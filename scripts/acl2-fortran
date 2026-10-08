@@ -1,0 +1,332 @@
+#!/usr/bin/env bb
+;; acl2-fortran: the Fortran the VM runs, GENERATED from the proved ACL2
+;; (PLAN step 30; James, 2026-10-07: "let's write the generator for
+;; everything"). Nobody edits the output; a change goes into the model,
+;; is proved, and is generated again.
+;;
+;;   scripts/acl2-fortran [-o FILE]
+;;
+;; ACL2 itself hands over each function of model/vmg.lisp in its
+;; translated form -- no macros, only lambda, if, quoted constants and
+;; calls -- with its formals, whether it returns the machine, and
+;; whether its guards are verified. A function whose guards are not
+;; verified is refused: guard verification is what makes every index in
+;; bounds and every integer inside 64 bits, and Fortran's integer
+;; overflow is undefined.
+;;
+;; The translation:
+;;   the machine (the stobj vmi)  type(vm_state) :: st, updated in place;
+;;                                its arrays 0-based, as ACL2's are
+;;   a function returning it      a subroutine on st
+;;   one returning an integer     an integer(int64) function; a value
+;;                                (anything a slot holds) is type(value)
+;;   tail recursion               a loop
+;;   if                           an if statement, into a temporary where
+;;                                it is an expression: only the branch
+;;                                taken is evaluated, as in ACL2
+;;   rt-*, vmg-stk-from           the runtime's hand-written routines
+;;   the-check                    nothing: the guard proof discharged it
+(require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn])
+
+(def args (apply hash-map *command-line-args*))
+(def out-file (get args "-o" "src/f/gen/vm_gen.f90"))
+
+;; the functions generated, callees first
+(def fns '[vmg-w vmg-poolv vmg-sreg vmg-sset vmg-copy-down vmg-push-rec vmg-pop-rec vmg-unwind
+           vmg-pick-fixed vmg-pick-rest vmg-pick
+           vmg-push vmg-load vmg-add vmg-lt vmg-slide vmg-jmpf vmg-jmp vmg-mkclo vmg-capt vmg-callv
+           vmg-ret vmg-recur vmg-prim vmg-throw vmg-try vmg-endtry vmg-step vmg-run])
+
+;; formals that hold a value, not an integer
+(def value-formals '{vmg-sset #{v} vmg-unwind #{v}})
+;; functions answering a value, not an integer
+(def value-fns '#{vmg-poolv vmg-sreg})
+
+;; ---- ACL2 hands over the translated definitions --------------------------------
+
+(def driver
+  (str "(include-book \"vmg\")\n"
+       "(set-print-case :downcase state)\n"
+       "(defun dump-fns (fns state)\n"
+       "  (declare (xargs :mode :program :stobjs state))\n"
+       "  (if (endp fns) state\n"
+       "    (let ((fn (car fns)) (w (w state)))\n"
+       "      (prog2$ (cw \"~%FN ~x0~%\" (list fn (formals fn w) (stobjs-out fn w)\n"
+       "                                     (eq (symbol-class fn w) :common-lisp-compliant) (body fn nil w)))\n"
+       "              (dump-fns (cdr fns) state)))))\n"
+       "(set-iprint nil)\n"
+       "(dump-fns '(" (str/join " " fns) ") state)\n"
+       "(good-bye)\n"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def dump (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+
+;; each FN block's first s-expression; ACL2's printer wraps lines, which the reader ignores
+
+(defn acl2->clj [s]
+  ;; ACL2's 'x is (quote x) to bb; its t and nil are symbols here, kept as written
+  (-> s (str/replace #"'" "'")))
+
+(def defs
+  (into {}
+        (for [blk (rest (str/split dump #"\nFN\s+"))]
+          (let [form (edn/read-string {:default (fn [_ v] v)} (str/replace (acl2->clj blk) "'" " QUOTE-MARK "))]
+            [(first form) form]))))
+
+(when (not= (count defs) (count fns))
+  (println "acl2-fortran: ACL2 did not hand over every function; its output ends:")
+  (println (subs dump (max 0 (- (count dump) 3000))))
+  (System/exit 1))
+
+;; QUOTE-MARK x  ->  (quote x)
+(defn fix-quotes [x]
+  (cond (sequential? x)
+        (loop [xs (seq x) acc []]
+          (cond (empty? xs) (apply list acc)
+                (= 'QUOTE-MARK (first xs)) (recur (nnext xs) (conj acc (list 'quote (fix-quotes (second xs)))))
+                :else (recur (next xs) (conj acc (fix-quotes (first xs))))))
+        :else x))
+
+(doseq [[fn [_ _ _ compliant _]] defs]
+  (when-not (= 't compliant)
+    (println (str "acl2-fortran: " fn "'s guards are not verified; refusing to generate it"))
+    (System/exit 1)))
+
+;; ---- types ---------------------------------------------------------------------------
+;;
+;; :st the machine, :int an integer(int64), :val a value, :bool a logical
+
+(defn stobj-out? [fn] (= '(vmi) (nth (defs fn) 2)))
+(defn fn-type [fn] (cond (stobj-out? fn) :st (value-fns fn) :val :else :int))
+(defn formal-type [fn x] (cond (= x 'vmi) :st (get-in value-formals [fn x]) :val :else :int))
+
+(def fields '{v-pc "pc" v-fb "fb" v-sp "sp" v-status "status" v-ctop "ctop" v-hidx "hidx"})
+(def arrays '{v-codei "code" v-pooli "pool" v-stki "stk" v-ckindi "ckind" v-cai "ca" v-cbi "cb" v-cci "cc"
+              v-cprevi "cprev" v-fnfirsti "fnfirst" v-fncounti "fncount" v-clni "cln" v-clenti "clent" v-clresti "clrest"})
+(def lengths '{v-code-length "code" v-pool-length "pool" v-stk-length "stk" v-ckind-length "ckind" v-ca-length "ca"
+               v-cb-length "cb" v-cc-length "cc" v-cprev-length "cprev" v-fnfirst-length "fnfirst"
+               v-fncount-length "fncount" v-cln-length "cln" v-clent-length "clent" v-clrest-length "clrest"})
+(def value-arrays #{"pool" "stk"})
+(def updaters (merge (into {} (for [[k v] fields] [(symbol (str "update-" k)) v]))
+                     (into {} (for [[k v] arrays] [(symbol (str "update-" k)) v]))))
+
+;; the runtime's operations on values: name, argument types, answer type
+(def rt '{rt-truthy ["rt_truthy" [:val] :bool] rt-add ["rt_add" [:val :val] :val] rt-lt ["rt_lt" [:val :val] :val]
+          rt-clo ["rt_clo" [:int :val] :val] rt-clop ["rt_clop" [:val] :bool] rt-clo-f ["rt_clo_f" [:val] :int]
+          rt-capt ["rt_capt" [:int :val] :val] rt-prim ["rt_prim" [:val :val] :val] rt-throwp ["rt_throwp" [:val] :bool]
+          rt-thrown ["rt_thrown" [:val] :val]})
+
+(defn fname [s] (str/replace (name s) "-" "_"))
+
+;; ---- expressions ---------------------------------------------------------------------
+;;
+;; (expr ctx x) -> {:stmts [...] :code "..." :type t}; ctx carries the
+;; locals in scope ({acl2-name {:f fortran-name :type t}}) and a counter
+;; for temporaries, in an atom shared by the function
+
+(declare expr)
+
+(defn fresh [ctx base t]
+  (let [n (swap! (:counter ctx) inc) v (str (str/replace (name base) #"[^a-z0-9]" "_") "_" n)]
+    (swap! (:locals ctx) assoc v t)
+    v))
+
+(defn lit [x]
+  (cond (integer? x) {:stmts [] :code (str x "_int64") :type :int}
+        (= x 'nil) {:stmts [] :code ".false." :type :bool :sym "nil"}
+        (= x 't) {:stmts [] :code ".true." :type :bool :sym "t"}
+        (keyword? x) {:stmts [] :code (str "rt_keyword(\"" (name x) "\")") :type :val}
+        (symbol? x) (if (= (name x) "nil") {:stmts [] :code ".false." :type :bool :sym "nil"}
+                      (throw (ex-info (str "unknown constant " x) {})))
+        :else (throw (ex-info (str "unknown constant " (pr-str x)) {}))))
+
+(defn int-op [ctx op xs]
+  (let [rs (map #(expr ctx %) xs)]
+    {:stmts (vec (mapcat :stmts rs)) :type :int
+     :code (case op
+             binary-+ (str "(" (:code (first rs)) " + " (:code (second rs)) ")")
+             binary-* (str "(" (:code (first rs)) " * " (:code (second rs)) ")")
+             unary-- (str "(-" (:code (first rs)) ")"))}))
+
+(defn cmp [ctx op a b]
+  (let [ra (expr ctx a) rb (expr ctx b)]
+    (when (and (= op :eq) (not (and (= :int (:type ra)) (= :int (:type rb)))))
+      (throw (ex-info (str "equal on non-integers: " (pr-str a) " " (pr-str b)) {})))
+    {:stmts (into (:stmts ra) (:stmts rb)) :type :bool
+     :code (str "(" (:code ra) (case op :eq " == " :lt " < ") (:code rb) ")")}))
+
+;; t and nil where a value is wanted are the runtime's t and nil
+(defn coerce [r t]
+  (if (and (= t :val) (= :bool (:type r)) (:sym r))
+    (assoc r :code (if (= "nil" (:sym r)) "rt_nil()" "rt_t()") :type :val)
+    r))
+
+(defn ftype [t] (case t :int "integer(int64)" :val "type(value)" :bool "logical"))
+
+(defn expr [ctx x]
+  (cond
+    (symbol? x) (if-let [v (get @(:env ctx) x)] {:stmts [] :code (:f v) :type (:type v)} (lit x))
+    (not (seq? x)) (lit x)
+    :else
+    (let [[op & xs] x]
+      (cond
+        (= op 'quote) (lit (first xs))
+        (= op 'the-check) (expr ctx (nth xs 2))
+        (#{'binary-+ 'binary-* 'unary--} op) (int-op ctx op xs)
+        (#{'equal 'eql} op) (cmp ctx :eq (first xs) (second xs))
+        (= op '<) (cmp ctx :lt (first xs) (second xs))
+        (= op 'not) (let [r (expr ctx (first xs))] (assoc r :code (str "(.not. " (:code r) ")")))
+        (= op 'nfix) (let [r (expr ctx (first xs))] (assoc r :code (str "max(0_int64, " (:code r) ")") :type :int))
+        (= op 'zp) (let [r (expr ctx (first xs))] (assoc r :code (str "(" (:code r) " <= 0_int64)") :type :bool))
+        (= op 'natp) (let [r (expr ctx (first xs))] (assoc r :code (str "(" (:code r) " >= 0_int64)") :type :bool))
+        (= op 'integerp) (let [r (expr ctx (first xs))]
+                           (when-not (= :int (:type r)) (throw (ex-info "integerp of a non-integer" {:x x})))
+                           (assoc r :code ".true." :type :bool))
+        (fields op) {:stmts [] :code (str "st%" (fields op)) :type :int}
+        (arrays op) (let [r (expr ctx (first xs)) a (arrays op)]
+                      {:stmts (:stmts r) :code (str "st%" a "(" (:code r) ")") :type (if (value-arrays a) :val :int)})
+        (lengths op) {:stmts [] :code (str "size(st%" (lengths op) ", kind=int64)") :type :int}
+        (rt op) (let [[f _ t] (rt op) rs (map #(expr ctx %) xs)]
+                  {:stmts (vec (mapcat :stmts rs)) :code (str f "(" (str/join ", " (map :code rs)) ")") :type t})
+        (= op 'vmg-stk-from) (let [rs (map #(expr ctx %) (butlast xs))]
+                               {:stmts (vec (mapcat :stmts rs)) :type :val
+                                :code (str "rt_list_from(st, " (str/join ", " (map :code rs)) ")")})
+        (= op 'if) (let [[c a b] xs rc (expr ctx c) ra0 (expr ctx a) rb0 (expr ctx b)
+                         t (if (or (= :val (:type ra0)) (= :val (:type rb0))) :val (if (= :bool (:type ra0)) (:type rb0) (:type ra0)))
+                         ra (coerce ra0 t) rb (coerce rb0 t)
+                         tmp (fresh ctx "t" t)]
+                     {:stmts (-> (:stmts rc) (conj (str "if (" (:code rc) ") then"))
+                                 (into (map #(str "  " %) (:stmts ra))) (conj (str "  " tmp " = " (:code ra)) "else")
+                                 (into (map #(str "  " %) (:stmts rb))) (conj (str "  " tmp " = " (:code rb)) "end if"))
+                      :code tmp :type t})
+        (and (seq? op) (= 'lambda (first op)))
+        (let [[_ vars body] op
+              binds (vec (for [[v a] (map vector vars xs) :when (not= v a)]
+                           (let [r (expr ctx a) f (fresh ctx v (:type r))] [v f r])))]
+          (doseq [[v f r] binds] (swap! (:env ctx) assoc v {:f f :type (:type r)}))
+          (let [rb (expr ctx body)]
+            (update rb :stmts #(vec (concat (mapcat (fn [[_ f r]] (conj (:stmts r) (str f " = " (:code r)))) binds) %)))))
+        (defs op) (let [[_ formals] (defs op)
+                        pairs (map vector formals xs)
+                        _ (doseq [[v a] pairs] (when (and (= v 'vmi) (not= a 'vmi))
+                                                 (throw (ex-info "a changed machine inside an expression" {:x x}))))
+                        ;; the machine is the first dummy, as the subroutines and functions declare it
+                        rs (concat (when (some #{'vmi} formals) [{:stmts [] :code "st"}])
+                                   (for [[v a] pairs :when (not= v 'vmi)] (expr ctx a)))]
+                    {:stmts (vec (mapcat :stmts rs)) :code (str (fname op) "(" (str/join ", " (map :code rs)) ")")
+                     :type (fn-type op)})
+        :else (throw (ex-info (str "acl2-fortran: no translation for " op) {:x x}))))))
+
+;; ---- statements: a term answering the machine --------------------------------------
+;;
+;; (stmt ctx fn x) -> lines that leave st as the term's value. A
+;; self-call in tail position becomes new values for the formals and
+;; `cycle`; the function's body runs in a `do` loop.
+
+(declare stmt)
+
+(defn assign-formals [ctx self args]
+  ;; all the new values first, into temporaries, then the formals: a call's arguments are evaluated together
+  (let [[_ formals] (defs self)
+        pairs (remove #(= 'vmi (first %)) (map vector formals args))
+        rs (for [[v a] pairs] (let [r (expr ctx a) tmp (fresh ctx v (:type r))] [v tmp r]))
+        st-arg (some #(when (= 'vmi (first %)) (second %)) (map vector formals args))]
+    (vec (concat (mapcat (fn [[_ tmp r]] (conj (:stmts r) (str tmp " = " (:code r)))) rs)
+                 (when (and st-arg (not= st-arg 'vmi)) (stmt ctx self st-arg))
+                 (for [[v tmp _] rs] (str (:f (get @(:env ctx) v)) " = " tmp))
+                 ["cycle"]))))
+
+(defn stmt [ctx self x]
+  (cond
+    (= x 'vmi) []
+    (not (seq? x)) (throw (ex-info (str "a machine term that is not one: " (pr-str x)) {}))
+    :else
+    (let [[op & xs] x]
+      (cond
+        (= op self) (assign-formals ctx self xs)
+        (updaters op) (let [f (updaters op)]
+                        (if (fields (symbol (subs (name op) 7)))
+                          (let [r (expr ctx (first xs))]
+                            (vec (concat (stmt ctx self (second xs)) (:stmts r) [(str "st%" f " = " (:code r))])))
+                          (let [ri (expr ctx (first xs)) rv (expr ctx (second xs))
+                                ti (fresh ctx "i" :int) tv (fresh ctx "v" (:type rv))]
+                            ;; the index and value are read from the machine before the inner update runs
+                            (vec (concat (:stmts ri) [(str ti " = " (:code ri))] (:stmts rv) [(str tv " = " (:code rv))]
+                                         (stmt ctx self (nth xs 2)) [(str "st%" f "(" ti ") = " tv)])))))
+        (= op 'if) (let [[c a b] xs rc (expr ctx c)]
+                     (vec (concat (:stmts rc) [(str "if (" (:code rc) ") then")] (map #(str "  " %) (stmt ctx self a))
+                                  ["else"] (map #(str "  " %) (stmt ctx self b)) ["end if"])))
+        (and (seq? op) (= 'lambda (first op)))
+        (let [[_ vars body] op
+              pairs (map vector vars xs)
+              ;; the values first, read from the machine as it is; then the machine's own update
+              vals (vec (for [[v a] pairs :when (and (not= v 'vmi) (not= v a))]
+                          (let [r (expr ctx a) f (fresh ctx v (:type r))] [v f r])))
+              st-act (some (fn [[v a]] (when (= v 'vmi) a)) pairs)]
+          (doseq [[v f r] vals] (swap! (:env ctx) assoc v {:f f :type (:type r)}))
+          (vec (concat (mapcat (fn [[_ f r]] (conj (:stmts r) (str f " = " (:code r)))) vals)
+                       (when (and st-act (not= st-act 'vmi)) (stmt ctx self st-act))
+                       (stmt ctx self body))))
+        (defs op) (let [[_ formals] (defs op)
+                        pairs (map vector formals xs)
+                        rs (for [[v a] pairs :when (not= v 'vmi)] (expr ctx a))
+                        st-arg (some (fn [[v a]] (when (= v 'vmi) a)) pairs)]
+                    (vec (concat (mapcat :stmts rs)
+                                 (when (and st-arg (not= st-arg 'vmi)) (stmt ctx self st-arg))
+                                 [(str "call " (fname op) "(st" (str/join (map #(str ", " (:code %)) rs)) ")")])))
+        :else (throw (ex-info (str "acl2-fortran: no machine translation for " op) {:x x}))))))
+
+;; a non-machine function's body in return position: self-calls become a loop
+(defn ret-stmts [ctx self x]
+  (if (and (seq? x) (= (first x) 'if))
+    (let [[_ c a b] x rc (expr ctx c)]
+      (vec (concat (:stmts rc) [(str "if (" (:code rc) ") then")] (map #(str "  " %) (ret-stmts ctx self a))
+                   ["else"] (map #(str "  " %) (ret-stmts ctx self b)) ["end if"])))
+    (if (and (seq? x) (= (first x) self))
+      (assign-formals ctx self (rest x))
+      (let [r (coerce (expr ctx x) (fn-type self))] (conj (:stmts r) (str "r = " (:code r)) "return")))))
+
+;; ---- functions -----------------------------------------------------------------------
+
+(defn gen-fn [self]
+  (let [[_ formals _ _ body0] (defs self)
+        body (fix-quotes body0)
+        ctx {:env (atom (into {} (for [x formals :when (not= x 'vmi)]
+                                   [x {:f (str (fname x) "_") :type (formal-type self x)}])))
+             :locals (atom {}) :counter (atom 0)}
+        st? (stobj-out? self)
+        lines (if st?
+                (stmt ctx self body)
+                (ret-stmts ctx self body))
+        recursive? (some #(= "cycle" (str/trim %)) lines)
+        dummies (for [x formals :when (not= x 'vmi)] [(str (fname x) "_") (formal-type self x)])
+        args (str/join ", " (concat (when (some #{'vmi} formals) ["st"]) (map first dummies)))
+        head (if st? (str "subroutine " (fname self) "(" args ")")
+                 (str (if (= :val (fn-type self)) "function " "pure function ") (fname self) "(" args ") result(r)"))]
+    (str "  " (if (= :val (fn-type self)) "" "") head "\n"
+         (when (some #{'vmi} formals) (str "    type(vm_state), intent(" (if st? "inout" "in") ") :: st\n"))
+         (str/join (for [[d t] dummies] (str "    " (ftype t) ", value :: " d "\n")))
+         (when-not st? (str "    " (ftype (fn-type self)) " :: r\n"))
+         (str/join (for [[v t] (sort @(:locals ctx))] (str "    " (ftype t) " :: " v "\n")))
+         (let [body-lines (if recursive?
+                            (concat ["do"] (map #(str "  " %) lines) [(if st? "  exit" "")] ["end do"])
+                            lines)]
+           (str/join (for [l body-lines :when (not= l "")] (str "    " l "\n"))))
+         "  end " (if st? "subroutine " "function ") (fname self) "\n")))
+
+(def fortran-source
+  (str "! GENERATED from model/vmg.lisp by scripts/acl2-fortran. Do not edit:\n"
+       "! change the model, prove it, and generate again (PLAN step 30).\n"
+       "! Every function here has its guards verified in ACL2: every index in\n"
+       "! bounds, every integer inside 64 bits. vmg-correct proves that a\n"
+       "! program run by vmg_run answers what it means.\n"
+       "module vm_gen\n"
+       "  use iso_fortran_env, only: int64\n"
+       "  use vm_runtime\n"
+       "  implicit none\n"
+       "contains\n"
+       (str/join "\n" (map gen-fn fns))
+       "end module vm_gen\n"))
+
+(spit out-file fortran-source)
+(println (str "acl2-fortran: " (count fns) " functions -> " out-file))

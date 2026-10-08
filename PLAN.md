@@ -3540,6 +3540,44 @@ and the lessons were about representation:
   (a 1189 s preprocess), where the same lemmas as rewrite rules took
   0.00 s.
 
+**64 bits, proved, and the first generated Fortran (model/vmg.lisp,
+vmg-correct.lisp, scripts/acl2-fortran, 2026-10-08).**
+- `vmg.lisp` is vmi's machine word for word, with guards, every
+  integer result declared `(signed-byte 64)`. Guard verification
+  proves every array index in bounds, every stored value 64-bit, and
+  every intermediate result inside 64 bits.
+- The bounds invariant (`vmg-bnd`): array lengths at most 2^40;
+  registers and code words at most 2^40; live control records bounded
+  and linked below themselves; the nearest-handler index pointing at a
+  handler, each handler linking to a handler; a function's clauses
+  inside the clause arrays. `vmg-step-good`: a step that leaves the
+  machine running leaves it in bounds, so `vmg-run`'s guard holds for
+  a whole run.
+- Each function is its vmi twin (`vmg-step-is`, `vmg-run-is`), and
+  `vmg-correct` is vmi-correct for the guarded run.
+- `scripts/acl2-fortran` (bb) asks ACL2 for each function's
+  translated body -- no macros, only lambda, if, constants and calls --
+  refuses any whose guards are not verified, and writes
+  `src/f/gen/vm_gen.f90`: 29 functions, the machine a `type(vm_state)`
+  updated in place, tail recursion as loops, an `if` in an expression
+  as an if statement into a temporary so only the branch taken runs,
+  the value operations (`rt_*`) left to the runtime. Nobody edits it;
+  `make gen-vm` writes it again.
+- `scripts/fuzz-vm-gen` runs fuzz-vmx2's programs on the generated
+  Fortran and on ACL2's vmi and compares the machine after every step:
+  300 programs and 44,650 steps agree under gfortran, 100 and 11,146
+  under flang. Its control, an uncaught throw leaving two slots where
+  ACL2 leaves one, is caught in 22 of 100. `make check-vm-gen` (in
+  fuzz-model) also fails if the checked-in file is not what the model
+  generates.
+
+What the check rests on: the translator, the compilers, and the test
+runtime (`test/vm/vm_runtime.f90`), which mirrors vmx2's value
+functions and primitives. The generated VM is not wired into clotran
+yet. That needs clotran's own values behind `rt_*` (gc_value, the
+builtins, rooting for a moving collector), and the analyzer from
+Clojure to the core language -- the next components, modelled first.
+
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries
 -- can be modelled and generated too. The proof must hold for every

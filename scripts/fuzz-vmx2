@@ -7,7 +7,7 @@
 ;; on vcs2-step in ACL2 against the extended meaning, mx2. The generator
 ;; builds only well-formed programs, each checked with x2wf.
 ;;
-;;   scripts/fuzz-vmx2 [-n COUNT] [-s SEED] [-x] [-i] [-xi]
+;;   scripts/fuzz-vmx2 [-n COUNT] [-s SEED] [-x] [-i] [-xi] [--emit FILE]
 ;;
 ;; -x is the NEGATIVE CONTROL: a throw's value goes one slot above the
 ;; handler's local, and the run must find disagreements.
@@ -26,6 +26,8 @@
 (def broken-i (some #{"-xi"} *command-line-args*))
 (def arrays (or broken-i (some #{"-i"} *command-line-args*)))
 (def args (apply hash-map (remove #{"-x" "-i" "-xi"} *command-line-args*)))
+;; --emit FILE: write the generated programs as EDN and stop (scripts/fuzz-vm-gen runs them)
+(def emit (get args "--emit"))
 (def n (parse-long (get args "-n" "200")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def state (atom seed))
@@ -111,6 +113,10 @@
         :else (str x)))
 
 (def exprs (vec (rep n #(gen 5 0 0 nil))))
+(when emit
+  (spit emit (pr-str exprs))
+  (println (str "fuzz-vmx2: " n " programs, seed " seed " -> " emit))
+  (System/exit 0))
 
 (def driver
   (str (if arrays "(include-book \"vmi\")\n" "(include-book \"vmx2\")\n")
