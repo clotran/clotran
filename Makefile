@@ -716,7 +716,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -782,8 +782,9 @@ fuzz-model: model
 	scripts/fuzz-vm-closure -n 40 -s 7 -r
 	scripts/fuzz-vmx -n 300 -s 1
 	scripts/fuzz-vmx -n 100 -s 2 -x
-	scripts/fuzz-vmx2 -n 300 -s 1
+	scripts/fuzz-vmx2 -n 300 -s 1 -i
 	scripts/fuzz-vmx2 -n 100 -s 2 -x
+	scripts/fuzz-vmx2 -n 100 -s 2 -xi
 	scripts/fuzz-alloc -n 300 -s 1
 	scripts/fuzz-alloc -n 400 -s 2 -k
 	scripts/fuzz-alloc -n 300 -s 4 -m

@@ -3488,6 +3488,58 @@ What it covers, in order:
 What stays hand-written: the builtins' results (checked against clj,
 as now), I/O, the OS calls, ICU, and the glue between routines.
 
+**The VM's implementation level, proved (model/vmi.lisp,
+vmi-proof.lisp, 2026-10-07).** The first component's implementation
+model, the one the Fortran will be generated from:
+- One ACL2 stobj: 64-bit registers (pc, frame base, sp, status, the
+  control stack's top, the nearest handler's index) and fixed-size
+  arrays (code, a constant pool, the stack, the control records, the
+  function table).
+- Instructions are 4 words: opcode and three operands.
+- A throw truncates the control stack to the nearest handler's index
+  in one step; each handler record links to the one below it.
+- An operation that may allocate writes its answer into a stack slot,
+  so generated code holds no value across an allocation.
+
+What is proved:
+- `vmi-step-refines`: one step of the arrays, read back as vmx2's
+  state, is `vcs2-step` on the program read back from them, unless an
+  array overflowed. vmx2's walk to the nearest handler is the chain's
+  head.
+- `vmi-step-keeps`: a step keeps the invariant (registers natural,
+  the control stack inside its arrays, the handler chain) and the
+  program.
+- `vmi-run-refines`: runs, step for step.
+- The encoder's round trip: a program encoded into the arrays reads
+  back as itself.
+- `vmi-correct`: a compiled program, encoded and run on the arrays,
+  answers what its meaning does, unless an array overflowed. With
+  `vcs2-correct` under it, that is the meaning down to the machine the
+  Fortran comes from.
+
+Not proved yet: that no register or intermediate value leaves 64 bits.
+The refinement holds for ACL2's unbounded integers. Fortran's integer
+overflow is undefined, so before the translator emits this code the
+guards must be verified: every arithmetic on bounded values, array
+lengths below 2^60, code operands below 2^31.
+
+scripts/fuzz-vmx2 `-i` runs every program on the arrays in lockstep
+with vcs2-step and compares every state: 300 programs agree. `-xi`,
+an array unwind that puts the caught value one slot high, is caught in
+24 of 100. Comparing every step sees what comparing only answers
+misses.
+
+The proof method was vmx2's, per instruction with a few named facts,
+and the lessons were about representation:
+- the control stack's read-backs as functions of the field lists, so
+  a write above the top is a list fact;
+- `update-nth` and `nth` kept closed, or ACL2 rewrites a field write
+  into conses;
+- a disabled function loses its induction scheme too;
+- many implications handed to `:use` together clausify exponentially
+  (a 1189 s preprocess), where the same lemmas as rewrite rules took
+  0.00 s.
+
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries
 -- can be modelled and generated too. The proof must hold for every
