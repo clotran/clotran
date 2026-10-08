@@ -5,7 +5,8 @@
 ! as it is there -- and the operations on values the model leaves to the
 ! runtime, written as vmx2.lisp and vmg.lisp write them, with prim as
 ! vmx2.lisp's prim-impl. clotran's own runtime, gc_value and the
-! builtins, takes its place when the VM is wired in.
+! builtins, takes its place when the VM is wired in. The compiler's
+! operations (rt_car .. rt_len, the resizes) serve src/f/gen/vmc_gen.f90.
 module vm_runtime
   use iso_fortran_env, only: int64
   implicit none
@@ -24,6 +25,12 @@ module vm_runtime
      integer(int64), allocatable :: ckind(:), ca(:), cb(:), cc(:), cprev(:)
      integer(int64), allocatable :: fnfirst(:), fncount(:), cln(:), clent(:), clrest(:)
   end type vm_state
+
+  ! the compile environment (model/vmic.lisp's stobj vce)
+  type vc_state
+     integer(int64), allocatable :: env(:)
+     integer(int64) :: err = 0
+  end type vc_state
 
   ! the conses, and the keywords by name
   type(value), allocatable :: hcar(:), hcdr(:)
@@ -270,6 +277,74 @@ contains
        r = cons(x, r)
     end do
   end function rt_list_from
+
+  ! ---- the compiler's (model/vmicg.lisp): the expression read as a list ---
+
+  function rt_car(x) result(r)
+    type(value), intent(in) :: x
+    type(value) :: r
+    r = car(x)
+  end function rt_car
+
+  function rt_cdr(x) result(r)
+    type(value), intent(in) :: x
+    type(value) :: r
+    r = cdr(x)
+  end function rt_cdr
+
+  logical function rt_consp(x)
+    type(value), intent(in) :: x
+    rt_consp = consp(x)
+  end function rt_consp
+
+  ! (equal x k), k a keyword: every rt-is in the model tests one
+  logical function rt_is(x, k)
+    type(value), intent(in) :: x, k
+    rt_is = (x%tag == k%tag .and. x%i == k%i)
+  end function rt_is
+
+  ! a natural below 2^31, else -1
+  function rt_nat(x) result(n)
+    type(value), intent(in) :: x
+    integer(int64) :: n
+    n = -1
+    if (x%tag == VT_INT) then
+       if (x%i >= 0 .and. x%i < 2147483648_int64) n = x%i
+    end if
+  end function rt_nat
+
+  function rt_len(x) result(n)
+    type(value), intent(in) :: x
+    integer(int64) :: n
+    n = len_of(x)
+  end function rt_len
+
+  ! a stobj array resized as ACL2 resizes it: the elements kept, the new
+  ! ones the initial value
+  subroutine rt_resize_int(a, n)
+    integer(int64), allocatable, intent(inout) :: a(:)
+    integer(int64), intent(in) :: n
+    integer(int64), allocatable :: t(:)
+    integer(int64) :: m
+    allocate(t(0:n-1))
+    t = 0
+    m = 0
+    if (allocated(a)) m = min(n, size(a, kind=int64))
+    if (m > 0) t(0:m-1) = a(0:m-1)
+    call move_alloc(t, a)
+  end subroutine rt_resize_int
+
+  subroutine rt_resize_val(a, n)
+    type(value), allocatable, intent(inout) :: a(:)
+    integer(int64), intent(in) :: n
+    type(value), allocatable :: t(:)
+    integer(int64) :: m
+    allocate(t(0:n-1))
+    m = 0
+    if (allocated(a)) m = min(n, size(a, kind=int64))
+    if (m > 0) t(0:m-1) = a(0:m-1)
+    call move_alloc(t, a)
+  end subroutine rt_resize_val
 
   ! ---- printing, as ACL2 prints with print-case downcase -----------------
 

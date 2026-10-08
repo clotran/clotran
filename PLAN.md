@@ -3627,8 +3627,40 @@ reads, the one vmi-load-prog leaves for vcs2-program's lists, and
 `vmic-correct` is vmi-correct for it: a program it compiles, run on
 the arrays, answers its meaning unless an array overflowed. Soundness
 only: that it accepts every encodable program is the fuzzer's claim,
-not a theorem. Next: guards and generation; the translator needs `mv`
-results and recursive subroutines for it.
+not a theorem.
+
+**The compiler, generated (model/vmicg.lisp, 2026-10-08).** vmicg is
+vmic word for word, with guards and every integer result declared
+64-bit, as vmg is vmi. Each function is proved equal to its vmic twin
+(`vmicg-compile-is` by vmic's flag induction), so `vmicg-correct` is
+vmic-correct. Guard verification proves every index in bounds and
+every intermediate inside 64 bits. The bound: the cursor, the stack
+depth and the environment's length each grow by at most the size of
+what is left to compile, so a program under 2^39 instructions keeps
+all three under 2^40. `vmicg-program` counts the sizes first,
+saturating at 2^40 so the count cannot overflow, and calls a program
+larger than that an overflow before writing anything.
+
+scripts/acl2-fortran now also translates functions with several
+results (an `mv` is a subroutine with intent(out) dummies after the
+arguments), real recursion (`recursive`, found from the call graph;
+tail self-calls are still loops), and a second stobj (`vce`,
+type(vc_state) :: ce). vm_gen.f90 regenerates byte for byte.
+src/f/gen/vmc_gen.f90 is the compiler. `scripts/fuzz-vmc-gen` runs it
+against ACL2's vmicg-program on fuzz-vmx2's programs, a fifth of them
+broken so the refusals run too: the error flag, the status and every
+array agree, 300 under gfortran and 100 under flang. Its control (the
+generated conditional jump one past its target) was caught 100 of 100.
+It runs in `make check-vm-gen`.
+
+Not done: the compiled machine is not proved to satisfy `vmg-good`,
+the bounds vmg-run's guard asks for (every code word and table entry
+in 0..2^40). The glue will check it with the generated vmg-good before
+a run, or the bound is proved (the compiler writes only pcs, depths,
+counts and environment slots, each of them a depth, so it should hold). Next: wire the
+generated pair into clotran -- clotran's values behind the `rt_`
+operations, an analyzer from Clojure to the core language, and the
+runtime's real arithmetic and primitives.
 
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries

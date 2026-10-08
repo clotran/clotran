@@ -1,0 +1,154 @@
+#!/usr/bin/env bb
+;; fuzz-vmc-gen: the GENERATED Fortran compiler (src/f/gen/vmc_gen.f90,
+;; written by scripts/acl2-fortran from model/vmicg.lisp) against the
+;; ACL2 it was generated from (PLAN step 30).
+;;
+;;   scripts/fuzz-vmc-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; fuzz-vmx2's programs -- a fifth of them broken, a local past the
+;; environment or a closure of no function, so the error paths run too --
+;; are compiled by ACL2's vmicg-program, which prints the error flag, the
+;; status and every array it fills, and by test/vm/vmc_check, which runs
+;; the generated vmicg_program on the same program and prints the same.
+;; They must agree token for token. The proof is about the ACL2; this is
+;; what says the Fortran is it.
+;;
+;; -x is the NEGATIVE CONTROL: the generated compiler's conditional jump
+;; one instruction past its target, as fuzz-vmx2 -xc breaks the model's,
+;; and the arrays must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "100")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-vmc-gen"})))
+
+;; the programs: fuzz-vmx2's generator, a fifth of them broken
+(p/shell {:out :string} "scripts/fuzz-vmx2" "-n" (str n) "-s" (str seed) "--emit" (str work "/progs.edn"))
+(def state (atom seed))
+(defn rnd [k]
+  (let [x (swap! state #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (unsigned-bit-shift-right x 33) k)))
+(defn break-one [e]
+  ;; the first (:local i) past the environment, else the first (:mkclo f) of no function
+  (let [done (atom false)
+        walk (fn walk [x]
+               (cond @done x
+                     (and (seq? x) (= :local (first x))) (do (reset! done true) (list :local 5000))
+                     (and (seq? x) (= :mkclo (first x))) (do (reset! done true) (list* :mkclo -3 (drop 2 x)))
+                     (seq? x) (apply list (map walk x))
+                     :else x))]
+    (walk e)))
+(def exprs (vec (for [e (edn/read-string (slurp (str work "/progs.edn")))]
+                  (if (zero? (rnd 5)) (break-one e) e))))
+
+(defn lisp [x]
+  (cond (seq? x) (str "(" (str/join " " (map lisp x)) ")")
+        (keyword? x) (str ":" (name x))
+        (true? x) "t"
+        (nil? x) "nil"
+        :else (str x)))
+
+;; ---- ACL2: each program as renamed, and vmicg-program's arrays ------------------------
+
+(def driver
+  (str "(include-book \"vmicg\")\n"
+       "(set-print-case :downcase state)\n"
+       "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       "(set-iprint nil)\n"
+       "(defun strip-to-clauses (ds) (if (atom ds) nil (cons (list (caar ds) (list (cadar ds) (caddar ds))) (strip-to-clauses (cdr ds)))))\n"
+       "(defconst *xall-defs* (append (strip-to-clauses *x-defs*) *x2-defs*))\n"
+       "(defconst *xall-names* (strip-cars *xall-defs*))\n"
+       "(defconst *xalli-defs* (ren-defs *xall-defs* *xall-names* 0))\n"
+       "(defun pr-code (i n vmi) (declare (xargs :stobjs vmi :mode :program))\n"
+       "  (if (>= i n) nil (prog2$ (cw \"~x0~%\" (v-codei i vmi)) (pr-code (1+ i) n vmi))))\n"
+       "(defun pr-pool (i n vmi) (declare (xargs :stobjs vmi :mode :program))\n"
+       "  (if (>= i n) nil (prog2$ (cw \"~x0~%\" (v-pooli i vmi)) (pr-pool (1+ i) n vmi))))\n"
+       "(defun pr-fns (i n vmi) (declare (xargs :stobjs vmi :mode :program))\n"
+       "  (if (>= i n) nil (prog2$ (cw \"~x0 ~x1~%\" (v-fnfirsti i vmi) (v-fncounti i vmi)) (pr-fns (1+ i) n vmi))))\n"
+       "(defun pr-cls (i n vmi) (declare (xargs :stobjs vmi :mode :program))\n"
+       "  (if (>= i n) nil (prog2$ (cw \"~x0 ~x1 ~x2~%\" (v-clni i vmi) (v-clenti i vmi) (v-clresti i vmi)) (pr-cls (1+ i) n vmi))))\n"
+       ;; a fresh machine for each program, as vmc_check's is
+       "(defun fresh (vmi vce) (declare (xargs :stobjs (vmi vce) :mode :program))\n"
+       "  (let* ((vmi (resize-v-code 0 vmi)) (vmi (resize-v-pool 0 vmi)) (vmi (resize-v-stk 0 vmi)) (vmi (resize-v-ckind 0 vmi))\n"
+       "         (vmi (resize-v-ca 0 vmi)) (vmi (resize-v-cb 0 vmi)) (vmi (resize-v-cc 0 vmi)) (vmi (resize-v-cprev 0 vmi))\n"
+       "         (vmi (resize-v-fnfirst 0 vmi)) (vmi (resize-v-fncount 0 vmi)) (vmi (resize-v-cln 0 vmi))\n"
+       "         (vmi (resize-v-clent 0 vmi)) (vmi (resize-v-clrest 0 vmi)) (vce (resize-ce-env 0 vce)))\n"
+       "    (mv vmi vce)))\n"
+       "(defun one (e i vmi vce) (declare (xargs :stobjs (vmi vce) :mode :program))\n"
+       "  (mv-let (vmi vce) (fresh vmi vce)\n"
+       "    (let ((e (ren-e e *xall-names*)))\n"
+       "      (mv-let (vmi vce) (vmicg-program e *xalli-defs* 1024 256 vmi vce)\n"
+       "        (prog2$ (cw \"~%BEGIN-INPUT ~x0~%~x1~%END-INPUT~%BEGIN-PROG ~x0~%~x2 ~x3~%~x4 ~x5 ~x6 ~x7 ~x8 ~x9~%\" i e\n"
+       "                    (ce-err vce) (v-status vmi) (v-code-length vmi) (v-pool-length vmi)\n"
+       "                    (v-fnfirst-length vmi) (v-cln-length vmi) (v-stk-length vmi) (v-ckind-length vmi))\n"
+       "          (prog2$ (pr-code 0 (v-code-length vmi) vmi)\n"
+       "            (prog2$ (pr-pool 0 (v-pool-length vmi) vmi)\n"
+       "              (prog2$ (pr-fns 0 (v-fnfirst-length vmi) vmi)\n"
+       "                (prog2$ (pr-cls 0 (v-cln-length vmi) vmi)\n"
+       "                  (prog2$ (cw \"~x0 ~x1 ~x2 ~x3 ~x4~%END-PROG~%\" (v-pc vmi) (v-fb vmi) (v-sp vmi) (v-ctop vmi) (v-hidx vmi))\n"
+       "                    (mv vmi vce)))))))))))\n"
+       "(defun all (es i vmi vce) (declare (xargs :stobjs (vmi vce) :mode :program))\n"
+       "  (if (atom es) (mv vmi vce) (mv-let (vmi vce) (one (car es) i vmi vce) (all (cdr es) (1+ i) vmi vce))))\n"
+       "(cw \"~%BEGIN-DEFS~%~x0~%END-DEFS~%\" *xalli-defs*)\n"
+       "(all '(" (str/join "\n" (map lisp exprs)) ") 0 vmi vce)\n"
+       "(good-bye)\n"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+
+(def defs-text (second (re-find #"(?s)BEGIN-DEFS\n(.*?)END-DEFS" out)))
+(def inputs (into {} (for [[_ i body] (re-seq #"(?s)BEGIN-INPUT (\d+)\n(.*?)END-INPUT" out)] [(parse-long i) body])))
+(def progs (into {} (for [[_ i body] (re-seq #"(?s)BEGIN-PROG (\d+)\n(.*?)END-PROG" out)] [(parse-long i) body])))
+
+(when (or (nil? defs-text) (not= n (count progs) (count inputs)))
+  (println "fuzz-vmc-gen: ACL2 did not report every program; the tail of its output:")
+  (println (subs out (max 0 (- (count out) 3000))))
+  (System/exit 1))
+
+;; ---- the generated Fortran ------------------------------------------------------------
+
+(def gen-src (str work "/vmc_gen.f90"))
+(spit gen-src
+      (cond-> (slurp "src/f/gen/vmc_gen.f90")
+        ;; the negative control: the conditional jump's target one past
+        broken ((fn [s] (let [s2 (str/replace-first s #"(call vmicg_put\(st, \w+, 6_int64, )(\w+)" "$1$2 + 1_int64")]
+                          (when (= s s2) (println "fuzz-vmc-gen: the control's slip has no place") (System/exit 1))
+                          s2)))))
+(def exe (str work "/vmc_check"))
+(let [r (p/shell {:continue true :out :string :err :string :dir work}
+                 fc "-O1" "-o" exe (str (fs/absolutize "test/vm/vm_runtime.f90")) gen-src (str (fs/absolutize "test/vm/vmc_check.f90")))]
+  (when-not (zero? (:exit r))
+    (println "fuzz-vmc-gen: the generated Fortran did not compile:")
+    (println (:err r) (:out r))
+    (System/exit 1)))
+
+(defn tokens [s] (vec (remove str/blank? (str/split s #"\s+"))))
+
+(def results
+  (vec (for [i (sort (keys progs))]
+         (let [f (str work "/prog" i ".txt")
+               _ (spit f (str (inputs i) "\n" defs-text "\n"))
+               r (p/shell {:continue true :out :string :err :string} exe f)
+               want (mapv tokens (remove str/blank? (str/split-lines (progs i))))
+               got (mapv tokens (remove str/blank? (str/split-lines (:out r))))
+               k (first (for [j (range (max (count want) (count got))) :when (not= (get want j) (get got j))] j))]
+           {:i i :ok (and (zero? (:exit r)) (nil? k)) :err-flag (first (first want))
+            :line k :want (when k (str/join " " (get want k))) :got (when k (str/join " " (get got k))) :stderr (:err r)}))))
+
+(def bad (filter (complement :ok) results))
+(println (str "fuzz-vmc-gen: " n " programs, seed " seed ", " fc "; "
+              (count (filter #(= "0" (:err-flag %)) results)) " compiled, "
+              (count (remove #(= "0" (:err-flag %)) results)) " refused"))
+(println (format "the generated compiler against ACL2's vmicg-program, every array: %d disagree" (count bad)))
+(doseq [b (take 3 bad)]
+  (println (str "    program " (:i b) ", line " (:line b) ": " (let [s (lisp (exprs (:i b)))] (if (> (count s) 160) (str (subs s 0 160) " ...") s))))
+  (println (str "      acl2:    " (:want b)))
+  (println (str "      fortran: " (:got b)))
+  (when-not (str/blank? (:stderr b)) (println (str "      " (first (str/split-lines (:stderr b)))))))
+(if broken
+  (do (println (if (seq bad) "negative control: the broken generated compiler was caught" "NEGATIVE CONTROL FAILED: a broken generated compiler went unseen"))
+      (System/exit (if (seq bad) 0 1)))
+  (System/exit (if (seq bad) 1 0)))

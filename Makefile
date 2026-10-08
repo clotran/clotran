@@ -716,7 +716,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -791,21 +791,28 @@ fuzz-model: model
 	scripts/fuzz-alloc -n 300 -s 4 -m
 	$(MAKE) check-vm-gen
 
-# The VM's Fortran is GENERATED from the proved ACL2 (PLAN step 30):
-# scripts/acl2-fortran translates model/vmg.lisp, whose guards are
-# verified, into src/f/gen/vm_gen.f90. Nobody edits that file; change the
-# model, prove it, `make gen-vm`. check-vm-gen says the checked-in file is
-# what the model generates, and runs it against ACL2 step for step under
-# both compilers, with a negative control.
+# The VM's Fortran and its compiler's are GENERATED from the proved ACL2
+# (PLAN step 30): scripts/acl2-fortran translates model/vmg.lisp and
+# model/vmicg.lisp, whose guards are verified, into src/f/gen/vm_gen.f90
+# and vmc_gen.f90. Nobody edits those files; change the model, prove it,
+# `make gen-vm`. check-vm-gen says the checked-in files are what the model
+# generates, and runs them against ACL2 -- the machine step for step, the
+# compiler array for array -- under both compilers, with negative controls.
 .PHONY: gen-vm check-vm-gen
 gen-vm: model
 	scripts/acl2-fortran
+	scripts/acl2-fortran -b vmicg
 check-vm-gen: model | $(B)
 	scripts/acl2-fortran -o $(B)/vm_gen.f90
 	@cmp -s $(B)/vm_gen.f90 src/f/gen/vm_gen.f90 || { echo "src/f/gen/vm_gen.f90 is not what model/vmg.lisp generates: make gen-vm"; exit 1; }
+	scripts/acl2-fortran -b vmicg -o $(B)/vmc_gen.f90
+	@cmp -s $(B)/vmc_gen.f90 src/f/gen/vmc_gen.f90 || { echo "src/f/gen/vmc_gen.f90 is not what model/vmicg.lisp generates: make gen-vm"; exit 1; }
 	scripts/fuzz-vm-gen -n 300 -s 1
 	scripts/fuzz-vm-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vm-gen -n 100 -s 2 -x
+	scripts/fuzz-vmc-gen -n 300 -s 1
+	scripts/fuzz-vmc-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-vmc-gen -n 100 -s 2 -x
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \
