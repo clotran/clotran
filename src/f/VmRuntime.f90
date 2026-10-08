@@ -92,6 +92,12 @@ module vm_runtime
   type(value) :: thrown_v, clo_v
   ! the primitives' own keywords, looked up once
   type(value) :: kw_arg, kw_deref, kw_invoke
+  ! (CLO f nil) for the first few f, made once: a closure of nothing is
+  ! a value no one can tell from another made the same, and main's
+  ! mkclo of the arity's own function would otherwise allocate per call
+  integer, parameter :: NCLO0 = 16
+  type(gc_root) :: clo0_root(0:NCLO0 - 1)
+  type(value) :: clo0(0:NCLO0 - 1)
   logical :: heads_made = .false.
 
 contains
@@ -146,6 +152,11 @@ contains
     kw_deref = rt_keyword("clotran.vm/deref")
     kw_invoke = rt_keyword("clotran.vm/invoke")
     kw_frozen = .true.
+    do i = 0, NCLO0 - 1
+       clo0(i) = gc_nil()
+       clo0(i) = rt_clo(int(i, int64), gc_nil())
+       call gc_global_keep(clo0_root(i), clo0(i))
+    end do
   end subroutine vmrt_init
 
   subroutine make_heads()
@@ -255,6 +266,12 @@ contains
     type(value) :: r
     type(gc_stack), pointer :: vst
     integer :: base
+    if (caps%tag == GCT_NIL .and. f >= 0 .and. f < NCLO0) then
+       if (clo0(f)%tag /= GCT_NIL) then
+          r = clo0(f)
+          return
+       end if
+    end if
     call make_heads()
     vst => gc_my_stack()
     base = vs_enter(vst, 2)

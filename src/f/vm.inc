@@ -670,10 +670,8 @@
     do i = 0, vm_progs(p)%nent - 1
        call vs_set(vst, ebase + i + 1, frame_get(fr, vm_entry_slot(nd, i)))
     end do
+    ! the window is nil already: vs_leave clears what it releases
     sbase = ebase + vm_progs(p)%nent
-    do i = 1, nstk
-       vst%vstack(sbase + i) = gc_nil()
-    end do
     st%stk(0:nstk - 1) => vst%vstack(sbase + 1:sbase + nstk)
     st%code => vm_progs(p)%code
     st%pool => vm_progs(p)%pool
