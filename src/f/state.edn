@@ -127,6 +127,22 @@
  "Eval.f90/flat_n_ok" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/flat_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/flat_n_eval" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/vm_mode" {:class :fixed, :note "CLOTRAN_VM, read once from the environment (lazily: the same value from any thread)"}
+ "Eval.f90/vm_trace" {:class :fixed, :note "CLOTRAN_VM_TRACE, read once with CLOTRAN_VM"}
+ "Eval.f90/vm_n_ok" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/vm_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/vm_progs" {:class :shared, :note "the VM's compiled programs (vm.inc): allocated once, never moved; an entry is reserved under the state lock, filled by the thread that reserved it, then only read"}
+ "Eval.f90/n_vm_progs" {:class :shared, :note "the VM's compiled programs (vm.inc): counted under the state lock"}
+ "VmRuntime.f90/kw_name" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_root" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_val" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/nkw" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_frozen" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/thrown_head" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/thrown_v" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/clo_head" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/clo_v" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/heads_made" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "Eval.f90/no_install" {:class :fixed, :note "set by main before any file loads when an image is being taken"}
  "Eval.f90/out_trace" {:class :fixed, :note "CLOTRAN_TRACE_OUT, read once (debugging)"}
  "Eval.f90/out_trace_read" {:class :fixed, :note "with out_trace"}

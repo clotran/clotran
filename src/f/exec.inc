@@ -601,7 +601,10 @@
           pos = gc_slot(nd, 4)
           ! a flat body is where its current call is (flat_run keeps
           ! the site in aux2); just entered, where its tree begins
-          if (gc_i1(nd) == N_FLAT) then
+          if (gc_i1(nd) == N_VMB) then
+             nd = gc_slot(nd, 5)
+             pos = gc_slot(nd, 4)
+          else if (gc_i1(nd) == N_FLAT) then
              if (tctx%kst(i)%pc /= 0 .and. tctx%kst(i)%aux2 > 0) then
                 pos = gc_int(int(tctx%kst(i)%aux2, gc_ip))
              else
@@ -1389,6 +1392,9 @@
        case (N_FLAT)
           call flat_run(tctx, kbot, vbase, val)
           if (tctx%yield_flag) exit
+       case (N_VMB)
+          call vm_run(tctx, nd, vs_get(vst, b + 2), val)
+          if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST)
           val = gc_slot(nd, 2)
           call k_finish(val, tctx)

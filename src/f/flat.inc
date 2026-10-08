@@ -701,7 +701,7 @@
     select case (gc_i1(v))
     case (N_RECUR)
        yes = .true.
-    case (N_FN, N_LAZY, N_CONST, N_FLAT)
+    case (N_FN, N_LAZY, N_CONST, N_FLAT, N_VMB)
        continue
     case default
        do j = 1, 3

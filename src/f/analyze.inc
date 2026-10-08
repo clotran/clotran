@@ -2158,7 +2158,13 @@
        block
          type(gc_value) :: fl, ar2
          integer :: nt
-         fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), gc_i1(scope_info(vs_get(vst, base + 5))), nt, &
+         ! the generated VM's form where it can run the arity (vm.inc),
+         ! with CLOTRAN_VM=1; else the flat form
+         fl = gc_nil()
+         nt = 0
+         if (vm_enabled()) fl = vm_compile_arity(gcv_nth(vs_get(vst, base + 7), i), &
+              gc_i1(scope_info(vs_get(vst, base + 5))), [vs_get(vst, base + 5), vs_get(vst, base + 7)])
+         if (fl%tag == GCT_NIL) fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), gc_i1(scope_info(vs_get(vst, base + 5))), nt, &
               [vs_get(vst, base + 5), vs_get(vst, base + 7)])
          if (fl%tag /= GCT_NIL) then
             call vs_set(vst, base + 8, fl)

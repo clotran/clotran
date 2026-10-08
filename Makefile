@@ -263,8 +263,20 @@ $(B)/LispReader.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B
 # on top of Eval, nothing sits on it.
 $(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/CompiledFn.o $(B)/NativeArray.o $(B)/Eval.o
 
+# The generated VM and compiler (src/f/gen, written from model/vmfg.lisp and
+# vmicg.lisp by scripts/acl2-fortran) on clotran's values (VmRuntime.f90),
+# below Eval, which runs them (vm.inc, CLOTRAN_VM=1). VmRuntime calls back up
+# through hooks Eval sets, as CompiledFn's table avoids the same cycle.
+vm-objects = $(B)/VmRuntime.o $(B)/vm_gen.o $(B)/vmc_gen.o
+$(B)/VmRuntime.o: $(B)/GC.o $(B)/PersistentList.o
+$(B)/vm_gen.o: $(S)/gen/vm_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $< -o $@
+$(B)/vmc_gen.o: $(S)/gen/vmc_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $< -o $@
+
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc
+	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc \
+	$(vm-objects) $(S)/vm.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
@@ -302,7 +314,7 @@ $(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/DynLoad.o
 # TCP sockets: the shim holds what differs between POSIX and Winsock
 socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o
 $(B)/Socket.o: $(B)/GC.o
-eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(B)/Eval.o \
+eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(vm-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
 LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
 

@@ -532,6 +532,8 @@
                  (:control-shrink opts) (into {} (map (fn [[k v]] [k (str/replace v "7" "8")])))))
       "tree" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
+      "vm" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+             (outputs (:out (sh {"CLOTRAN_VM" "1"} bin core f))))
       "noimage" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                   (outputs (:out (sh {"CLOTRAN_IMAGE" "0"} bin core f))))
       "compiled"

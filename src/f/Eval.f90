@@ -63,6 +63,9 @@ module Eval
   use DynLoad
   use Socket
   use Threads
+  use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_init, rt_keyword
+  use vm_gen, only: vmg_xstep, vmg_fuse_prog, vmg_good
+  use vmc_gen, only: vmicg_program
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
        c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t
   implicit none
@@ -444,7 +447,7 @@ module Eval
   public :: gce_set_home, gce_home
   public :: gce_image_write, gce_image_read, gce_set_no_install
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
-  public :: flat_stats_print
+  public :: flat_stats_print, vm_stats_print
 
   ! THE CALL STACK. One entry per closure invocation in progress: the
   ! closure and the position of the call that entered it (set by the
@@ -466,7 +469,34 @@ module Eval
        N_LOOP = 12, N_LETFN = 13, N_FN = 14, N_LAZY = 15, N_RECUR = 16, N_THROW = 17, &
        N_TRY = 18, N_CASE = 19, N_DEFTYPE = 20, N_DOT = 21, N_NEW = 22, N_NEWTYPE = 23, &
        N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28, &
-       N_FLAT = 29   ! a fn body as flat instructions (flat.inc)
+       N_FLAT = 29, &   ! a fn body as flat instructions (flat.inc)
+       N_VMB = 30       ! a fn body the generated VM runs (vm.inc)
+  ! vm.inc's: a translation's state, and a compiled program
+  type :: vm_tr_ctx
+     logical :: ok = .true., fn_recur = .false.
+     integer :: rstart = 0, rcount = 0, depth = 0
+     logical, allocatable :: reads(:), binds(:)
+     integer, allocatable :: map(:), entry(:)
+  end type vm_tr_ctx
+  type :: vm_prog
+     integer(gc_ip), pointer, contiguous :: code(:) => null()
+     type(gc_value), pointer, contiguous :: pool(:) => null()
+     integer(gc_ip), pointer, contiguous :: fnfirst(:) => null(), fncount(:) => null()
+     integer(gc_ip), pointer, contiguous :: cln(:) => null(), clent(:) => null(), clrest(:) => null()
+     integer, allocatable :: entry(:)
+     integer :: nent = 0, nstk = 0, nctl = 0
+  end type vm_prog
+  ! one table for the process, never moved -- threads read it while
+  ! another adds -- and added to under the state lock; a full table
+  ! leaves an arity to the flat form
+  integer, parameter :: VM_PROGS_MAX = 65536
+  type(vm_prog), allocatable :: vm_progs(:)
+  integer :: n_vm_progs = 0
+  ! CLOTRAN_VM: 0 unread, 1 on, 2 off
+  integer, save :: vm_mode = 0
+  ! CLOTRAN_VM_TRACE=1: each arity's core language and each run, on stderr
+  logical, save :: vm_trace = .false.
+  integer(8), save :: vm_n_ok = 0, vm_n_refused = 0
   ! flat.inc's compiler state, one per arity being compiled
   type :: flat_buf
      integer, allocatable :: code(:)
@@ -943,6 +973,8 @@ contains
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
+    ! the generated VM's runtime, before any thread can run VM code (vm.inc)
+    if (vm_enabled()) call vmrt_init()
     ! The sweep tells us when an object owning out-of-heap storage
     ! dies, so a native array's buffer is freed exactly once rather
     ! than leaking for the life of the process.
@@ -1446,6 +1478,8 @@ contains
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
+    ! the generated VM's runtime, before any thread can run VM code (vm.inc)
+    if (vm_enabled()) call vmrt_init()
     call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])
     call gc_set_coll_ops(gce_coll_hash, gce_coll_equal)
     call ctx_reset()
@@ -20568,7 +20602,7 @@ contains
     if (gc_kind(v) == OBJ_AST) then
        ! an arity's flat form is how it runs, not what it is: the tree
        ! beside it is the export (flat.inc)
-       if (gc_i1(v) == N_FLAT) then
+       if (gc_i1(v) == N_FLAT .or. gc_i1(v) == N_VMB) then
           out = gc_nil()
           return
        end if
@@ -21295,6 +21329,7 @@ contains
   include "exec.inc"
   include "rational.inc"
   include "flat.inc"
+  include "vm.inc"
   include "repl.inc"
   include "tasks.inc"
   include "sorted.inc"

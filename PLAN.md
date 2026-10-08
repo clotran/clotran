@@ -3738,6 +3738,41 @@ loop. The comparison flatters it slightly: the test runtime's values
 are simpler than clotran's, and the number that will count is the one
 measured on clotran's values once the VM is wired in.
 
+**The generated VM in clotran, opt-in (CLOTRAN_VM=1, 2026-10-08).**
+`src/f/VmRuntime.f90` is the runtime the generated code runs on over
+clotran's values (nil, true and false for the model's nil, t and
+:false; a throw and a closure lists headed by private objects no
+program can reach); `src/f/vm.inc` translates an arity whose nodes it
+knows (constants, locals, Vars, if, do, let, loop, recur, throw, calls)
+into vmx2's core language -- each call a prim, so clotran's own `+` and
+`<` with their throws -- and compiles, fuses, bounds-checks and runs it
+with the generated code. The arity is one function whose parameters are
+its entry slots, called from a main that fetches each by a prim, so the
+whole run is a compiled program from pc 0 and vmfg-correct covers it;
+the translation and the runtime are glue the theorem does not, checked
+instead: `scripts/fuzz -m vm` agrees with clj on 600 cases and the 140
+regressions, and language_test passes 193 of 196 -- the three are a
+break reading a VM body's locals and call positions, which the VM does
+not keep. core.clj: 1,355 arities run on the VM, 957 stay flat. Off by
+default; the gate does not run it.
+
+Measured, and the point of the next steps:
+
+| | flat (default) | VM |
+|---|---|---|
+| a 10^6-iteration loop in a fn | 32 ms | 97 ms |
+| `(apply + (take 10^6 (range)))` | 947 ms | 3,900 ms |
+
+clj does the second in 72 ms -- James's yardstick. The VM loses because
+a call costs it a setup (the entry values copied, the control stack
+allocated, main's prims, mkclo and callv) and every call it makes goes
+back up through the evaluator (`gce_apply_slots`); the superinstructions
+never run on that form. Next, in the model: a VM-compiled fn called by
+the VM directly, its frame on the VM's stack, nothing allocated per
+call; then the lazy-seq, range and take objects (step 26's findings 1
+and 3) as modelled data structures.
+
+
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries
 -- can be modelled and generated too. The proof must hold for every

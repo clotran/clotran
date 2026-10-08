@@ -598,6 +598,9 @@ module GC
      logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
      integer :: state_depth = 0        ! how deep this thread holds the state lock
      logical :: grow_entered = .false., grow_stopped = .false.   ! gc_grow_begin's, for gc_grow_end
+     ! the generated VM's running body: its entry values are vstack(vm_args_rb + i + 1)
+     ! (src/f/VmRuntime.f90, vm.inc) -- per thread, as two threads run VM code at once
+     integer :: vm_args_rb = 0
      ! SPARE FRAMES: a compiled procedure's frame, cleared, once its call
      ! has returned (gc_frame_give) -- nothing keeps a frame after its
      ! call -- by size, a few of each. Not roots: every collection empties
