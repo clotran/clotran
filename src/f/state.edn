@@ -130,6 +130,7 @@
  "Eval.f90/vm_mode" {:class :fixed, :note "CLOTRAN_VM, read once from the environment (lazily: the same value from any thread)"}
  "Eval.f90/vm_trace" {:class :fixed, :note "CLOTRAN_VM_TRACE, read once with CLOTRAN_VM"}
  "Eval.f90/vm_n_ok" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/vm_refused_by" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/vm_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/vm_progs" {:class :shared, :note "the VM's compiled programs (vm.inc): allocated once, never moved; an entry is reserved under the state lock, filled by the thread that reserved it, then only read"}
  "Eval.f90/n_vm_progs" {:class :shared, :note "the VM's compiled programs (vm.inc): counted under the state lock"}

@@ -33,11 +33,14 @@
   !                         initial values together
   !   recur                 (:recur args); the fn's own recur, a loop
   !                         around the body over its parameters
+  !   vector, map, set, new, a dot call, fn, lazy-seq
+  !                         (:prim NODE parts..): the runtime does what
+  !                         flat does with the node (vm_node_hook)
   !   a call                (:prim f args), f the builtin or Var the
   !                         analyzer wrote as the head; any other head
   !                         (:prim :clotran.vm/invoke head args)
-  ! Anything else -- fn, try, letfn, case, interop -- and the arity runs
-  ! as before.
+  ! Anything else -- try, letfn, case, def -- and the arity runs as
+  ! before.
   ! ===================================================================
 
   ! CLOTRAN_VM=1: fn bodies the VM can run, it runs
@@ -49,6 +52,7 @@
        if (vm_mode == 1) then
           vmrt_call => vm_call_hook
           vmrt_deref => vm_deref_hook
+          vmrt_node => vm_node_hook
           block
             character(len=8) :: tr
             call get_environment_variable("CLOTRAN_VM_TRACE", tr)
@@ -87,6 +91,101 @@
        end if
     end if
   end subroutine vm_call_hook
+
+  ! the runtime's node: what flat does for a node the VM leaves to it
+  ! (F_COLL, F_NEW, F_DOT, F_FN, F_LAZY), on the n values above argbase --
+  ! a collection's elements, new's and a dot call's arguments (the dot's
+  ! target first when it is a value), a fn's captured values in the
+  ! order of its template's captures. A throw as vm_call_hook's.
+  recursive subroutine vm_node_hook(nd, argbase, n, out, ok)
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: argbase, n
+    type(gc_value), intent(out) :: out
+    logical, intent(out) :: ok
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value) :: argv, x, capv
+    integer :: base, j, from, ncap, hi
+    tctx => ctx_self()
+    vst => tctx%stk
+    out = gc_nil()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, nd)
+    select case (gc_i1(nd))
+    case (N_VECTOR, N_MAP, N_SET, N_NEW)
+       call vs_set(vst, base + 2, vm_slots_vec(vst, argbase, 0, n, [nd]))
+       select case (gc_i1(nd))
+       case (N_VECTOR); out = vs_get(vst, base + 2)
+       case (N_SET);    out = vec_to_set(vs_get(vst, base + 2), [nd])
+       case (N_MAP);    out = vec_to_map(vs_get(vst, base + 2), [nd])
+       case default;    out = new_cached(vs_get(vst, base + 1), vs_get(vst, base + 2))
+       end select
+    case (N_DOT)
+       from = 1
+       if (tag_of(gc_slot(nd, 3)) == GCT_SYM) from = 0
+       if (from == 1) then
+          call vs_set(vst, base + 3, vs_get(vst, argbase + 1))
+       else
+          call vs_set(vst, base + 3, gc_slot(nd, 3))
+       end if
+       call vs_set(vst, base + 2, vm_slots_vec(vst, argbase, from, n - from, [nd]))
+       out = dot_dispatch(vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 2), from)
+       if (.not. tctx%has_error .and. is_call_request(out)) then
+          call vs_set(vst, base + 3, out)
+          out = apply(gc_slot(vs_get(vst, base + 3), 1), gc_slot(vs_get(vst, base + 3), 2))
+       end if
+    case (N_FN, N_LAZY)
+       ! a frame holding the captured values at the slots the template reads
+       capv = gcv_nth(gc_slot(nd, 2), 2)
+       ncap = gcv_count(capv) / 2
+       hi = 0
+       do j = 0, ncap - 1
+          hi = max(hi, int_of(gcv_nth(capv, 2 * j)) + 1)
+       end do
+       x = gc_vec(max(hi, 1), [nd])
+       call vs_set(vst, base + 2, x)
+       do j = 0, ncap - 1
+          call gc_vec_set(vs_get(vst, base + 2), int_of(gcv_nth(gcv_nth(gc_slot(nd, 2), 2), 2 * j)) + 1, &
+               vs_get(vst, argbase + j + 1))
+       end do
+       out = make_closure_from(gc_slot(nd, 2), vs_get(vst, base + 2), [nd])
+       if (gc_i1(nd) == N_LAZY) then
+          call vs_set(vst, base + 3, out)
+          out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [vs_get(vst, base + 3)])
+          call gc_set_i1(out, LAZY_PENDING)
+       end if
+    end select
+    ok = .not. tctx%has_error
+    if (.not. ok) then
+       out = thrown_value()
+       if (out%tag == GCT_NIL) then
+          block
+            character(len=:), allocatable :: msg
+            call gce_error(s=msg)
+            out = error_value(msg, [nd])
+          end block
+       end if
+    end if
+    call vs_leave(vst, base)
+  end subroutine vm_node_hook
+
+  ! slots argbase+from+1 .. +n as a vector
+  function vm_slots_vec(vst, argbase, from, n, roots) result(v)
+    type(gc_stack), pointer, intent(in) :: vst
+    integer, intent(in) :: argbase, from, n
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    integer :: base, j
+    base = vs_enter(vst, 1)
+    v = gcv_build(n, roots)
+    call vs_set(vst, base + 1, v)
+    do j = 0, n - 1
+       v = gcv_put(vs_get(vst, base + 1), j, vs_get(vst, argbase + from + j + 1), roots)
+       call vs_set(vst, base + 1, v)
+    end do
+    v = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
+  end function vm_slots_vec
 
   function vm_deref_hook(var) result(v)
     type(gc_value), intent(in) :: var
@@ -136,9 +235,17 @@
     case (N_CONST, N_VAR)
     case (N_LOCAL)
        call vm_mark(c%reads, gc_i2(nd), c)
-    case (N_IF, N_DO, N_THROW)
-       do i = 0, gcv_count(kids) - 1
-          call vm_scan(c, gcv_nth(kids, i))
+    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT)
+       if (gcv_is(kids)) then
+          do i = 0, gcv_count(kids) - 1
+             call vm_scan(c, gcv_nth(kids, i))
+          end do
+       end if
+    case (N_FN, N_LAZY)
+       ! the slots its template captures, read here
+       head = gcv_nth(gc_slot(nd, 2), 2)
+       do i = 0, gcv_count(head) / 2 - 1
+          call vm_mark(c%reads, int_of(gcv_nth(head, 2 * i)), c)
        end do
     case (N_LET, N_LOOP)
        n = gc_i2(nd)
@@ -174,6 +281,7 @@
        end if
     case default
        c%ok = .false.
+       if (gc_i1(nd) >= 0 .and. gc_i1(nd) <= 40) vm_refused_by(gc_i1(nd)) = vm_refused_by(gc_i1(nd)) + 1
     end select
   end subroutine vm_scan
 
@@ -234,6 +342,28 @@
           call vs_set(vst, base + 2, x)
        end if
        if (c%ok) e = vm_head_list("if", vs_get(vst, base + 2), roots)
+    case (N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT)
+       ! the runtime's node on the parts' values (vm_node_hook)
+       call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
+       if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
+    case (N_FN, N_LAZY)
+       ! the captured slots' values, in the template's order
+       call vs_set(vst, base + 2, gcv_empty(roots))
+       x = gcv_nth(gc_slot(nd, 2), 2)
+       call vs_set(vst, base + 6, x)
+       call vs_set(vst, base + 5, vm_kw("local"))
+       do i = 0, gcv_count(vs_get(vst, base + 6)) / 2 - 1
+          n = c%map(int_of(gcv_nth(vs_get(vst, base + 6), 2 * i)))
+          if (n < 0) then
+             c%ok = .false.
+             exit
+          end if
+          x = vm_l([vs_get(vst, base + 5), gc_int(int(n, gc_ip))], [roots, vs_get(vst, base + 2), vs_get(vst, base + 6)])
+          call vs_set(vst, base + 3, x)
+          x = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [roots, vs_get(vst, base + 2), vs_get(vst, base + 6)])
+          call vs_set(vst, base + 2, x)
+       end do
+       if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
     case (N_THROW)
        call vm_tr_kids(c, kids, 0, 0, base + 2, roots)
        if (c%ok) e = vm_head_list("throw", vs_get(vst, base + 2), roots)
@@ -364,6 +494,23 @@
     end do
     call vs_leave(vst, base)
   end subroutine vm_tr_kids
+
+  ! (:prim NODE items ..)
+  function vm_node_prim(nd, items, roots) result(e)
+    type(gc_value), intent(in) :: nd, items, roots(:)
+    type(gc_value) :: e, x
+    type(gc_stack), pointer :: vst
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    x = vec_to_list(items, [roots, items, nd])
+    call vs_set(vst, base + 1, x)
+    x = gcl_cons(nd, vs_get(vst, base + 1), [roots, nd, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, x)
+    call vs_set(vst, base + 2, vm_kw("prim"))
+    e = gcl_cons(vs_get(vst, base + 2), vs_get(vst, base + 1), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
+  end function vm_node_prim
 
   ! (kw items ..)
   function vm_head_list(kw, items, roots) result(e)
@@ -751,6 +898,9 @@
 
   ! CLOTRAN_STATS: how many arities the VM took
   subroutine vm_stats_print()
+    integer :: k
     if (vm_mode /= 1) return
     write(0, '(a, i0, a, i0, a)') 'vm: ', vm_n_ok, ' arities compiled, ', vm_n_refused, ' refused'
+    write(0, '(a, *(1x, i0, ":", i0))') 'vm: refused by node kind', &
+         (k, vm_refused_by(k), k = 0, 40)
   end subroutine vm_stats_print

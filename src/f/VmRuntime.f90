@@ -73,6 +73,9 @@ module vm_runtime
   end interface
   procedure(vmrt_call_i), pointer, public :: vmrt_call => null()
   procedure(vmrt_deref_i), pointer, public :: vmrt_deref => null()
+  ! a node of the program's own (an OBJ_AST constant) run on values: what
+  ! flat does for a collection literal, new, a dot call, fn, lazy-seq
+  procedure(vmrt_call_i), pointer, public :: vmrt_node => null()
   ! the running body's entry values (the arguments, the captures, the fn
   ! itself) are vstack(vm_args_rb + i + 1), vm_args_rb the thread's own
   ! (gc_stack, set by vm.inc around each run)
@@ -425,6 +428,11 @@ contains
     logical :: ok
     vst => gc_my_stack()
     r = gc_nil()
+    if (gc_kind(op) == OBJ_AST) then
+       call vmrt_node(op, argbase, n, r, ok)
+       if (.not. ok) r = vmrt_throw_of(r)
+       return
+    end if
     if (op%tag == GCT_KEY) then
        if (rt_is(op, kw_arg)) then
           a = vs_get(vst, argbase + 1)
