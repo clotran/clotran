@@ -107,7 +107,9 @@
                             [2 (two '[bit-and bit-or bit-xor] l l)]
                             [1 (two '[bit-shift-left bit-shift-right unsigned-bit-shift-right] l (g/choose 0 5))]
                             [1 (g/fmap #(list 'long %) d)]])
-           (= ty :D) (into [[3 (two '[+ - * max min] d d)]
+           ;; no min or max of two doubles: a signed-zero tie is DEVIATIONS 76,
+           ;; and what DEVIATIONS records is not generated (as in fuzz-num)
+           (= ty :D) (into [[3 (two '[+ - *] d d)]
                             [2 (two '[+ - *] l d)]
                             [1 (two '[/] d (g/elements [2.0 -0.5 4.0 3.0]))]
                             [1 (g/fmap #(list 'double %) l)]])
