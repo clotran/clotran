@@ -110,4 +110,9 @@
  ;; \u measured its length in bytes (scripts/fuzz-read, seed 2362644560)
  (read-string "\\oλ1") (read-string "\\o1λ") (read-string "\\uλ12a")
  (read-string "\\u12λa") (read-string "\\u12λ") (read-string "\\oλ")
+ ;; compare with no answer threw its own message; clj's casts the second to
+ ;; Number after a number, to the first's own type after a Comparable, and the
+ ;; first to Comparable otherwise (scripts/fuzz -m compiled, seed 620472936)
+ (sort [[1] 2]) (sort [2 [1]]) (compare [1] :a) (compare 1/2 :a) (compare :a "x")
+ (compare "s" 1) (compare true 1) (compare \a 1) (compare 'a 1) (compare {} 1) (compare (list 1) 1)
 ]

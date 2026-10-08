@@ -14593,13 +14593,7 @@ contains
          if (cok) then
             out = gc_int(cv)
          else
-            ! what clj throws when neither is Comparable to the other
-            block
-               call type_name(strip_meta(gcv_nth(args, 0)), s=dlt_1)
-               call type_name(strip_meta(gcv_nth(args, 1)), s=dlt_2)
-               call raise_class("clotran.host.class_cast_exception", "compare: cannot compare " //  dlt_1 // " with " //  dlt_2, &
-                    [vs_get(vst, base + 1)])
-            end block
+            call raise_compare_cast(gcv_nth(args, 0), gcv_nth(args, 1), [vs_get(vst, base + 1)])
          end if
        end block
     case (B_DISJ)
@@ -19368,6 +19362,39 @@ contains
        end select
     end select
   end subroutine class_name_of
+
+  ! What clj throws when compare(a, b) has no answer (Util.compare): a
+  ! number casts b to Number; a Comparable casts b to its own type in its
+  ! compareTo; anything else is cast to Comparable itself.
+  subroutine raise_compare_cast(a, b, roots)
+    type(gc_value), intent(in) :: a, b
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: x
+    character(len=:), allocatable :: na, nb, target
+    x = strip_meta(a)
+    call class_name_of(x, s=na)
+    call class_name_of(strip_meta(b), s=nb)
+    if (is_number(x)) then
+       target = "clotran.host.number"
+    else
+       select case (x%tag)
+       case (GCT_BOOL); target = "clotran.host.logical"
+       case (GCT_CHAR); target = "clotran.host.char"
+       case (GCT_STR);  target = "clotran.host.string"
+       case (GCT_SYM);  target = "clotran.host.symbol"
+       case (GCT_KEY);  target = "clotran.host.keyword"
+       case default
+          if (gc_kind(x) == OBJ_VECTOR) then
+             target = "clotran.host.i_persistent_vector"
+          else
+             call raise_class("clotran.host.class_cast_exception", "class " // na // &
+                  " cannot be cast to class clotran.host.comparable", roots)
+             return
+          end if
+       end select
+    end if
+    call raise_class("clotran.host.class_cast_exception", "class " // nb // " cannot be cast to class " // target, roots)
+  end subroutine raise_compare_cast
 
   ! The classpath, and the extensions. One root was enough while only
   ! core.clj was being loaded, but Clojure's own test suite lives under

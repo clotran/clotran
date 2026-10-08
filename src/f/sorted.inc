@@ -34,11 +34,7 @@
        end if
        c = compare_values(a, b, ok)
        if (.not. ok) then
-          block
-             call class_name_of(a, s=dlt_1)
-             call class_name_of(b, s=dlt_2)
-             call raise_class("clotran.host.class_cast_exception",  "cannot compare " // dlt_1 // " with " // dlt_2, [a, b])
-          end block
+          call raise_compare_cast(a, b, [a, b])
           c = huge(0)
        end if
     else
