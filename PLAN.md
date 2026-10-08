@@ -3653,11 +3653,16 @@ array agree, 300 under gfortran and 100 under flang. Its control (the
 generated conditional jump one past its target) was caught 100 of 100.
 It runs in `make check-vm-gen`.
 
-Not done: the compiled machine is not proved to satisfy `vmg-good`,
-the bounds vmg-run's guard asks for (every code word and table entry
-in 0..2^40). The glue will check it with the generated vmg-good before
-a run, or the bound is proved (the compiler writes only pcs, depths,
-counts and environment slots, each of them a depth, so it should hold). Next: wire the
+The bounds a run starts from: vmg-run's guard asks for `vmg-good`
+(every code word and table entry in 0..2^40, the tables inside their
+arrays), and nothing proves that a loaded or compiled program meets
+it. So it is checked instead: vmg-good is guard-verified ACL2 too,
+and vm_gen.f90 now carries it as `vmg_good`, generated, for the glue
+to run before every `vmg_run` -- translation validation, the bounds
+checked where they are not proved. Both fuzzers report it: no
+program fuzz-vm-gen loads or fuzz-vmc-gen compiles without an error
+lies outside them, and the Fortran and ACL2 agree on it for every
+one. Proving it of vmicg-program's output would drop the check. Next: wire the
 generated pair into clotran -- clotran's values behind the `rt_`
 operations, an analyzer from Clojure to the core language, and the
 runtime's real arithmetic and primitives.

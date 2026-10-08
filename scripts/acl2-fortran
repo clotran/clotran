@@ -44,7 +44,8 @@
   '{"vmg"
     {:module "vm_gen" :out "src/f/gen/vm_gen.f90"
      ;; the functions generated, callees first
-     :fns [vmg-w vmg-poolv vmg-sreg vmg-sset vmg-copy-down vmg-push-rec vmg-pop-rec vmg-unwind
+     :fns [bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good
+           vmg-w vmg-poolv vmg-sreg vmg-sset vmg-copy-down vmg-push-rec vmg-pop-rec vmg-unwind
            vmg-pick-fixed vmg-pick-rest vmg-pick
            vmg-push vmg-load vmg-add vmg-lt vmg-slide vmg-jmpf vmg-jmp vmg-mkclo vmg-capt vmg-callv
            vmg-ret vmg-recur vmg-prim vmg-throw vmg-try vmg-endtry vmg-step vmg-run]
@@ -52,6 +53,8 @@
      :value-formals {vmg-sset #{v} vmg-unwind #{v}}
      ;; functions answering a value, not an integer
      :value-fns #{vmg-poolv vmg-sreg}
+     ;; functions answering true or false: the bounds, which a run checks before it starts
+     :bool-fns #{bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good}
      :header ["! GENERATED from model/vmg.lisp by scripts/acl2-fortran. Do not edit:"
               "! change the model, prove it, and generate again (PLAN step 30)."
               "! Every function here has its guards verified in ACL2: every index in"
@@ -80,6 +83,7 @@
 (def fns (:fns cfg))
 (def value-formals (:value-formals cfg))
 (def value-fns (:value-fns cfg))
+(def bool-fns (get cfg :bool-fns #{}))
 
 ;; ---- ACL2 hands over the translated definitions --------------------------------
 
@@ -159,7 +163,7 @@
 
 (defn outs [fn] (nth (defs fn) 2))
 (defn sub? [fn] (boolean (some stobjs (outs fn))))
-(defn fn-type [fn] (cond (sub? fn) :st (value-fns fn) :val :else :int))
+(defn fn-type [fn] (cond (sub? fn) :st (value-fns fn) :val (bool-fns fn) :bool :else :int))
 (defn formal-type [fn x] (cond (stobjs x) :st (get-in value-formals [fn x]) :val :else :int))
 (defn res-names [fn]
   (let [k (count (remove stobjs (outs fn)))] (if (= k 1) ["r"] (mapv #(str "r" (inc %)) (range k)))))
@@ -258,6 +262,8 @@
         (#{'binary-+ 'binary-* 'unary--} op) (int-op ctx op xs)
         (#{'equal 'eql} op) (cmp ctx :eq (first xs) (second xs))
         (= op '<) (cmp ctx :lt (first xs) (second xs))
+        ;; implies is a function in ACL2, but its second argument is only read when the first holds
+        (= op 'implies) (expr ctx (list 'if (first xs) (second xs) (list 'quote 't)))
         (= op 'not) (let [r (expr ctx (first xs))] (assoc r :code (str "(.not. " (:code r) ")")))
         (= op 'nfix) (let [r (expr ctx (first xs))] (assoc r :code (str "max(0_int64, " (:code r) ")") :type :int))
         (= op 'zp) (let [r (expr ctx (first xs))] (assoc r :code (str "(" (:code r) " <= 0_int64)") :type :bool))

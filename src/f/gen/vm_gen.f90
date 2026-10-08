@@ -8,6 +8,321 @@ module vm_gen
   use vm_runtime
   implicit none
 contains
+  pure function bnd40p(x_) result(r)
+    integer(int64), value :: x_
+    logical :: r
+    if (.true.) then
+      if ((.not. (x_ < 0_int64))) then
+        r = (.not. (1099511627776_int64 < x_))
+        return
+      else
+        r = .false.
+        return
+      end if
+    else
+      r = .false.
+      return
+    end if
+  end function bnd40p
+
+  pure function vmg_lens(st) result(r)
+    type(vm_state), intent(in) :: st
+    logical :: r
+    if ((.not. (1099511627776_int64 < size(st%code, kind=int64)))) then
+      if ((.not. (1099511627776_int64 < size(st%pool, kind=int64)))) then
+        if ((.not. (1099511627776_int64 < size(st%stk, kind=int64)))) then
+          if ((.not. (1099511627776_int64 < size(st%ckind, kind=int64)))) then
+            if ((.not. (size(st%ca, kind=int64) < size(st%ckind, kind=int64)))) then
+              if ((.not. (size(st%cb, kind=int64) < size(st%ckind, kind=int64)))) then
+                if ((.not. (size(st%cc, kind=int64) < size(st%ckind, kind=int64)))) then
+                  if ((.not. (size(st%cprev, kind=int64) < size(st%ckind, kind=int64)))) then
+                    if ((.not. (1099511627776_int64 < size(st%fnfirst, kind=int64)))) then
+                      if ((.not. (size(st%fncount, kind=int64) < size(st%fnfirst, kind=int64)))) then
+                        if ((.not. (1099511627776_int64 < size(st%cln, kind=int64)))) then
+                          if ((.not. (size(st%clent, kind=int64) < size(st%cln, kind=int64)))) then
+                            r = (.not. (size(st%clrest, kind=int64) < size(st%cln, kind=int64)))
+                            return
+                          else
+                            r = .false.
+                            return
+                          end if
+                        else
+                          r = .false.
+                          return
+                        end if
+                      else
+                        r = .false.
+                        return
+                      end if
+                    else
+                      r = .false.
+                      return
+                    end if
+                  else
+                    r = .false.
+                    return
+                  end if
+                else
+                  r = .false.
+                  return
+                end if
+              else
+                r = .false.
+                return
+              end if
+            else
+              r = .false.
+              return
+            end if
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      else
+        r = .false.
+        return
+      end if
+    else
+      r = .false.
+      return
+    end if
+  end function vmg_lens
+
+  pure function words_ok(st, i_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: i_
+    logical :: r
+    integer(int64) :: i_1
+    do
+      if ((i_ <= 0_int64)) then
+        r = .true.
+        return
+      else
+        if (bnd40p(st%code((-1_int64 + i_)))) then
+          i_1 = (-1_int64 + i_)
+          i_ = i_1
+          cycle
+        else
+          r = .false.
+          return
+        end if
+      end if
+    end do
+  end function words_ok
+
+  pure function cls_ok(st, c_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: c_
+    logical :: r
+    integer(int64) :: c_1
+    do
+      if ((c_ <= 0_int64)) then
+        r = .true.
+        return
+      else
+        if (bnd40p(st%cln((-1_int64 + c_)))) then
+          if (bnd40p(st%clent((-1_int64 + c_)))) then
+            c_1 = (-1_int64 + c_)
+            c_ = c_1
+            cycle
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      end if
+    end do
+  end function cls_ok
+
+  pure function fns_ok(st, f_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: f_
+    logical :: r
+    integer(int64) :: f_1
+    do
+      if ((f_ <= 0_int64)) then
+        r = .true.
+        return
+      else
+        if (bnd40p(st%fnfirst((-1_int64 + f_)))) then
+          if (bnd40p(st%fncount((-1_int64 + f_)))) then
+            if ((.not. (size(st%cln, kind=int64) < (st%fnfirst((-1_int64 + f_)) + st%fncount((-1_int64 + f_)))))) then
+              f_1 = (-1_int64 + f_)
+              f_ = f_1
+              cycle
+            else
+              r = .false.
+              return
+            end if
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      end if
+    end do
+  end function fns_ok
+
+  pure function recs_ok(st, j_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: j_
+    logical :: r
+    integer(int64) :: j_3
+    logical :: t_1
+    logical :: t_2
+    do
+      if ((j_ <= 0_int64)) then
+        r = .true.
+        return
+      else
+        if (bnd40p(st%ca((-1_int64 + j_)))) then
+          if (bnd40p(st%cb((-1_int64 + j_)))) then
+            if (bnd40p(st%cc((-1_int64 + j_)))) then
+              if (.true.) then
+                if ((.not. (st%cprev((-1_int64 + j_)) < -1_int64))) then
+                  if ((st%cprev((-1_int64 + j_)) < (-1_int64 + j_))) then
+                    if ((st%ckind((-1_int64 + j_)) == 2_int64)) then
+                      if ((st%cprev((-1_int64 + j_)) < 0_int64)) then
+                        t_1 = (st%cprev((-1_int64 + j_)) < 0_int64)
+                      else
+                        t_1 = (st%ckind(st%cprev((-1_int64 + j_))) == 2_int64)
+                      end if
+                      t_2 = t_1
+                    else
+                      t_2 = .true.
+                    end if
+                    if (t_2) then
+                      j_3 = (-1_int64 + j_)
+                      j_ = j_3
+                      cycle
+                    else
+                      r = .false.
+                      return
+                    end if
+                  else
+                    r = .false.
+                    return
+                  end if
+                else
+                  r = .false.
+                  return
+                end if
+              else
+                r = .false.
+                return
+              end if
+            else
+              r = .false.
+              return
+            end if
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      end if
+    end do
+  end function recs_ok
+
+  pure function vmg_bnd(st) result(r)
+    type(vm_state), intent(in) :: st
+    logical :: r
+    logical :: t_1
+    if (vmg_lens(st)) then
+      if (bnd40p(st%pc)) then
+        if (bnd40p(st%fb)) then
+          if (bnd40p(st%sp)) then
+            if ((st%ctop >= 0_int64)) then
+              if ((.not. (size(st%ckind, kind=int64) < st%ctop))) then
+                if ((.not. (st%hidx < -1_int64))) then
+                  if ((st%hidx < st%ctop)) then
+                    if ((st%hidx < 0_int64)) then
+                      t_1 = (st%hidx < 0_int64)
+                    else
+                      t_1 = (st%ckind(st%hidx) == 2_int64)
+                    end if
+                    if (t_1) then
+                      if (words_ok(st, size(st%code, kind=int64))) then
+                        if (cls_ok(st, size(st%cln, kind=int64))) then
+                          if (fns_ok(st, size(st%fnfirst, kind=int64))) then
+                            r = recs_ok(st, st%ctop)
+                            return
+                          else
+                            r = .false.
+                            return
+                          end if
+                        else
+                          r = .false.
+                          return
+                        end if
+                      else
+                        r = .false.
+                        return
+                      end if
+                    else
+                      r = .false.
+                      return
+                    end if
+                  else
+                    r = .false.
+                    return
+                  end if
+                else
+                  r = .false.
+                  return
+                end if
+              else
+                r = .false.
+                return
+              end if
+            else
+              r = .false.
+              return
+            end if
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      else
+        r = .false.
+        return
+      end if
+    else
+      r = .false.
+      return
+    end if
+  end function vmg_bnd
+
+  pure function vmg_good(st) result(r)
+    type(vm_state), intent(in) :: st
+    logical :: r
+    logical :: t_1
+    if ((st%status == 0_int64)) then
+      t_1 = vmg_bnd(st)
+    else
+      t_1 = .true.
+    end if
+    r = t_1
+    return
+  end function vmg_good
+
   pure function vmg_w(st, pc_, k_) result(r)
     type(vm_state), intent(in) :: st
     integer(int64), value :: pc_

@@ -39,7 +39,7 @@
 ;; ---- ACL2: each program's arrays and vmi's trace ----------------------------------
 
 (def driver
-  (str "(include-book \"vmi\")\n"
+  (str "(include-book \"vmg\")\n"
        "(set-print-case :downcase state)\n"
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
        "(defun strip-to-clauses (ds) (if (atom ds) nil (cons (list (caar ds) (list (cadar ds) (caddar ds))) (strip-to-clauses (cdr ds)))))\n"
@@ -83,7 +83,7 @@
        "            (prog2$ (pr-pool 0 (v-pool-length vmi) vmi)\n"
        "              (prog2$ (pr-fns 0 (v-fnfirst-length vmi) vmi)\n"
        "                (prog2$ (pr-cls 0 (v-cln-length vmi) vmi)\n"
-       "                  (prog2$ (cw \"END-PROG~%BEGIN-TRACE ~x0~%\" i)\n"
+       "                  (prog2$ (cw \"END-PROG~%BEGIN-TRACE ~x0~%good ~x1~%\" i (vmg-good vmi))\n"
        "                    (prog2$ (show vmi)\n"
        "                      (let ((vmi (trace-run 400000 vmi)))\n"
        "                        (prog2$ (cw \"END-TRACE~%\") vmi)))))))))))))\n"
@@ -125,6 +125,14 @@
 
 (defn tokens [s] (vec (remove str/blank? (str/split s #"\s+"))))
 
+;; the bounds check's own control: a program with one code word out of
+;; bounds must be said to be outside them
+(def check-caught
+  (let [i (first (sort (keys progs))) [hd & ls] (str/split-lines (progs i))
+        f (str work "/outside.txt")]
+    (spit f (str/join "\n" (concat [hd "-1"] (rest ls) [""])))
+    (= "good nil" (str/trim (first (str/split-lines (:out (p/shell {:continue true :out :string :err :string} exe f))))))))
+
 (def results
   (vec (for [i (sort (keys traces))]
          (let [f (str work "/prog" i ".txt")
@@ -137,9 +145,13 @@
             :want (when k (str/join " " (get want k))) :got (when k (str/join " " (get got k))) :err (:err r)}))))
 
 (def bad (filter (complement :ok) results))
+;; a loaded program outside the bounds a run's guard asks for
+(def unbounded (filter #(= "good nil" (str/trim (first (str/split-lines (traces %))))) (sort (keys traces))))
 (println (str "fuzz-vm-gen: " n " programs, seed " seed ", " fc "; " (count results) " run, "
               (reduce + (map :steps results)) " steps compared" (when (pos? not-encodable) (str ", " not-encodable " not encodable"))))
 (println (format "the generated Fortran against ACL2's vmi, step for step: %d disagree" (count bad)))
+(println (if check-caught "the bounds check said a code word of -1 is outside them" "BOUNDS CHECK FAILED: a code word of -1 went unseen"))
+(println (format "loaded outside vmg-good's bounds: %d%s" (count unbounded) (if (seq unbounded) (str " (programs " (str/join " " (take 5 unbounded)) ")") "")))
 (doseq [b (take 3 bad)]
   (println (str "    program " (:i b) ", step " (:line b) ": " (lisp (exprs (:i b)))))
   (println (str "      acl2:    " (:want b)))
@@ -148,4 +160,4 @@
 (if broken
   (do (println (if (seq bad) "negative control: the broken generated unwind was caught" "NEGATIVE CONTROL FAILED: a broken generated unwind went unseen"))
       (System/exit (if (seq bad) 0 1)))
-  (System/exit (if (or (seq bad) (pos? not-encodable)) 1 0)))
+  (System/exit (if (or (seq bad) (pos? not-encodable) (seq unbounded) (not check-caught)) 1 0)))

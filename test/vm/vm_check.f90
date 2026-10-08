@@ -50,8 +50,10 @@ program vm_check
   end do
   close(u)
 
-  ! as ACL2's trace: the state, a step, ..., until the machine stops or
-  ! has run the main code's return
+  ! the bounds vmg_run's guard asks for, which the generated vmg_good
+  ! checks; then as ACL2's trace: the state, a step, ..., until the
+  ! machine stops or has run the main code's return
+  write(*, '(a)') merge('good t  ', 'good nil', vmg_good(st))
   call show()
   do k = 1, 400000
      last = (vmg_w(st, st%pc, 0_int64) == 11 .and. st%ctop == 0 .and. st%status == 0)

@@ -2,11 +2,13 @@
 ! scripts/fuzz-vmc-gen: reads the expression and the function table as
 ! ACL2 prints them, compiles them with vmicg_program, and prints the
 ! error flag, the status and every array, as the fuzzer's ACL2 driver
-! prints vmicg-program's.
+! prints vmicg-program's, and whether the machine is inside the bounds
+! vmg_run's guard asks for (the generated vmg_good).
 program vmc_check
   use iso_fortran_env, only: int64
   use vm_runtime
   use vmc_gen
+  use vm_gen, only: vmg_good
   implicit none
   type(vm_state) :: st
   type(vc_state) :: ce
@@ -47,6 +49,7 @@ program vmc_check
      write(6, '(i0, 1x, i0, 1x, i0)') st%cln(j), st%clent(j), st%clrest(j)
   end do
   write(6, '(5(i0, 1x))') st%pc, st%fb, st%sp, st%ctop, st%hidx
+  write(6, '(a)') merge('good t  ', 'good nil', vmg_good(st))
 
 contains
 

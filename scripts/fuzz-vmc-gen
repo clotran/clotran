@@ -10,8 +10,10 @@
 ;; are compiled by ACL2's vmicg-program, which prints the error flag, the
 ;; status and every array it fills, and by test/vm/vmc_check, which runs
 ;; the generated vmicg_program on the same program and prints the same.
-;; They must agree token for token. The proof is about the ACL2; this is
-;; what says the Fortran is it.
+;; They must agree token for token, and on whether the machine is inside
+;; the bounds vmg-run's guard asks for (vmg-good, generated too); a program
+;; compiled without an error outside them is a finding. The proof is
+;; about the ACL2; this is what says the Fortran is it.
 ;;
 ;; -x is the NEGATIVE CONTROL: the generated compiler's conditional jump
 ;; one instruction past its target, as fuzz-vmx2 -xc breaks the model's,
@@ -88,7 +90,7 @@
        "            (prog2$ (pr-pool 0 (v-pool-length vmi) vmi)\n"
        "              (prog2$ (pr-fns 0 (v-fnfirst-length vmi) vmi)\n"
        "                (prog2$ (pr-cls 0 (v-cln-length vmi) vmi)\n"
-       "                  (prog2$ (cw \"~x0 ~x1 ~x2 ~x3 ~x4~%END-PROG~%\" (v-pc vmi) (v-fb vmi) (v-sp vmi) (v-ctop vmi) (v-hidx vmi))\n"
+       "                  (prog2$ (cw \"~x0 ~x1 ~x2 ~x3 ~x4~%good ~x5~%END-PROG~%\" (v-pc vmi) (v-fb vmi) (v-sp vmi) (v-ctop vmi) (v-hidx vmi) (vmg-good vmi))\n"
        "                    (mv vmi vce)))))))))))\n"
        "(defun all (es i vmi vce) (declare (xargs :stobjs (vmi vce) :mode :program))\n"
        "  (if (atom es) (mv vmi vce) (mv-let (vmi vce) (one (car es) i vmi vce) (all (cdr es) (1+ i) vmi vce))))\n"
@@ -119,7 +121,7 @@
                           s2)))))
 (def exe (str work "/vmc_check"))
 (let [r (p/shell {:continue true :out :string :err :string :dir work}
-                 fc "-O1" "-o" exe (str (fs/absolutize "test/vm/vm_runtime.f90")) gen-src (str (fs/absolutize "test/vm/vmc_check.f90")))]
+                 fc "-O1" "-o" exe (str (fs/absolutize "test/vm/vm_runtime.f90")) (str (fs/absolutize "src/f/gen/vm_gen.f90")) gen-src (str (fs/absolutize "test/vm/vmc_check.f90")))]
   (when-not (zero? (:exit r))
     (println "fuzz-vmc-gen: the generated Fortran did not compile:")
     (println (:err r) (:out r))
@@ -139,10 +141,14 @@
             :line k :want (when k (str/join " " (get want k))) :got (when k (str/join " " (get got k))) :stderr (:err r)}))))
 
 (def bad (filter (complement :ok) results))
+;; compiled without an error, yet outside the bounds a run's guard asks for
+(def unbounded (for [i (sort (keys progs)) :let [ls (str/split-lines (str/trim (progs i)))]
+                     :when (and (= "0 0" (str/trim (first ls))) (= "good nil" (str/trim (last ls))))] i))
 (println (str "fuzz-vmc-gen: " n " programs, seed " seed ", " fc "; "
               (count (filter #(= "0" (:err-flag %)) results)) " compiled, "
               (count (remove #(= "0" (:err-flag %)) results)) " refused"))
 (println (format "the generated compiler against ACL2's vmicg-program, every array: %d disagree" (count bad)))
+(println (format "compiled outside vmg-good's bounds: %d%s" (count unbounded) (if (seq unbounded) (str " (programs " (str/join " " (take 5 unbounded)) ")") "")))
 (doseq [b (take 3 bad)]
   (println (str "    program " (:i b) ", line " (:line b) ": " (let [s (lisp (exprs (:i b)))] (if (> (count s) 160) (str (subs s 0 160) " ...") s))))
   (println (str "      acl2:    " (:want b)))
@@ -151,4 +157,4 @@
 (if broken
   (do (println (if (seq bad) "negative control: the broken generated compiler was caught" "NEGATIVE CONTROL FAILED: a broken generated compiler went unseen"))
       (System/exit (if (seq bad) 0 1)))
-  (System/exit (if (seq bad) 1 0)))
+  (System/exit (if (or (seq bad) (seq unbounded)) 1 0)))
