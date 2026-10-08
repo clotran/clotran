@@ -530,11 +530,25 @@
              (vmi (update-v-sp (i64 (+ fb b k)) vmi)))
         (update-v-pc l vmi)))))
 
+; the runtime's operation on the n values from slot a: one or two written
+; out, so the runtime is handed them without a list built (rt_prim1,
+; rt_prim2); vmg-prim-call-is says it is the same call
+(defun vmg-prim-call (op a n vmi)
+  (declare (xargs :stobjs vmi :guard (and (natp a) (natp n) (<= (+ a n) (* 2 *b40*)))))
+  (cond ((equal n 1) (rt-prim op (list (vmg-sreg a vmi))))
+        ((equal n 2) (rt-prim op (list (vmg-sreg a vmi) (vmg-sreg (i64 (1+ a)) vmi))))
+        (t (rt-prim op (vmg-stk-from a n vmi)))))
+
+(defthm vmg-prim-call-is
+  (implies (natp a) (equal (vmg-prim-call op a n vmi) (rt-prim op (vmg-stk-from a n vmi))))
+  :hints (("Goal" :expand ((vmg-stk-from a 1 vmi) (vmg-stk-from a 2 vmi) (vmg-stk-from (+ 1 a) 1 vmi)))))
+(in-theory (disable vmg-prim-call))
+
 (defins vmg-prim
   (let ((sp (nfix (v-sp vmi))) (n (nfix (vmg-w (v-pc vmi) 2 vmi))))
     (if (< sp n)
         vmi
-      (let ((a (rt-prim (vmg-poolv (vmg-w (v-pc vmi) 1 vmi) vmi) (vmg-stk-from (i64 (- sp n)) n vmi))))
+      (let ((a (vmg-prim-call (vmg-poolv (vmg-w (v-pc vmi) 1 vmi) vmi) (i64 (- sp n)) n vmi)))
         (if (rt-throwp a)
             (vmg-unwind (rt-thrown a) vmi)
           (let* ((vmi (vmg-sset (i64 (- sp n)) a vmi))

@@ -325,6 +325,28 @@ contains
     return
   end function vmg_good
 
+  function vmg_prim_call(st, op_, a_, n_) result(r)
+    type(vm_state), intent(in) :: st
+    type(value), value :: op_
+    integer(int64), value :: a_
+    integer(int64), value :: n_
+    type(value) :: r
+    integer(int64) :: var_1
+    if ((n_ == 1_int64)) then
+      r = rt_prim1(op_, vmg_sreg(st, a_))
+      return
+    else
+      if ((n_ == 2_int64)) then
+        var_1 = (1_int64 + a_)
+        r = rt_prim2(op_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
+        return
+      else
+        r = rt_prim(op_, rt_list_from(st, a_, n_))
+        return
+      end if
+    end if
+  end function vmg_prim_call
+
   pure function vmg_w(st, pc_, k_) result(r)
     type(vm_state), intent(in) :: st
     integer(int64), value :: pc_
@@ -937,7 +959,7 @@ contains
     if ((sp_1 < n_2)) then
     else
       var_3 = (sp_1 + (-n_2))
-      a_4 = rt_prim(vmg_poolv(st, vmg_w(st, st%pc, 1_int64)), rt_list_from(st, var_3, n_2))
+      a_4 = vmg_prim_call(st, vmg_poolv(st, vmg_w(st, st%pc, 1_int64)), var_3, n_2)
       if (rt_throwp(a_4)) then
         call vmg_unwind(st, rt_thrown(a_4))
       else

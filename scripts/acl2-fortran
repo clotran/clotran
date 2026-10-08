@@ -49,7 +49,7 @@
   '{"vmg"
     {:module "vm_gen" :out "src/f/gen/vm_gen.f90" :book "vmfg"
      ;; the functions generated, callees first
-     :fns [bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good
+     :fns [bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good vmg-prim-call
            vmg-w vmg-poolv vmg-sreg vmg-sset vmg-copy-down vmg-push-rec vmg-pop-rec vmg-unwind
            vmg-pick-fixed vmg-pick-rest vmg-pick
            vmg-push vmg-load vmg-add vmg-lt vmg-slide vmg-jmpf vmg-jmp vmg-mkclo vmg-capt vmg-callv
@@ -58,9 +58,9 @@
            vmg-f17 vmg-f18 vmg-f19 vmg-f20-ok vmg-fk-ok vmg-f20 vmg-f21 vmg-f22 vmg-f23
            vmg-xstep vmg-xrun vmg-tag vmg-fuse vmg-fuse-prog]
      ;; formals that hold a value, not an integer
-     :value-formals {vmg-sset #{v} vmg-unwind #{v} vmg-f20-ok #{r} vmg-fk-ok #{r}}
+     :value-formals {vmg-sset #{v} vmg-unwind #{v} vmg-f20-ok #{r} vmg-fk-ok #{r} vmg-prim-call #{op}}
      ;; functions answering a value, not an integer
-     :value-fns #{vmg-poolv vmg-sreg}
+     :value-fns #{vmg-poolv vmg-sreg vmg-prim-call}
      ;; functions answering true or false: the bounds, which a run checks before it starts
      :bool-fns #{bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good}
      :header ["! GENERATED from model/vmg.lisp by scripts/acl2-fortran. Do not edit:"
