@@ -3667,6 +3667,62 @@ generated pair into clotran -- clotran's values behind the `rt_`
 operations, an analyzer from Clojure to the core language, and the
 runtime's real arithmetic and primitives.
 
+**Superinstructions (model/vmf.lisp, vmf-proof.lisp, vmfg.lisp,
+2026-10-08).** First an experiment: running a loop's instructions
+under one dispatch, each still doing its own reads and writes, was no
+faster (54 ms against 49) -- the profile puts the time in each
+instruction's code-word reads, bounds-checked stack accesses and value
+building, not the dispatch. So a superinstruction is a direct
+definition of a run of instructions:
+
+| tag | run | what it does at once |
+|---|---|---|
+| 17 | load a; push k; lt; jmpf t | a loop's test of a local against a constant |
+| 18 | load a; push k; add | a local plus a constant |
+| 19 | load a; load b; add | a local plus a local |
+
+The encoding costs no proof elsewhere: a load uses only its first
+operand, so the fusion pass writes the tag into the load's fourth word.
+The opcode stays 2, the program reads back as the same program
+(vmi-ins ignores that word), and it runs the same under vmi-step. The
+tag is only a hint. `vmi-xstep` checks that the run's instructions
+follow, that the run lies inside the code and that the stack has room,
+and otherwise takes one ordinary step.
+
+Proved:
+- `vmi-f17-steps` (18, 19): each superinstruction is the three or four
+  steps it replaces.
+- `vmi-xrun-is`: a fused run is a run at least as long.
+- `vmi-fuse-prog-facts`: the pass leaves the shape, the invariant, the
+  program read back and the start state unchanged.
+- `vmf-correct`: a compiled program, fused and run by vmi-xrun, answers
+  what it means unless an array overflowed.
+- `vmfg.lisp`: the guarded twins, every index in bounds and every
+  integer in 64 bits, each fused step keeping the bounds
+  (`vmg-xstep-good`). `vmfg-correct` covers the whole generated
+  pipeline: vmicg-program, then vmg-fuse-prog, then vmg-xrun.
+
+Generated into vm_gen.f90 (`vmg_xstep`, `vmg_xrun`, `vmg_fuse_prog`).
+`fuzz-vm-gen -f` tags each program with both passes, prints the tags,
+and steps ACL2's vmi-xstep against the generated vmg_xstep: 300 under
+gfortran, 100 under flang. Seed 1's 100 programs take 12,683 fused
+steps where unfused they take 16,254. Its control, a loop's test that
+holds jumping one instruction too far, was caught in 25 of 100.
+
+Measured on the 10^6-iteration loop (test runtime, gfortran -O3, the
+same machine and session; flat re-measured):
+
+| | ms | dispatches an iteration |
+|---|---|---|
+| clotran flat | 36 | 5-6 |
+| generated VM | 47 | 11 |
+| generated VM, fused | 31 | 4 |
+
+The fused VM is the first generated machine faster than flat on this
+loop. The comparison flatters it slightly: the test runtime's values
+are simpler than clotran's, and the number that will count is the one
+measured on clotran's values once the VM is wired in.
+
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries
 -- can be modelled and generated too. The proof must hold for every

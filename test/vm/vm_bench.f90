@@ -1,16 +1,21 @@
-! Times a program on the generated VM with no trace: vm_bench FILE STEPS
+! Times a program on the generated VM with no trace: vm_bench FILE STEPS [fused]
+! -- fused: the generated pass tags the superinstructions first
+! (vmg_fuse_prog) and the generated fused step runs it (vmg_xstep).
 program vm_bench
   use iso_fortran_env, only: int64
   use vm_runtime
   use vm_gen
   implicit none
   type(vm_state) :: st
-  character(len=512) :: path, line, arg
+  character(len=512) :: path, line, arg, mode
+  logical :: fused
   integer :: u
   integer(int64) :: ncode, npool, nfn, ncl, nstk, nctl, i, n, steps, t0, t1, rate
   call get_command_argument(1, path)
   call get_command_argument(2, arg)
   read(arg, *) steps
+  call get_command_argument(3, mode)
+  fused = (trim(mode) == 'fused')
   open(newunit=u, file=trim(path), status='old', action='read')
   read(u, *) ncode, npool, nfn, ncl, nstk, nctl
   allocate(st%code(0:ncode-1), st%pool(0:npool-1), st%stk(0:nstk-1))
@@ -44,9 +49,14 @@ program vm_bench
   close(u)
   ! step until the main code returns, as vm_check stops
   call system_clock(t0, rate)
+  if (fused) call vmg_fuse_prog(st)
   do i = 1, steps
      if (st%code(4 * st%pc) == 11 .and. st%ctop == 0) exit
-     call vmg_step(st)
+     if (fused) then
+        call vmg_xstep(st)
+     else
+        call vmg_step(st)
+     end if
      if (st%status /= 0) exit
   end do
   call system_clock(t1)

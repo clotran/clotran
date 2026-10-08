@@ -13,12 +13,14 @@ program vm_check
   use vm_gen
   implicit none
   type(vm_state) :: st
-  character(len=512) :: path, line
+  character(len=512) :: path, line, mode
   integer :: u, k
   integer(int64) :: ncode, npool, nfn, ncl, nstk, nctl, i, n
-  logical :: last
+  logical :: last, fused
 
   call get_command_argument(1, path)
+  call get_command_argument(2, mode)
+  fused = (trim(mode) == 'fused')
   open(newunit=u, file=trim(path), status='old', action='read')
   read(u, *) ncode, npool, nfn, ncl, nstk, nctl
   allocate(st%code(0:ncode-1), st%pool(0:npool-1), st%stk(0:nstk-1))
@@ -51,13 +53,26 @@ program vm_check
   close(u)
 
   ! the bounds vmg_run's guard asks for, which the generated vmg_good
-  ! checks; then as ACL2's trace: the state, a step, ..., until the
+  ! checks (with fused, after the generated pass tags the program, which
+  ! then runs by the fused step); then as ACL2's trace: the state, a step, ..., until the
   ! machine stops or has run the main code's return
+  if (fused) call vmg_fuse_prog(st)
   write(*, '(a)') merge('good t  ', 'good nil', vmg_good(st))
+  if (fused) then
+     write(*, '(a)', advance='no') 'tags'
+     do i = 0, ncode / 4 - 1
+        write(*, '(1x, i0)', advance='no') st%code(4 * i + 3)
+     end do
+     write(*, '(a)') ''
+  end if
   call show()
   do k = 1, 400000
      last = (vmg_w(st, st%pc, 0_int64) == 11 .and. st%ctop == 0 .and. st%status == 0)
-     call vmg_step(st)
+     if (fused) then
+        call vmg_xstep(st)
+     else
+        call vmg_step(st)
+     end if
      call show()
      if (st%status /= 0 .or. last) exit
   end do

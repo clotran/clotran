@@ -16,10 +16,17 @@
 ;;
 ;; -x is the NEGATIVE CONTROL: the generated unwind, with no handler to
 ;; land at, leaves two slots where ACL2 leaves one, and the traces must part.
+;;
+;; -f runs the SUPERINSTRUCTIONS (model/vmf.lisp, vmfg.lisp): both sides tag
+;; the loaded program with their fusion pass and print the tags, then step
+;; it with the fused step, ACL2's vmi-xstep against the generated
+;; vmg_xstep. With -x the control breaks the generated fused test instead:
+;; a loop's test that holds goes one instruction too far.
 (require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
-(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def fused (some #{"-f"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x" "-f"} *command-line-args*)))
 (def n (parse-long (get args "-n" "100")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def fc (get args "--fc" "gfortran"))
@@ -39,7 +46,7 @@
 ;; ---- ACL2: each program's arrays and vmi's trace ----------------------------------
 
 (def driver
-  (str "(include-book \"vmg\")\n"
+  (str "(include-book \"vmg\")\n(include-book \"vmf\")\n"
        "(set-print-case :downcase state)\n"
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
        "(defun strip-to-clauses (ds) (if (atom ds) nil (cons (list (caar ds) (list (cadar ds) (caddar ds))) (strip-to-clauses (cdr ds)))))\n"
@@ -70,9 +77,11 @@
        "(defun trace-run (k vmi) (declare (xargs :stobjs vmi :mode :program))\n"
        "  (if (zp k) vmi\n"
        "    (let* ((last (and (equal (vmi-w (v-pc vmi) 0 vmi) 11) (zp (v-ctop vmi)) (equal (v-status vmi) 0)))\n"
-       "           (vmi (vmi-step vmi)))\n"
+       "           (vmi (" (if fused "vmi-xstep" "vmi-step") " vmi)))\n"
        "      (prog2$ (show vmi)\n"
        "        (if (or (not (equal (v-status vmi) 0)) last) vmi (trace-run (1- k) vmi))))))\n"
+       "(defun pr-tags (i n vmi) (declare (xargs :stobjs vmi :mode :program))\n"
+       "  (if (>= i n) nil (prog2$ (cw \" ~x0\" (v-codei (+ 3 (* 4 i)) vmi)) (pr-tags (1+ i) n vmi))))\n"
        "(defun one (e i vmi) (declare (xargs :stobjs vmi :mode :program))\n"
        "  (let* ((e (ren-e e *xall-names*)) (prog (vcs2-program e *xalli-defs*)))\n"
        "    (if (not (enc-ok prog)) (prog2$ (cw \"~%NOT-ENCODABLE ~x0~%\" i) vmi)\n"
@@ -83,10 +92,12 @@
        "            (prog2$ (pr-pool 0 (v-pool-length vmi) vmi)\n"
        "              (prog2$ (pr-fns 0 (v-fnfirst-length vmi) vmi)\n"
        "                (prog2$ (pr-cls 0 (v-cln-length vmi) vmi)\n"
+       "                  (let ((vmi " (if fused "(vmi-fuse-prog vmi)" "vmi") "))\n"
        "                  (prog2$ (cw \"END-PROG~%BEGIN-TRACE ~x0~%good ~x1~%\" i (vmg-good vmi))\n"
+       "                    (prog2$ " (if fused "(prog2$ (cw \"tags\") (prog2$ (pr-tags 0 (floor (v-code-length vmi) 4) vmi) (cw \"~%\")))" "nil") "\n"
        "                    (prog2$ (show vmi)\n"
        "                      (let ((vmi (trace-run 400000 vmi)))\n"
-       "                        (prog2$ (cw \"END-TRACE~%\") vmi)))))))))))))\n"
+       "                        (prog2$ (cw \"END-TRACE~%\") vmi)))))))))))))))\n"
        "(defun all (es i vmi) (declare (xargs :stobjs vmi :mode :program))\n"
        "  (if (atom es) vmi (let ((vmi (one (car es) i vmi))) (all (cdr es) (1+ i) vmi))))\n"
        "(set-guard-checking :none)\n"
@@ -111,7 +122,11 @@
 (spit gen-src
       (cond-> (slurp "src/f/gen/vm_gen.f90")
         ;; the negative control: an uncaught throw's stack two slots, not one
-        broken ((fn [s] (let [a (str/index-of s "subroutine vmg_unwind")
+        (and broken fused) ((fn [s] (let [a (str/index-of s "subroutine vmg_f17")
+                                          b (str/index-of s "+ 4_int64)" a)]
+                                      (when-not b (println "fuzz-vm-gen: the control's slip has no place") (System/exit 1))
+                                      (str (subs s 0 b) "+ 5_int64)" (subs s (+ b (count "+ 4_int64)")))))))
+        (and broken (not fused)) ((fn [s] (let [a (str/index-of s "subroutine vmg_unwind")
                               b (str/index-of s "st%sp = 1_int64" a)]
                           (when-not b (println "fuzz-vm-gen: the control's slip has no place") (System/exit 1))
                           (str (subs s 0 b) "st%sp = 2_int64" (subs s (+ b (count "st%sp = 1_int64")))))))))
@@ -137,7 +152,7 @@
   (vec (for [i (sort (keys traces))]
          (let [f (str work "/prog" i ".txt")
                _ (spit f (progs i))
-               r (p/shell {:continue true :out :string :err :string} exe f)
+               r (apply p/shell {:continue true :out :string :err :string} exe f (when fused ["fused"]))
                want (mapv tokens (remove str/blank? (str/split-lines (traces i))))
                got (mapv tokens (remove str/blank? (str/split-lines (:out r))))
                k (first (for [j (range (max (count want) (count got))) :when (not= (get want j) (get got j))] j))]
@@ -147,7 +162,7 @@
 (def bad (filter (complement :ok) results))
 ;; a loaded program outside the bounds a run's guard asks for
 (def unbounded (filter #(= "good nil" (str/trim (first (str/split-lines (traces %))))) (sort (keys traces))))
-(println (str "fuzz-vm-gen: " n " programs, seed " seed ", " fc "; " (count results) " run, "
+(println (str "fuzz-vm-gen: " n " programs, seed " seed ", " fc (when fused ", fused") "; " (count results) " run, "
               (reduce + (map :steps results)) " steps compared" (when (pos? not-encodable) (str ", " not-encodable " not encodable"))))
 (println (format "the generated Fortran against ACL2's vmi, step for step: %d disagree" (count bad)))
 (println (if check-caught "the bounds check said a code word of -1 is outside them" "BOUNDS CHECK FAILED: a code word of -1 went unseen"))
@@ -158,6 +173,6 @@
   (println (str "      fortran: " (:got b)))
   (when-not (str/blank? (:err b)) (println (str "      " (first (str/split-lines (:err b)))))))
 (if broken
-  (do (println (if (seq bad) "negative control: the broken generated unwind was caught" "NEGATIVE CONTROL FAILED: a broken generated unwind went unseen"))
+  (do (println (if (seq bad) (str "negative control: the broken generated " (if fused "fused test" "unwind") " was caught") (str "NEGATIVE CONTROL FAILED: a broken generated " (if fused "fused test" "unwind") " went unseen")))
       (System/exit (if (seq bad) 0 1)))
   (System/exit (if (or (seq bad) (pos? not-encodable) (seq unbounded) (not check-caught)) 1 0)))

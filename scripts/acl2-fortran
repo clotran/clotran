@@ -6,8 +6,9 @@
 ;;
 ;;   scripts/acl2-fortran [-b vmg|vmicg] [-o FILE]
 ;;
-;; -b names the book: vmg, the machine (src/f/gen/vm_gen.f90, the
-;; default), or vmicg, the compiler (src/f/gen/vmc_gen.f90).
+;; -b names the book: vmg, the machine and its superinstructions
+;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
+;; vmg), or vmicg, the compiler (src/f/gen/vmc_gen.f90).
 ;;
 ;; ACL2 itself hands over each function in its translated form -- no
 ;; macros, only lambda, if, quoted constants and calls -- with its
@@ -42,13 +43,15 @@
 
 (def books
   '{"vmg"
-    {:module "vm_gen" :out "src/f/gen/vm_gen.f90"
+    {:module "vm_gen" :out "src/f/gen/vm_gen.f90" :book "vmfg"
      ;; the functions generated, callees first
      :fns [bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good
            vmg-w vmg-poolv vmg-sreg vmg-sset vmg-copy-down vmg-push-rec vmg-pop-rec vmg-unwind
            vmg-pick-fixed vmg-pick-rest vmg-pick
            vmg-push vmg-load vmg-add vmg-lt vmg-slide vmg-jmpf vmg-jmp vmg-mkclo vmg-capt vmg-callv
-           vmg-ret vmg-recur vmg-prim vmg-throw vmg-try vmg-endtry vmg-step vmg-run]
+           vmg-ret vmg-recur vmg-prim vmg-throw vmg-try vmg-endtry vmg-step vmg-run
+           ;; the superinstructions (model/vmfg.lisp)
+           vmg-f17 vmg-f18 vmg-f19 vmg-xstep vmg-xrun vmg-tag vmg-fuse vmg-fuse-prog]
      ;; formals that hold a value, not an integer
      :value-formals {vmg-sset #{v} vmg-unwind #{v}}
      ;; functions answering a value, not an integer
@@ -59,7 +62,9 @@
               "! change the model, prove it, and generate again (PLAN step 30)."
               "! Every function here has its guards verified in ACL2: every index in"
               "! bounds, every integer inside 64 bits. vmg-correct proves that a"
-              "! program run by vmg_run answers what it means."]}
+              "! program run by vmg_run answers what it means. The superinstructions"
+              "! and the pass that tags them come from model/vmfg.lisp: vmfg-correct"
+              "! proves a compiled program, fused and run by vmg_xrun, answers the same."]}
     "vmicg"
     {:module "vmc_gen" :out "src/f/gen/vmc_gen.f90"
      :fns [vmicg-sat vmicg-len-acc vmicg-len vmicg-size vmicg-size-args vmicg-size-clauses vmicg-size-defs
@@ -88,7 +93,7 @@
 ;; ---- ACL2 hands over the translated definitions --------------------------------
 
 (def driver
-  (str "(include-book \"" book "\")\n"
+  (str "(include-book \"" (get cfg :book book) "\")\n"
        "(set-print-case :downcase state)\n"
        "(defun dump-fns (fns state)\n"
        "  (declare (xargs :mode :program :stobjs state))\n"

@@ -2,7 +2,9 @@
 ! change the model, prove it, and generate again (PLAN step 30).
 ! Every function here has its guards verified in ACL2: every index in
 ! bounds, every integer inside 64 bits. vmg-correct proves that a
-! program run by vmg_run answers what it means.
+! program run by vmg_run answers what it means. The superinstructions
+! and the pass that tags them come from model/vmfg.lisp: vmfg-correct
+! proves a compiled program, fused and run by vmg_xrun, answers the same.
 module vm_gen
   use iso_fortran_env, only: int64
   use vm_runtime
@@ -1067,4 +1069,355 @@ contains
       exit
     end do
   end subroutine vmg_run
+
+  subroutine vmg_f17(st)
+    type(vm_state), intent(inout) :: st
+    type(value) :: b_7
+    integer(int64) :: i_11
+    integer(int64) :: i_8
+    integer(int64) :: p_1
+    integer(int64) :: sp_2
+    type(value) :: v_12
+    type(value) :: v_9
+    integer(int64) :: var_10
+    integer(int64) :: var_13
+    integer(int64) :: var_14
+    integer(int64) :: var_3
+    integer(int64) :: var_5
+    type(value) :: x_4
+    type(value) :: y_6
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    var_3 = (max(0_int64, st%fb) + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_4 = vmg_sreg(st, var_3)
+    var_5 = (p_1 + 1_int64)
+    y_6 = vmg_poolv(st, vmg_w(st, var_5, 1_int64))
+    b_7 = rt_lt(x_4, y_6)
+    i_8 = sp_2
+    v_9 = b_7
+    st%stk(i_8) = v_9
+    var_10 = (sp_2 + 1_int64)
+    i_11 = var_10
+    v_12 = y_6
+    st%stk(i_11) = v_12
+    st%sp = sp_2
+    if (rt_truthy(b_7)) then
+      var_13 = (p_1 + 4_int64)
+      st%pc = var_13
+    else
+      var_14 = (p_1 + 3_int64)
+      st%pc = max(0_int64, vmg_w(st, var_14, 1_int64))
+    end if
+  end subroutine vmg_f17
+
+  subroutine vmg_f18(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: i_10
+    integer(int64) :: i_7
+    integer(int64) :: p_1
+    integer(int64) :: sp_2
+    type(value) :: v_11
+    type(value) :: v_8
+    integer(int64) :: var_12
+    integer(int64) :: var_13
+    integer(int64) :: var_3
+    integer(int64) :: var_5
+    integer(int64) :: var_9
+    type(value) :: x_4
+    type(value) :: y_6
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    var_3 = (max(0_int64, st%fb) + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_4 = vmg_sreg(st, var_3)
+    var_5 = (p_1 + 1_int64)
+    y_6 = vmg_poolv(st, vmg_w(st, var_5, 1_int64))
+    i_7 = sp_2
+    v_8 = rt_add(x_4, y_6)
+    st%stk(i_7) = v_8
+    var_9 = (sp_2 + 1_int64)
+    i_10 = var_9
+    v_11 = y_6
+    st%stk(i_10) = v_11
+    var_12 = (sp_2 + 1_int64)
+    st%sp = var_12
+    var_13 = (p_1 + 3_int64)
+    st%pc = var_13
+  end subroutine vmg_f18
+
+  subroutine vmg_f19(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: fb_3
+    integer(int64) :: i_11
+    integer(int64) :: i_14
+    integer(int64) :: i_6
+    integer(int64) :: p_1
+    integer(int64) :: sp_2
+    type(value) :: v_12
+    type(value) :: v_15
+    type(value) :: v_7
+    integer(int64) :: var_13
+    integer(int64) :: var_16
+    integer(int64) :: var_17
+    integer(int64) :: var_4
+    integer(int64) :: var_8
+    integer(int64) :: var_9
+    type(value) :: x_5
+    type(value) :: y_10
+    p_1 = max(0_int64, st%pc)
+    sp_2 = max(0_int64, st%sp)
+    fb_3 = max(0_int64, st%fb)
+    var_4 = (fb_3 + max(0_int64, vmg_w(st, p_1, 1_int64)))
+    x_5 = vmg_sreg(st, var_4)
+    i_6 = sp_2
+    v_7 = x_5
+    st%stk(i_6) = v_7
+    var_8 = (p_1 + 1_int64)
+    var_9 = (fb_3 + max(0_int64, vmg_w(st, var_8, 1_int64)))
+    y_10 = vmg_sreg(st, var_9)
+    i_11 = sp_2
+    v_12 = rt_add(x_5, y_10)
+    st%stk(i_11) = v_12
+    var_13 = (sp_2 + 1_int64)
+    i_14 = var_13
+    v_15 = y_10
+    st%stk(i_14) = v_15
+    var_16 = (sp_2 + 1_int64)
+    st%sp = var_16
+    var_17 = (p_1 + 3_int64)
+    st%pc = var_17
+  end subroutine vmg_f19
+
+  subroutine vmg_xstep(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: p_1
+    logical :: t_12
+    logical :: t_13
+    logical :: t_14
+    logical :: t_17
+    logical :: t_18
+    logical :: t_21
+    logical :: t_22
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    integer(int64) :: tag_8
+    integer(int64) :: var_10
+    integer(int64) :: var_11
+    integer(int64) :: var_15
+    integer(int64) :: var_16
+    integer(int64) :: var_19
+    integer(int64) :: var_2
+    integer(int64) :: var_20
+    integer(int64) :: var_3
+    integer(int64) :: var_4
+    integer(int64) :: var_9
+    p_1 = max(0_int64, st%pc)
+    if ((st%status == 0_int64)) then
+      var_2 = (4_int64 * p_1)
+      var_3 = (15_int64 + var_2)
+      if ((var_3 < size(st%code, kind=int64))) then
+        if ((vmg_w(st, p_1, 0_int64) == 2_int64)) then
+          var_4 = (1_int64 + max(0_int64, st%sp))
+          t_5 = (var_4 < size(st%stk, kind=int64))
+        else
+          t_5 = .false.
+        end if
+        t_6 = t_5
+      else
+        t_6 = .false.
+      end if
+      t_7 = t_6
+    else
+      t_7 = .false.
+    end if
+    if (t_7) then
+      tag_8 = vmg_w(st, p_1, 3_int64)
+      if ((tag_8 == 17_int64)) then
+        var_9 = (p_1 + 1_int64)
+        if ((vmg_w(st, var_9, 0_int64) == 1_int64)) then
+          var_10 = (p_1 + 2_int64)
+          if ((vmg_w(st, var_10, 0_int64) == 4_int64)) then
+            var_11 = (p_1 + 3_int64)
+            t_12 = (vmg_w(st, var_11, 0_int64) == 6_int64)
+          else
+            t_12 = .false.
+          end if
+          t_13 = t_12
+        else
+          t_13 = .false.
+        end if
+        t_14 = t_13
+      else
+        t_14 = .false.
+      end if
+      if (t_14) then
+        call vmg_f17(st)
+      else
+        if ((tag_8 == 18_int64)) then
+          var_15 = (p_1 + 1_int64)
+          if ((vmg_w(st, var_15, 0_int64) == 1_int64)) then
+            var_16 = (p_1 + 2_int64)
+            t_17 = (vmg_w(st, var_16, 0_int64) == 3_int64)
+          else
+            t_17 = .false.
+          end if
+          t_18 = t_17
+        else
+          t_18 = .false.
+        end if
+        if (t_18) then
+          call vmg_f18(st)
+        else
+          if ((tag_8 == 19_int64)) then
+            var_19 = (p_1 + 1_int64)
+            if ((vmg_w(st, var_19, 0_int64) == 2_int64)) then
+              var_20 = (p_1 + 2_int64)
+              t_21 = (vmg_w(st, var_20, 0_int64) == 3_int64)
+            else
+              t_21 = .false.
+            end if
+            t_22 = t_21
+          else
+            t_22 = .false.
+          end if
+          if (t_22) then
+            call vmg_f19(st)
+          else
+            call vmg_step(st)
+          end if
+        end if
+      end if
+    else
+      call vmg_step(st)
+    end if
+  end subroutine vmg_xstep
+
+  subroutine vmg_xrun(st, n_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: n_
+    integer(int64) :: n_1
+    do
+      if ((n_ <= 0_int64)) then
+      else
+        call vmg_xstep(st)
+        n_1 = (-1_int64 + n_)
+        n_ = n_1
+        cycle
+      end if
+      exit
+    end do
+  end subroutine vmg_xrun
+
+  pure function vmg_tag(st, i_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: i_
+    integer(int64) :: r
+    integer(int64) :: o1_2
+    integer(int64) :: o2_4
+    integer(int64) :: o3_6
+    logical :: t_10
+    integer(int64) :: t_11
+    integer(int64) :: t_12
+    integer(int64) :: t_13
+    logical :: t_7
+    logical :: t_8
+    logical :: t_9
+    integer(int64) :: var_1
+    integer(int64) :: var_3
+    integer(int64) :: var_5
+    var_1 = (i_ + 1_int64)
+    o1_2 = vmg_w(st, var_1, 0_int64)
+    var_3 = (i_ + 2_int64)
+    o2_4 = vmg_w(st, var_3, 0_int64)
+    var_5 = (i_ + 3_int64)
+    o3_6 = vmg_w(st, var_5, 0_int64)
+    if ((o1_2 == 1_int64)) then
+      if ((o2_4 == 4_int64)) then
+        t_7 = (o3_6 == 6_int64)
+      else
+        t_7 = .false.
+      end if
+      t_8 = t_7
+    else
+      t_8 = .false.
+    end if
+    if (t_8) then
+      t_13 = 17_int64
+    else
+      if ((o1_2 == 1_int64)) then
+        t_9 = (o2_4 == 3_int64)
+      else
+        t_9 = .false.
+      end if
+      if (t_9) then
+        t_12 = 18_int64
+      else
+        if ((o1_2 == 2_int64)) then
+          t_10 = (o2_4 == 3_int64)
+        else
+          t_10 = .false.
+        end if
+        if (t_10) then
+          t_11 = 19_int64
+        else
+          t_11 = 0_int64
+        end if
+        t_12 = t_11
+      end if
+      t_13 = t_12
+    end if
+    r = t_13
+    return
+  end function vmg_tag
+
+  subroutine vmg_fuse(st, i_, n_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: i_
+    integer(int64), value :: n_
+    integer(int64) :: i_6
+    integer(int64) :: i_9
+    integer(int64) :: n_10
+    logical :: t_3
+    integer(int64) :: v_7
+    integer(int64) :: var_1
+    integer(int64) :: var_2
+    integer(int64) :: var_4
+    integer(int64) :: var_5
+    integer(int64) :: var_8
+    do
+      if ((.not. (max(0_int64, i_) < max(0_int64, n_)))) then
+        t_3 = (.not. (max(0_int64, i_) < max(0_int64, n_)))
+      else
+        var_1 = (4_int64 * max(0_int64, i_))
+        var_2 = (3_int64 + var_1)
+        t_3 = (.not. (var_2 < size(st%code, kind=int64)))
+      end if
+      if (t_3) then
+      else
+        if ((vmg_w(st, max(0_int64, i_), 0_int64) == 2_int64)) then
+          var_4 = (4_int64 * max(0_int64, i_))
+          var_5 = (3_int64 + var_4)
+          i_6 = var_5
+          v_7 = vmg_tag(st, max(0_int64, i_))
+          st%code(i_6) = v_7
+        else
+        end if
+        var_8 = (1_int64 + max(0_int64, i_))
+        i_9 = var_8
+        n_10 = n_
+        i_ = i_9
+        n_ = n_10
+        cycle
+      end if
+      exit
+    end do
+  end subroutine vmg_fuse
+
+  subroutine vmg_fuse_prog(st)
+    type(vm_state), intent(inout) :: st
+    if ((.not. (1099511627776_int64 < size(st%code, kind=int64)))) then
+      call vmg_fuse(st, 0_int64, size(st%code, kind=int64))
+    else
+    end if
+  end subroutine vmg_fuse_prog
 end module vm_gen

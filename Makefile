@@ -716,7 +716,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -810,6 +810,9 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-vm-gen -n 300 -s 1
 	scripts/fuzz-vm-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vm-gen -n 100 -s 2 -x
+	scripts/fuzz-vm-gen -n 300 -s 1 -f
+	scripts/fuzz-vm-gen -n 100 -s 2 -f --fc flang
+	scripts/fuzz-vm-gen -n 100 -s 2 -f -x
 	scripts/fuzz-vmc-gen -n 300 -s 1
 	scripts/fuzz-vmc-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vmc-gen -n 100 -s 2 -x
