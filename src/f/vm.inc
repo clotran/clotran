@@ -660,6 +660,8 @@
     integer :: p, ebase, sbase, i, nstk, nctl, saved_rb
     integer(gc_ip) :: steps
     character(len=:), allocatable :: msg
+    ! the control stack: main's call is its only record, so four, here
+    integer(gc_ip), target :: ck(0:3), ca(0:3), cb(0:3), cc(0:3), cprev(0:3)
     vst => tctx%stk
     p = gc_i2(nd)
     nstk = vm_progs(p)%nstk
@@ -680,12 +682,16 @@
     st%cln => vm_progs(p)%cln
     st%clent => vm_progs(p)%clent
     st%clrest => vm_progs(p)%clrest
-    allocate(st%ckind(0:nctl - 1), st%ca(0:nctl - 1), st%cb(0:nctl - 1), st%cc(0:nctl - 1), st%cprev(0:nctl - 1))
-    st%ckind = 0
-    st%ca = 0
-    st%cb = 0
-    st%cc = 0
-    st%cprev = 0
+    ck = 0
+    ca = 0
+    cb = 0
+    cc = 0
+    cprev = 0
+    st%ckind(0:nctl - 1) => ck(0:nctl - 1)
+    st%ca(0:nctl - 1) => ca(0:nctl - 1)
+    st%cb(0:nctl - 1) => cb(0:nctl - 1)
+    st%cc(0:nctl - 1) => cc(0:nctl - 1)
+    st%cprev(0:nctl - 1) => cprev(0:nctl - 1)
     st%pc = 0
     st%fb = 0
     st%sp = 0
@@ -735,7 +741,6 @@
        call raise_class("clotran.host.stack_overflow_error", "the VM's stack overflowed", [nd])
        val = gc_nil()
     end select
-    deallocate(st%ckind, st%ca, st%cb, st%cc, st%cprev)
     call vs_leave(vst, ebase)
   end subroutine vm_run
 

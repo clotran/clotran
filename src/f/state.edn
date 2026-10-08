@@ -142,6 +142,9 @@
  "VmRuntime.f90/thrown_v" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/clo_head" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/clo_v" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_arg" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_deref" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_invoke" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/heads_made" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "Eval.f90/no_install" {:class :fixed, :note "set by main before any file loads when an image is being taken"}
  "Eval.f90/out_trace" {:class :fixed, :note "CLOTRAN_TRACE_OUT, read once (debugging)"}

@@ -90,6 +90,8 @@ module vm_runtime
   ! the private heads
   type(gc_root) :: thrown_head, clo_head
   type(value) :: thrown_v, clo_v
+  ! the primitives' own keywords, looked up once
+  type(value) :: kw_arg, kw_deref, kw_invoke
   logical :: heads_made = .false.
 
 contains
@@ -140,6 +142,9 @@ contains
     end do
     heads_made = .false.
     call make_heads()
+    kw_arg = rt_keyword("clotran.vm/arg")
+    kw_deref = rt_keyword("clotran.vm/deref")
+    kw_invoke = rt_keyword("clotran.vm/invoke")
     kw_frozen = .true.
   end subroutine vmrt_init
 
@@ -195,6 +200,10 @@ contains
     character(len=:), allocatable :: a, b
     rt_is = .false.
     if (x%tag /= GCT_KEY .or. k%tag /= GCT_KEY) return
+    if (x%ref == k%ref) then
+       rt_is = .true.
+       return
+    end if
     call gc_text(x, a)
     call gc_text(k, b)
     rt_is = (a == b)
@@ -400,14 +409,14 @@ contains
     vst => gc_my_stack()
     r = gc_nil()
     if (op%tag == GCT_KEY) then
-       if (rt_is(op, rt_keyword("clotran.vm/arg"))) then
+       if (rt_is(op, kw_arg)) then
           a = vs_get(vst, argbase + 1)
           if (n == 1 .and. a%tag == GCT_INT) r = vst%vstack(vst%vm_args_rb + int(a%ival) + 1)
           return
-       else if (rt_is(op, rt_keyword("clotran.vm/deref"))) then
+       else if (rt_is(op, kw_deref)) then
           if (n == 1) r = vmrt_deref(vs_get(vst, argbase + 1))
           return
-       else if (rt_is(op, rt_keyword("clotran.vm/invoke"))) then
+       else if (rt_is(op, kw_invoke)) then
           if (n >= 1) then
              call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
              if (.not. ok) r = vmrt_throw_of(r)
