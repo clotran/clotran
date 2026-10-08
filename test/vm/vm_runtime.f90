@@ -106,6 +106,14 @@ contains
     if (v%tag == VT_KW) is_kw = (trim(kwname(v%i)) == name)
   end function is_kw
 
+  ! the keywords the operations test, looked up once
+  integer(int64) function kw_id(name)
+    character(len=*), intent(in) :: name
+    type(value) :: v
+    v = rt_keyword(name)
+    kw_id = v%i
+  end function kw_id
+
   function rt_nil() result(v)
     type(value) :: v
     v = value(VT_NIL, 0)
@@ -120,7 +128,9 @@ contains
 
   logical function rt_truthy(x)
     type(value), intent(in) :: x
-    rt_truthy = .not. (x%tag == VT_NIL .or. is_kw(x, "false"))
+    integer(int64), save :: kfalse = -1
+    if (kfalse < 0) kfalse = kw_id("false")
+    rt_truthy = .not. (x%tag == VT_NIL .or. (x%tag == VT_KW .and. x%i == kfalse))
   end function rt_truthy
 
   function fixv(x) result(i)
@@ -139,10 +149,12 @@ contains
   function rt_lt(a, b) result(r)
     type(value), intent(in) :: a, b
     type(value) :: r
+    integer(int64), save :: kfalse = -1
+    if (kfalse < 0) kfalse = kw_id("false")
     if (fixv(a) < fixv(b)) then
        r = value(VT_T, 0)
     else
-       r = rt_keyword("false")
+       r = value(VT_KW, kfalse)
     end if
   end function rt_lt
 

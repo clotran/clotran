@@ -3571,6 +3571,28 @@ vmg-correct.lisp, scripts/acl2-fortran, 2026-10-08).**
   fuzz-model) also fails if the checked-in file is not what the model
   generates.
 
+**Measured (2026-10-08), the generated VM against flat and clj.** The
+loop `(loop [i 0 s 0] (if (< i 1e6) (recur (+ i 1) (+ s i)) s))`,
+10^6 iterations, compiled by vmx2's compiler and run by
+`test/vm/vm_bench` on the test runtime:
+
+| | ms | instructions an iteration |
+|---|---|---|
+| clj | 0.54 | |
+| clotran flat | 36 | 5-6 |
+| generated VM, gfortran -O3 | 49 | 11 |
+| generated VM, flang -O3 | 120 | 11 |
+
+The generated code costs about 4.5 ns an instruction, flat's order,
+and runs twice as many: 11 instructions an iteration where flat runs
+5 or 6. That is milestone 1's finding again -- in this host what costs
+is the number of dispatches. The speed does not come from
+hand-tuning the generated Fortran (nobody edits it). It comes from
+the model: superinstructions defined and proved in vmx2/vmi/vmg, so
+an iteration is fewer instructions, and then the JIT (step 31). Being
+correct by construction comes first; the generated VM replaces flat
+only when it is also faster.
+
 What the check rests on: the translator, the compilers, and the test
 runtime (`test/vm/vm_runtime.f90`), which mirrors vmx2's value
 functions and primitives. The generated VM is not wired into clotran
