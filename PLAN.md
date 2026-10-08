@@ -3613,10 +3613,22 @@ natural), so the generated Fortran will walk clotran's own lists.
 function table. Checked: vmi's 15 programs in the book, and
 `fuzz-vmx2 -i` compiles every program both ways and compares the
 arrays (300 agree; the `-xc` control, a condition's jump one past
-its else, caught 100 of 100). Next: `vmic-proof.lisp` proving the
-arrays read back as vcs2-program for every program, then guards and
-generation; the translator needs `mv` results and recursive
-subroutines for it.
+its else, caught 100 of 100).
+
+Proved (`vmic-proof.lisp`, `vmic-correct.lisp`): wherever vmic
+finishes without an error or an overflow, vcs2-compile's code sits at
+the cursor, each instruction's four words and pool slot the encoder's
+(`vmic-code`). A write elsewhere leaves a placed instruction placed, so
+the backpatched jumps cost nothing in the proof. The environment is a
+prefix of the slot array, and an error or an overflow is sticky. The
+table's fields are folds of `update-nth`, the same ones the encoder
+writes. So the machine vmic-program leaves is, in everything vmi-correct
+reads, the one vmi-load-prog leaves for vcs2-program's lists, and
+`vmic-correct` is vmi-correct for it: a program it compiles, run on
+the arrays, answers its meaning unless an array overflowed. Soundness
+only: that it accepts every encodable program is the fuzzer's claim,
+not a theorem. Next: guards and generation; the translator needs `mv`
+results and recursive subroutines for it.
 
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries

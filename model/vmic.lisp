@@ -201,15 +201,27 @@
         (mv-let (pa vmi vce) (vmic-compile (rcadr cl) (1+ nl) nl nl pc -1 0 0 vmi vce)
           (let ((vmi (vmic-put pa 11 0 0 0 nil vmi))) (mv (1+ pa) vmi vce)))))))
 
+; clause ci's arity n, entry pc and rest flag; function f's first clause and count
+(defun vmic-clause-entry (ci n pc rest vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (if (and (< (nfix ci) (v-cln-length vmi)) (< (nfix ci) (v-clent-length vmi)) (< (nfix ci) (v-clrest-length vmi)))
+      (let* ((vmi (update-v-clni (nfix ci) n vmi))
+             (vmi (update-v-clenti (nfix ci) pc vmi)))
+        (update-v-clresti (nfix ci) rest vmi))
+    (update-v-status 2 vmi)))
+
+(defun vmic-fn-entry (f ci count vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (if (and (< (nfix f) (v-fnfirst-length vmi)) (< (nfix f) (v-fncount-length vmi)))
+      (let ((vmi (update-v-fnfirsti (nfix f) ci vmi)))
+        (update-v-fncounti (nfix f) count vmi))
+    (update-v-status 2 vmi)))
+
 (defun vmic-clauses (cls ci pc vmi vce)
   (declare (xargs :stobjs (vmi vce) :measure (acl2-count cls) :verify-guards nil))
   (if (rt-consp cls)
       (let* ((cl (rt-car cls)) (n (rt-nat (rt-car cl)))
-             (vmi (if (< (nfix ci) (v-cln-length vmi))
-                      (let* ((vmi (update-v-clni (nfix ci) (nfix n) vmi))
-                             (vmi (update-v-clenti (nfix ci) (nfix pc) vmi)))
-                        (update-v-clresti (nfix ci) (if (rt-is (rcaddr cl) :rest) 1 0) vmi))
-                    (update-v-status 2 vmi))))
+             (vmi (vmic-clause-entry ci (nfix n) (nfix pc) (if (rt-is (rcaddr cl) :rest) 1 0) vmi)))
         (mv-let (pa vmi vce) (vmic-body cl pc vmi vce)
           (vmic-clauses (rt-cdr cls) (1+ (nfix ci)) pa vmi vce)))
     (mv (nfix pc) vmi vce)))
@@ -219,10 +231,7 @@
   (if (rt-consp defs)
       (let* ((d (rt-car defs)) (cls (rt-cdr d))
              (vce (if (equal (rt-nat (rt-car d)) (nfix f)) vce (vce-fail vce)))
-             (vmi (if (< (nfix f) (v-fnfirst-length vmi))
-                      (let ((vmi (update-v-fnfirsti (nfix f) (nfix ci) vmi)))
-                        (update-v-fncounti (nfix f) (rt-len cls) vmi))
-                    (update-v-status 2 vmi))))
+             (vmi (vmic-fn-entry f (nfix ci) (rt-len cls) vmi)))
         (mv-let (pa vmi vce) (vmic-clauses cls ci pc vmi vce)
           (vmic-defs (rt-cdr defs) (1+ (nfix f)) (+ (nfix ci) (rt-len cls)) pa vmi vce)))
     (mv (nfix pc) vmi vce)))
@@ -234,22 +243,27 @@
   (if (rt-consp defs) (+ (vmic-size-clauses (rt-cdr (rt-car defs))) (vmic-size-defs (rt-cdr defs))) 0))
 (defun vmic-nclauses (defs)
   (if (rt-consp defs) (+ (rt-len (rt-cdr (rt-car defs))) (vmic-nclauses (rt-cdr defs))) 0))
-(defun vmic-envs (e) (declare (ignore e)) 4096)
 
-; THE PROGRAM: main, its return, then every function's clauses; the
-; machine set up to run it, with a stack of nstk slots and a control
-; stack of nctl records
-(defun vmic-program (e defs nstk nctl vmi vce)
-  (declare (xargs :stobjs (vmi vce) :verify-guards nil))
-  (let* ((n (+ (vmic-size e) 1 (vmic-size-defs defs))) (nf (rt-len defs)) (nc (vmic-nclauses defs))
-         (vmi (resize-v-stk 0 vmi)) (vmi (resize-v-ckind 0 vmi)) (vmi (resize-v-code 0 vmi)) (vmi (resize-v-pool 0 vmi))
+; the arrays sized as vmi-load-prog sizes them: n instructions, nf
+; functions, nc clauses
+(defun vmic-resize (n nf nc nstk nctl vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((vmi (resize-v-stk 0 vmi)) (vmi (resize-v-ckind 0 vmi))
          (vmi (resize-v-code (* 4 n) vmi)) (vmi (resize-v-pool n vmi)) (vmi (resize-v-stk nstk vmi))
          (vmi (resize-v-ckind nctl vmi)) (vmi (resize-v-ca nctl vmi)) (vmi (resize-v-cb nctl vmi))
          (vmi (resize-v-cc nctl vmi)) (vmi (resize-v-cprev nctl vmi))
          (vmi (resize-v-fnfirst nf vmi)) (vmi (resize-v-fncount nf vmi))
-         (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)) (vmi (resize-v-clrest nc vmi))
+         (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)))
+    (resize-v-clrest nc vmi)))
+
+; THE PROGRAM: main, its return, then every function's clauses; the
+; machine set up to run it, with a stack of nstk slots and a control
+; stack of nctl records. At most 4096 locals are in scope at once.
+(defun vmic-program (e defs nstk nctl vmi vce)
+  (declare (xargs :stobjs (vmi vce) :verify-guards nil))
+  (let* ((vmi (vmic-resize (+ (vmic-size e) 1 (vmic-size-defs defs)) (rt-len defs) (vmic-nclauses defs) nstk nctl vmi))
          (vmi (update-v-status 0 vmi))
-         (vce (resize-ce-env (vmic-envs e) vce)) (vce (update-ce-err 0 vce)))
+         (vce (resize-ce-env 4096 vce)) (vce (update-ce-err 0 vce)))
     (mv-let (pa vmi vce) (vmic-compile e 0 0 -1 0 -1 0 0 vmi vce)
       (let ((vmi (vmic-put pa 11 0 0 0 nil vmi)))
         (mv-let (pb vmi vce) (vmic-defs defs 0 0 (1+ pa) vmi vce)
