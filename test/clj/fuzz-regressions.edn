@@ -129,4 +129,10 @@
  ;; recursed until the stack overflowed (DEVIATIONS 55)
  (with-redefs [first (fn [x] :r)] (str "a" "b" "c"))
  (with-redefs [next (fn [x] nil)] (apply + [1 2 3]))
+ ;; float let an infinity through, which RT.floatCast refuses; and a
+ ;; Float printed its infinities and NaN as Infinity and NaN, its
+ ;; print-method dropped from clotran's core_print (scripts/fuzz-num)
+ (let [r (float ##-Inf)] [r (class r)])
+ (let [r (float ##Inf)] [r (class r)])
+ [(pr-str (unchecked-float ##Inf)) (pr-str (unchecked-float ##-Inf)) (pr-str (float ##NaN)) (pr-str (float 1.5))]
 ]

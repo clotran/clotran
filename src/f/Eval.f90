@@ -10857,11 +10857,12 @@ contains
     case (B_FLOATCAST, B_UFLOATCAST)
        ! a Float: the double rounded to single precision, and boxed as one;
        ! RT.floatCast refuses one past Float.MAX_VALUE, the unchecked cast
-       ! lets it go to infinity
+       ! lets it go to infinity; an infinity is refused too, unless it is
+       ! already a Float (floatCast(Object) answers a Float as it is)
        a = strip_meta(gcv_nth(args, 0))
        if (id == B_FLOATCAST .and. is_number(a)) then
           if (abs(num_dbl(a)) > real(huge(1.0_4), gc_dp) .and. num_dbl(a) == num_dbl(a) &
-               .and. abs(num_dbl(a)) <= huge(1.0_gc_dp)) then
+               .and. .not. (a%tag == GCT_REAL .and. a%ref == W_FLOAT)) then
              block
                 call to_string_text(a, s=dlt_1)
                 call raise_class("clotran.host.illegal_argument_exception", "Value out of range for float: " // dlt_1, &

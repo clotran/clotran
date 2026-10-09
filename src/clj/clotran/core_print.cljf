@@ -10,9 +10,10 @@
 ;; place (Eval.f90 B_RTLOAD), with what was clj taken out -- the
 ;; print-method and print-dup methods keyed on clotran.host.list, Map, Set,
 ;; Collection and RandomAccess and the preferences among them, and the
-;; methods for Float and StackTraceElement, which clotran never
-;; produces (BigDecimal came back on 2026-09-21, when 1.0M started
-;; reading as one). Everything that prints a Clojure value is Rich's, line
+;; method for StackTraceElement, which clotran never produces
+;; (BigDecimal came back on 2026-09-21, when 1.0M started reading as
+;; one, and Float on 2026-10-09: (float x) has been one since floats
+;; became real(4), and printed its infinities as Infinity). Everything that prints a Clojure value is Rich's, line
 ;; for line. ClojureScript does the same: its printing is its own, on a
 ;; protocol, and it does not model clj's util to run this file verbatim.
 ;; DEVIATIONS.md 40.
@@ -144,6 +145,13 @@
     (= clotran.host.real8/POSITIVE_INFINITY o) (.write w "##Inf")
     (= clotran.host.real8/NEGATIVE_INFINITY o) (.write w "##-Inf")
     (.isNaN ^clotran.host.real8 o) (.write w "##NaN")
+    :else (.write w (str o))))
+
+(defmethod print-method clotran.host.real4 [o, ^clotran.host.writer w]
+  (cond
+    (= clotran.host.real4/POSITIVE_INFINITY o) (.write w "##Inf")
+    (= clotran.host.real4/NEGATIVE_INFINITY o) (.write w "##-Inf")
+    (.isNaN ^clotran.host.real4 o) (.write w "##NaN")
     :else (.write w (str o))))
 
 (defmethod print-dup clotran.host.number [o, ^clotran.host.writer w]
