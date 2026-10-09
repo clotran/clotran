@@ -72,6 +72,7 @@ module GC
   use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t, c_int64_t, c_int, c_int32_t
   use BigInt
   use BigDec
+  use iso_fortran_env, only: int64
   implicit none
   private
 
@@ -697,8 +698,17 @@ module GC
   ! An explicit stack, not recursion: a list is a chain thousands of
   ! nodes deep, and recursive marking would overflow the real stack on
   ! exactly the structure this language builds most.
-  type(gc_value), allocatable :: mark_stack(:)
-  integer :: mark_sp = 0
+  ! THE MARKER (PLAN step 33, stage 1a): generated from model/heapg.lisp
+  ! (src/f/gen/heap_gen.inc, included below), proved in heapg-proof.lisp to
+  ! leave the mark set closed. Its stack and counts; the pools it reads
+  ! through the hp_* accessors. A reference is marked when it is pushed, so
+  ! each object and run is pushed at most once and the stack, sized to
+  ! them at each collection's start (mark_begin), cannot overflow.
+  type :: heap_state
+     integer(int64) :: err = 0, msp = 0, nobj = 0, nvec = 0, nstr = 0, alive = 0
+     integer(int64), allocatable :: mtag(:), mref(:)
+  end type heap_state
+  type(heap_state) :: hstate
 
   integer, public :: gc_allocs = 0
   integer, public :: gc_frees = 0
@@ -1047,9 +1057,6 @@ contains
     str_mark = .false.; str_free = .false.; str_free_next = 0
     str_free_head = 0; str_used = 0
 
-    if (allocated(mark_stack)) deallocate(mark_stack)
-    allocate(mark_stack(n))
-    mark_sp = 0
 
     if (allocated(obj_young)) deallocate(obj_young, vec_young, str_young, obj_rem, vec_rem, rem_set)
     allocate(obj_young(1024), vec_young(1024), str_young(1024), rem_set(1024))
@@ -1167,9 +1174,6 @@ contains
     obj_aged = .false.; vec_aged = .false.
     n_obj_young = 0; n_vec_young = 0; n_str_young = 0; n_rem = 0; n_obj_aged = 0; n_vec_aged = 0
     obj_pend_dead = 0; vec_pend_dead = 0; str_pend_dead = 0
-    if (allocated(mark_stack)) deallocate(mark_stack)
-    allocate(mark_stack(size(obj_pool)))
-    mark_sp = 0
     gc_allocs = 0; gc_frees = 0; gc_collections = 0; gc_young_collections = 0
     gc_no_collect = .false.
     call heap_sync_init()
@@ -2943,7 +2947,7 @@ contains
     obj_mark = .false.
     vec_mark = .false.
     str_mark = .false.
-    mark_sp = 0
+    call mark_begin()
     call push_roots(roots)
     call drain_mark_stack()
     last_marked = gc_marked - last_marked
@@ -3027,7 +3031,7 @@ contains
     call merge_batches(.false.)
     last_marked = gc_marked
     obj_marked = 0; vec_marked = 0; str_marked = 0
-    mark_sp = 0
+    call mark_begin()
     call push_roots(roots)
     do i = 1, n_rem
        v = rem_set(i)
@@ -4324,61 +4328,104 @@ contains
     n = global_count
   end function gc_global_count
 
+  ! A collection's marking begins: the stack empty and big enough for every
+  ! object and run, the counts zero
+  subroutine mark_begin()
+    integer(int64) :: n
+    n = int(obj_used, int64) + int(vec_used, int64) + 2
+    if (allocated(hstate%mtag)) then
+       if (size(hstate%mtag, kind=int64) < n) deallocate(hstate%mtag, hstate%mref)
+    end if
+    if (.not. allocated(hstate%mtag)) allocate(hstate%mtag(0:2 * n - 1), hstate%mref(0:2 * n - 1))
+    hstate%err = 0; hstate%msp = 0
+    hstate%nobj = 0; hstate%nvec = 0; hstate%nstr = 0; hstate%alive = 0
+  end subroutine mark_begin
+
+  ! a reference met: marked, and an object or a run pushed to be scanned
   subroutine push_mark(v)
     type(gc_value), intent(in) :: v
-    type(gc_value), allocatable :: bigger(:)
-    integer :: n
-    if (v%ref == 0) return
-    select case (v%tag)
-    case (GCT_OBJ, GCT_VEC, GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC, GCT_BIGRATIO)
-       continue
-    case default
-       return ! an immediate holds nothing
-    end select
-    if (mark_sp >= size(mark_stack)) then
-       n = size(mark_stack)
-       allocate(bigger(2 * n))
-       bigger(1:n) = mark_stack(1:n)
-       call move_alloc(bigger, mark_stack)
-    end if
-    mark_sp = mark_sp + 1
-    mark_stack(mark_sp) = v
+    call hpg_push(hstate, int(v%tag, int64), int(v%ref, int64))
   end subroutine push_mark
 
+  ! everything reachable from what was pushed, marked; the counts added
   subroutine drain_mark_stack()
-    type(gc_value) :: v
-    integer :: i, n
-    do while (mark_sp > 0)
-       v = mark_stack(mark_sp)
-       mark_sp = mark_sp - 1
-       select case (v%tag)
-       case (GCT_OBJ)
-          ! Already-marked stops the walk, which is what makes a cycle
-          ! terminate instead of looping forever.
-          if (obj_mark(v%ref)) cycle
-          obj_mark(v%ref) = .true.
-          gc_marked = gc_marked + 1
-          obj_marked = obj_marked + 1
-          do i = 1, OBJ_SLOTS
-             call push_mark(obj_pool(v%ref)%slot(i))
-          end do
-       case (GCT_VEC)
-          if (vec_mark(v%ref)) cycle
-          vec_mark(v%ref) = .true.
-          gc_marked = gc_marked + 1
-          vec_marked = vec_marked + 1
-          n = vec_pool(v%ref)%len
-          arena_live = arena_live + n
-          do i = 1, n
-             call push_mark(vec_store(vec_pool(v%ref)%off + i - 1))
-          end do
-       case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC, GCT_BIGRATIO)
-          str_mark(v%ref) = .true. ! a leaf: holds no references
-          gc_marked = gc_marked + 1
-          str_marked = str_marked + 1
-       end select
-    end do
+    call hpg_drain(hstate, huge(0_int64))
+    if (hstate%err /= 0) error stop "clotran: the collector's mark stack overflowed"
+    gc_marked = gc_marked + hstate%nobj + hstate%nvec + hstate%nstr
+    obj_marked = obj_marked + int(hstate%nobj)
+    vec_marked = vec_marked + int(hstate%nvec)
+    str_marked = str_marked + int(hstate%nstr)
+    arena_live = arena_live + int(hstate%alive)
+    hstate%nobj = 0; hstate%nvec = 0; hstate%nstr = 0; hstate%alive = 0
   end subroutine drain_mark_stack
+
+  ! ---- the marker's view of the pools (heap_gen.inc's externs) ----
+  ! object i's slot k is word 5i+k; a mark is 1 or 0
+  integer(int64) function hp_otag(j)
+    integer(int64), intent(in) :: j
+    hp_otag = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%tag
+  end function hp_otag
+  integer(int64) function hp_oref(j)
+    integer(int64), intent(in) :: j
+    hp_oref = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%ref
+  end function hp_oref
+  integer(int64) function hp_n_oslot()
+    hp_n_oslot = 5_int64 * (int(obj_used, int64) + 1)
+  end function hp_n_oslot
+  integer(int64) function hp_omark(i)
+    integer(int64), intent(in) :: i
+    hp_omark = merge(1_int64, 0_int64, obj_mark(i))
+  end function hp_omark
+  subroutine hp_set_omark(i, x)
+    integer(int64), intent(in) :: i, x
+    obj_mark(i) = x /= 0
+  end subroutine hp_set_omark
+  integer(int64) function hp_n_obj()
+    hp_n_obj = int(obj_used, int64) + 1
+  end function hp_n_obj
+  integer(int64) function hp_voff(i)
+    integer(int64), intent(in) :: i
+    hp_voff = vec_pool(i)%off
+  end function hp_voff
+  integer(int64) function hp_vlen(i)
+    integer(int64), intent(in) :: i
+    hp_vlen = vec_pool(i)%len
+  end function hp_vlen
+  integer(int64) function hp_vmark(i)
+    integer(int64), intent(in) :: i
+    hp_vmark = merge(1_int64, 0_int64, vec_mark(i))
+  end function hp_vmark
+  subroutine hp_set_vmark(i, x)
+    integer(int64), intent(in) :: i, x
+    vec_mark(i) = x /= 0
+  end subroutine hp_set_vmark
+  integer(int64) function hp_n_vec()
+    hp_n_vec = int(vec_used, int64) + 1
+  end function hp_n_vec
+  integer(int64) function hp_atag(j)
+    integer(int64), intent(in) :: j
+    hp_atag = vec_store(j)%tag
+  end function hp_atag
+  integer(int64) function hp_aref(j)
+    integer(int64), intent(in) :: j
+    hp_aref = vec_store(j)%ref
+  end function hp_aref
+  integer(int64) function hp_n_arena()
+    hp_n_arena = size(vec_store, kind=int64) + 1
+  end function hp_n_arena
+  integer(int64) function hp_smark(i)
+    integer(int64), intent(in) :: i
+    hp_smark = merge(1_int64, 0_int64, str_mark(i))
+  end function hp_smark
+  subroutine hp_set_smark(i, x)
+    integer(int64), intent(in) :: i, x
+    str_mark(i) = x /= 0
+  end subroutine hp_set_smark
+  integer(int64) function hp_n_str()
+    hp_n_str = int(str_used, int64) + 1
+  end function hp_n_str
+
+  include "gen/heap_gen.inc"
 
   ! A per-slot free FLAG, not a scan of the free list: scanning made
   ! sweep O(free^2), quadratic in exactly the case that matters -- a

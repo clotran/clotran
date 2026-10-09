@@ -86,7 +86,29 @@
               "! Every function here has its guards verified in ACL2: every index in"
               "! bounds, every integer inside 64 bits. vmicg-correct proves that a"
               "! program vmicg_program compiles without an error or an overflow"
-              "! answers, run, what it means."]}})
+              "! answers, run, what it means."]}
+    "heapg"
+    {:out "src/f/gen/heap_gen.inc" :include true
+     :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain]
+     :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
+     :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
+               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]}
+     :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"]}
+     :prefix {"hs" "h-"}
+     :value-arrays #{}
+     ;; GC.f90's pools, through its accessors (GC.f90, "the marker's view")
+     :externs {"otag" ["hp_otag" "-" "hp_n_oslot"] "oref" ["hp_oref" "-" "hp_n_oslot"]
+               "omark" ["hp_omark" "hp_set_omark" "hp_n_obj"]
+               "voff" ["hp_voff" "-" "hp_n_vec"] "vlen" ["hp_vlen" "-" "hp_n_vec"]
+               "vmark" ["hp_vmark" "hp_set_vmark" "hp_n_vec"]
+               "atag" ["hp_atag" "-" "hp_n_arena"] "aref" ["hp_aref" "-" "hp_n_arena"]
+               "smark" ["hp_smark" "hp_set_smark" "hp_n_str"]}
+     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag}
+     :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
+              "  ! change the model, prove it, and generate again (PLAN step 33). Included in"
+              "  ! GC.f90's contains part: the collector's marking, guard-verified, on GC's"
+              "  ! pools through its accessors. heapg-proof's hpg-drain-closed: a drain that"
+              "  ! empties its stack with no overflow leaves the mark set closed."]}})
 
 (def cfg (or (books book) (do (println (str "acl2-fortran: no book " book)) (System/exit 1))))
 (def out-file (get args "-o" (:out cfg)))
@@ -143,18 +165,23 @@
 
 ;; ---- the stobjs ----------------------------------------------------------------------
 
-(def stobjs '{vmi "st" vce "ce"})
-(def stobj-types {"st" "vm_state" "ce" "vc_state"})
+(def stobjs (get cfg :stobjs '{vmi "st" vce "ce"}))
+(def stobj-types (get cfg :stobj-types {"st" "vm_state" "ce" "vc_state"}))
 
-(def fields (merge (into {} (for [f ["pc" "fb" "sp" "status" "ctop" "hidx"]] [(symbol (str "v-" f)) ["st" f]]))
-                   '{ce-err ["ce" "err"]}))
-(def array-names {"st" ["code" "pool" "stk" "ckind" "ca" "cb" "cc" "cprev" "fnfirst" "fncount" "cln" "clent" "clrest"]
-                  "ce" ["env"]})
-(def prefix {"st" "v-" "ce" "ce-"})
+(def fields (get cfg :fields
+                 (merge (into {} (for [f ["pc" "fb" "sp" "status" "ctop" "hidx"]] [(symbol (str "v-" f)) ["st" f]]))
+                        '{ce-err ["ce" "err"]})))
+(def array-names (get cfg :array-names
+                      {"st" ["code" "pool" "stk" "ckind" "ca" "cb" "cc" "cprev" "fnfirst" "fncount" "cln" "clent" "clrest"]
+                       "ce" ["env"]}))
+(def prefix (get cfg :prefix {"st" "v-" "ce" "ce-"}))
+;; arrays that are the runtime's own storage, read and written through its
+;; accessors: name -> [reader writer length]
+(def externs (get cfg :externs {}))
 (def arrays (into {} (for [[o as] array-names a as] [(symbol (str (prefix o) a "i")) [o a]])))
 (def lengths (into {} (for [[o as] array-names a as] [(symbol (str (prefix o) a "-length")) [o a]])))
 (def resizers (into {} (for [[o as] array-names a as] [(symbol (str "resize-" (prefix o) a)) [o a]])))
-(def value-arrays #{"pool" "stk"})
+(def value-arrays (get cfg :value-arrays #{"pool" "stk"}))
 (def updaters (merge (into {} (for [[k v] fields] [(symbol (str "update-" k)) v]))
                      (into {} (for [[k v] arrays] [(symbol (str "update-" k)) v]))))
 (defn sref [[o f]] (str o "%" f))
@@ -283,8 +310,10 @@
                            (assoc r :code ".true." :type :bool))
         (fields op) {:stmts [] :code (sref (fields op)) :type :int}
         (arrays op) (let [r (expr ctx (first xs)) [_ a :as oa] (arrays op)]
-                      {:stmts (:stmts r) :code (str (sref oa) "(" (:code r) ")") :type (if (value-arrays a) :val :int)})
-        (lengths op) {:stmts [] :code (str "size(" (sref (lengths op)) ", kind=int64)") :type :int}
+                      {:stmts (:stmts r) :code (if (externs a) (str (first (externs a)) "(" (:code r) ")") (str (sref oa) "(" (:code r) ")"))
+                       :type (if (value-arrays a) :val :int)})
+        (lengths op) (let [[_ a] (lengths op)]
+                       {:stmts [] :code (if (externs a) (str (nth (externs a) 2) "()") (str "size(" (sref (lengths op)) ", kind=int64)")) :type :int})
         (= op 'rt-is) (do (when-not (and (seq? (second xs)) (= 'quote (first (second xs))) (keyword? (second (second xs))))
                             (throw (ex-info "rt-is with other than a keyword" {:x x})))
                           (let [[f _ t] (rt op) rs (map #(expr ctx %) xs)]
@@ -397,7 +426,10 @@
                                 ti (fresh ctx "i" :int) tv (fresh ctx "v" (:type rv))]
                             ;; the index and value are read from the stobj before the inner update runs
                             (vec (concat (:stmts ri) [(str ti " = " (:code ri))] (:stmts rv) [(str tv " = " (:code rv))]
-                                         (stmt inner self (nth xs 2)) [(str (sref oa) "(" ti ") = " tv)])))))
+                                         (stmt inner self (nth xs 2))
+                                         [(if (externs (second oa))
+                                            (str "call " (second (externs (second oa))) "(" ti ", " tv ")")
+                                            (str (sref oa) "(" ti ") = " tv))])))))
         (resizers op) (let [[_ a :as oa] (resizers op) r (expr ctx (first xs))
                             tn (fresh ctx "n" :int)]
                         (vec (concat (:stmts r) [(str tn " = " (:code r))] (stmt (assoc ctx :tail false) self (second xs))
@@ -481,14 +513,19 @@
          "  end " (if sub "subroutine " "function ") (fname self) "\n")))
 
 (def fortran-source
-  (str (str/join (map #(str % "\n") (:header cfg)))
-       "module " (:module cfg) "\n"
-       "  use iso_fortran_env, only: int64\n"
-       "  use vm_runtime\n"
-       "  implicit none\n"
-       "contains\n"
-       (str/join "\n" (map gen-fn fns))
-       "end module " (:module cfg) "\n"))
+  (if (:include cfg)
+    ;; procedures to include in the contains part of the module that owns
+    ;; the storage they work on
+    (str (str/join (map #(str % "\n") (:header cfg)))
+         (str/join "\n" (map gen-fn fns)))
+    (str (str/join (map #(str % "\n") (:header cfg)))
+         "module " (:module cfg) "\n"
+         "  use iso_fortran_env, only: int64\n"
+         "  use vm_runtime\n"
+         "  implicit none\n"
+         "contains\n"
+         (str/join "\n" (map gen-fn fns))
+         "end module " (:module cfg) "\n")))
 
 (spit out-file fortran-source)
 (println (str "acl2-fortran: " (count fns) " functions -> " out-file))

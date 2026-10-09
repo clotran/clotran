@@ -4295,6 +4295,85 @@ example is the same workflow done through clotran.
 Build order: local plus SSH first, then Slurm, then Kubernetes; then
 `libclotran` and the Python client.
 
+### 33. The runtime under the model (decided 2026-10-09)
+
+James, 2026-10-09: "should we write everything first, then profile and
+then optimize the model and then have our Fortran emitter update that
+part of our language?" -- and, told that only the VM loop and its
+compiler are generated: "continue in that order".
+
+**Why.** The models designed the VM, the allocator, lazy cells and the
+persistent structures, but only the VM's step loop (vm_gen.f90) and its
+compiler (vmc_gen.f90) are generated from them. Everything the
+yardstick spends its time in -- the heap, the collector, cons and lazy
+cells, the seq operations, apply, the flat interpreter -- is
+hand-written Fortran that predates the models, and in the VM model it
+all sits behind `prim`, unconstrained. Optimising a model cannot touch
+code that is not generated from one. The day's measurements say the
+same from the other side: the moving nursery alloc.lisp designs cannot
+be bolted onto the hand-written runtime, whose `roots(:)` convention
+(241 procedures, ~970 call sites) keeps references as copies a moving
+collector cannot update -- with every collection relocating objects
+(a test mode, scratch only), core's load stops at its first vector
+append. Code generated from the model is move-safe by construction
+(vmi: an operation that may allocate writes its answer into a stack
+slot, so generated code holds no value across an allocation).
+
+**The order**, each stage modelled, proved, generated, fuzzed against
+the model, wired in behind the API it replaces, and measured:
+1. THE HEAP (GC.f90's core, ~2,300 lines).
+   a. The collector's algorithm: marking from the roots over the three
+      pools (objects, vector runs, texts) and sweeping. The policy
+      around it (young or full, aging, batching, finalizers, the world
+      stopped) stays hand-written at first and calls it.
+   b. Allocation: free lists, the arena's size-class slabs, the
+      threads' batches.
+   c. The generations: aging, the remembered set and its barrier.
+   d. THE OBJECT LAYOUT: objects sized to their kind (a cons and a lazy
+      cell in 32-48 bytes, not 96) -- the change that buys locality --
+      behind the same gc_slot/gc_kind API.
+   e. The moving nursery (alloc.lisp), once what holds references is
+      generated. Before it: identity hashes stored rather than taken
+      from `ref` (gc_hash, gc_equal's fallback), the image's indices,
+      and the references kept outside traced values (a closure's
+      call-table ref in i2, flat's cached arena offsets).
+2. The seq and lazy-cell operations as functions over the modelled
+   heap, not prims.
+3. The calling convention.
+
+The yardstick is measured after each, in the mode that runs the
+generated code.
+
+**Stage 1a, the marking, generated (2026-10-09).** model/heapg.lisp is
+the collector's marking at the level the Fortran is generated from,
+guard-verified: GC.f90's pools seen through accessors (an object's five
+slots, a run's words in the arena, each pool's marks), the marker's own
+stack and counts. A reference is MARKED WHEN IT IS PUSHED, so each object
+and run is pushed at most once and the stack, sized at each collection's
+start to the objects and runs there are, cannot overflow (an overflow
+sets a flag, and GC.f90 stops on it). Texts are leaves, counted at every
+push as GC.f90's marker counted them. model/heapg-proof.lisp proves
+`hpg-drain-closed`: from a state the invariant holds in -- each marked
+object or run on the stack or BLACK, every reference it holds marked --
+which no marks and the roots just pushed are, a drain that empties its
+stack with no overflow leaves the mark set closed under references, the
+property alloc-old.lisp's old-gc-invisible asks of a sweep. Underneath:
+marking writes no word of the pools, never unmarks, and a push leaves
+the stack below its top alone.
+
+scripts/acl2-fortran generates it (`-b heapg`) as src/f/gen/heap_gen.inc,
+included in GC.f90's contains part: the translator now takes a book's
+stobj tables from its configuration, and maps an array the runtime owns
+to its accessors (`:externs`: reader, writer, length), so the generated
+code works on GC's own pools with nothing copied. GC.f90's push_mark and
+drain_mark_stack are the generated hpg_push and hpg_drain. The yardstick
+does not move (~857 ms); nothing was meant to, this stage puts the
+collector's algorithm under the model. scripts/fuzz-heap-gen marks random
+heaps -- references in range and out of it, objects already marked as a
+young collection finds them, stacks too small to finish -- with ACL2's
+hpg-drain and with the generated code, under gfortran and flang (make
+check-vm-gen); its control, an object's last slot left unread, is caught.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

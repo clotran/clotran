@@ -204,8 +204,7 @@
  "GC.f90/global_gen" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/global_root" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/last_marked" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
- "GC.f90/mark_sp" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
- "GC.f90/mark_stack" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
+ "GC.f90/hstate" {:class :shared, :note "the collector's marker (heap_gen.inc): used only by a collection, which runs with the world stopped (14c)"}
  "GC.f90/obj_free" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/obj_free_head" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/obj_free_next" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}

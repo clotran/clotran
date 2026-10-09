@@ -1,0 +1,154 @@
+#!/usr/bin/env bb
+;; fuzz-heap-gen: the GENERATED collector's marking (src/f/gen/heap_gen.inc,
+;; written by scripts/acl2-fortran -b heapg from model/heapg.lisp) against
+;; the ACL2 it was generated from (PLAN step 33, stage 1a).
+;;
+;;   scripts/fuzz-heap-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random heaps: objects of five slots, vector runs in an arena, texts;
+;; slots and arena words holding references of every kind -- in range and
+;; out of it, to objects already marked (as a young collection finds the
+;; old ones) -- and immediates; a few roots; a mark stack sometimes too
+;; small to finish. ACL2 pushes the roots with hpg-push and drains with
+;; hpg-drain; test/heap/heap_check does the same with the generated code.
+;; The final marks, the counts, the stack's top and the overflow flag must
+;; agree, case for case.
+;;
+;; -x is the NEGATIVE CONTROL: the generated side reads every object's last
+;; slot as no reference, and the marks must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-heap-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+(def text-tags [5 6 7 11 12 13 15])
+
+(defn gen-ref [no nv ns]
+  (let [t (pick [0 2 3 8 8 8 9 9 5 6 7 11 12 13 15 1])]
+    [t (case t
+         8 (rnd (+ no 2))
+         9 (rnd (+ nv 2))
+         (5 6 7 11 12 13 15) (rnd (+ ns 2))
+         (rnd 50))]))
+
+(defn gen-case []
+  (let [no (+ 1 (rnd 25)) nv (+ 1 (rnd 8)) na (+ 1 (rnd 40)) ns (+ 1 (rnd 8))
+        slots (vec (repeatedly (* 5 no) #(gen-ref no nv ns)))
+        ;; object 0 and run 0 are no object: their marks start clear
+        omark (vec (cons 0 (repeatedly (dec no) #(if (zero? (rnd 6)) 1 0))))
+        vmark (vec (cons 0 (repeatedly (dec nv) #(if (zero? (rnd 6)) 1 0))))
+        voff (vec (repeatedly nv #(if (zero? (rnd 10)) (- (rnd 5)) (rnd (+ na 3)))))
+        vlen (vec (repeatedly nv #(if (zero? (rnd 12)) (- (rnd 3)) (rnd 7))))
+        arena (vec (repeatedly na #(gen-ref no nv ns)))
+        smark (vec (repeatedly ns #(rnd 2)))
+        small (zero? (rnd 6))
+        ;; a stack too small: several objects pushed at once, to overflow it
+        roots (if small
+                (vec (repeatedly (+ 3 (rnd 4)) #(vector 8 (+ 1 (rnd (max 1 (dec no)))))))
+                (vec (repeatedly (+ 1 (rnd 6)) #(gen-ref no nv ns))))
+        cap (if small (+ 1 (rnd 3)) (+ no nv 2))]
+    {:no no :nv nv :na na :ns ns :cap cap
+     :otag (mapv first slots) :oref (mapv second slots) :omark omark
+     :voff voff :vlen vlen :vmark vmark :atag (mapv first arena) :aref (mapv second arena)
+     :smark smark :roots roots}))
+
+(def cases (vec (repeatedly n gen-case)))
+
+;; ---- ACL2 -------------------------------------------------------------------------
+
+(defn l [xs] (str "'(" (str/join " " xs) ")"))
+
+(def driver
+  (str "(include-book \"heapg\")\n"
+       "(set-print-case :downcase state)\n"
+       "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       "(defun ld-arr (f i xs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (endp xs) hpg\n"
+       "    (let ((hpg (case f (0 (update-h-otagi i (car xs) hpg)) (1 (update-h-orefi i (car xs) hpg))\n"
+       "                       (2 (update-h-omarki i (car xs) hpg)) (3 (update-h-voffi i (car xs) hpg))\n"
+       "                       (4 (update-h-vleni i (car xs) hpg)) (5 (update-h-vmarki i (car xs) hpg))\n"
+       "                       (6 (update-h-atagi i (car xs) hpg)) (7 (update-h-arefi i (car xs) hpg))\n"
+       "                       (t (update-h-smarki i (car xs) hpg)))))\n"
+       "      (ld-arr f (1+ i) (cdr xs) hpg))))\n"
+       "(defun get-arr (f i n hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (>= i n) nil (cons (case f (2 (h-omarki i hpg)) (5 (h-vmarki i hpg)) (t (h-smarki i hpg))) (get-arr f (1+ i) n hpg))))\n"
+       "(defun push-roots (rs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (endp rs) hpg (let ((hpg (hpg-push (caar rs) (cadar rs) hpg))) (push-roots (cdr rs) hpg))))\n"
+       "(defun run-case (k ot orf om vo vl vm at ar sm cap roots hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (let* ((hpg (resize-h-otag (len ot) hpg)) (hpg (resize-h-oref (len orf) hpg)) (hpg (resize-h-omark (len om) hpg))\n"
+       "         (hpg (resize-h-voff (len vo) hpg)) (hpg (resize-h-vlen (len vl) hpg)) (hpg (resize-h-vmark (len vm) hpg))\n"
+       "         (hpg (resize-h-atag (len at) hpg)) (hpg (resize-h-aref (len ar) hpg)) (hpg (resize-h-smark (len sm) hpg))\n"
+       "         (hpg (resize-h-mtag cap hpg)) (hpg (resize-h-mref cap hpg))\n"
+       "         (hpg (ld-arr 0 0 ot hpg)) (hpg (ld-arr 1 0 orf hpg)) (hpg (ld-arr 2 0 om hpg))\n"
+       "         (hpg (ld-arr 3 0 vo hpg)) (hpg (ld-arr 4 0 vl hpg)) (hpg (ld-arr 5 0 vm hpg))\n"
+       "         (hpg (ld-arr 6 0 at hpg)) (hpg (ld-arr 7 0 ar hpg)) (hpg (ld-arr 8 0 sm hpg))\n"
+       "         (hpg (update-h-msp 0 hpg)) (hpg (update-h-err 0 hpg)) (hpg (update-h-nobj 0 hpg))\n"
+       "         (hpg (update-h-nvec 0 hpg)) (hpg (update-h-nstr 0 hpg)) (hpg (update-h-alive 0 hpg))\n"
+       "         (hpg (push-roots roots hpg)) (hpg (hpg-drain 1000000 hpg)))\n"
+       "    (prog2$ (cw \"CASE ~x0 ~x1~%\" k (list (get-arr 2 0 (len om) hpg) (get-arr 5 0 (len vm) hpg) (get-arr 8 0 (len sm) hpg)\n"
+       "                                            (list (h-err hpg) (h-msp hpg) (h-nobj hpg) (h-nvec hpg) (h-nstr hpg) (h-alive hpg))))\n"
+       "            hpg)))\n"
+       (str/join (map-indexed (fn [k c]
+                                (str "(run-case " k " " (l (:otag c)) " " (l (:oref c)) " " (l (:omark c)) " "
+                                     (l (:voff c)) " " (l (:vlen c)) " " (l (:vmark c)) " " (l (:atag c)) " " (l (:aref c)) " "
+                                     (l (:smark c)) " " (:cap c) " '(" (str/join " " (map (fn [[t r]] (str "(" t " " r ")")) (:roots c))) ") hpg)\n"))
+                              cases))
+       "(good-bye)\n"))
+
+(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ k body] (re-seq #"CASE (\d+) (\(.*\))" out)]
+             [(parse-long k) (edn/read-string body)])))
+(when (not= (count expected) n)
+  (println (str "fuzz-heap-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+
+;; ---- the generated code ---------------------------------------------------------------
+
+(p/shell {:out :string :err :string} "scripts/acl2-fortran" "-b" "heapg" "-o" (str work "/heap_gen.inc"))
+(fs/copy "test/heap/heap_check.f90" (str work "/heap_check.f90"))
+(def exe (str work "/heap_check"))
+(let [r (p/shell {:continue true :out :string :err :string :dir work} fc "-O2" "-o" exe "heap_check.f90")]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(defn case-file [k c]
+  (let [f (str work "/case" k ".txt")
+        nums (fn [xs] (str/join " " xs))]
+    (spit f (str (:no c) " " (:nv c) " " (:na c) " " (:ns c) " " (:cap c) "\n"
+                 (nums (:otag c)) "\n" (nums (:oref c)) "\n" (nums (:omark c)) "\n"
+                 (nums (:voff c)) "\n" (nums (:vlen c)) "\n" (nums (:vmark c)) "\n"
+                 (nums (:atag c)) "\n" (nums (:aref c)) "\n" (nums (:smark c)) "\n"
+                 (count (:roots c)) "\n" (str/join "\n" (map (fn [[t r]] (str t " " r)) (:roots c))) "\n"))
+    f))
+
+(defn parse-out [s]
+  (let [m (into {} (for [ln (str/split-lines s) :let [[k & vs] (str/split (str/trim ln) #"\s+")]]
+                     [k (mapv parse-long vs)]))]
+    (list (seq (m "omark")) (seq (m "vmark")) (seq (m "smark")) (seq (m "regs")))))
+
+(def results
+  (vec (for [[k c] (map-indexed vector cases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+               got (parse-out (:out r))
+               want (map seq (expected k))]
+           {:k k :ok (= got want) :got got :want want :overflow (= 1 (first (last (expected k))))}))))
+
+(def bad (remove :ok results))
+(println (str n " heaps, seed " seed (when broken " (negative control: an object's last slot unread)")
+              "; " (count (filter :overflow results)) " overflowed their stack"))
+(println (str "generated marking against ACL2's: " (count bad) " differ"))
+(doseq [b (take 3 bad)] (println "  case" (:k b) "ACL2" (pr-str (:want b)) "generated" (pr-str (:got b))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

@@ -247,7 +247,7 @@ $(B)/%.o: $(S)/%.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(B)/BigDec.o: $(B)/BigInt.o
-$(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o
+$(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o $(S)/gen/heap_gen.inc
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
 $(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
 $(B)/Assoc.o: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o
@@ -735,7 +735,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj heapg heapg-proof
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -821,6 +821,7 @@ fuzz-model: model
 gen-vm: model
 	scripts/acl2-fortran
 	scripts/acl2-fortran -b vmicg
+	scripts/acl2-fortran -b heapg
 check-vm-gen: model | $(B)
 	scripts/acl2-fortran -o $(B)/vm_gen.f90
 	@cmp -s $(B)/vm_gen.f90 src/f/gen/vm_gen.f90 || { echo "src/f/gen/vm_gen.f90 is not what model/vmg.lisp generates: make gen-vm"; exit 1; }
@@ -836,6 +837,11 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-vmc-gen -n 300 -s 1
 	scripts/fuzz-vmc-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vmc-gen -n 100 -s 2 -x
+	scripts/acl2-fortran -b heapg -o $(B)/heap_gen.inc
+	@cmp -s $(B)/heap_gen.inc src/f/gen/heap_gen.inc || { echo "src/f/gen/heap_gen.inc is not what model/heapg.lisp generates: make gen-vm"; exit 1; }
+	scripts/fuzz-heap-gen -n 300 -s 1
+	scripts/fuzz-heap-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-heap-gen -n 100 -s 2 -x
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \
