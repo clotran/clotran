@@ -1977,12 +1977,13 @@
        end select
     else
        select case (id)
-       case (B_INC, B_UINC)
-          ! unchecked-inc wraps at the top; that one value goes to the
-          ! builtin, which knows how (dotimes counts with it)
+       case (B_INC, B_UINC, B_PINC)
+          ! unchecked-inc wraps at the top and inc' promotes; that one value
+          ! goes to the builtin, which knows how (dotimes counts with it;
+          ! (range) is (iterate inc' 0))
           if (a == huge(a)) return
           out = gc_int(a + 1_gc_ip)
-       case (B_DEC, B_UDEC)
+       case (B_DEC, B_UDEC, B_PDEC)
           if (a == -huge(a) - 1_gc_ip) return
           out = gc_int(a - 1_gc_ip)
        case (B_ZERO); out = gc_bool(a == 0)
