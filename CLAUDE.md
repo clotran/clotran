@@ -125,6 +125,13 @@ find out which. Run `make model` before committing anything that
 touches the model; a book that does not certify means nothing gets
 staged, as a red crosscheck does.
 
+**Every algorithm in the model has a cost theorem, in the same commit.**
+James, 2026-10-04 and 2026-10-09: a step-count bound -- by counting, as
+`model/vm-cost.lisp` and `model/heap-cost.lisp` do -- for every model
+algorithm, not only the data structures. A book with a correctness
+theorem and no cost theorem is unfinished; the heap books once landed
+that way and had to be caught up.
+
 ## Every feature gets a fuzzer
 
 James, 2026-10-02: fuzz everything, and from now on design a fuzzer

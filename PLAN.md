@@ -4479,6 +4479,28 @@ no list for it, only fresh arena. scripts/fuzz-heap-gen makes up to eight
 run takes after the pools' allocations; forcing batching off in its
 driver is caught. The yardstick does not move (~866 ms).
 
+**Stage 1b, the cost theorems (2026-10-09).** The heap books landed with
+correctness theorems and no cost theorem, which the rule (every model
+algorithm gets a step-count bound; James, 2026-10-04, and again today:
+"have cost theorems for everything moving forward") does not allow.
+model/heap-cost.lisp counts steps as vm-cost.lisp does -- each count
+follows its function's own recursion over the function's own state, a
+turn a constant number of array reads and writes -- and proves: a take,
+pop or use in any pool is one step; a pool's batch fill at most fuel
+turns and at most the batch's room; a sweep of slots i .. n exactly
+n+1-i turns, a vector's free at most 41 steps more (its size class); a
+size class at most 41 doublings, a run length at most 63; the arena's
+batch fill at most 64 turns; run_take at most 170 steps; an object's scan
+at most its five slots, a run's at most its length; and THE DRAIN'S WORK
+AT MOST ITS STARTING POTENTIAL -- each stack entry and each unmarked
+object (6) or vector (1 + its length) carries its scan cost, a push only
+moves a cost from the unmarked reserve onto the stack, and a turn does
+at most its popped entry's cost (hpg-drain-is-dstep ties the counted turn
+to hpg-drain). Marking is linear in the heap, each object and vector
+scanned once; allocation is O(1) a slot and O(1) a run, a batch's refill
+amortised over the batch; sweeping is linear in the pool. From here on a
+model book is committed with its cost theorem, or not at all.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
