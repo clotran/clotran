@@ -920,6 +920,8 @@
           return
        end if
     end do
+    ! and natively, under CLOTRAN_JIT=1 (vmjit.inc)
+    if (vmj_enabled()) call vmj_compile(int(p0, c_int64_t), pend)
     ! the constants, kept alive by the caller
     x = gc_vec(int(sz), [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, x)
@@ -1031,6 +1033,10 @@
     end if
     hi = nl + 1
     steps = 0
+    if (vmj_enabled()) then
+       ! natively (vmjit.inc), the same steps
+       call vmj_run(st, ct0, hi, steps)
+    else
     do
        if (st%status /= 0) exit
        if (st%code(4 * st%pc) == 11 .and. st%ctop == 0) exit
@@ -1042,6 +1048,7 @@
           if (gc_stop_pending()) call gc_poll()
        end if
     end do
+    end if
     vst%vm_ctl_top = int(ct0)
     select case (int(st%status))
     case (0)

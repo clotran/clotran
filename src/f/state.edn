@@ -133,6 +133,16 @@
  "Eval.f90/vmp_pc" {:class :shared, :note "the program's next free code: reserved under the state lock"}
  "Eval.f90/vmp_ci" {:class :shared, :note "the program's next free clause: reserved under the state lock"}
  "Eval.f90/vmp_f" {:class :shared, :note "the program's next function id: reserved under the state lock"}
+ "Eval.f90/vmj_mode" {:class :fixed, :note "CLOTRAN_JIT, read once from the environment, and set on by vmj_init on the main thread while core loads (the first compile asks)"}
+ "Eval.f90/vmj_base" {:class :fixed, :note "the JIT's code region, mapped once by vmj_init; never moved"}
+ "Eval.f90/vmj_cap" {:class :fixed, :note "the code region's size in words, set once by vmj_init"}
+ "Eval.f90/vmj_used" {:class :shared, :note "the code region's next free word: reserved under the state lock"}
+ "Eval.f90/vmj_enter" {:class :fixed, :note "the ENTER stub's address, set once by vmj_init"}
+ "Eval.f90/vmj_stub" {:class :fixed, :note "the SLOW stub's address, set once by vmj_init"}
+ "Eval.f90/vmj_tab" {:class :shared, :note "each pc's native address: a function's entries written once after its code is in place, aligned 64-bit stores read by any thread's native code"}
+ "Eval.f90/vmj_break" {:class :fixed, :note "CLOTRAN_JIT_BREAK (the JIT fuzzer's negative control), read once with CLOTRAN_JIT"}
+ "Eval.f90/vmj_n_fns" {:class :shared, :note "statistics: a race miscounts, nothing more"}
+ "Eval.f90/vmj_n_inline" {:class :shared, :note "statistics: a race miscounts, nothing more"}
  "Eval.f90/vm_mode" {:class :fixed, :note "CLOTRAN_VM, read once from the environment (lazily: the same value from any thread)"}
  "Eval.f90/vm_trace" {:class :fixed, :note "CLOTRAN_VM_TRACE, read once with CLOTRAN_VM"}
  "Eval.f90/vm_n_ok" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}

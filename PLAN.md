@@ -4031,6 +4031,44 @@ sixth machine. Its `-r` control is an allocator that never loads (it
 takes a slot to be in its register already), and it is caught by the
 stage-2b runs alone.
 
+**Stage 1 on the machine clotran runs (2026-10-09).** jit*.lisp
+designed the JIT on vm-closure.lisp's small machine; model/vmj.lisp
+does it on vmi, the machine vm_gen.f90 is generated from. Each bytecode
+is a block: push, load, slide, jmpf and jmp as native moves and
+branches, each slot they touch checked against the stack's length
+first; every other instruction, and a failed check, is a call of the
+step the interpreter runs. `vmj-block-is`: a block run from its pc is
+one vmi-step. `vmj-run-is`: blocks translated once from the program,
+then run, are vmi-run step for step, since a step changes no code and
+no pool.
+
+src/f/vmjit.inc emits it for arm64, opt-in (CLOTRAN_VM=1
+CLOTRAN_JIT=1), each function as the VM compiles it: an entry stub, the
+blocks, and a slow stub that calls vmg_xstep through a bind(c) helper
+and goes on through a pc -> native table (a pc with no native code
+interprets). src/c/jit_shim.c maps the memory (MAP_JIT and per-thread
+write protection on macOS) and flushes the instruction cache. The
+emitter is written by hand from vmj-block, op for op; generating it
+from the model, with an arm64 decoder theorem, is still to do.
+`scripts/fuzz -m jit` agrees with clj (`make check-fuzz-jit`, nightly);
+its control, a jmpf that branches on the opposite test, is caught.
+
+It gains nothing measurable:
+
+| | VM | VM + JIT stage 1 |
+|---|---|---|
+| `(apply + (take 10^6 (range)))` | 1.5-1.7 s | 1.4-1.7 s |
+| a 10^7-iteration loop | 605 ms | 614 ms |
+
+The instructions it compiles are the cheap ones. A loop iteration is
+two prims (`<`, `unchecked-inc`), a recur and five moves; the prims and
+the recur are ~85% of it and still go through the runtime. So the next
+stage is the one that compiles the prims: a builtin's fast case
+(integer compare and arithmetic with the overflow check, first and
+next of a realised cell) inline, the runtime otherwise, with the
+builtin's meaning on those cases a stated property of the runtime
+that the fuzzer checks (prim is unconstrained in the model).
+
 ### 31a. The unified debugger (decided 2026-10-06)
 
 James, 2026-10-06: no Python. Make one debugger, with our own UX,

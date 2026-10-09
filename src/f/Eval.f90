@@ -635,6 +635,49 @@ module Eval
   ! trace (vm.inc vm_fn_at)
   integer(gc_ip), allocatable, save :: vmp_fstart(:)
   type(vm_fname), allocatable, save :: vmp_fnames(:)
+  ! THE JIT (vmjit.inc, model/vmj.lisp): a run's registers and what its
+  ! native code reads, laid out for that code (the offsets are vmjit.inc's)
+  type, bind(c) :: vm_jit_ctx
+     integer(c_int64_t) :: pc, fb, sp, hi          ! 0 8 16 24
+     type(c_ptr) :: stk                            ! 32: the run's stack window
+     integer(c_int64_t) :: stklen                  ! 40
+     type(c_ptr) :: pool                           ! 48
+     type(c_ptr) :: tab                            ! 56: native address per pc
+     type(c_funptr) :: step                        ! 64: vm_jit_step
+     type(c_ptr) :: st                             ! 72: the run's vm_state
+     integer(c_int64_t) :: ct0, steps              ! 80 88
+  end type vm_jit_ctx
+  ! CLOTRAN_JIT=1 under CLOTRAN_VM=1: 0 not asked yet, 1 on, 2 off
+  integer, save :: vmj_mode = 0
+  ! the code region, its size and words used; the entry, the exit and the
+  ! slow stub's addresses; each pc's native address (the stub until its
+  ! function is translated)
+  type(c_ptr), save :: vmj_base
+  integer(c_int64_t), save :: vmj_cap = 0, vmj_used = 0, vmj_enter = 0, vmj_stub = 0
+  integer(c_int64_t), allocatable, target, save :: vmj_tab(:)
+  integer, save :: vmj_n_fns = 0, vmj_n_inline = 0
+  logical, save :: vmj_break = .false.
+  interface
+     function clotran_jit_alloc(n) bind(c, name="clotran_jit_alloc") result(p)
+       import :: c_ptr, c_int64_t
+       integer(c_int64_t), value :: n
+       type(c_ptr) :: p
+     end function clotran_jit_alloc
+     subroutine clotran_jit_write(d, w, n) bind(c, name="clotran_jit_write")
+       import :: c_ptr, c_int32_t, c_int64_t
+       type(c_ptr), value :: d
+       integer(c_int32_t), intent(in) :: w(*)
+       integer(c_int64_t), value :: n
+     end subroutine clotran_jit_write
+     subroutine clotran_jit_enter(e, cx) bind(c, name="clotran_jit_enter")
+       import :: c_ptr
+       type(c_ptr), value :: e, cx
+     end subroutine clotran_jit_enter
+     function clotran_jit_arch() bind(c, name="clotran_jit_arch") result(a)
+       import :: c_int
+       integer(c_int) :: a
+     end function clotran_jit_arch
+  end interface
   ! Each context is allocated on its own and never moves: a thread holds
   ! its context's address (PLAN.md step 14b), so growing the table copies
   ! pointers, not contexts.
@@ -21375,6 +21418,7 @@ contains
   include "rational.inc"
   include "flat.inc"
   include "vm.inc"
+  include "vmjit.inc"
   include "repl.inc"
   include "tasks.inc"
   include "sorted.inc"

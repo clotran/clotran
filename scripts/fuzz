@@ -534,6 +534,13 @@
                (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
       "vm" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
              (outputs (:out (sh {"CLOTRAN_VM" "1"} bin core f))))
+      ;; the VM's code translated to native code (src/f/vmjit.inc)
+      "jit" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+              (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1"} bin core f))))
+      ;; its negative control: a jmpf block that branches on the opposite
+      ;; test (CLOTRAN_JIT_BREAK), which this mode must catch
+      "jit-control" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+                      (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1" "CLOTRAN_JIT_BREAK" "1"} bin core f))))
       "noimage" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                   (outputs (:out (sh {"CLOTRAN_IMAGE" "0"} bin core f))))
       "compiled"

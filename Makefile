@@ -267,7 +267,10 @@ $(B)/ClotranABI.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/Namespace.o $(B)/Compi
 # vmicg.lisp by scripts/acl2-fortran) on clotran's values (VmRuntime.f90),
 # below Eval, which runs them (vm.inc, CLOTRAN_VM=1). VmRuntime calls back up
 # through hooks Eval sets, as CompiledFn's table avoids the same cycle.
-vm-objects = $(B)/VmRuntime.o $(B)/vm_gen.o $(B)/vmc_gen.o
+vm-objects = $(B)/VmRuntime.o $(B)/vm_gen.o $(B)/vmc_gen.o $(B)/jit_shim.o
+# the JIT's executable memory (src/f/vmjit.inc)
+$(B)/jit_shim.o: src/c/jit_shim.c | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
 $(B)/VmRuntime.o: $(B)/GC.o $(B)/PersistentList.o
 $(B)/vm_gen.o: $(S)/gen/vm_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
@@ -276,7 +279,7 @@ $(B)/vmc_gen.o: $(S)/gen/vmc_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
 	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc \
-	$(vm-objects) $(S)/vm.inc
+	$(vm-objects) $(S)/vm.inc $(S)/vmjit.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
@@ -431,7 +434,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-read check-fuzz-print
-TEST_NIGHTLY = check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
+TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -596,6 +599,10 @@ check-fuzz-print:
 check-fuzz-spec:
 	@echo "--- spec itself (PLAN 29): generated spec forms and values, valid?/conform/unform/explain-data/form, through clj and every mode, GC torture too ---"
 	scripts/fuzz-spec -n 20 -k 2 -s $(SEED) -o $(B)/fuzz-spec.edn > $(B)/fuzz-spec.out 2>&1; s=$$?; cat $(B)/fuzz-spec.out; exit $$s
+check-fuzz-jit:
+	@echo "--- the VM and its JIT (PLAN 31, model/vmj.lisp), opt-in: generated programs through clj, CLOTRAN_VM=1 and CLOTRAN_VM=1 CLOTRAN_JIT=1; the control's broken jmpf must be caught ---"
+	scripts/fuzz -m vm,jit -n 100 -s $(SEED) > $(B)/fuzz-jit.out 2>&1; s=$$?; cat $(B)/fuzz-jit.out; \
+	  if scripts/fuzz -m jit-control -n 5 -s $(SEED) > $(B)/fuzz-jit-control.out 2>&1; then echo "the JIT's control was not caught"; exit 1; fi; exit $$s
 check-frames:
 	@echo "--- frames (PLAN 29): names, locals and lines of breaks and traces, generated, against clj and the generator, through a reload and a recompile; compiled breaks wait for the debug build ---"
 	scripts/fuzz-frames -n 40 -s $(SEED) --modes flat,tree > $(B)/frames.out 2>&1 && scripts/fuzz-frames -n 40 -s $(SEED) --modes compiled --leaves throw >> $(B)/frames.out 2>&1; s=$$?; cat $(B)/frames.out; exit $$s
@@ -728,7 +735,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
