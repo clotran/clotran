@@ -332,6 +332,8 @@ contains
     integer(int64), value :: n_
     type(value) :: r
     integer(int64) :: var_1
+    integer(int64) :: var_2
+    integer(int64) :: var_3
     if ((n_ == 1_int64)) then
       r = rt_prim1(op_, vmg_sreg(st, a_))
       return
@@ -341,8 +343,15 @@ contains
         r = rt_prim2(op_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
         return
       else
-        r = rt_prim(op_, rt_list_from(st, a_, n_))
-        return
+        if ((n_ == 3_int64)) then
+          var_2 = (1_int64 + a_)
+          var_3 = (2_int64 + a_)
+          r = rt_prim3(op_, vmg_sreg(st, a_), vmg_sreg(st, var_2), vmg_sreg(st, var_3))
+          return
+        else
+          r = rt_prim(op_, rt_list_from(st, a_, n_))
+          return
+        end if
       end if
     end if
   end function vmg_prim_call

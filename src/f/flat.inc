@@ -739,12 +739,14 @@
   !   5 + 4n .. 8 + 4n, for n = 0..K arguments: the fixed arity's first
   !     parameter slot or -1, its tree, its flat body or nil, the
   !     builtin it only wraps or nil
-  !   then each capture's slot in the frame
+  !   then each capture's slot in the frame, and last the generated VM's
+  !   function id or -1 (VmRuntime compiled_fn)
   ! Variadic arities and anything past K (CT_MAXFIX, Eval.f90) take
   ! the general road.
 
-  function call_table(tmpl, roots) result(ct)
+  function call_table(tmpl, vmf, roots) result(ct)
     type(gc_value), intent(in) :: tmpl
+    integer, intent(in) :: vmf
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: ct, ars, ar, caps, wbs, fl
     integer :: k, i, nf, ncap, p, sz
@@ -758,7 +760,7 @@
        if (.not. truthy(gcv_nth(ar, 1))) k = max(k, int_of(gcv_nth(ar, 0)))
     end do
     k = min(k, CT_MAXFIX)
-    sz = 4 + 4 * (k + 1) + ncap
+    sz = 4 + 4 * (k + 1) + ncap + 1
     ct = gc_vec(sz, [roots, tmpl])
     call gc_vec_set(ct, 1, gcv_nth(tmpl, 3))
     call gc_vec_set(ct, 2, gcv_nth(tmpl, 4))
@@ -783,6 +785,7 @@
     do i = 0, ncap - 1
        call gc_vec_set(ct, 5 + 4 * (k + 1) + i, gcv_nth(caps, 2 * i + 1))
     end do
+    call gc_vec_set(ct, sz, gc_int(vmf))
   end function call_table
 
   ! fn's call table, or nil for a fn made some other way

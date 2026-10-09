@@ -101,7 +101,7 @@ module vm_runtime
   type(gc_root) :: thrown_head, clo_head
   type(value) :: thrown_v, clo_v
   ! the primitives' own keywords, looked up once
-  type(value) :: kw_arg, kw_deref, kw_invoke, kw_invoke_m, kw_arity
+  type(value) :: kw_arg, kw_deref, kw_invoke, kw_invoke_m, kw_arity, kw_callw
   ! (CLO f nil) for the first few f, made once: a closure of nothing is
   ! a value no one can tell from another made the same, and main's
   ! mkclo of the arity's own function would otherwise allocate per call
@@ -163,6 +163,7 @@ contains
     kw_invoke = rt_keyword("clotran.vm/invoke")
     kw_invoke_m = rt_keyword("invoke")
     kw_arity = rt_keyword("clotran.vm/arity")
+    kw_callw = rt_keyword("clotran.vm/callw")
     kw_frozen = .true.
     do i = 0, NCLO0 - 1
        clo0(i) = gc_nil()
@@ -296,38 +297,45 @@ contains
     call vs_leave(vst, base)
   end function rt_clo
 
-  ! a clotran closure, its metadata taken off, whose fn the program compiled
-  function compiled_fn(c) result(f)
+  ! a clotran closure, its metadata taken off, whose fn the program compiled:
+  ! f the closure (nil when it is not one), fid its function in the program,
+  ! ncap its captures -- read from its call table (flat.inc call_table: the
+  ! captures in place 3, K in 4, the function id last), one raw vector the
+  ! closure notes at birth, not the template's persistent vectors
+  subroutine compiled_fn(c, f, fid, ncap)
     type(value), intent(in) :: c
-    type(value) :: f, t
+    type(value), intent(out) :: f
+    integer(int64), intent(out) :: fid
+    integer, intent(out) :: ncap
+    type(value) :: ct, x
     f = c
+    fid = -1
+    ncap = 0
     do while (gc_kind(f) == OBJ_META)
        f = gc_slot(f, 1)
     end do
-    if (gc_kind(f) /= OBJ_CLOSURE) then
-       f = gc_nil()
-       return
-    end if
-    t = gc_slot(f, 1)
-    if (.not. gcv_is(t)) then
-       f = gc_nil()
-    else if (gcv_count(t) < 10) then
-       f = gc_nil()
-    else
-       t = gcv_nth(t, 9)
-       if (t%tag /= GCT_INT) then
-          f = gc_nil()
-       else if (t%ival < 0) then
-          f = gc_nil()
+    if (gc_kind(f) == OBJ_CLOSURE) then
+       if (gc_i2(f) > 0) then
+          if (gc_kind(gc_slot(f, 3)) /= OBJ_ENV) then
+             ct = value(GCT_VEC, gc_i2(f), 0_gc_ip)
+             x = gc_reg(ct, 3)
+             ncap = int(x%ival)
+             x = gc_reg(ct, 4)
+             x = gc_reg(ct, 4 + 4 * (int(x%ival) + 1) + ncap + 1)
+             if (x%tag == GCT_INT) fid = x%ival
+          end if
        end if
     end if
-  end function compiled_fn
+    if (fid < 0) f = gc_nil()
+  end subroutine compiled_fn
 
   logical function rt_clop(c)
     type(value), intent(in) :: c
     type(value) :: f
-    f = compiled_fn(c)
-    if (f%tag /= GCT_NIL) then
+    integer(int64) :: fid
+    integer :: ncap
+    call compiled_fn(c, f, fid, ncap)
+    if (fid >= 0) then
        rt_clop = .true.
        return
     end if
@@ -339,12 +347,9 @@ contains
     type(value), intent(in) :: c
     integer(int64) :: f
     type(value) :: x
-    x = compiled_fn(c)
-    if (x%tag /= GCT_NIL) then
-       x = gcv_nth(gc_slot(x, 1), 9)
-       f = x%ival
-       return
-    end if
+    integer :: ncap
+    call compiled_fn(c, x, f, ncap)
+    if (f >= 0) return
     x = rt_car(rt_cdr(c))
     f = -1
     if (x%tag == GCT_INT) f = x%ival
@@ -357,12 +362,11 @@ contains
     integer(int64), intent(in) :: i
     type(value), intent(in) :: c
     type(value) :: r
-    integer(int64) :: k
+    integer(int64) :: k, fid
     type(value) :: f
     integer :: ncap
-    f = compiled_fn(c)
-    if (f%tag /= GCT_NIL) then
-       ncap = gcv_count(gcv_nth(gc_slot(f, 1), 2)) / 2
+    call compiled_fn(c, f, fid, ncap)
+    if (fid >= 0) then
        if (i >= ncap) then
           r = c
        else if (ncap > 2) then
@@ -540,6 +544,14 @@ contains
           return
        else if (op%ref == kw_deref%ref) then
           if (n == 1) r = vmrt_deref(vs_get(vst, argbase + 1))
+          return
+       else if (op%ref == kw_callw%ref) then
+          ! (callw var args ..): the var's value called on the args
+          if (n >= 1) then
+             call vs_set(vst, argbase + 1, vmrt_deref(vs_get(vst, argbase + 1)))
+             call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
+             if (.not. ok) r = vmrt_throw_of(r)
+          end if
           return
        else if (op%ref == kw_invoke%ref .or. op%ref == kw_invoke_m%ref) then
           if (n >= 1) then

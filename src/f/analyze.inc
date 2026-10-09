@@ -2244,7 +2244,7 @@
     ! and what a call reads, as one raw vector (flat.inc call_table)
     block
       type(gc_value) :: ct
-      ct = call_table(vs_get(vst, base + 8), [vs_get(vst, base + 5)])
+      ct = call_table(vs_get(vst, base + 8), vmfid, [vs_get(vst, base + 5)])
       tmpl = gcv_conj(vs_get(vst, base + 8), ct, [vs_get(vst, base + 5), ct])
       call vs_set(vst, base + 8, tmpl)
     end block

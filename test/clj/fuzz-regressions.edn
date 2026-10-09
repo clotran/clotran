@@ -1,6 +1,7 @@
 ;; Cases scripts/fuzz found clotran getting wrong, kept so they stay
 ;; fixed: each runs through clj and clotran's flat, tree and compiled
-;; modes (make test, check-fuzz). Add a shrunk form here with each fix.
+;; modes (make test, check-fuzz), and the VM's (CLOTRAN_VM=1). Add a
+;; shrunk form here with each fix.
 [
  ;; compiled, (int x) boxed as a long: the class differs from the
  ;; interpreted int (scripts/fuzz-num)
@@ -123,4 +124,9 @@
  (nth [10 20 30] 4294967296) (nth [10 20 30] 4294967297N) (nth [10 20 30] 3e9) (nth [10 20 30] 1.5) (nth [10 20 30] 1/2)
  (nth [10 20 30] 18446744073709551617N) (nth [10 20 30] 1e30) (nth [10 20] 4294967297 :nf) (nth (list 1 2) 4294967296)
  (nth (transient [1 2]) 4294967296) (nth (transient [1 2]) 1.5) (nth "ab" 4294967296)
+ ;; the VM (CLOTRAN_VM=1) read a direct-linked call site through its Var:
+ ;; core's str called a redefined first, and a redefinition calling str
+ ;; recursed until the stack overflowed (DEVIATIONS 55)
+ (with-redefs [first (fn [x] :r)] (str "a" "b" "c"))
+ (with-redefs [next (fn [x] nil)] (apply + [1 2 3]))
 ]

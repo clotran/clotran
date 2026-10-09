@@ -7744,6 +7744,22 @@ contains
                   tctx => ctx_self()
                   p = 5 + 4 * nargs
                   start = ct_int(vs_get(vst, base + 2), p)
+                  body = ct_body(vs_get(vst, base + 2), p)
+                  ! A BODY THE VM RUNS: the arguments go from these slots
+                  ! straight onto its stack (vm.inc vm_run), no frame made
+                  if (gc_kind(body) == OBJ_AST) then
+                     if (gc_i1(body) == N_VMB) then
+                        call vs_set(vst, base + 3, body)
+                        call push_frame(tctx, vs_get(vst, base + 1), tctx%pending_site)
+                        tctx%pending_site = 0
+                        if (.not. tctx%has_error) then
+                           call vm_run(tctx, vs_get(vst, base + 3), gc_nil(), vs_get(vst, base + 1), out, argbase)
+                           call pop_frame(tctx)
+                        end if
+                        call vs_leave(vst, base)
+                        return
+                     end if
+                  end if
                   frame = ct_frame(vs_get(vst, base + 1), vs_get(vst, base + 2), [gc_value ::])
                   call vs_set(vst, base + 3, frame)
                   do j = 0, nargs - 1

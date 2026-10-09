@@ -3772,6 +3772,42 @@ the VM directly, its frame on the VM's stack, nothing allocated per
 call; then the lazy-seq, range and take objects (step 26's findings 1
 and 3) as modelled data structures.
 
+**The boundary, cheaper (2026-10-09).** A profile of the yardstick
+under the VM (2.58 s then) split it: the VM's own instructions 26%, the
+collector 21%, the glue between the VM and the runtime 18%, the
+evaluator and the builtins 36%. Per element, 77 VM instructions (~660
+ns) and about 12 calls into the runtime at ~160 ns each. So the
+boundary came first, as the JIT's native code will call it too:
+- a call through a Var whose fn only wraps a builtin (core's first,
+  next, seq, rest, cons) is ONE prim, `(:prim :clotran.vm/callw var
+  args)`, not a deref prim, a VM call frame and the builtin's prim;
+- the runtime's call hook answers a builtin, or a wrapper of one, on
+  what is there (flat_seq_op, flat_int_op, flat_cons_op) before the
+  evaluator's general apply;
+- a VM closure's function id is read from its call table, one raw
+  vector, not the template's persistent vectors;
+- a fn or lazy-seq node's closure is made straight from the captured
+  values, with no frame vector to copy them out of;
+- the evaluator enters a VM body with the arguments from its slots, no
+  frame made;
+- a prim on three values builds no list (model/vmg.lisp vmg-prim-call,
+  rt_prim3), as one and two did.
+The translation also now honours DIRECT LINKING (DEVIATIONS 55): a
+core call site reads the fn its Var held when the site was analysed,
+as flat does. Before, redefining `first` sent core's own `str` into it,
+and a redefinition calling `str` overflowed the stack; the regressions
+file has the case and now runs under the VM too.
+
+| | flat | VM before | VM now |
+|---|---|---|---|
+| `(apply + (take 10^6 (range)))` | 0.91 s | 2.58 s | 1.5-1.7 s |
+| a 10^7-iteration loop | 255 ms | | 605 ms |
+
+The VM is still slower than flat on both. What is left per prim is
+the runtime's calling convention: arguments copied onto the value stack
+and dispatched through keyword compares and a procedure pointer, about
+25 ns, which flat's executor does in place.
+
 
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries

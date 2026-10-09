@@ -105,6 +105,25 @@
     logical, intent(out) :: ok
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
+    type(gc_value) :: b
+    ! a builtin, or a core fn that only wraps one, on what is already there:
+    ! answered in place, as gce_apply_slots's first test answers it -- they
+    ! cannot fail, and every element of a seq a VM body walks comes here
+    if (nargs == 1 .or. nargs == 2) then
+       b = fn
+       if (gc_kind(b) == OBJ_CLOSURE) b = wrapper_of(b, nargs)
+       if (gc_kind(b) == OBJ_BUILTIN) then
+          vst => gc_my_stack()
+          ok = .true.
+          if (nargs == 1) then
+             if (flat_seq_op(gc_i1(b), vst%vstack(argbase + 1), out)) return
+             if (flat_int_op(gc_i1(b), 1, vst%vstack(argbase + 1), vst%vstack(argbase + 1), out)) return
+          else
+             if (flat_int_op(gc_i1(b), 2, vst%vstack(argbase + 1), vst%vstack(argbase + 2), out)) return
+             if (flat_cons_op(gc_i1(b), 2, vst%vstack(argbase + 1), vst%vstack(argbase + 2), out)) return
+          end if
+       end if
+    end if
     tctx => ctx_self()
     vst => tctx%stk
     out = gce_apply_slots(vst, fn, argbase, nargs)
@@ -150,11 +169,40 @@
     call vm_took(tctx, ok, out, name)
   end subroutine vm_arity_hook
 
+  ! a Var's value -- or, given a DIRECT-LINKED Var's node (DEVIATIONS 55),
+  ! the fn the call site bound, as exec.inc's N_CALL reads it
   function vm_deref_hook(var) result(v)
     type(gc_value), intent(in) :: var
-    type(gc_value) :: v
+    type(gc_value) :: v, fnv
+    if (gc_kind(var) == OBJ_AST) then
+       fnv = gc_slot(var, 5)
+       if (fnv%tag == GCT_INT) then
+          if (fnv%ival /= link_epoch) then
+             fnv = gcn_var_value(gc_slot(var, 2))
+             if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(var, 3, fnv)
+             call gc_set_slot(var, 5, gc_int(int(link_epoch, gc_ip)))
+          end if
+          v = gc_slot(var, 3)
+       else
+          v = var_deref(gc_slot(var, 2), [var])
+       end if
+       return
+    end if
     v = var_deref(var, [var])
   end function vm_deref_hook
+
+  ! what a Var node is read through: the node itself when it is direct-
+  ! linked to a fn (vm_deref_hook), else its Var
+  function vm_var_ref(nd) result(r)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: r
+    type(gc_value) :: ep
+    r = gc_slot(nd, 2)
+    if (gc_i2(nd) == 1) then
+       ep = gc_slot(nd, 5)
+       if (ep%tag == GCT_INT) r = nd
+    end if
+  end function vm_var_ref
 
   ! the runtime's node: what flat does for a node the VM leaves to it
   ! (F_COLL, F_NEW, F_DOT, F_FN, F_LAZY), on the n values above argbase --
@@ -169,7 +217,7 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value) :: x, capv
-    integer :: base, j, from, ncap, hi
+    integer :: base, j, from, ncap
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -199,20 +247,26 @@
           out = apply(gc_slot(vs_get(vst, base + 3), 1), gc_slot(vs_get(vst, base + 3), 2))
        end if
     case (N_FN, N_LAZY)
-       ! a frame holding the captured values at the slots the template reads
-       capv = gcv_nth(gc_slot(nd, 2), 2)
-       ncap = gcv_count(capv) / 2
-       hi = 0
-       do j = 0, ncap - 1
-          hi = max(hi, int_of(gcv_nth(capv, 2 * j)) + 1)
-       end do
-       x = gc_vec(max(hi, 1), [nd])
-       call vs_set(vst, base + 2, x)
-       do j = 0, ncap - 1
-          call gc_vec_set(vs_get(vst, base + 2), int_of(gcv_nth(gcv_nth(gc_slot(nd, 2), 2), 2 * j)) + 1, &
-               vs_get(vst, argbase + j + 1))
-       end do
-       out = make_closure_from(gc_slot(nd, 2), vs_get(vst, base + 2), [nd])
+       ! the closure straight from the captured values, in its template's
+       ! capture order: make_closure_from's two shapes, with no frame built
+       ! to copy them out of
+       call vs_set(vst, base + 2, gc_slot(nd, 2))
+       ncap = gcv_count(gcv_nth(vs_get(vst, base + 2), 2)) / 2
+       if (ncap <= 2) then
+          capv = gc_nil()
+          x = gc_nil()
+          if (ncap >= 1) capv = vs_get(vst, argbase + 1)
+          if (ncap >= 2) x = vs_get(vst, argbase + 2)
+          out = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 2), capv, gc_nil(), x, gc_nil()], [nd])
+       else
+          x = gc_vec(ncap, [nd])
+          call vs_set(vst, base + 3, x)
+          do j = 0, ncap - 1
+             call gc_vec_set(vs_get(vst, base + 3), j + 1, vs_get(vst, argbase + j + 1))
+          end do
+          out = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 2), vs_get(vst, base + 3), gc_nil(), gc_nil(), gc_nil()], [nd])
+       end if
+       call closure_note_table(out)
        if (gc_i1(nd) == N_LAZY) then
           call vs_set(vst, base + 3, out)
           out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [vs_get(vst, base + 3)])
@@ -362,7 +416,7 @@
     case (N_LOCAL)
        e = vm_slot_ref(c, gc_i2(nd), roots)
     case (N_VAR)
-       e = vm_deref_of(gc_slot(nd, 2), [roots, vs_get(vst, base + 1)])
+       e = vm_deref_of(vm_var_ref(nd), [roots, vs_get(vst, base + 1)])
     case (N_IF)
        call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
        if (nk == 2) then
@@ -479,6 +533,23 @@
              call vs_set(vst, base + 3, x)
              call vs_set(vst, base + 5, vm_kw("prim"))
              e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
+          else if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_VAR .and. vm_wraps(head, nk - 1)) then
+             ! a Var whose fn now only wraps a builtin at this arity, as
+             ! core's first and next do: (:prim :clotran.vm/callw var args ..),
+             ! the runtime's call of what the Var holds then (the Var's node
+             ! when it is direct-linked: the fn the site bound)
+             call vs_set(vst, base + 4, vm_kw("const"))
+             x = vm_l([vs_get(vst, base + 4), vm_var_ref(head)], [roots, vs_get(vst, base + 2), head])
+             call vs_set(vst, base + 4, x)
+             x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
+             call vs_set(vst, base + 3, x)
+             x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 3, x)
+             call vs_set(vst, base + 4, vm_kw("clotran.vm/callw"))
+             x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 3, x)
+             call vs_set(vst, base + 5, vm_kw("prim"))
+             e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
           else
              ! anything else: the machine's call, (:callv f args ..) -- its
              ! own when f is one of its closures, the runtime's otherwise
@@ -501,6 +572,26 @@
     call vs_leave(vst, base)
     e = v
   end function vm_tr
+
+  ! a Var node's fn -- the one it is direct-linked to, else its Var's value
+  ! now -- only wraps a builtin (not a runtime fn of the analyzer's own)
+  ! when called with n arguments
+  logical function vm_wraps(nd, n)
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: n
+    type(gc_value) :: v, wb
+    vm_wraps = .false.
+    if (.not. gcn_is_var(gc_slot(nd, 2))) return
+    v = vm_var_ref(nd)
+    if (gc_kind(v) == OBJ_AST) then
+       v = strip_meta(gc_slot(nd, 3))
+    else
+       v = strip_meta(gcn_var_value(v))
+    end if
+    wb = wrapper_of(v, n)
+    if (gc_kind(wb) /= OBJ_BUILTIN) return
+    vm_wraps = gc_i1(wb) /= B_RTFN .and. gc_i1(wb) /= B_UUIDFN
+  end function vm_wraps
 
   ! a slot read: a local, a capture (:capt i), or the fn itself
   function vm_slot_ref(c, s, roots) result(e)
@@ -847,10 +938,14 @@
   ! fn: the frame a call makes on the VM's stack -- the parameters, the
   ! rest already packed, the fn above them -- a call record returning to
   ! the halt at pc 0, and the clause's code until the halt.
-  recursive subroutine vm_run(tctx, nd, fr, fn, val)
+  ! The body nd of fn run on the VM: its entry values the frame fr's from
+  ! the body's first slot, or, given argbase, the value stack's from
+  ! argbase + 1 (a fixed arity's arguments, the caller's slots let go)
+  recursive subroutine vm_run(tctx, nd, fr, fn, val, argbase)
     type(eval_ctx), pointer, intent(in) :: tctx
     type(gc_value), intent(in) :: nd, fr, fn
     type(gc_value), intent(inout) :: val
+    integer, intent(in), optional :: argbase
     type(gc_stack), pointer :: vst
     type(vm_state), target :: st
     type(gc_value) :: info
@@ -872,9 +967,16 @@
        return
     end if
     sbase = vs_enter(vst, win)
-    do i = 0, nl - 1
-       vst%vstack(sbase + i + 1) = frame_get(fr, start + i)
-    end do
+    if (present(argbase)) then
+       do i = 0, nl - 1
+          vst%vstack(sbase + i + 1) = vst%vstack(argbase + i + 1)
+          vst%vstack(argbase + i + 1) = gc_nil()
+       end do
+    else
+       do i = 0, nl - 1
+          vst%vstack(sbase + i + 1) = frame_get(fr, start + i)
+       end do
+    end if
     vst%vstack(sbase + nl + 1) = fn
     st%stk(0:win - 1) => vst%vstack(sbase + 1:sbase + win)
     st%code => vmp%code

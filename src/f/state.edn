@@ -149,6 +149,7 @@
  "VmRuntime.f90/clo_v" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/kw_arg" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/kw_deref" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
+ "VmRuntime.f90/kw_callw" {:class :fixed, :note "the translator's call of a Var that wraps a builtin, looked up once by vmrt_init on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/kw_invoke_m" {:class :fixed, :note "the model's own :invoke, looked up once by vmrt_init on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/kw_arity" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/kw_invoke" {:class :fixed, :note "the primitives' own keywords: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
