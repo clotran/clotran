@@ -563,12 +563,26 @@ module Eval
   ! stack is GC's, bound the same way (gc_stack_bind). A task is a
   ! context; so is the paused frame a debugger inspects while the REPL
   ! runs in another, on the same thread.
+   ! a VM run on this thread (vm.inc), for a trace read while it runs: its
+   ! machine, and how deep the frame stack was when it was entered
+   type :: vm_runref
+      type(vm_state), pointer :: st => null()
+      integer :: fstop = 0
+   end type vm_runref
+   ! a compiled function's name, for a trace
+   type :: vm_fname
+      character(len=:), allocatable :: s
+   end type vm_fname
   type eval_ctx
      type(kframe), allocatable :: kst(:)
      integer :: ksp = 0
      type(gc_value), allocatable :: fstack_fn(:)
      integer, allocatable :: fstack_site(:)
      integer :: fstack_top = 0, pending_site = 0, ev_depth = 0
+     ! the VM runs this thread is inside, outermost first: their calls are
+     ! frames too, read off their control stacks when a trace is taken
+     type(vm_runref) :: vm_runs(64)
+     integer :: n_vm_runs = 0
      ! the packed position of the top-level form being loaded: a def
      ! whose own form has none (read-string, eval) takes it, as DefExpr
      ! takes the compiler's LINE and SOURCE_PATH
@@ -617,6 +631,10 @@ module Eval
      ! unrealised, for its prologue's clotran_rest_args; 0 when none
      integer :: rest_slot = 0
   end type eval_ctx
+  ! the VM program's functions: each one's first instruction and name, for a
+  ! trace (vm.inc vm_fn_at)
+  integer(gc_ip), allocatable, save :: vmp_fstart(:)
+  type(vm_fname), allocatable, save :: vmp_fnames(:)
   ! Each context is allocated on its own and never moves: a thread holds
   ! its context's address (PLAN.md step 14b), so growing the table copies
   ! pointers, not contexts.
@@ -696,7 +714,9 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: out, m, nm
     character(len=:), allocatable :: who, fname
-    integer :: i, base, line, col
+    integer :: i, base, line, col, ti
+    integer, allocatable :: tord(:)
+    type(vm_fname), allocatable :: tnames(:)
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
@@ -704,11 +724,17 @@ contains
     base = vs_enter(vst, 4)
     out = gcv_empty(roots)
     call vs_set(vst, base + 1, out)
-    do i = tctx%fstack_top, 1, -1
-       call fn_who(tctx%fstack_fn(i), who)
+    call trace_order(tctx, tord, tnames)
+    do ti = 1, size(tord)
+       i = tord(ti)
        fname = ""
        line = 0
-       if (frame_site(tctx, i) /= 0) call gcr_position_parts(frame_site(tctx, i), fname, line, col)
+       if (i < 0) then
+          who = tnames(-i)%s
+       else
+          call fn_who(tctx%fstack_fn(i), who)
+          if (frame_site(tctx, i) /= 0) call gcr_position_parts(frame_site(tctx, i), fname, line, col)
+       end if
        m = gca_empty([roots, vs_get(vst, base + 1)])
        call vs_set(vst, base + 2, m)
        call frame_put(base, roots, "class", gc_str(who, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
@@ -851,7 +877,9 @@ contains
 
   subroutine capture_trace()
     type(eval_ctx), pointer :: tctx
-    integer :: i
+    integer :: i, ti
+    integer, allocatable :: tord(:)
+    type(vm_fname), allocatable :: tnames(:)
     type(gc_value) :: bm
     type(gc_value) :: nm
     character(len=:), allocatable :: who
@@ -860,8 +888,14 @@ contains
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     tctx%last_trace = ""
-    if (tctx%fstack_top > 128) write(more, '(I0)') tctx%fstack_top - 128
-    do i = tctx%fstack_top, max(1, tctx%fstack_top - 127), -1
+    call trace_order(tctx, tord, tnames)
+    if (size(tord) > 128) write(more, '(I0)') size(tord) - 128
+    do ti = 1, min(size(tord), 128)
+       i = tord(ti)
+       if (i < 0) then
+          tctx%last_trace = tctx%last_trace // "  at " // tnames(-i)%s // achar(10)
+          cycle
+       end if
        call fn_who(tctx%fstack_fn(i), who)
        if (frame_site(tctx, i) /= 0) then
           block
@@ -872,7 +906,7 @@ contains
           tctx%last_trace = tctx%last_trace // "  at " // who // achar(10)
        end if
     end do
-    if (tctx%fstack_top > 128) tctx%last_trace = tctx%last_trace // "  ... " // trim(more) // " more" // achar(10)
+    if (size(tord) > 128) tctx%last_trace = tctx%last_trace // "  ... " // trim(more) // " more" // achar(10)
     ! and the paused state as data, while the frames are still pending,
     ! to the handler if one is bound
     if (break_mode == 0) call read_break_mode()

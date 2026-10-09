@@ -128,6 +128,8 @@
  "Eval.f90/flat_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/flat_n_eval" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/vmp" {:class :shared, :note "the generated VM's one program (vm.inc): its arrays made once and never moved; a function compiled at a place reserved under the state lock, by the thread that reserved it, then only read"}
+ "Eval.f90/vmp_fstart" {:class :shared, :note "the program's functions' first instructions and names, for a trace: an entry written by the thread that reserved the function, before its id is published"}
+ "Eval.f90/vmp_fnames" {:class :shared, :note "the program's functions' first instructions and names, for a trace: an entry written by the thread that reserved the function, before its id is published"}
  "Eval.f90/vmp_pc" {:class :shared, :note "the program's next free code: reserved under the state lock"}
  "Eval.f90/vmp_ci" {:class :shared, :note "the program's next free clause: reserved under the state lock"}
  "Eval.f90/vmp_f" {:class :shared, :note "the program's next function id: reserved under the state lock"}

@@ -77,6 +77,8 @@
     allocate(vmp%code(0:4 * VMP_INSTRS - 1), vmp%pool(0:VMP_INSTRS - 1))
     allocate(vmp%cln(0:VMP_CLAUSES - 1), vmp%clent(0:VMP_CLAUSES - 1), vmp%clrest(0:VMP_CLAUSES - 1))
     allocate(vmp%fnfirst(0:VMP_FNS - 1), vmp%fncount(0:VMP_FNS - 1))
+    allocate(vmp_fstart(0:VMP_FNS - 1), vmp_fnames(0:VMP_FNS - 1))
+    vmp_fstart = huge(0_gc_ip)
     allocate(vmp%stk(0:0), vmp%ckind(0:0), vmp%ca(0:0), vmp%cb(0:0), vmp%cc(0:0), vmp%cprev(0:0))
     vmp%code = 0
     vmp%pool = gc_nil()
@@ -778,6 +780,9 @@
        f = vmp_f
        c0 = vmp_ci
        p0 = int(vmp_pc)
+       ! its place and name, for a trace, before another can see the id
+       vmp_fstart(f) = p0
+       call gcp_str(display, .false., s=vmp_fnames(f)%s)
        vmp_f = vmp_f + 1
        vmp_ci = vmp_ci + na + 1
        vmp_pc = vmp_pc + int(sz)
@@ -847,11 +852,12 @@
     type(gc_value), intent(in) :: nd, fr, fn
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
-    type(vm_state) :: st
+    type(vm_state), target :: st
     type(gc_value) :: info
     integer :: sbase, i, nl, start, ci, win, top, hi
     integer(gc_ip) :: steps, ct0
     character(len=:), allocatable :: msg
+    logical :: reg
     vst => tctx%stk
     ci = gc_i2(nd)
     info = gc_slot(nd, 3)
@@ -912,6 +918,15 @@
     ! it is told the whole rest and a nested one starts past the most
     ! this one can have used -- the records are counted as they are taken
     vst%vm_ctl_top = int(ct0)
+    ! on the thread's list of runs, for a trace taken while it runs
+    if (tctx%n_vm_runs < size(tctx%vm_runs)) then
+       tctx%n_vm_runs = tctx%n_vm_runs + 1
+       tctx%vm_runs(tctx%n_vm_runs)%st => st
+       tctx%vm_runs(tctx%n_vm_runs)%fstop = tctx%fstack_top
+       reg = .true.
+    else
+       reg = .false.
+    end if
     hi = nl + 1
     steps = 0
     do
@@ -945,6 +960,10 @@
        if (.not. tctx%has_error) call raise_class("clotran.host.stack_overflow_error", "stack overflow", [nd])
        val = gc_nil()
     end select
+    if (reg) then
+       tctx%vm_runs(tctx%n_vm_runs)%st => null()
+       tctx%n_vm_runs = tctx%n_vm_runs - 1
+    end if
     if (vm_trace) then
        write(0, '(a, i0, a, i0, a, i0)') 'vm run clause ', ci, ' status ', st%status, ' steps ', steps
     end if
@@ -953,6 +972,92 @@
     if (vst%vs_top > top) vst%vs_top = top
     call vs_leave(vst, sbase)
   end subroutine vm_run
+
+  ! ---- TRACES ------------------------------------------------------------
+
+  ! the function whose code holds pc, or -1
+  integer function vm_fn_at(pc)
+    integer(gc_ip), intent(in) :: pc
+    integer :: lo, hi, mid
+    vm_fn_at = -1
+    lo = 0
+    hi = vmp_f - 1
+    do while (lo <= hi)
+       mid = (lo + hi) / 2
+       if (vmp_fstart(mid) <= pc) then
+          vm_fn_at = mid
+          lo = mid + 1
+       else
+          hi = mid - 1
+       end if
+    end do
+  end function vm_fn_at
+
+  ! The frames a trace shows, innermost first: idx(k) > 0 the frame stack's
+  ! entry, < 0 a call inside a VM run, names(-idx(k)) its fn. A run's calls
+  ! sit between the frame it was entered by and the frames pushed under it:
+  ! the function at its pc, then each call record's caller but the entry's
+  ! own, which is the frame stack's.
+  subroutine trace_order(tctx, idx, names)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    integer, allocatable, intent(out) :: idx(:)
+    type(vm_fname), allocatable, intent(out) :: names(:)
+    integer, allocatable :: buf(:)
+    type(vm_fname), allocatable :: nb(:)
+    integer :: i, r, j, n, nn, f
+    allocate(buf(tctx%fstack_top + 64), nb(64))
+    n = 0
+    nn = 0
+    do i = tctx%fstack_top, 1, -1
+       do r = tctx%n_vm_runs, 1, -1
+          if (tctx%vm_runs(r)%fstop /= i .or. .not. associated(tctx%vm_runs(r)%st)) cycle
+          associate (st => tctx%vm_runs(r)%st)
+            ! the function running, when it is not the entry's own
+            if (st%ctop >= 2) then
+               f = vm_fn_at(st%pc)
+               if (f >= 0) call trace_push(n, nn, buf, nb, f)
+            end if
+            ! the innermost caller records: ctop-1 .. 2
+            do j = int(st%ctop) - 1, 2, -1
+               f = vm_fn_at(st%ca(j))
+               if (f >= 0) call trace_push(n, nn, buf, nb, f)
+            end do
+          end associate
+       end do
+       if (n >= size(buf)) call grow_int(buf)
+       n = n + 1
+       buf(n) = i
+    end do
+    idx = buf(1:n)
+    names = nb(1:max(nn, 0))
+  end subroutine trace_order
+
+  subroutine trace_push(n, nn, buf, nb, f)
+    integer, intent(inout) :: n, nn
+    integer, allocatable, intent(inout) :: buf(:)
+    type(vm_fname), allocatable, intent(inout) :: nb(:)
+    integer, intent(in) :: f
+    type(vm_fname), allocatable :: t(:)
+    if (nn >= size(nb)) then
+       allocate(t(2 * size(nb)))
+       t(1:nn) = nb(1:nn)
+       call move_alloc(t, nb)
+    end if
+    nn = nn + 1
+    nb(nn)%s = "?"
+    if (allocated(vmp_fnames(f)%s)) nb(nn)%s = vmp_fnames(f)%s
+    if (n >= size(buf)) call grow_int(buf)
+    n = n + 1
+    buf(n) = -nn
+  end subroutine trace_push
+
+  subroutine grow_int(a)
+    integer, allocatable, intent(inout) :: a(:)
+    integer, allocatable :: t(:)
+    allocate(t(2 * size(a)))
+    t(1:size(a)) = a
+    call move_alloc(t, a)
+  end subroutine grow_int
 
   ! CLOTRAN_STATS: how many fns the VM took
   subroutine vm_stats_print()
