@@ -2304,39 +2304,27 @@ contains
   ! thread's batch is filled from the free list and the unused end of
   ! the pool first -- each slot flagged free while it waits -- and the
   ! slot comes from it.
+  ! A slot for the caller (generated: model/heapal.lisp; heapal-proof's
+  ! theorems: never one in use, on the free list or in a batch). With
+  ! batching, this thread's own dead first (pend_refill_obj), then its
+  ! batch filled from the free list and the pool's unused end, and the
+  ! batch's last taken; else the free list's head or the unused end.
   integer function obj_take()
     type(gc_stack), pointer :: s
+    integer(int64) :: r
     if (batching()) then
        s => my_stack()
-       ! this thread's own dead first: the heap's free slots are everyone's
        call pend_refill_obj(s)
-       do while (s%n_obj_b < ALLOC_BATCH)
-          if (obj_free_head /= 0) then
-             s%n_obj_b = s%n_obj_b + 1
-             s%obj_b(s%n_obj_b) = obj_free_head
-             obj_free_head = obj_free_next(obj_free_head)
-          else if (obj_used < size(obj_pool)) then
-             obj_used = obj_used + 1
-             obj_free(obj_used) = .true.
-             s%n_obj_b = s%n_obj_b + 1
-             s%obj_b(s%n_obj_b) = obj_used
-          else
-             exit
-          end if
-       end do
-       if (s%n_obj_b > 0) then
-          obj_take = s%obj_b(s%n_obj_b)
-          s%n_obj_b = s%n_obj_b - 1
+       call hpg_obj_fill(hstate, int(ALLOC_BATCH, int64))
+       call hpg_obj_pop(hstate, r)
+       if (r > 0) then
+          obj_take = int(r)
           return
        end if
     end if
-    if (obj_free_head /= 0) then
-       obj_take = obj_free_head
-       obj_free_head = obj_free_next(obj_take)
-    else
-       obj_used = obj_used + 1
-       obj_take = obj_used
-    end if
+    call hpg_obj_take(hstate, r)
+    if (r <= 0) error stop "clotran: obj_take with the pool full"
+    obj_take = int(r)
   end function obj_take
 
   integer function vec_take()
@@ -4375,7 +4363,7 @@ contains
     hp_oref = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%ref
   end function hp_oref
   integer(int64) function hp_n_oslot()
-    hp_n_oslot = 5_int64 * (int(obj_used, int64) + 1)
+    hp_n_oslot = 5_int64 * (size(obj_pool, kind=int64) + 1)
   end function hp_n_oslot
   integer(int64) function hp_omark(i)
     integer(int64), intent(in) :: i
@@ -4385,8 +4373,9 @@ contains
     integer(int64), intent(in) :: i, x
     obj_mark(i) = x /= 0
   end subroutine hp_set_omark
+  ! the pool's slots and slot 0, as every array the model reads of it
   integer(int64) function hp_n_obj()
-    hp_n_obj = int(obj_used, int64) + 1
+    hp_n_obj = size(obj_pool, kind=int64) + 1
   end function hp_n_obj
   integer(int64) function hp_voff(i)
     integer(int64), intent(in) :: i
@@ -4553,6 +4542,45 @@ contains
     integer(int64), intent(in) :: x
     str_free_head = int(x)
   end subroutine hp_set_shead
+  ! allocation's view (stage 1b): the pool's used end and size, and the
+  ! calling thread's batch
+  integer(int64) function hp_oused()
+    hp_oused = obj_used
+  end function hp_oused
+  subroutine hp_set_oused(x)
+    integer(int64), intent(in) :: x
+    obj_used = int(x)
+  end subroutine hp_set_oused
+  integer(int64) function hp_ocap()
+    hp_ocap = size(obj_pool, kind=int64)
+  end function hp_ocap
+  integer(int64) function hp_nob()
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_nob = s%n_obj_b
+  end function hp_nob
+  subroutine hp_set_nob(x)
+    integer(int64), intent(in) :: x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%n_obj_b = int(x)
+  end subroutine hp_set_nob
+  integer(int64) function hp_ob(k)
+    integer(int64), intent(in) :: k
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_ob = s%obj_b(k)
+  end function hp_ob
+  subroutine hp_set_ob(k, x)
+    integer(int64), intent(in) :: k, x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%obj_b(k) = int(x)
+  end subroutine hp_set_ob
+  integer(int64) function hp_n_ob()
+    hp_n_ob = ALLOC_BATCH + 1
+  end function hp_n_ob
+
   ! a text's storage released: the one place it belongs, run once per slot
   subroutine hp_release_str(i, x)
     integer(int64), intent(in) :: i, x

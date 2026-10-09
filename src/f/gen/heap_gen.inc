@@ -768,3 +768,151 @@
       exit
     end do
   end subroutine hpg_sweep_strs
+
+  subroutine hpg_obj_take(hs, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), intent(out) :: r
+    integer(int64) :: h_1
+    logical :: t_2
+    integer(int64) :: u_3
+    h_1 = hp_ohead()
+    if ((0_int64 < h_1)) then
+      t_2 = (h_1 < hp_n_obj())
+    else
+      t_2 = .false.
+    end if
+    if (t_2) then
+      call hp_set_ohead(hpg_s64(hp_onext(h_1)))
+      r = h_1
+    else
+      if ((hp_oused() < hp_ocap())) then
+        u_3 = (1_int64 + hp_oused())
+        call hp_set_oused(u_3)
+        r = u_3
+      else
+        r = 0_int64
+      end if
+    end if
+  end subroutine hpg_obj_take
+
+  subroutine hpg_obj_use(hs, i_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: i_1
+    integer(int64) :: i_3
+    integer(int64) :: v_2
+    integer(int64) :: v_4
+    i_1 = i_
+    v_2 = 0_int64
+    call hp_set_ofree(i_1, v_2)
+    i_3 = i_
+    v_4 = 0_int64
+    call hp_set_omark(i_3, v_4)
+  end subroutine hpg_obj_use
+
+  subroutine hpg_obj_fill_list(hs)
+    type(heap_state), intent(inout) :: hs
+    integer(int64) :: h_1
+    integer(int64) :: i_3
+    integer(int64) :: n_2
+    integer(int64) :: v_4
+    h_1 = hp_ohead()
+    n_2 = (1_int64 + hp_nob())
+    i_3 = n_2
+    v_4 = h_1
+    call hp_set_ob(i_3, v_4)
+    call hp_set_nob(n_2)
+    call hp_set_ohead(hpg_s64(hp_onext(h_1)))
+  end subroutine hpg_obj_fill_list
+
+  subroutine hpg_obj_fill_end(hs)
+    type(heap_state), intent(inout) :: hs
+    integer(int64) :: i_2
+    integer(int64) :: i_5
+    integer(int64) :: n_4
+    integer(int64) :: u_1
+    integer(int64) :: v_3
+    integer(int64) :: v_6
+    u_1 = (1_int64 + hp_oused())
+    call hp_set_oused(u_1)
+    i_2 = u_1
+    v_3 = 1_int64
+    call hp_set_ofree(i_2, v_3)
+    n_4 = (1_int64 + hp_nob())
+    i_5 = n_4
+    v_6 = u_1
+    call hp_set_ob(i_5, v_6)
+    call hp_set_nob(n_4)
+  end subroutine hpg_obj_fill_end
+
+  subroutine hpg_obj_fill(hs, fuel_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: fuel_
+    integer(int64) :: fuel_3
+    integer(int64) :: fuel_6
+    logical :: t_1
+    logical :: t_2
+    logical :: t_4
+    logical :: t_5
+    do
+      if ((fuel_ <= 0_int64)) then
+        t_1 = (fuel_ <= 0_int64)
+      else
+        t_1 = (.not. ((1_int64 + hp_nob()) < hp_n_ob()))
+      end if
+      if (t_1) then
+      else
+        if ((0_int64 < hp_ohead())) then
+          t_2 = (hp_ohead() < hp_n_obj())
+        else
+          t_2 = .false.
+        end if
+        if (t_2) then
+          call hpg_obj_fill_list(hs)
+          fuel_3 = (-1_int64 + fuel_)
+          fuel_ = fuel_3
+          cycle
+        else
+          if ((hp_oused() < hp_ocap())) then
+            if (((1_int64 + hp_oused()) < hp_n_obj())) then
+              t_4 = ((1_int64 + hp_oused()) < hp_n_obj())
+            else
+              t_4 = .false.
+            end if
+            t_5 = t_4
+          else
+            t_5 = .false.
+          end if
+          if (t_5) then
+            call hpg_obj_fill_end(hs)
+            fuel_6 = (-1_int64 + fuel_)
+            fuel_ = fuel_6
+            cycle
+          else
+          end if
+        end if
+      end if
+      exit
+    end do
+  end subroutine hpg_obj_fill
+
+  subroutine hpg_obj_pop(hs, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), intent(out) :: r
+    integer(int64) :: i_3
+    integer(int64) :: n_1
+    logical :: t_2
+    n_1 = hp_nob()
+    if ((0_int64 < n_1)) then
+      t_2 = (n_1 < hp_n_ob())
+    else
+      t_2 = .false.
+    end if
+    if (t_2) then
+      i_3 = hp_ob(n_1)
+      call hp_set_nob((-1_int64 + n_1))
+      r = i_3
+    else
+      r = 0_int64
+    end if
+  end subroutine hpg_obj_pop

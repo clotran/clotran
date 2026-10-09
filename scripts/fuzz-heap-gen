@@ -69,14 +69,17 @@
      :okind (vec (repeatedly no #(rnd 20))) :ofree (flags no) :onext (vec (repeatedly no #(rnd no)))
      :vfree (flags nv) :vnext (vec (repeatedly nv #(rnd nv))) :sfree (flags ns) :snext (vec (repeatedly ns #(rnd ns)))
      :aival (vec (repeatedly na #(rnd 100))) :chead (vec (repeatedly 31 #(rnd na)))
-     :heads [(rnd no) (rnd nv) (rnd ns)]}))
+     :heads [(rnd no) (rnd nv) (rnd ns)]
+     ;; the pool's used end and its size, both inside the arrays
+     :used (let [u (rnd no)] [u (+ u (rnd (- no u)))])}))
 
 (def cases (vec (repeatedly n gen-case)))
 
 ;; what is compared, in this order, on both sides
 (def arrays-in [:okind :ofree :onext :vfree :vnext :sfree :snext :aival :chead])
 (def out-names ["omark" "vmark" "smark" "regs" "okind" "ofree" "onext" "ofin" "voff" "vlen" "vfree" "vnext"
-                "atag" "aref" "aival" "chead" "sfree" "snext" "srel" "sweep"])
+                "atag" "aref" "aival" "chead" "sfree" "snext" "srel" "sweep"
+                "takes" "pops" "ob" "alloc" "ofree2" "omark2"])
 
 ;; ---- ACL2 -------------------------------------------------------------------------
 
@@ -86,10 +89,10 @@
 (def acl2-arrays
   (array-map "otag" 0 "oref" 1 "omark" 2 "voff" 3 "vlen" 4 "vmark" 5 "atag" 6 "aref" 7 "smark" 8
              "okind" 9 "ofree" 10 "onext" 11 "vfree" 12 "vnext" 13 "sfree" 14 "snext" 15 "aival" 16 "chead" 17
-             "ofin" 18 "srel" 19))
+             "ofin" 18 "srel" 19 "ob" 20))
 
 (def driver
-  (str "(include-book \"heapsw\")\n"
+  (str "(include-book \"heapal\")\n"
        "(set-print-case :downcase state)\n"
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
        "(defun ld-arr (f i xs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
@@ -114,7 +117,13 @@
        " (t 0)) hpg))\n"
        "(defun push-roots (rs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
        "  (if (endp rs) hpg (let ((hpg (hpg-push (caar rs) (cadar rs) hpg))) (push-roots (cdr rs) hpg))))\n"
-       "(defun run-case (k arrs cap hd roots hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "(defun takes (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (zp k) (mv (reverse acc) hpg)\n"
+       "    (mv-let (i hpg) (hpg-obj-take hpg)\n"
+       "      (let ((hpg (if (and (< 0 i) (< i (h-ofree-length hpg))) (hpg-obj-use i hpg) hpg))) (takes (1- k) (cons i acc) hpg)))))\n"
+       "(defun pops (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (zp k) (mv (reverse acc) hpg) (mv-let (i hpg) (hpg-obj-pop hpg) (pops (1- k) (cons i acc) hpg))))\n"
+       "(defun run-case (k arrs cap hd us roots hpg) (declare (xargs :stobjs hpg :mode :program))\n"
        "  (let* ((hpg (put 0 (nth 0 arrs) hpg)) (hpg (put 1 (nth 1 arrs) hpg)) (hpg (put 2 (nth 2 arrs) hpg))\n"
        "         (hpg (put 3 (nth 3 arrs) hpg)) (hpg (put 4 (nth 4 arrs) hpg)) (hpg (put 5 (nth 5 arrs) hpg))\n"
        "         (hpg (put 6 (nth 6 arrs) hpg)) (hpg (put 7 (nth 7 arrs) hpg)) (hpg (put 8 (nth 8 arrs) hpg))\n"
@@ -130,19 +139,27 @@
        "         (hpg (update-h-nswo 0 hpg)) (hpg (update-h-nswv 0 hpg)) (hpg (update-h-nsws 0 hpg)) (hpg (update-h-afree 0 hpg))\n"
        "         (hpg (push-roots roots hpg)) (hpg (hpg-drain 1000000 hpg))\n"
        "         (hpg (hpg-sweep-objs 1 (- (len (nth 2 arrs)) 1) hpg)) (hpg (hpg-sweep-vecs 1 (- (len (nth 5 arrs)) 1) hpg))\n"
-       "         (hpg (hpg-sweep-strs 1 (- (len (nth 8 arrs)) 1) hpg)))\n"
-       "    (prog2$ (cw \"CASE ~x0 ~x1~%\" k\n"
-       "                (list (get-all 2 hpg) (get-all 5 hpg) (get-all 8 hpg)\n"
-       "                      (list (h-err hpg) (h-msp hpg) (h-nobj hpg) (h-nvec hpg) (h-nstr hpg) (h-alive hpg))\n"
-       "                      (get-all 9 hpg) (get-all 10 hpg) (get-all 11 hpg) (get-all 18 hpg) (get-all 3 hpg) (get-all 4 hpg) (get-all 12 hpg) (get-all 13 hpg)\n"
-       "                      (get-all 6 hpg) (get-all 7 hpg) (get-all 16 hpg) (get-all 17 hpg) (get-all 14 hpg) (get-all 15 hpg) (get-all 19 hpg)\n"
-       "                      (list (h-ohead hpg) (h-vhead hpg) (h-shead hpg) (h-nswo hpg) (h-nswv hpg) (h-nsws hpg) (h-afree hpg))))\n"
-       "            hpg)))\n"
+       "         (hpg (hpg-sweep-strs 1 (- (len (nth 8 arrs)) 1) hpg))\n"
+       "         (mk (list (get-all 2 hpg) (get-all 5 hpg) (get-all 8 hpg)\n"
+       "                   (list (h-err hpg) (h-msp hpg) (h-nobj hpg) (h-nvec hpg) (h-nstr hpg) (h-alive hpg))\n"
+       "                   (get-all 9 hpg) (get-all 10 hpg) (get-all 11 hpg) (get-all 18 hpg) (get-all 3 hpg) (get-all 4 hpg) (get-all 12 hpg) (get-all 13 hpg)\n"
+       "                   (get-all 6 hpg) (get-all 7 hpg) (get-all 16 hpg) (get-all 17 hpg) (get-all 14 hpg) (get-all 15 hpg) (get-all 19 hpg)\n"
+       "                   (list (h-ohead hpg) (h-vhead hpg) (h-shead hpg) (h-nswo hpg) (h-nswv hpg) (h-nsws hpg) (h-afree hpg))))\n"
+       ;; allocation: three takes, each used; a fill; four pops
+       "         (hpg (update-h-oused (nth 0 us) hpg)) (hpg (update-h-ocap (nth 1 us) hpg))\n"
+       "         (hpg (put 20 (make-list 8 :initial-element 0) hpg)) (hpg (update-h-nob 0 hpg)))\n"
+       "    (mv-let (tk hpg) (takes 3 nil hpg)\n"
+       "      (let ((hpg (hpg-obj-fill 6 hpg)))\n"
+       "        (mv-let (pp hpg) (pops 4 nil hpg)\n"
+       "          (prog2$ (cw \"CASE ~x0 ~x1~%\" k\n"
+       "                      (append mk (list tk pp (get-all 20 hpg) (list (h-nob hpg) (h-oused hpg) (h-ohead hpg) (h-ocap hpg))\n"
+       "                                       (get-all 10 hpg) (get-all 2 hpg))))\n"
+       "                  hpg))))))\n"
        (str/join (map-indexed (fn [k c]
                                 (str "(run-case " k " (list "
                                      (str/join " " (map #(l (% c)) [:otag :oref :omark :voff :vlen :vmark :atag :aref :smark
                                                                     :okind :ofree :onext :vfree :vnext :sfree :snext :aival :chead]))
-                                     ") " (:cap c) " " (l (:heads c))
+                                     ") " (:cap c) " " (l (:heads c)) " " (l (:used c))
                                      " '(" (str/join " " (map (fn [[t r]] (str "(" t " " r ")")) (:roots c))) ") hpg)\n"))
                               cases))
        "(good-bye)\n"))
@@ -171,7 +188,7 @@
     (spit f (str (:no c) " " (:nv c) " " (:na c) " " (:ns c) " " (:cap c) "\n"
                  (str/join "\n" (map #(nums (% c)) [:otag :oref :omark :voff :vlen :vmark :atag :aref :smark])) "\n"
                  (str/join "\n" (map #(nums (% c)) arrays-in)) "\n"
-                 (nums (:heads c)) "\n"
+                 (nums (:heads c)) "\n" (nums (:used c)) "\n"
                  (count (:roots c)) "\n" (str/join "\n" (map (fn [[t r]] (str t " " r)) (:roots c))) "\n"))
     f))
 
@@ -190,7 +207,7 @@
 (def bad (remove :ok results))
 (println (str n " heaps, seed " seed (when broken " (negative control: an object's last slot unread)")
               "; " (count (filter :overflow results)) " overflowed their stack"))
-(println (str "generated marking and sweep against ACL2's: " (count bad) " differ"))
+(println (str "generated marking, sweep and allocation against ACL2's: " (count bad) " differ"))
 (doseq [b (take 2 bad)]
   (println "  case" (:k b))
   (doseq [[nm w g] (map vector out-names (:want b) (:got b)) :when (not= w g)]

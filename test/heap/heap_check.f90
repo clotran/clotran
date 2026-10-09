@@ -16,6 +16,8 @@ module heap_check_m
   integer(int64), allocatable :: okind(:), ofree(:), onext(:), vfree(:), vnext(:), sfree(:), snext(:), aival(:), chead(:)
   integer(int64), allocatable :: ofin(:), srel(:)
   integer(int64) :: ohead = 0, vhead = 0, shead = 0
+  integer(int64) :: oused = 0, ocap = 0, nob = 0
+  integer(int64), allocatable :: ob(:)
   logical :: broken = .false.
 contains
   integer(int64) function hp_otag(j)
@@ -204,6 +206,35 @@ contains
     srel(i) = x
   end subroutine hp_release_str
 
+  integer(int64) function hp_oused()
+    hp_oused = oused
+  end function hp_oused
+  subroutine hp_set_oused(x)
+    integer(int64), intent(in) :: x
+    oused = x
+  end subroutine hp_set_oused
+  integer(int64) function hp_ocap()
+    hp_ocap = ocap
+  end function hp_ocap
+  integer(int64) function hp_nob()
+    hp_nob = nob
+  end function hp_nob
+  subroutine hp_set_nob(x)
+    integer(int64), intent(in) :: x
+    nob = x
+  end subroutine hp_set_nob
+  integer(int64) function hp_ob(k)
+    integer(int64), intent(in) :: k
+    hp_ob = ob(k)
+  end function hp_ob
+  subroutine hp_set_ob(k, x)
+    integer(int64), intent(in) :: k, x
+    ob(k) = x
+  end subroutine hp_set_ob
+  integer(int64) function hp_n_ob()
+    hp_n_ob = size(ob, kind=int64)
+  end function hp_n_ob
+
   include "heap_gen.inc"
 end module heap_check_m
 
@@ -212,7 +243,7 @@ program heap_check
   implicit none
   type(heap_state) :: hs
   integer :: u, i, nr
-  integer(int64) :: no, nv, na, ns, cap, t, r
+  integer(int64) :: no, nv, na, ns, cap, t, r, tk(3), pp(4), k
   character(len=256) :: path, arg2
   call get_command_argument(1, path)
   call get_command_argument(2, arg2)
@@ -245,6 +276,9 @@ program heap_check
   if (na > 0) read(u, *) aival
   read(u, *) chead
   read(u, *) ohead, vhead, shead
+  read(u, *) oused, ocap
+  allocate(ob(0:7))
+  ob = 0
   read(u, *) nr
   do i = 1, nr
      read(u, *) t, r
@@ -275,4 +309,18 @@ program heap_check
   write(*, '(a, *(1x, i0))') 'snext', snext
   write(*, '(a, *(1x, i0))') 'srel', srel
   write(*, '(a, 7(1x, i0))') 'sweep', ohead, vhead, shead, hs%nswo, hs%nswv, hs%nsws, hs%afree
+  do k = 1, 3
+     call hpg_obj_take(hs, tk(k))
+     if (tk(k) > 0 .and. tk(k) < no) call hpg_obj_use(hs, tk(k))
+  end do
+  call hpg_obj_fill(hs, 6_int64)
+  do k = 1, 4
+     call hpg_obj_pop(hs, pp(k))
+  end do
+  write(*, '(a, 3(1x, i0))') 'takes', tk
+  write(*, '(a, 4(1x, i0))') 'pops', pp
+  write(*, '(a, *(1x, i0))') 'ob', ob
+  write(*, '(a, 4(1x, i0))') 'alloc', nob, oused, ohead, ocap
+  write(*, '(a, *(1x, i0))') 'ofree2', ofree
+  write(*, '(a, *(1x, i0))') 'omark2', omark
 end program heap_check

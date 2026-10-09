@@ -88,21 +88,27 @@
               "! program vmicg_program compiles without an error or an overflow"
               "! answers, run, what it means."]}
     "heapg"
-    {:out "src/f/gen/heap_gen.inc" :include true :book "heapsw"
+    {:out "src/f/gen/heap_gen.inc" :include true :book "heapal"
      :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain
            ;; the sweep and the frees (model/heapsw.lisp)
            hpg-s64 hpg-n40 hpg-size-class hpg-free-obj hpg-slab-free hpg-free-vec hpg-free-str
-           hpg-sweep-objs hpg-sweep-vecs hpg-sweep-strs]
+           hpg-sweep-objs hpg-sweep-vecs hpg-sweep-strs
+           ;; allocation (model/heapal.lisp)
+           hpg-obj-take hpg-obj-use hpg-obj-fill-list hpg-obj-fill-end hpg-obj-fill hpg-obj-pop]
      :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
      :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]
               h-nswo ["hs" "nswo"] h-nswv ["hs" "nswv"] h-nsws ["hs" "nsws"] h-afree ["hs" "afree"]
-              h-ohead ["hs" "ohead"] h-vhead ["hs" "vhead"] h-shead ["hs" "shead"]}
+              h-ohead ["hs" "ohead"] h-vhead ["hs" "vhead"] h-shead ["hs" "shead"]
+              h-oused ["hs" "oused"] h-ocap ["hs" "ocap"] h-nob ["hs" "nob"]}
      ;; the free lists' heads are GC's own variables
      :extern-fields {h-ohead ["hp_ohead" "hp_set_ohead"] h-vhead ["hp_vhead" "hp_set_vhead"]
-                     h-shead ["hp_shead" "hp_set_shead"]}
+                     h-shead ["hp_shead" "hp_set_shead"]
+                     h-oused ["hp_oused" "hp_set_oused"] h-ocap ["hp_ocap" "-"]
+                     ;; the calling thread's batch
+                     h-nob ["hp_nob" "hp_set_nob"]}
      :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"
-                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel"]}
+                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob"]}
      :prefix {"hs" "h-"}
      :value-arrays #{}
      ;; GC.f90's pools, through its accessors (GC.f90, "the marker's view")
@@ -117,7 +123,8 @@
                "vfree" ["hp_vfree" "hp_set_vfree" "hp_n_vec"] "vnext" ["hp_vnext" "hp_set_vnext" "hp_n_vec"]
                "sfree" ["hp_sfree" "hp_set_sfree" "hp_n_str"] "snext" ["hp_snext" "hp_set_snext" "hp_n_str"]
                "srel" ["-" "hp_release_str" "hp_n_str"]
-               "aival" ["hp_aival" "hp_set_aival" "hp_n_arena"] "chead" ["hp_chead" "hp_set_chead" "hp_n_chead"]}
+               "aival" ["hp_aival" "hp_set_aival" "hp_n_arena"] "chead" ["hp_chead" "hp_set_chead" "hp_n_chead"]
+               "ob" ["hp_ob" "hp_set_ob" "hp_n_ob"]}
      :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag}
      :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"

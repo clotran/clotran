@@ -4405,6 +4405,37 @@ scripts/fuzz-heap-gen now sweeps after marking, from free flags, free
 lists, class heads and arena words of its own, and compares everything
 the sweep wrote.
 
+**Stage 1b, allocation, objects (2026-10-09).** Before it, a probe of
+which slots each object kind uses (CLOTRAN_STATS, scratch): the
+yardstick's lazy cells (9.1 M allocated over three runs) and closures
+(3.0 M) use all five slots -- a lazy cell changes shape in place, pending
+to realised, and iterate keeps its x in slot 5 -- so sizing objects to
+their kind (stage 1d) would save about a third on them, not the 2-3x
+this plan supposed; 1d is worth less, and the allocator as it is was
+modelled.
+
+model/heapal.lisp: a slot from the free list's head or past the used end
+(obj_take without a batch); with batching, the thread's batch filled
+from the list and the used end, each slot from the end flagged free while
+it waits, and its last taken; and USE, what gc_obj does to a slot handed
+out. model/heapal-proof.lisp proves NO SLOT IS HANDED OUT TWICE, over a
+ghost list L, the free list's slots, and B, the batch's: L runs from the
+head through the links to 0, every slot of L and B is free and at most
+used, and L and B together hold no slot twice. A take hands out L's head
+(the list its rest) or the slot past used (on neither); a pop the
+batch's last; a fill moves slots from L's front or past used into B (a
+witness, fill-rest, says which); use of a slot on neither keeps the
+invariant; and the sweep's free of a slot not free puts it on L's
+front. GC.f90's obj_take is the generated take, fill and pop (the
+thread's own young dead still go into its batch by the hand-written
+pend_refill_obj); gc_obj's in-line pop on its fast path stays as it was
+-- the generated pop reads the thread's batch through an accessor that
+finds the thread each time. The accessors' pool lengths are now the
+pool's size, which allocation needs and the marking and sweep accept.
+scripts/fuzz-heap-gen runs three takes, a fill and four pops after the
+sweep, on both sides. Runs, texts and the arena's slab allocator take
+the same shape next.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

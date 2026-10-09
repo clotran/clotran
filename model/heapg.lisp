@@ -76,7 +76,13 @@
   (h-nswo :type (signed-byte 64) :initially 0)
   (h-nswv :type (signed-byte 64) :initially 0)
   (h-nsws :type (signed-byte 64) :initially 0)
-  (h-afree :type (signed-byte 64) :initially 0))
+  (h-afree :type (signed-byte 64) :initially 0)
+  ;; ALLOCATION (stage 1b): how far each pool is used and how big it is,
+  ;; and the calling thread's batch of free slots, 1-based as GC.f90's
+  (h-oused :type (signed-byte 64) :initially 0)
+  (h-ocap :type (signed-byte 64) :initially 0)
+  (h-ob :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-nob :type (signed-byte 64) :initially 0))
 
 ; ---- BOUNDS ---------------------------------------------------------------------------
 
