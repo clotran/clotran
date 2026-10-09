@@ -127,6 +127,11 @@
  "Eval.f90/flat_n_ok" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/flat_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/flat_n_eval" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/flat_op_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/bi_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/bi_fast_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/force_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "GC.f90/gc_kind_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/vmp" {:class :shared, :note "the generated VM's one program (vm.inc): its arrays made once and never moved; a function compiled at a place reserved under the state lock, by the thread that reserved it, then only read"}
  "Eval.f90/vmp_fstart" {:class :shared, :note "the program's functions' first instructions and names, for a trace: an entry written by the thread that reserved the function, before its id is published"}
  "Eval.f90/vmp_fnames" {:class :shared, :note "the program's functions' first instructions and names, for a trace: an entry written by the thread that reserved the function, before its id is published"}

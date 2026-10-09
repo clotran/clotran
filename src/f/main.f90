@@ -221,6 +221,12 @@ contains
        write(0, '(A,I0,A,I0,A,I0,A,I0,A,I0)') "stats: evals=", gce_evals, " allocs=", gc_allocs, &
             " collections=", gc_collections, " marked=", gc_marked, " obj_capacity=", gc_obj_capacity()
        call flat_stats_print(0)
+       block
+         integer :: k
+         do k = 0, 63
+            if (gc_kind_n(k) > 0) write(0, '(A,I0,A,I0)') '    kind ', k, ' ', gc_kind_n(k)
+         end do
+       end block
        call vm_stats_print()
        block
          integer :: cap, used, live

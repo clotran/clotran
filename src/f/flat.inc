@@ -140,6 +140,10 @@
   ! through the tree from inside a compiled body (PLAN 30: bytecode only)
   subroutine flat_stats_print(u)
     integer, intent(in) :: u
+    character(len=8), parameter :: ops(1:26) = [character(len=8) :: 'const', 'nil', 'move', 'movec', 'var', &
+         'dlvar', 'jmpf', 'jmp', 'call', 'ret', 'recur', 'fn', 'lazy', 'coll', 'throw', 'eval', 'callb', &
+         'dot', 'case', 'try', 'endtry', 'handler', 'catch', 'rethrow', 'new', 'callw']
+    integer :: o
     character(len=12), parameter :: names(0:29) = [character(len=12) :: 'not-a-node', &
          'const', 'local', 'var', 'if', 'do', 'call', 'vector', 'map', 'set', 'def', 'let', &
          'loop', 'letfn', 'fn', 'lazy', 'recur', 'throw', 'try', 'case', 'deftype', 'dot', &
@@ -149,6 +153,14 @@
          ' (refused by:'
     do k = 0, 29
        if (flat_n_refused(k) > 0) write(u, '(A,A,A,I0)') '    ', trim(names(k)), ' ', flat_n_refused(k)
+    end do
+    write(u, '(A,I0)') 'stats: flat instructions=', sum(flat_op_n)
+    do o = 1, 26
+       if (flat_op_n(o) > 0) write(u, '(A,A,A,I0)') '    op ', trim(ops(o)), ' ', flat_op_n(o)
+    end do
+    write(u, '(A,I0)') 'stats: lazy forces=', force_n
+    do o = 0, 1023
+       if (bi_n(o) > 0 .or. bi_fast_n(o) > 0) write(u, '(A,I0,A,I0,A,I0)') '    builtin ', o, ' ', bi_n(o), ' ', bi_fast_n(o)
     end do
     write(u, '(A)') 'stats: tree islands in bytecode bodies, by kind:'
     do k = 0, 29
@@ -980,6 +992,7 @@
 
     do
        w = int(vec_store(cb + pc : cb + pc + FW - 1)%ival)
+       flat_op_n(w(1)) = flat_op_n(w(1)) + 1
        select case (w(1))
        case (F_CONST)
           vst%vstack(rb + w(2) + 1) = vec_store(kb + w(3) + 1)
@@ -1040,6 +1053,7 @@
                argv = gc_nil()
                if (n == 2) argv = vst%vstack(rb + w(4) + 1 + 1)
                done = .false.
+               if (bid1 <= 1024) bi_fast_n(bid1 - 1) = bi_fast_n(bid1 - 1) + 1
                if (n == 1) done = flat_seq_op(int(bid1) - 1, vst%vstack(rb + w(4) + 1), newframe)
                if (.not. done) done = flat_int_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
                if (.not. done) done = flat_cons_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)

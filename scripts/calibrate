@@ -1,0 +1,150 @@
+#!/usr/bin/env bb
+;; calibrate: the weights of clotran's cost model, measured (PLAN step 34).
+;;
+;;   scripts/calibrate [-o weights.edn]
+;;
+;; The model's cost theorems bound WEIGHTED work: each instruction class and
+;; each allocation a weight in ns, the theorem true for any weights. This
+;; finds the weights on this machine: every form below runs twice in one
+;; clotran (warm, then timed), CLOTRAN_STATS counts its flat instructions by
+;; opcode and its allocations (less an empty program's), its collector
+;; pauses come off its time, and the weights are the non-negative least
+;; squares fit of time to counts. Then each form's predicted time beside its
+;; measured one, and the fit's worst error: a form far off its prediction is
+;; work the model does not see.
+(require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str])
+
+(def opts (loop [as *command-line-args* o {}]
+            (if (empty? as) o
+                (case (first as)
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/calibrate [-o weights.edn]") (System/exit 2))))))
+
+;; THE FIT: loops that each add one kind of work to a base loop, so the
+;; classes come apart; THE CHECK: real programs the fit never saw, whose
+;; prediction error is the model's
+(def fit-forms
+  ["(loop [i 0] (if (< i 1000000) (recur (inc i)) i))"
+   "(loop [i 0 a 0] (if (< i 1000000) (recur (inc i) (+ a i)) a))"
+   "(let [f (fn [x] x)] (loop [i 0] (if (< i 1000000) (do (f i) (recur (inc i))) i)))"
+   "(let [f (fn [x y] y)] (loop [i 0] (if (< i 1000000) (do (f i i) (recur (inc i))) i)))"
+   "(loop [i 0] (if (< i 1000000) (do (pos? i) (recur (inc i))) i))"
+   "(loop [i 0] (if (< i 1000000) (do (pos? i) (zero? i) (recur (inc i))) i))"
+   "(loop [i 0] (if (< i 1000000) (do (cons i nil) (recur (inc i))) i))"
+   "(loop [i 0] (if (< i 1000000) (do (lazy-seq nil) (recur (inc i))) i))"
+   "(loop [i 0] (if (< i 1000000) (do (seq (lazy-seq nil)) (recur (inc i))) i))"
+   "(loop [i 0] (if (< i 1000000) (let [a i b a] (recur (inc b))) i))"
+   "(loop [i 0] (if (< i 1000000) (recur (if (even? i) (inc i) (inc i))) i))"
+   "((fn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) 25)"
+   "(dotimes [_ 100] ((fn f [n] (if (zero? n) 0 (inc (f (dec n))))) 5000))"
+   "(let [v [1 2 3]] (loop [i 0] (if (< i 1000000) (do (first v) (recur (inc i))) i)))"
+   "(loop [i 0] (if (< i 1000000) (do (fn [] i) (recur (inc i))) i))"
+   "(let [l (list 1 2 3)] (loop [i 0] (if (< i 1000000) (do (first l) (next l) (recur (inc i))) i)))"
+   "(let [l (list 1 2 3)] (loop [i 0] (if (< i 1000000) (do (seq l) (rest l) (recur (inc i))) i)))"
+   "(let [s (lazy-seq (cons 1 nil))] (loop [i 0] (if (< i 1000000) (do (seq s) (first s) (recur (inc i))) i)))"
+   "(let [m {:a 1}] (loop [i 0] (if (< i 1000000) (do (get m :a) (recur (inc i))) i)))"])
+(def check-forms
+  ["(apply + (take 1000000 (range)))"
+   "(count (map inc (range 300000)))"
+   "(dorun (take 300000 (iterate inc 0)))"
+   "(count (filter even? (range 300000)))"
+   "(reduce (fn [a x] (+ a x)) 0 (range 300000))"
+   "(dorun ((fn step [n] (lazy-seq (when (pos? n) (cons n (step (dec n)))))) 200000))"
+   "(loop [i 0 l nil] (if (< i 300000) (recur (inc i) (cons i l)) (count l)))"])
+
+(def classes
+  ;; opcode -> class: what one weight covers
+  {"const" :move "nil" :move "move" :move "movec" :move
+   "jmpf" :branch "jmp" :branch "case" :branch
+   "var" :var "dlvar" :var
+   "call" :call "ret" :ret "recur" :recur "callw" :callw "callb" :callb
+   "lazy" :lazy "fn" :fn "dot" :dot})
+(def features [:one :move :branch :var :call :ret :recur :callw :callb :lazy :fn :dot :other :seqop :builtin :force :alloc])
+
+;; builtin ids -> names, from Eval.f90's own table; the seq operations
+(def bnames (into {} (for [[_ nm b] (re-seq #"bind_builtin\(\w+, \"([^\"]+)\", (B_\w+)\)" (slurp "src/f/Eval.f90"))] [b nm])))
+(def bids (into {} (for [[_ b n] (re-seq #"(B_\w+) = (\d+)" (slurp "src/f/Eval.f90"))] [(parse-long n) (get bnames b b)])))
+(def seq-ops #{"seq" "first" "next" "rest" "cons"})
+
+(def scratch (str (fs/create-temp-dir {:prefix "calibrate"})))
+
+(defn run-stats [body]
+  (let [f (str scratch "/f.clj")]
+    (spit f body)
+    (let [r (p/shell {:out :string :err :string :continue true :in ""
+                      :extra-env {"CLOTRAN_STATS" "1"}}
+                     "./clotran-bin" "src/clj/clojure/core.clj" f)]
+      (str (:out r) (:err r)))))
+
+(defn parse [out]
+  (let [ops (into {} (for [[_ op n] (re-seq #"(?m)^    op (\S+) (\d+)" out)] [op (parse-long n)]))
+        allocs (some-> (re-find #"allocs=(\d+)" out) second parse-long)
+        bis (for [[_ id a b] (re-seq #"(?m)^    builtin (\d+) (\d+) (\d+)" out)] [(get bids (parse-long id)) (+ (parse-long a) (parse-long b))])
+        force (or (some-> (re-find #"lazy forces=(\d+)" out) second parse-long) 0)
+        pause (fn [k] (or (some-> (re-find (re-pattern (str k " \\d+ total_ms=([\\d.]+)")) out) second parse-double) 0.0))
+        el (some-> (re-find #"Elapsed time: ([\d.]+) msecs" out) second parse-double)]
+    {:ops ops :allocs (or allocs 0) :gc-ms (+ (pause "young") (pause "full")) :ms el
+     :seqop (reduce + 0 (for [[nm n] bis :when (seq-ops nm)] n))
+     :builtin (reduce + 0 (for [[nm n] bis :when (not (seq-ops nm))] n))
+     :force force}))
+
+(defn feats [{:keys [ops allocs seqop builtin force]}]
+  (let [by (reduce-kv (fn [m op n] (update m (get classes op :other) (fnil + 0) n)) {} ops)]
+    (assoc by :alloc allocs :one 2 :seqop seqop :builtin builtin :force force)))
+
+(def base (parse (run-stats "nil\n")))
+(def base-f (feats base))
+
+(defn measure [form]
+  (let [s (parse (run-stats (str form "\n(time " form ")\n")))
+        f (feats s)
+        ;; two runs counted, one timed: half the counts
+        d (into {} (for [k features] [k (/ (- (get f k 0) (get base-f k 0)) 2.0)]))
+        gc (/ (- (:gc-ms s) (:gc-ms base)) 2.0)]
+    {:form form :ms (:ms s) :gc gc :x d}))
+
+(def fit-rows (mapv measure fit-forms))
+(def check-rows (mapv measure check-forms))
+
+;; non-negative least squares by coordinate descent, each row scaled by its
+;; own time so the fit minimises RELATIVE error (no one form dominates)
+(defn nnls [xs ys]
+  (let [k (count features)
+        sc (mapv (fn [y] (/ 1.0 (max y 1.0))) ys)
+        xs (mapv (fn [x s] (mapv #(* s %) x)) xs sc)
+        ys (mapv * ys sc)
+        cols (mapv (fn [j] (mapv #(nth % j) xs)) (range k))
+        norm (mapv #(reduce + (map * % %)) cols)]
+    (loop [w (vec (repeat k 0.0)) it 0]
+      (if (= it 4000) w
+          (recur (reduce (fn [w j]
+                           (if (zero? (norm j)) w
+                               (let [r (mapv (fn [x y] (- y (reduce + (map * x w)))) xs ys)
+                                     g (reduce + (map * (cols j) r))]
+                                 (assoc w j (max 0.0 (+ (w j) (/ g (norm j))))))))
+                         w (range k))
+                 (inc it))))))
+
+(defn xs-of [rows] (mapv (fn [r] (mapv #(get (:x r) % 0.0) features)) rows))
+(defn ys-of [rows] (mapv (fn [r] (* 1e6 (max 0.0 (- (:ms r) (:gc r))))) rows))
+(def w (nnls (xs-of fit-rows) (ys-of fit-rows)))
+(def weights (zipmap features w))
+
+(println "weights, ns each (fit to" (count fit-rows) "loops by relative error; collector pauses off):")
+(doseq [f features] (println (format "  %-7s %8.2f" (name f) (get weights f))))
+(defn report [title rows]
+  (println)
+  (println title)
+  (println (format "%9s %9s %9s %6s  %s" "measured" "less gc" "predicted" "error" "form"))
+  (vec (for [[r x y] (map vector rows (xs-of rows) (ys-of rows))]
+         (let [pred (/ (reduce + (map * x w)) 1e6)
+               meas (/ y 1e6)
+               e (if (pos? meas) (* 100 (/ (- pred meas) meas)) 0.0)]
+           (println (format "%9.1f %9.1f %9.1f %5.0f%%  %s" (:ms r) meas pred e (:form r)))
+           e))))
+(def fit-errs (report "THE FIT" fit-rows))
+(def check-errs (report "THE CHECK (forms the fit never saw)" check-rows))
+(println (format "worst error: fit %.0f%%, check %.0f%%" (apply max (map abs fit-errs)) (apply max (map abs check-errs))))
+(when-let [o (:out opts)]
+  (spit o (pr-str {:weights weights :rows (mapv (fn [r] (select-keys r [:form :ms :gc :x])) (concat fit-rows check-rows))}))
+  (println "weights ->" o))

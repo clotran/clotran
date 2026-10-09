@@ -4501,6 +4501,50 @@ scanned once; allocation is O(1) a slot and O(1) a run, a batch's refill
 amortised over the batch; sweeping is linear in the pool. From here on a
 model book is committed with its cost theorem, or not at all.
 
+### 34. Dispatch and the calling convention, timed (decided 2026-10-09)
+
+**Why now, ahead of stage 33's 1c-1e.** The yardstick's account
+(`sample` over twelve runs, bucketed): of its 862 ns an element, 65% is
+the interpreter's dispatch (flat_run's own loop 38%, frames, calls,
+call tables, argument passing), 14% lazy cells and seq operations, 13%
+allocation, 3% the collector, 1% arithmetic. A free allocator would buy
+~130 ns; the dispatch holds ~560. James: make dispatch and the calling
+convention the next stage, and "include timing in your proofs".
+
+**What an element is** (CLOTRAN_STATS, less an empty program): 45 flat
+instructions -- 15 moves, 6 branches, 18 calls (9 direct-linked builtins
+`callw`, 3 builtins `callb`, 6 general, 3 of which open a frame and run a
+Clojure body), 1 recur, 1 lazy -- 8 host seq operations (seq 3, first 2,
+next, rest, cons), 1 lazy cell forced, and 4 objects (3 lazy cells, a
+closure).
+
+**Timing in the proofs.** ACL2 counts steps; time is steps by weights.
+Each operation class carries a weight in ns; a cost theorem bounds WEIGHTED
+work and holds for any weights; `scripts/calibrate` measures the weights on
+the machine (non-negative least squares over designed loops, each adding
+one kind of work, fit by relative error, the collector's pauses taken off)
+and checks them against programs the fit never saw. A weight goes into a
+claim only when it predicts those. CLOTRAN_STATS now counts flat
+instructions by opcode, builtins by id (generic and in line), lazy forces,
+and allocations by kind -- about 1.5% on the yardstick, the price of the
+account.
+
+First fit (2026-10-09): a frame's call and return ~25 + 45 ns, a host seq
+operation ~64, an allocation ~32, a branch ~6, a builtin through callb ~8.
+The fit set within 24%; held out, the yardstick within 18-30%, iterate 27%,
+a hand-written lazy recursion 6%, a cons loop 1% -- but chunked map and
+filter 500-1400% off: their per-chunk interop and `new` are one class here
+and are not one cost. Not yet good enough to state a time; good enough to
+aim. And a finding on the way: `integer?` costs ~196 ns and `even?` ~357
+(pos? ~33), because core.clj's integer? is a chain of instance? checks
+that clotran resolves at run time and clj's compiler inlines.
+
+**Order.** (1) the calibration good to ~15% held out (interop and chunk
+operations their own classes); (2) the calling convention in the model --
+a call's frame, its arguments, its return -- with WEIGHTED cost theorems;
+(3) the cheaper convention generated, aimed at the ~70 ns a frame and the
+callw path; (4) instance? with a constant class answered at link time.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

@@ -714,6 +714,8 @@ module GC
   type(heap_state) :: hstate
 
   integer, public :: gc_allocs = 0
+  ! objects allocated, by kind (CLOTRAN_STATS)
+  integer(8), public :: gc_kind_n(0:63) = 0
   integer, public :: gc_frees = 0
   integer, public :: gc_collections = 0
   ! Objects marked, summed over every collection: the collector's
@@ -1844,6 +1846,7 @@ contains
     logical :: entered, stopped
     type(gc_stack), pointer :: s
 
+    if (kind >= 0 .and. kind <= 63) gc_kind_n(kind) = gc_kind_n(kind) + 1
     if (gc_every > 0 .and. .not. gc_no_collect) then
        allocate(all_roots(size(roots) + size(slots)))
        all_roots(1:size(roots)) = roots

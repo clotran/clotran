@@ -514,6 +514,12 @@ module Eval
   ! and the tree islands the compiled ones run, by kind. Statistics: a
   ! race between threads miscounts, nothing more.
   integer(8), save :: flat_n_ok = 0, flat_n_refused(0:40) = 0, flat_n_eval(0:40) = 0
+  ! flat instructions run, by opcode (CLOTRAN_STATS): the yardstick's
+  ! account weighs each class by its measured cost (PLAN step 34)
+  integer(8), save :: flat_op_n(0:40) = 0
+  ! builtins called, by id: through call_builtin, and answered in line by a
+  ! direct-linked call (flat.inc F_CALLW); lazy cells forced (CLOTRAN_STATS)
+  integer(8), save :: bi_n(0:1023) = 0, bi_fast_n(0:1023) = 0, force_n = 0
   ! a flat instruction: FW integers, the opcode first (flat.inc)
   integer, parameter :: FW = 8
   ! exact rationals (rational.inc): 128-bit intermediates, and the operations
@@ -5119,6 +5125,7 @@ contains
     type(gc_value), intent(in) :: v
     type(gc_value) :: r, args
     integer :: base
+    force_n = force_n + 1
 
     tctx => ctx_self()
     vst => tctx%stk
@@ -8214,6 +8221,7 @@ contains
     character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4
     tctx => ctx_self()
     vst => tctx%stk
+    if (id >= 0 .and. id <= 1023) bi_n(id) = bi_n(id) + 1
     out = gc_nil()
     hit = .false.
     n = gcv_count(args)
