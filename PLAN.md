@@ -4436,6 +4436,21 @@ scripts/fuzz-heap-gen runs three takes, a fill and four pops after the
 sweep, on both sides. Runs, texts and the arena's slab allocator take
 the same shape next.
 
+**Stage 1b, allocation, vectors and texts (2026-10-09).** vec_take and
+str_take were obj_take's text with the names changed, so the model says
+so: heapal.lisp and heapal-proof.lisp are each ONE text over a pool, @
+its letter and % its name (h-@head, hpg-%-take), instantiated for
+objects, vectors and texts by a macro that renames the symbols. Every
+definition and theorem above now holds of all three pools; only the
+sweep's free differs per pool (a finalizer, a run back to the arena, a
+text released), so hpg-free-obj-safe, -vec-safe and -str-safe are
+written out. GC.f90's vec_take and str_take are the generated take,
+fill and pop, as obj_take is, and the vector and text accessors' lengths
+are the pools' sizes. scripts/fuzz-heap-gen allocates in all three pools
+after the sweep; skipping the vector fill or the text fill in its driver
+is caught. The yardstick does not move (~857 ms). Next, the arena: the
+size-class runs (run_take, runs_fill, slab_alloc).
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

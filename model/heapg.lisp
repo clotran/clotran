@@ -82,7 +82,15 @@
   (h-oused :type (signed-byte 64) :initially 0)
   (h-ocap :type (signed-byte 64) :initially 0)
   (h-ob :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
-  (h-nob :type (signed-byte 64) :initially 0))
+  (h-nob :type (signed-byte 64) :initially 0)
+  (h-vused :type (signed-byte 64) :initially 0)
+  (h-vcap :type (signed-byte 64) :initially 0)
+  (h-vb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-nvb :type (signed-byte 64) :initially 0)
+  (h-sused :type (signed-byte 64) :initially 0)
+  (h-scap :type (signed-byte 64) :initially 0)
+  (h-sb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-nsb :type (signed-byte 64) :initially 0))
 
 ; ---- BOUNDS ---------------------------------------------------------------------------
 

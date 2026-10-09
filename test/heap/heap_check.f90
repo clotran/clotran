@@ -16,8 +16,8 @@ module heap_check_m
   integer(int64), allocatable :: okind(:), ofree(:), onext(:), vfree(:), vnext(:), sfree(:), snext(:), aival(:), chead(:)
   integer(int64), allocatable :: ofin(:), srel(:)
   integer(int64) :: ohead = 0, vhead = 0, shead = 0
-  integer(int64) :: oused = 0, ocap = 0, nob = 0
-  integer(int64), allocatable :: ob(:)
+  integer(int64) :: oused = 0, ocap = 0, nob = 0, vused = 0, vcap = 0, nvb = 0, sused = 0, scap = 0, nsb = 0
+  integer(int64), allocatable :: ob(:), vb(:), sb(:)
   logical :: broken = .false.
 contains
   integer(int64) function hp_otag(j)
@@ -234,6 +234,56 @@ contains
   integer(int64) function hp_n_ob()
     hp_n_ob = size(ob, kind=int64)
   end function hp_n_ob
+  integer(int64) function hp_vused()
+    hp_vused = vused
+  end function hp_vused
+  subroutine hp_set_vused(x)
+    integer(int64), intent(in) :: x
+    vused = x
+  end subroutine hp_set_vused
+  integer(int64) function hp_vcap()
+    hp_vcap = vcap
+  end function hp_vcap
+  integer(int64) function hp_nvb()
+    hp_nvb = nvb
+  end function hp_nvb
+  subroutine hp_set_nvb(x)
+    integer(int64), intent(in) :: x
+    nvb = x
+  end subroutine hp_set_nvb
+  integer(int64) function hp_vb(k)
+    integer(int64), intent(in) :: k
+    hp_vb = vb(k)
+  end function hp_vb
+  subroutine hp_set_vb(k, x)
+    integer(int64), intent(in) :: k, x
+    vb(k) = x
+  end subroutine hp_set_vb
+  integer(int64) function hp_sused()
+    hp_sused = sused
+  end function hp_sused
+  subroutine hp_set_sused(x)
+    integer(int64), intent(in) :: x
+    sused = x
+  end subroutine hp_set_sused
+  integer(int64) function hp_scap()
+    hp_scap = scap
+  end function hp_scap
+  integer(int64) function hp_nsb()
+    hp_nsb = nsb
+  end function hp_nsb
+  subroutine hp_set_nsb(x)
+    integer(int64), intent(in) :: x
+    nsb = x
+  end subroutine hp_set_nsb
+  integer(int64) function hp_sb(k)
+    integer(int64), intent(in) :: k
+    hp_sb = sb(k)
+  end function hp_sb
+  subroutine hp_set_sb(k, x)
+    integer(int64), intent(in) :: k, x
+    sb(k) = x
+  end subroutine hp_set_sb
 
   include "heap_gen.inc"
 end module heap_check_m
@@ -276,9 +326,11 @@ program heap_check
   if (na > 0) read(u, *) aival
   read(u, *) chead
   read(u, *) ohead, vhead, shead
-  read(u, *) oused, ocap
-  allocate(ob(0:7))
+  read(u, *) oused, ocap, vused, vcap, sused, scap
+  allocate(ob(0:7), vb(0:7), sb(0:7))
   ob = 0
+  vb = 0
+  sb = 0
   read(u, *) nr
   do i = 1, nr
      read(u, *) t, r
@@ -323,4 +375,32 @@ program heap_check
   write(*, '(a, 4(1x, i0))') 'alloc', nob, oused, ohead, ocap
   write(*, '(a, *(1x, i0))') 'ofree2', ofree
   write(*, '(a, *(1x, i0))') 'omark2', omark
+  do k = 1, 3
+     call hpg_vec_take(hs, tk(k))
+     if (tk(k) > 0 .and. tk(k) < nv) call hpg_vec_use(hs, tk(k))
+  end do
+  call hpg_vec_fill(hs, 6_int64)
+  do k = 1, 4
+     call hpg_vec_pop(hs, pp(k))
+  end do
+  write(*, '(a, 3(1x, i0))') 'vtakes', tk
+  write(*, '(a, 4(1x, i0))') 'vpops', pp
+  write(*, '(a, *(1x, i0))') 'vb', vb
+  write(*, '(a, 4(1x, i0))') 'valloc', nvb, vused, vhead, vcap
+  write(*, '(a, *(1x, i0))') 'vfree2', vfree
+  write(*, '(a, *(1x, i0))') 'vmark2', vmark
+  do k = 1, 3
+     call hpg_str_take(hs, tk(k))
+     if (tk(k) > 0 .and. tk(k) < ns) call hpg_str_use(hs, tk(k))
+  end do
+  call hpg_str_fill(hs, 6_int64)
+  do k = 1, 4
+     call hpg_str_pop(hs, pp(k))
+  end do
+  write(*, '(a, 3(1x, i0))') 'stakes', tk
+  write(*, '(a, 4(1x, i0))') 'spops', pp
+  write(*, '(a, *(1x, i0))') 'sb', sb
+  write(*, '(a, 4(1x, i0))') 'salloc', nsb, sused, shead, scap
+  write(*, '(a, *(1x, i0))') 'sfree2', sfree
+  write(*, '(a, *(1x, i0))') 'smark2', smark
 end program heap_check

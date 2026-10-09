@@ -70,8 +70,8 @@
      :vfree (flags nv) :vnext (vec (repeatedly nv #(rnd nv))) :sfree (flags ns) :snext (vec (repeatedly ns #(rnd ns)))
      :aival (vec (repeatedly na #(rnd 100))) :chead (vec (repeatedly 31 #(rnd na)))
      :heads [(rnd no) (rnd nv) (rnd ns)]
-     ;; the pool's used end and its size, both inside the arrays
-     :used (let [u (rnd no)] [u (+ u (rnd (- no u)))])}))
+     ;; each pool's used end and its size, both inside the arrays
+     :used (vec (mapcat (fn [k] (let [u (rnd k)] [u (+ u (rnd (- k u)))])) [no nv ns]))}))
 
 (def cases (vec (repeatedly n gen-case)))
 
@@ -79,7 +79,9 @@
 (def arrays-in [:okind :ofree :onext :vfree :vnext :sfree :snext :aival :chead])
 (def out-names ["omark" "vmark" "smark" "regs" "okind" "ofree" "onext" "ofin" "voff" "vlen" "vfree" "vnext"
                 "atag" "aref" "aival" "chead" "sfree" "snext" "srel" "sweep"
-                "takes" "pops" "ob" "alloc" "ofree2" "omark2"])
+                "takes" "pops" "ob" "alloc" "ofree2" "omark2"
+                "vtakes" "vpops" "vb" "valloc" "vfree2" "vmark2"
+                "stakes" "spops" "sb" "salloc" "sfree2" "smark2"])
 
 ;; ---- ACL2 -------------------------------------------------------------------------
 
@@ -89,7 +91,7 @@
 (def acl2-arrays
   (array-map "otag" 0 "oref" 1 "omark" 2 "voff" 3 "vlen" 4 "vmark" 5 "atag" 6 "aref" 7 "smark" 8
              "okind" 9 "ofree" 10 "onext" 11 "vfree" 12 "vnext" 13 "sfree" 14 "snext" 15 "aival" 16 "chead" 17
-             "ofin" 18 "srel" 19 "ob" 20))
+             "ofin" 18 "srel" 19 "ob" 20 "vb" 21 "sb" 22))
 
 (def driver
   (str "(include-book \"heapal\")\n"
@@ -117,12 +119,7 @@
        " (t 0)) hpg))\n"
        "(defun push-roots (rs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
        "  (if (endp rs) hpg (let ((hpg (hpg-push (caar rs) (cadar rs) hpg))) (push-roots (cdr rs) hpg))))\n"
-       "(defun takes (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n"
-       "  (if (zp k) (mv (reverse acc) hpg)\n"
-       "    (mv-let (i hpg) (hpg-obj-take hpg)\n"
-       "      (let ((hpg (if (and (< 0 i) (< i (h-ofree-length hpg))) (hpg-obj-use i hpg) hpg))) (takes (1- k) (cons i acc) hpg)))))\n"
-       "(defun pops (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n"
-       "  (if (zp k) (mv (reverse acc) hpg) (mv-let (i hpg) (hpg-obj-pop hpg) (pops (1- k) (cons i acc) hpg))))\n"
+       "(defun takes-obj (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n  (if (zp k) (mv (reverse acc) hpg)\n    (mv-let (i hpg) (hpg-obj-take hpg)\n      (let ((hpg (if (and (< 0 i) (< i (h-ofree-length hpg))) (hpg-obj-use i hpg) hpg))) (takes-obj (1- k) (cons i acc) hpg)))))\n(defun pops-obj (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n  (if (zp k) (mv (reverse acc) hpg) (mv-let (i hpg) (hpg-obj-pop hpg) (pops-obj (1- k) (cons i acc) hpg))))\n(defun alloc-init (us hpg) (declare (xargs :stobjs hpg :mode :program))\n  (let* ((hpg (update-h-oused (nth 0 us) hpg)) (hpg (update-h-ocap (nth 1 us) hpg))\n         (hpg (update-h-vused (nth 2 us) hpg)) (hpg (update-h-vcap (nth 3 us) hpg))\n         (hpg (update-h-sused (nth 4 us) hpg)) (hpg (update-h-scap (nth 5 us) hpg))\n         (hpg (put 20 (make-list 8 :initial-element 0) hpg)) (hpg (put 21 (make-list 8 :initial-element 0) hpg))\n         (hpg (put 22 (make-list 8 :initial-element 0) hpg))\n         (hpg (update-h-nob 0 hpg)) (hpg (update-h-nvb 0 hpg)))\n    (update-h-nsb 0 hpg)))\n(defun alloc-obj (hpg) (declare (xargs :stobjs hpg :mode :program))\n  (progn$\n    (mv-let (tk hpg) (takes-obj 3 nil hpg)\n      (let ((hpg (hpg-obj-fill 6 hpg)))\n        (mv-let (pp hpg) (pops-obj 4 nil hpg)\n          (mv (list tk pp (get-all 20 hpg) (list (h-nob hpg) (h-oused hpg) (h-ohead hpg) (h-ocap hpg))\n                    (get-all 10 hpg) (get-all 2 hpg))\n              hpg))))))\n(defun takes-vec (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n  (if (zp k) (mv (reverse acc) hpg)\n    (mv-let (i hpg) (hpg-vec-take hpg)\n      (let ((hpg (if (and (< 0 i) (< i (h-vfree-length hpg))) (hpg-vec-use i hpg) hpg))) (takes-vec (1- k) (cons i acc) hpg)))))\n(defun pops-vec (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n  (if (zp k) (mv (reverse acc) hpg) (mv-let (i hpg) (hpg-vec-pop hpg) (pops-vec (1- k) (cons i acc) hpg))))\n(defun alloc-vec (hpg) (declare (xargs :stobjs hpg :mode :program))\n  (progn$\n    (mv-let (tk hpg) (takes-vec 3 nil hpg)\n      (let ((hpg (hpg-vec-fill 6 hpg)))\n        (mv-let (pp hpg) (pops-vec 4 nil hpg)\n          (mv (list tk pp (get-all 21 hpg) (list (h-nvb hpg) (h-vused hpg) (h-vhead hpg) (h-vcap hpg))\n                    (get-all 12 hpg) (get-all 5 hpg))\n              hpg))))))\n(defun takes-str (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n  (if (zp k) (mv (reverse acc) hpg)\n    (mv-let (i hpg) (hpg-str-take hpg)\n      (let ((hpg (if (and (< 0 i) (< i (h-sfree-length hpg))) (hpg-str-use i hpg) hpg))) (takes-str (1- k) (cons i acc) hpg)))))\n(defun pops-str (k acc hpg) (declare (xargs :stobjs hpg :mode :program))\n  (if (zp k) (mv (reverse acc) hpg) (mv-let (i hpg) (hpg-str-pop hpg) (pops-str (1- k) (cons i acc) hpg))))\n(defun alloc-str (hpg) (declare (xargs :stobjs hpg :mode :program))\n  (progn$\n    (mv-let (tk hpg) (takes-str 3 nil hpg)\n      (let ((hpg (hpg-str-fill 6 hpg)))\n        (mv-let (pp hpg) (pops-str 4 nil hpg)\n          (mv (list tk pp (get-all 22 hpg) (list (h-nsb hpg) (h-sused hpg) (h-shead hpg) (h-scap hpg))\n                    (get-all 14 hpg) (get-all 8 hpg))\n              hpg))))))\n"
        "(defun run-case (k arrs cap hd us roots hpg) (declare (xargs :stobjs hpg :mode :program))\n"
        "  (let* ((hpg (put 0 (nth 0 arrs) hpg)) (hpg (put 1 (nth 1 arrs) hpg)) (hpg (put 2 (nth 2 arrs) hpg))\n"
        "         (hpg (put 3 (nth 3 arrs) hpg)) (hpg (put 4 (nth 4 arrs) hpg)) (hpg (put 5 (nth 5 arrs) hpg))\n"
@@ -145,16 +142,13 @@
        "                   (get-all 9 hpg) (get-all 10 hpg) (get-all 11 hpg) (get-all 18 hpg) (get-all 3 hpg) (get-all 4 hpg) (get-all 12 hpg) (get-all 13 hpg)\n"
        "                   (get-all 6 hpg) (get-all 7 hpg) (get-all 16 hpg) (get-all 17 hpg) (get-all 14 hpg) (get-all 15 hpg) (get-all 19 hpg)\n"
        "                   (list (h-ohead hpg) (h-vhead hpg) (h-shead hpg) (h-nswo hpg) (h-nswv hpg) (h-nsws hpg) (h-afree hpg))))\n"
-       ;; allocation: three takes, each used; a fill; four pops
-       "         (hpg (update-h-oused (nth 0 us) hpg)) (hpg (update-h-ocap (nth 1 us) hpg))\n"
-       "         (hpg (put 20 (make-list 8 :initial-element 0) hpg)) (hpg (update-h-nob 0 hpg)))\n"
-       "    (mv-let (tk hpg) (takes 3 nil hpg)\n"
-       "      (let ((hpg (hpg-obj-fill 6 hpg)))\n"
-       "        (mv-let (pp hpg) (pops 4 nil hpg)\n"
-       "          (prog2$ (cw \"CASE ~x0 ~x1~%\" k\n"
-       "                      (append mk (list tk pp (get-all 20 hpg) (list (h-nob hpg) (h-oused hpg) (h-ohead hpg) (h-ocap hpg))\n"
-       "                                       (get-all 10 hpg) (get-all 2 hpg))))\n"
-       "                  hpg))))))\n"
+       "         )\n"
+       ;; allocation in each pool: three takes, each used; a fill; four pops
+       "    (let ((hpg (alloc-init us hpg)))\n"
+       "    (mv-let (ro hpg) (alloc-obj hpg)\n"
+       "      (mv-let (rv hpg) (alloc-vec hpg)\n"
+       "        (mv-let (rs hpg) (alloc-str hpg)\n"
+       "          (prog2$ (cw \"CASE ~x0 ~x1~%\" k (append mk ro rv rs)) hpg)))))))\n"
        (str/join (map-indexed (fn [k c]
                                 (str "(run-case " k " (list "
                                      (str/join " " (map #(l (% c)) [:otag :oref :omark :voff :vlen :vmark :atag :aref :smark

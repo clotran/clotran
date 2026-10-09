@@ -2300,13 +2300,10 @@ contains
     s%d_obj_live = 0; s%d_vec_live = 0; s%d_str_live = 0; s%d_arena_live = 0; s%d_allocs = 0
   end subroutine clear_batches
 
-  ! Under the heap lock, a slot for the caller: with batching, this
-  ! thread's batch is filled from the free list and the unused end of
-  ! the pool first -- each slot flagged free while it waits -- and the
-  ! slot comes from it.
-  ! A slot for the caller (generated: model/heapal.lisp; heapal-proof's
+  ! Under the heap lock, a slot for the caller -- obj_take, vec_take and
+  ! str_take alike (generated: model/heapal.lisp; heapal-proof's
   ! theorems: never one in use, on the free list or in a batch). With
-  ! batching, this thread's own dead first (pend_refill_obj), then its
+  ! batching, this thread's own dead first (pend_refill_*), then its
   ! batch filled from the free list and the pool's unused end, and the
   ! batch's last taken; else the free list's head or the unused end.
   integer function obj_take()
@@ -2329,70 +2326,38 @@ contains
 
   integer function vec_take()
     type(gc_stack), pointer :: s
+    integer(int64) :: r
     if (batching()) then
        s => my_stack()
        call pend_refill_vec(s)
-       do while (s%n_vec_b < ALLOC_BATCH)
-          if (vec_free_head /= 0) then
-             s%n_vec_b = s%n_vec_b + 1
-             s%vec_b(s%n_vec_b) = vec_free_head
-             vec_free_head = vec_free_next(vec_free_head)
-          else if (vec_used < size(vec_pool)) then
-             vec_used = vec_used + 1
-             vec_free(vec_used) = .true.
-             s%n_vec_b = s%n_vec_b + 1
-             s%vec_b(s%n_vec_b) = vec_used
-          else
-             exit
-          end if
-       end do
-       if (s%n_vec_b > 0) then
-          vec_take = s%vec_b(s%n_vec_b)
-          s%n_vec_b = s%n_vec_b - 1
+       call hpg_vec_fill(hstate, int(ALLOC_BATCH, int64))
+       call hpg_vec_pop(hstate, r)
+       if (r > 0) then
+          vec_take = int(r)
           return
        end if
     end if
-    if (vec_free_head /= 0) then
-       vec_take = vec_free_head
-       vec_free_head = vec_free_next(vec_take)
-    else
-       vec_used = vec_used + 1
-       vec_take = vec_used
-    end if
+    call hpg_vec_take(hstate, r)
+    if (r <= 0) error stop "clotran: vec_take with the pool full"
+    vec_take = int(r)
   end function vec_take
 
   integer function str_take()
     type(gc_stack), pointer :: s
+    integer(int64) :: r
     if (batching()) then
        s => my_stack()
        call pend_refill_str(s)
-       do while (s%n_str_b < ALLOC_BATCH)
-          if (str_free_head /= 0) then
-             s%n_str_b = s%n_str_b + 1
-             s%str_b(s%n_str_b) = str_free_head
-             str_free_head = str_free_next(str_free_head)
-          else if (str_used < size(str_pool)) then
-             str_used = str_used + 1
-             str_free(str_used) = .true.
-             s%n_str_b = s%n_str_b + 1
-             s%str_b(s%n_str_b) = str_used
-          else
-             exit
-          end if
-       end do
-       if (s%n_str_b > 0) then
-          str_take = s%str_b(s%n_str_b)
-          s%n_str_b = s%n_str_b - 1
+       call hpg_str_fill(hstate, int(ALLOC_BATCH, int64))
+       call hpg_str_pop(hstate, r)
+       if (r > 0) then
+          str_take = int(r)
           return
        end if
     end if
-    if (str_free_head /= 0) then
-       str_take = str_free_head
-       str_free_head = str_free_next(str_take)
-    else
-       str_used = str_used + 1
-       str_take = str_used
-    end if
+    call hpg_str_take(hstate, r)
+    if (r <= 0) error stop "clotran: str_take with the pool full"
+    str_take = int(r)
   end function str_take
 
   ! Under the heap lock: this thread's runs of class c topped up from the
@@ -4394,7 +4359,7 @@ contains
     vec_mark(i) = x /= 0
   end subroutine hp_set_vmark
   integer(int64) function hp_n_vec()
-    hp_n_vec = int(vec_used, int64) + 1
+    hp_n_vec = size(vec_pool, kind=int64) + 1
   end function hp_n_vec
   integer(int64) function hp_atag(j)
     integer(int64), intent(in) :: j
@@ -4416,7 +4381,7 @@ contains
     str_mark(i) = x /= 0
   end subroutine hp_set_smark
   integer(int64) function hp_n_str()
-    hp_n_str = int(str_used, int64) + 1
+    hp_n_str = size(str_pool, kind=int64) + 1
   end function hp_n_str
 
   ! the sweep's view (stage 1b)
@@ -4580,6 +4545,72 @@ contains
   integer(int64) function hp_n_ob()
     hp_n_ob = ALLOC_BATCH + 1
   end function hp_n_ob
+  integer(int64) function hp_vused()
+    hp_vused = vec_used
+  end function hp_vused
+  subroutine hp_set_vused(x)
+    integer(int64), intent(in) :: x
+    vec_used = int(x)
+  end subroutine hp_set_vused
+  integer(int64) function hp_vcap()
+    hp_vcap = size(vec_pool, kind=int64)
+  end function hp_vcap
+  integer(int64) function hp_nvb()
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_nvb = s%n_vec_b
+  end function hp_nvb
+  subroutine hp_set_nvb(x)
+    integer(int64), intent(in) :: x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%n_vec_b = int(x)
+  end subroutine hp_set_nvb
+  integer(int64) function hp_vb(k)
+    integer(int64), intent(in) :: k
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_vb = s%vec_b(k)
+  end function hp_vb
+  subroutine hp_set_vb(k, x)
+    integer(int64), intent(in) :: k, x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%vec_b(k) = int(x)
+  end subroutine hp_set_vb
+  integer(int64) function hp_sused()
+    hp_sused = str_used
+  end function hp_sused
+  subroutine hp_set_sused(x)
+    integer(int64), intent(in) :: x
+    str_used = int(x)
+  end subroutine hp_set_sused
+  integer(int64) function hp_scap()
+    hp_scap = size(str_pool, kind=int64)
+  end function hp_scap
+  integer(int64) function hp_nsb()
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_nsb = s%n_str_b
+  end function hp_nsb
+  subroutine hp_set_nsb(x)
+    integer(int64), intent(in) :: x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%n_str_b = int(x)
+  end subroutine hp_set_nsb
+  integer(int64) function hp_sb(k)
+    integer(int64), intent(in) :: k
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_sb = s%str_b(k)
+  end function hp_sb
+  subroutine hp_set_sb(k, x)
+    integer(int64), intent(in) :: k, x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%str_b(k) = int(x)
+  end subroutine hp_set_sb
 
   ! a text's storage released: the one place it belongs, run once per slot
   subroutine hp_release_str(i, x)
