@@ -243,6 +243,8 @@
  "NativeArray.f90/reg" {:class :shared, :note "a registry: additions under a lock"}
  "NativeArray.f90/reg_used" {:class :shared, :note "a registry: additions under a lock"}
  "PersistentList.f90/empty_root" {:class :fixed, :note "the empty list, made once"}
+ "PersistentList.f90/empty_val" {:class :fixed, :note "the empty list read lock-free: filled at its first use, during core's load before a second thread exists, and again only after gc_init or an image, both single-threaded"}
+ "PersistentList.f90/empty_for" {:class :fixed, :note "the root handle empty_val was read through, which a new heap or an image no longer matches"}
  "Regex.f90/next_slot" {:class :shared, :note "a registry: additions under a lock"}
  "Regex.f90/registry" {:class :shared, :note "a registry: additions under a lock"}
  "Regex.f90/subject" {:class :shared, :note "per handle; a handle is one Matcher, so the slot table is what is shared: additions under a lock"}

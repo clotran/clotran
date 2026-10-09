@@ -22,6 +22,14 @@ module PersistentList
   ! Index of the global-root slot holding the empty-list singleton.
   ! Zero until first use; see gcl_empty.
   type(gc_root), save :: empty_root
+  ! THE SINGLETON ITSELF, read with no lock: the root table is read under
+  ! the state lock, and every rest that reaches the end of a list read it
+  ! -- half of the time a walk of a realised seq took. Kept with the handle
+  ! it was read through, so a new heap (gc_init) or an image misses it and
+  ! reads the table again. Filled on the first use, which is core's load,
+  ! before a second thread exists.
+  type(gc_value), save :: empty_val
+  type(gc_root), save :: empty_for
 
   public :: gcl_empty, gcl_cons, gcl_first, gcl_rest, gcl_count, gcl_is
   public :: gcl_image_write, gcl_image_read
@@ -35,6 +43,7 @@ contains
   subroutine gcl_image_read(u)
     integer, intent(in) :: u
     read(u) empty_root
+    empty_for = gc_root()
   end subroutine gcl_image_read
 
 
@@ -47,9 +56,19 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     type(gc_value) :: none(0)
+    if (empty_for%idx == empty_root%idx .and. empty_for%gen == empty_root%gen) then
+       if (gc_root_live(empty_root)) then
+          v = empty_val
+          if (gc_kind(v) == OBJ_CONS) return
+       end if
+    end if
     if (gc_root_live(empty_root)) then
        v = gc_root_get(empty_root)
-       if (gc_kind(v) == OBJ_CONS) return
+       if (gc_kind(v) == OBJ_CONS) then
+          empty_val = v
+          empty_for = empty_root
+          return
+       end if
     end if
     v = gc_obj(OBJ_CONS, none, roots)
     call gc_set_i1(v, 0)
