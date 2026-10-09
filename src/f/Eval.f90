@@ -63,7 +63,7 @@ module Eval
   use DynLoad
   use Socket
   use Threads
-  use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword
+  use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword, vm_prim_n
   use vm_gen, only: vmg_xstep, vmg_fuse
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
@@ -492,6 +492,8 @@ module Eval
   ! CLOTRAN_VM_TRACE=1: each arity's core language and each run, on stderr
   logical, save :: vm_trace = .false.
   integer(8), save :: vm_n_ok = 0, vm_n_refused = 0, vm_refused_by(0:40) = 0
+  ! VM steps run, by opcode (CLOTRAN_STATS; the account, PLAN step 34)
+  integer(8), save :: vm_op_n(0:63) = 0
   ! flat.inc's compiler state, one per arity being compiled
   type :: flat_buf
      integer, allocatable :: code(:)

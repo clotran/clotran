@@ -1041,6 +1041,8 @@
        if (st%status /= 0) exit
        if (st%code(4 * st%pc) == 11 .and. st%ctop == 0) exit
        vst%vm_ctl_top = int(ct0 + st%ctop + 1)
+       if (st%code(4 * st%pc) >= 0 .and. st%code(4 * st%pc) <= 63) &
+            vm_op_n(st%code(4 * st%pc)) = vm_op_n(st%code(4 * st%pc)) + 1
        call vmg_xstep(st)
        if (st%sp > hi) hi = int(st%sp)
        steps = steps + 1
@@ -1174,4 +1176,6 @@
     if (vm_mode /= 1) return
     write(0, '(a, i0, a, i0, a)') 'vm: ', vm_n_ok, ' fns compiled, ', vm_n_refused, ' refused'
     write(0, '(a, *(1x, i0, ":", i0))') 'vm: refused by node kind', (k, vm_refused_by(k), k = 0, 40)
+    write(0, '(a, *(1x, i0, ":", i0))') 'vm: steps by opcode', (k, vm_op_n(k), k = 0, 63)
+    write(0, '(a, 7(1x, i0))') 'vm: prims arg arity deref callw invoke node other', vm_prim_n
   end subroutine vm_stats_print

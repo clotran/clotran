@@ -109,6 +109,9 @@ module vm_runtime
   type(gc_root) :: clo0_root(0:NCLO0 - 1)
   type(value) :: clo0(0:NCLO0 - 1)
   logical :: heads_made = .false.
+  ! prims called, by kind (CLOTRAN_STATS): arg, arity, deref, callw,
+  ! invoke, a node of the evaluator's, and any other value called
+  integer(8), public :: vm_prim_n(1:7) = 0
 
 contains
 
@@ -527,6 +530,7 @@ contains
     vst => gc_my_stack()
     r = gc_nil()
     if (gc_kind(op) == OBJ_AST) then
+       vm_prim_n(6) = vm_prim_n(6) + 1
        call vmrt_node(op, argbase, n, r, ok)
        if (.not. ok) r = vmrt_throw_of(r)
        return
@@ -535,18 +539,22 @@ contains
     ! rt_keyword from its cache: the same object, so identity is the test
     if (op%tag == GCT_KEY) then
        if (op%ref == kw_arg%ref) then
+          vm_prim_n(1) = vm_prim_n(1) + 1
           a = vs_get(vst, argbase + 1)
           if (n == 1 .and. a%tag == GCT_INT) r = vst%vstack(vst%vm_args_rb + int(a%ival) + 1)
           return
        else if (op%ref == kw_arity%ref) then
+          vm_prim_n(2) = vm_prim_n(2) + 1
           call vmrt_arity(op, argbase, n, r, ok)
           if (.not. ok) r = vmrt_throw_of(r)
           return
        else if (op%ref == kw_deref%ref) then
+          vm_prim_n(3) = vm_prim_n(3) + 1
           if (n == 1) r = vmrt_deref(vs_get(vst, argbase + 1))
           return
        else if (op%ref == kw_callw%ref) then
           ! (callw var args ..): the var's value called on the args
+          vm_prim_n(4) = vm_prim_n(4) + 1
           if (n >= 1) then
              call vs_set(vst, argbase + 1, vmrt_deref(vs_get(vst, argbase + 1)))
              call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
@@ -554,6 +562,7 @@ contains
           end if
           return
        else if (op%ref == kw_invoke%ref .or. op%ref == kw_invoke_m%ref) then
+          vm_prim_n(5) = vm_prim_n(5) + 1
           if (n >= 1) then
              call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
              if (.not. ok) r = vmrt_throw_of(r)
@@ -561,6 +570,7 @@ contains
           return
        end if
     end if
+    vm_prim_n(7) = vm_prim_n(7) + 1
     call vmrt_call(op, argbase, n, r, ok)
     if (.not. ok) r = vmrt_throw_of(r)
   end function dispatch

@@ -152,6 +152,8 @@
  "Eval.f90/vm_trace" {:class :fixed, :note "CLOTRAN_VM_TRACE, read once with CLOTRAN_VM"}
  "Eval.f90/vm_n_ok" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/vm_refused_by" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "Eval.f90/vm_op_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
+ "VmRuntime.f90/vm_prim_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "Eval.f90/vm_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "VmRuntime.f90/kw_name" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}
  "VmRuntime.f90/kw_root" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}

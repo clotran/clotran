@@ -4552,11 +4552,32 @@ through callb ~7, moves and branches ~0 beside them. Lazy forces are not
 measured: the fit's forcing goes through flat_force in line, which
 force_n does not see.
 
-**Order.** (1) the calibration good to ~15% held out (interop and chunk
-operations their own classes); (2) the calling convention in the model --
-a call's frame, its arguments, its return -- with WEIGHTED cost theorems;
-(3) the cheaper convention generated, aimed at the ~70 ns a frame and the
-callw path; (4) instance? with a constant class answered at link time.
+**In the VM, not flat (James, 2026-10-09).** Asked whether the cheaper
+convention goes into the hand-written flat executor or the modelled VM:
+"Put the convention into the VM model, obviously." Flat is what the VM
+must beat; the VM is where the model leads and the JIT follows.
+
+**The VM's account (2026-10-09).** CLOTRAN_STATS now counts the VM's steps
+by opcode and its prims by kind. An element under CLOTRAN_VM=1, 1660 ns:
+56 steps (15 load, 10 push, 12 prim, 4 jmpf, 4 ret, 3 callv, 3 capt, 2
+slide, 2 jmp, 1 recur), 14 prims (7 callw, 4 values called through the
+evaluator's apply, 2 deref, 1 evaluator node), 2 lazy cells forced by a
+nested run. Sampled and bucketed: THE BOUNDARY 40% (~658 ns: vm_run's
+entries, gce_apply_slots, dispatch's keyword compares, the call hooks),
+the steps 22% (~356, ~6.4 ns a step), seq operations and forcing 15%,
+allocation 10%, retention and the collector 10% (grow_obj and marking:
+the VM keeps the seq's head alive where flat does not, 2.9 M objects
+marked against 0.6 M). The generated step chooses its instruction by
+SIXTEEN NESTED IFs -- ACL2's case translated literally.
+
+**Order.** (1) the translator emits a case on an integer as `select case`,
+a jump table: no model change, the proofs as they are; (2) the prim
+convention in the model -- prims numbered when compiled and dispatched by
+table, the seq operations on a realised cell answered without leaving the
+machine -- with WEIGHTED cost theorems, generated; (3) entering the
+machine (a nested run, a call from the runtime) without setup; (4) what
+the VM keeps alive, found, and a dead slot proved cleared; (5) instance?
+with a constant class answered at link time.
 
 ### 29. Fuzz everything (begun 2026-10-02)
 
