@@ -3808,6 +3808,31 @@ the runtime's calling convention: arguments copied onto the value stack
 and dispatched through keyword compares and a procedure pointer, about
 25 ns, which flat's executor does in place.
 
+**Forcing a lazy cell inside the machine, tried and reverted
+(2026-10-09).** Under the VM each element's cell is forced by a nested
+run (the runtime's next, the evaluator's apply, a fresh vm_run), ~300
+ns. The protocol tried needed no change to vmx2 or its proofs: the
+translator wrapped first/next/rest/seq as `(:let x (:try (:prim
+callwf f x) (:callv H H t f x)))`, the runtime answered a pending cell
+whose thunk the VM compiled by claiming it and THROWING a request, and
+H, a fixed function of the program, called the thunk on the machine's
+own stack under a try that gave the cell back on a throw, settled it
+and did the op again. It agreed with clj, and it was slower: forcing an
+empty thunk 300 -> 600 ns, the yardstick 1.6 -> 2.0-2.5 s. A force is
+~20 VM steps and 6 prims at ~8 and ~25 ns each, more than the nested
+run, and every seq op paid a let and a try besides. Any protocol that
+moves runtime work into VM code loses until a VM step and a prim cost
+what a native instruction and a direct call do -- the JIT's stage 2.
+In flat mode forcing already runs in the loop (flat_force), so this
+was never the default mode's cost.
+
+Also measured that day, for the allocator (alloc.lisp's moving nursery
+or a non-moving one): the yardstick's collections are ~2% of it and
+allocation ~5-7%, so neither design moves it more than ~7%; it is
+retained data that gains -- walking a kept 10^6-cell lazy seq is 87 ns
+a step today, 57 laid out by bumping, 27 compacted -- so the moving
+design stands for that.
+
 
 **Threads, later** (after the allocator). Their logic -- the
 stop-all-threads safepoint handshake, agent queues, the STM's retries
