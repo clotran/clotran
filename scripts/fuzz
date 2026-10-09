@@ -245,7 +245,9 @@
         ;; interop on strings, as Clojure writes it
         [1 (g/let [st (lazy #(g-str env (dec d)))] (list '.length st))]
         [1 (g/let [st (lazy #(g-str env (dec d)))] (list '.indexOf st "a"))]
-        [1 (g/let [x (i)] (list 'clotran.host.math/abs x))]]))))
+        ;; a long, so clj picks the long overload when it compiles; given a
+        ;; boxed long its reflection calls abs(int) and truncates (DEVIATIONS 77)
+        [1 (g/let [x (i)] (list 'clotran.host.math/abs (list 'long x)))]]))))
 
 (defn g-seq [env d]
   (if (<= d 0)

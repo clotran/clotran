@@ -2167,3 +2167,19 @@ doubles.
 **Removal**: give the compiled mode's `^double` arithmetic its own
 `min`/`max` that orders signed zeros, if a program is found that
 relies on the difference.
+
+## 77. The host's abs of a long is the long's, reflection or not
+
+In clj, `(Math/abs x)` with x a boxed long the compiler cannot type is
+resolved by reflection at run time, and the reflector accepts a Long for
+an `int` parameter as readily as for a `long` one: it calls `abs(int)`,
+narrowing first. `(let [x (identity -4611686018427387904)] (Math/abs x))`
+answers 0 -- the low 32 bits -- where `(Math/abs (long x))`, typed when it
+compiles, answers 4611686018427387904. clotran's `clotran.host.math/abs`
+has one integer overload and answers the latter either way, as Clojure's
+own `abs` does on both. Found by `scripts/fuzz`; its host `abs` is now
+given a `(long ...)`, so clj compiles the long overload and the check
+tests what abs means rather than which overload reflection picks.
+ClojureScript has no overloads to pick between.
+
+**Removal**: none intended -- it would mean narrowing a long on purpose.
