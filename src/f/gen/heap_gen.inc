@@ -22,38 +22,29 @@
   pure function hpg_text_tag(tag_) result(r)
     integer(int64), value :: tag_
     logical :: r
-    if ((tag_ == 5_int64)) then
+    select case (tag_)
+    case (5_int64)
       r = (tag_ == 5_int64)
       return
-    else
-      if ((tag_ == 6_int64)) then
-        r = (tag_ == 6_int64)
-        return
-      else
-        if ((tag_ == 7_int64)) then
-          r = (tag_ == 7_int64)
-          return
-        else
-          if ((tag_ == 11_int64)) then
-            r = (tag_ == 11_int64)
-            return
-          else
-            if ((tag_ == 12_int64)) then
-              r = (tag_ == 12_int64)
-              return
-            else
-              if ((tag_ == 13_int64)) then
-                r = (tag_ == 13_int64)
-                return
-              else
-                r = (tag_ == 15_int64)
-                return
-              end if
-            end if
-          end if
-        end if
-      end if
-    end if
+    case (6_int64)
+      r = (tag_ == 6_int64)
+      return
+    case (7_int64)
+      r = (tag_ == 7_int64)
+      return
+    case (11_int64)
+      r = (tag_ == 11_int64)
+      return
+    case (12_int64)
+      r = (tag_ == 12_int64)
+      return
+    case (13_int64)
+      r = (tag_ == 13_int64)
+      return
+    case default
+      r = (tag_ == 15_int64)
+      return
+    end select
   end function hpg_text_tag
 
   subroutine hpg_spush(hs, tag_, ref_)

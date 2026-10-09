@@ -523,10 +523,18 @@
        head = gcv_nth(kids, 0)
        call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
        if (c%ok) then
-          if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST .and. &
-               gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) then
-             ! a builtin: the runtime's own operation, (:prim f args ..)
-             call vs_set(vst, base + 4, gc_slot(head, 2))
+          if ((gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST .and. &
+               gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) .or. vm_linked_builtin(head, nk - 1)) then
+             ! a builtin: the runtime's own operation, (:prim f args ..) --
+             ! written as one, or the builtin a DIRECT-LINKED Var's fn only
+             ! wraps at this arity: the fn was fixed when the site was
+             ! analysed (DEVIATIONS 55), so the builtin is too, and the
+             ! call needs no deref and no look-up of the wrapper each time
+             if (gc_i1(head) == N_CONST) then
+                call vs_set(vst, base + 4, gc_slot(head, 2))
+             else
+                call vs_set(vst, base + 4, wrapper_of(strip_meta(gc_slot(head, 3)), nk - 1))
+             end if
              x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
              call vs_set(vst, base + 3, x)
              x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
@@ -592,6 +600,18 @@
     if (gc_kind(wb) /= OBJ_BUILTIN) return
     vm_wraps = gc_i1(wb) /= B_RTFN .and. gc_i1(wb) /= B_UUIDFN
   end function vm_wraps
+
+  ! a DIRECT-LINKED Var node whose bound fn only wraps a builtin at n
+  ! arguments: the site's builtin is fixed now, as its fn is
+  logical function vm_linked_builtin(nd, n)
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: n
+    vm_linked_builtin = .false.
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) /= N_VAR) return
+    if (.not. vm_wraps(nd, n)) return
+    vm_linked_builtin = gc_kind(vm_var_ref(nd)) == OBJ_AST
+  end function vm_linked_builtin
 
   ! a slot read: a local, a capture (:capt i), or the fn itself
   function vm_slot_ref(c, s, roots) result(e)

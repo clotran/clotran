@@ -334,26 +334,23 @@ contains
     integer(int64) :: var_1
     integer(int64) :: var_2
     integer(int64) :: var_3
-    if ((n_ == 1_int64)) then
+    select case (n_)
+    case (1_int64)
       r = rt_prim1(op_, vmg_sreg(st, a_))
       return
-    else
-      if ((n_ == 2_int64)) then
-        var_1 = (1_int64 + a_)
-        r = rt_prim2(op_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
-        return
-      else
-        if ((n_ == 3_int64)) then
-          var_2 = (1_int64 + a_)
-          var_3 = (2_int64 + a_)
-          r = rt_prim3(op_, vmg_sreg(st, a_), vmg_sreg(st, var_2), vmg_sreg(st, var_3))
-          return
-        else
-          r = rt_prim(op_, rt_list_from(st, a_, n_))
-          return
-        end if
-      end if
-    end if
+    case (2_int64)
+      var_1 = (1_int64 + a_)
+      r = rt_prim2(op_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
+      return
+    case (3_int64)
+      var_2 = (1_int64 + a_)
+      var_3 = (2_int64 + a_)
+      r = rt_prim3(op_, vmg_sreg(st, a_), vmg_sreg(st, var_2), vmg_sreg(st, var_3))
+      return
+    case default
+      r = rt_prim(op_, rt_list_from(st, a_, n_))
+      return
+    end select
   end function vmg_prim_call
 
   function vmg_invoke_call(st, c_, a_, m_) result(r)
@@ -363,24 +360,21 @@ contains
     integer(int64), value :: m_
     type(value) :: r
     integer(int64) :: var_1
-    if ((m_ == 0_int64)) then
+    select case (m_)
+    case (0_int64)
       r = rt_prim1(rt_keyword("invoke"), c_)
       return
-    else
-      if ((m_ == 1_int64)) then
-        r = rt_prim2(rt_keyword("invoke"), c_, vmg_sreg(st, a_))
-        return
-      else
-        if ((m_ == 2_int64)) then
-          var_1 = (1_int64 + a_)
-          r = rt_prim3(rt_keyword("invoke"), c_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
-          return
-        else
-          r = rt_prim(rt_keyword("invoke"), rt_cons(c_, rt_list_from(st, a_, m_)))
-          return
-        end if
-      end if
-    end if
+    case (1_int64)
+      r = rt_prim2(rt_keyword("invoke"), c_, vmg_sreg(st, a_))
+      return
+    case (2_int64)
+      var_1 = (1_int64 + a_)
+      r = rt_prim3(rt_keyword("invoke"), c_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
+      return
+    case default
+      r = rt_prim(rt_keyword("invoke"), rt_cons(c_, rt_list_from(st, a_, m_)))
+      return
+    end select
   end function vmg_invoke_call
 
   pure function vmg_w(st, pc_, k_) result(r)
@@ -1063,70 +1057,41 @@ contains
     if ((.not. (st%status == 0_int64))) then
     else
       case_do_not_use_elsewhere_1 = vmg_w(st, st%pc, 0_int64)
-      if ((case_do_not_use_elsewhere_1 == 1_int64)) then
+      select case (case_do_not_use_elsewhere_1)
+      case (1_int64)
         call vmg_push(st)
-      else
-        if ((case_do_not_use_elsewhere_1 == 2_int64)) then
-          call vmg_load(st)
-        else
-          if ((case_do_not_use_elsewhere_1 == 3_int64)) then
-            call vmg_add(st)
-          else
-            if ((case_do_not_use_elsewhere_1 == 4_int64)) then
-              call vmg_lt(st)
-            else
-              if ((case_do_not_use_elsewhere_1 == 5_int64)) then
-                call vmg_slide(st)
-              else
-                if ((case_do_not_use_elsewhere_1 == 6_int64)) then
-                  call vmg_jmpf(st)
-                else
-                  if ((case_do_not_use_elsewhere_1 == 7_int64)) then
-                    call vmg_jmp(st)
-                  else
-                    if ((case_do_not_use_elsewhere_1 == 8_int64)) then
-                      call vmg_mkclo(st)
-                    else
-                      if ((case_do_not_use_elsewhere_1 == 9_int64)) then
-                        call vmg_capt(st)
-                      else
-                        if ((case_do_not_use_elsewhere_1 == 10_int64)) then
-                          call vmg_callv(st)
-                        else
-                          if ((case_do_not_use_elsewhere_1 == 11_int64)) then
-                            call vmg_ret(st)
-                          else
-                            if ((case_do_not_use_elsewhere_1 == 12_int64)) then
-                              call vmg_recur(st)
-                            else
-                              if ((case_do_not_use_elsewhere_1 == 13_int64)) then
-                                call vmg_prim(st)
-                              else
-                                if ((case_do_not_use_elsewhere_1 == 14_int64)) then
-                                  call vmg_throw(st)
-                                else
-                                  if ((case_do_not_use_elsewhere_1 == 15_int64)) then
-                                    call vmg_try(st)
-                                  else
-                                    if ((case_do_not_use_elsewhere_1 == 16_int64)) then
-                                      call vmg_endtry(st)
-                                    else
-                                    end if
-                                  end if
-                                end if
-                              end if
-                            end if
-                          end if
-                        end if
-                      end if
-                    end if
-                  end if
-                end if
-              end if
-            end if
-          end if
-        end if
-      end if
+      case (2_int64)
+        call vmg_load(st)
+      case (3_int64)
+        call vmg_add(st)
+      case (4_int64)
+        call vmg_lt(st)
+      case (5_int64)
+        call vmg_slide(st)
+      case (6_int64)
+        call vmg_jmpf(st)
+      case (7_int64)
+        call vmg_jmp(st)
+      case (8_int64)
+        call vmg_mkclo(st)
+      case (9_int64)
+        call vmg_capt(st)
+      case (10_int64)
+        call vmg_callv(st)
+      case (11_int64)
+        call vmg_ret(st)
+      case (12_int64)
+        call vmg_recur(st)
+      case (13_int64)
+        call vmg_prim(st)
+      case (14_int64)
+        call vmg_throw(st)
+      case (15_int64)
+        call vmg_try(st)
+      case (16_int64)
+        call vmg_endtry(st)
+      case default
+      end select
     end if
   end subroutine vmg_step
 

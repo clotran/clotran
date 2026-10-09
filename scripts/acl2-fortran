@@ -470,6 +470,34 @@
                      (mapcat (fn [[o c]] (stmt (one-stobj ctx o) self c)) moves)
                      (for [[_ tmp d] tmps] (str d " = " tmp))))))))
 
+;; ACL2's case on an integer, as it arrives: (if (equal v 'k1) a (if (equal
+;; v 'k2) b ...)) -- one variable, distinct integer constants. Three or more
+;; arms become a SELECT CASE, a jump table, not a chain of compares; the
+;; meaning is the same, the arms tried in order and the keys distinct.
+(defn case-key [c]
+  (when (and (seq? c) ('#{equal eql =} (first c)) (= 3 (count c)))
+    (let [[_ a b] c
+          lit (fn [k] (cond (integer? k) k
+                            (and (seq? k) (= 'quote (first k)) (integer? (second k))) (second k)))]
+      (cond (and (symbol? a) (lit b)) [a (lit b)]
+            (and (symbol? b) (lit a)) [b (lit a)]))))
+
+(defn case-arms
+  "[v [[k arm] ..] else] when x is such a chain of three or more, else nil"
+  [x]
+  (loop [x x v nil arms []]
+    (let [kv (when (and (seq? x) (= 'if (first x))) (case-key (second x)))]
+      (if (and kv (or (nil? v) (= v (first kv))) (not-any? #(= (second kv) (first %)) arms))
+        (recur (nth x 3) (first kv) (conj arms [(second kv) (nth x 2)]))
+        (when (>= (count arms) 3) [v arms x])))))
+
+(defn select-lines [ctx v arms else emit]
+  (let [rv (expr ctx v)]
+    (vec (concat (:stmts rv) [(str "select case (" (:code rv) ")")]
+                 (mapcat (fn [[k a]] (cons (str "case (" k "_int64)") (map #(str "  " %) (branch ctx #(emit a))))) arms)
+                 ["case default"] (map #(str "  " %) (branch ctx #(emit else)))
+                 ["end select"]))))
+
 (defn stmt [ctx self x]
   (cond
     (symbol? x) (if (= (list x) (:outs ctx)) []
@@ -497,6 +525,8 @@
                             tn (fresh ctx "n" :int)]
                         (vec (concat (:stmts r) [(str tn " = " (:code r))] (stmt (assoc ctx :tail false) self (second xs))
                                      [(str "call rt_resize_" (if (value-arrays a) "val" "int") "(" (sref oa) ", " tn ")")])))
+        (and (= op 'if) (case-arms x))
+        (let [[v arms else] (case-arms x)] (select-lines ctx v arms else #(stmt ctx self %)))
         (= op 'if) (let [[c a b] xs rc (expr ctx c)]
                      (vec (concat (:stmts rc) [(str "if (" (:code rc) ") then")] (map #(str "  " %) (branch ctx #(stmt ctx self a)))
                                   ["else"] (map #(str "  " %) (branch ctx #(stmt ctx self b))) ["end if"])))
@@ -534,13 +564,15 @@
 
 ;; a non-stobj function's body in return position: self-calls become a loop
 (defn ret-stmts [ctx self x]
+  (if-let [[v arms else] (case-arms x)]
+    (select-lines ctx v arms else #(ret-stmts ctx self %))
   (if (and (seq? x) (= (first x) 'if))
     (let [[_ c a b] x rc (expr ctx c)]
       (vec (concat (:stmts rc) [(str "if (" (:code rc) ") then")] (map #(str "  " %) (branch ctx #(ret-stmts ctx self a)))
                    ["else"] (map #(str "  " %) (branch ctx #(ret-stmts ctx self b))) ["end if"])))
     (if (and (seq? x) (= (first x) self))
       (assign-formals ctx self (rest x))
-      (let [r (coerce (expr ctx x) (fn-type self))] (conj (:stmts r) (str "r = " (:code r)) "return")))))
+      (let [r (coerce (expr ctx x) (fn-type self))] (conj (:stmts r) (str "r = " (:code r)) "return"))))))
 
 ;; ---- functions -----------------------------------------------------------------------
 
