@@ -53,7 +53,30 @@
   (h-nobj :type (signed-byte 64) :initially 0)
   (h-nvec :type (signed-byte 64) :initially 0)
   (h-nstr :type (signed-byte 64) :initially 0)
-  (h-alive :type (signed-byte 64) :initially 0))
+  (h-alive :type (signed-byte 64) :initially 0)
+  ;; THE SWEEP (stage 1b): each pool's free flags and free list, the
+  ;; arena's words' third field (a free run's link) and its size classes'
+  ;; heads, and the two things the runtime does as a slot is freed -- an
+  ;; object's finalizer, a text's storage released -- as writes to h-ofin
+  ;; and h-srel
+  (h-okind :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-ofree :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-onext :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-vfree :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-vnext :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-sfree :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-snext :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-aival :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-chead :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-ofin :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-srel :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-ohead :type (signed-byte 64) :initially 0)
+  (h-vhead :type (signed-byte 64) :initially 0)
+  (h-shead :type (signed-byte 64) :initially 0)
+  (h-nswo :type (signed-byte 64) :initially 0)
+  (h-nswv :type (signed-byte 64) :initially 0)
+  (h-nsws :type (signed-byte 64) :initially 0)
+  (h-afree :type (signed-byte 64) :initially 0))
 
 ; ---- BOUNDS ---------------------------------------------------------------------------
 

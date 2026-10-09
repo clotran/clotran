@@ -88,21 +88,36 @@
               "! program vmicg_program compiles without an error or an overflow"
               "! answers, run, what it means."]}
     "heapg"
-    {:out "src/f/gen/heap_gen.inc" :include true
-     :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain]
+    {:out "src/f/gen/heap_gen.inc" :include true :book "heapsw"
+     :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain
+           ;; the sweep and the frees (model/heapsw.lisp)
+           hpg-s64 hpg-n40 hpg-size-class hpg-free-obj hpg-slab-free hpg-free-vec hpg-free-str
+           hpg-sweep-objs hpg-sweep-vecs hpg-sweep-strs]
      :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
      :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
-               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]}
-     :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"]}
+              h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]
+              h-nswo ["hs" "nswo"] h-nswv ["hs" "nswv"] h-nsws ["hs" "nsws"] h-afree ["hs" "afree"]
+              h-ohead ["hs" "ohead"] h-vhead ["hs" "vhead"] h-shead ["hs" "shead"]}
+     ;; the free lists' heads are GC's own variables
+     :extern-fields {h-ohead ["hp_ohead" "hp_set_ohead"] h-vhead ["hp_vhead" "hp_set_vhead"]
+                     h-shead ["hp_shead" "hp_set_shead"]}
+     :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"
+                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel"]}
      :prefix {"hs" "h-"}
      :value-arrays #{}
      ;; GC.f90's pools, through its accessors (GC.f90, "the marker's view")
      :externs {"otag" ["hp_otag" "-" "hp_n_oslot"] "oref" ["hp_oref" "-" "hp_n_oslot"]
                "omark" ["hp_omark" "hp_set_omark" "hp_n_obj"]
-               "voff" ["hp_voff" "-" "hp_n_vec"] "vlen" ["hp_vlen" "-" "hp_n_vec"]
+               "voff" ["hp_voff" "hp_set_voff" "hp_n_vec"] "vlen" ["hp_vlen" "hp_set_vlen" "hp_n_vec"]
                "vmark" ["hp_vmark" "hp_set_vmark" "hp_n_vec"]
-               "atag" ["hp_atag" "-" "hp_n_arena"] "aref" ["hp_aref" "-" "hp_n_arena"]
-               "smark" ["hp_smark" "hp_set_smark" "hp_n_str"]}
+               "atag" ["hp_atag" "hp_set_atag" "hp_n_arena"] "aref" ["hp_aref" "hp_set_aref" "hp_n_arena"]
+               "smark" ["hp_smark" "hp_set_smark" "hp_n_str"]
+               "okind" ["hp_okind" "hp_set_okind" "hp_n_obj"] "ofree" ["hp_ofree" "hp_set_ofree" "hp_n_obj"]
+               "onext" ["hp_onext" "hp_set_onext" "hp_n_obj"] "ofin" ["-" "hp_finalize" "hp_n_obj"]
+               "vfree" ["hp_vfree" "hp_set_vfree" "hp_n_vec"] "vnext" ["hp_vnext" "hp_set_vnext" "hp_n_vec"]
+               "sfree" ["hp_sfree" "hp_set_sfree" "hp_n_str"] "snext" ["hp_snext" "hp_set_snext" "hp_n_str"]
+               "srel" ["-" "hp_release_str" "hp_n_str"]
+               "aival" ["hp_aival" "hp_set_aival" "hp_n_arena"] "chead" ["hp_chead" "hp_set_chead" "hp_n_chead"]}
      :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag}
      :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"
@@ -178,6 +193,8 @@
 ;; arrays that are the runtime's own storage, read and written through its
 ;; accessors: name -> [reader writer length]
 (def externs (get cfg :externs {}))
+;; scalar fields that are the runtime's own variables: field symbol -> [reader writer]
+(def extern-fields (get cfg :extern-fields {}))
 (def arrays (into {} (for [[o as] array-names a as] [(symbol (str (prefix o) a "i")) [o a]])))
 (def lengths (into {} (for [[o as] array-names a as] [(symbol (str (prefix o) a "-length")) [o a]])))
 (def resizers (into {} (for [[o as] array-names a as] [(symbol (str "resize-" (prefix o) a)) [o a]])))
@@ -239,7 +256,9 @@
     v))
 
 (defn lit [x]
-  (cond (integer? x) {:stmts [] :code (str x "_int64") :type :int}
+  (cond (integer? x) {:stmts [] :type :int
+                      ;; the least 64-bit integer has no literal: its negation is past the range
+                      :code (if (= (bigint x) -9223372036854775808N) "(-huge(0_int64) - 1_int64)" (str x "_int64"))}
         (= x 'nil) {:stmts [] :code ".false." :type :bool :sym "nil"}
         (= x 't) {:stmts [] :code ".true." :type :bool :sym "t"}
         (keyword? x) {:stmts [] :code (str "rt_keyword(\"" (name x) "\")") :type :val}
@@ -255,7 +274,26 @@
              binary-* (str "(" (:code (first rs)) " * " (:code (second rs)) ")")
              unary-- (str "(-" (:code (first rs)) ")"))}))
 
+(def int64-min -9223372036854775808N)
+(def int64-max 9223372036854775807N)
+;; a quoted integer outside 64 bits
+(defn big-lit [x]
+  (when (and (seq? x) (= 'quote (first x)) (integer? (second x))
+             (or (< (bigint (second x)) int64-min) (> (bigint (second x)) int64-max)))
+    (bigint (second x))))
+
+(declare cmp1)
 (defn cmp [ctx op a b]
+  (cond
+    ;; an integer word against a literal past 64 bits: known (the guard proof
+    ;; made the word an integer of 64 bits), and no Fortran literal holds it
+    (and (= op :lt) (big-lit b))
+    (let [ra (expr ctx a)] {:stmts (:stmts ra) :type :bool :code (if (> (big-lit b) int64-max) ".true." ".false.")})
+    (and (= op :lt) (big-lit a))
+    (let [rb (expr ctx b)] {:stmts (:stmts rb) :type :bool :code (if (< (big-lit a) int64-min) ".true." ".false.")})
+    :else (cmp1 ctx op a b)))
+
+(defn cmp1 [ctx op a b]
   (let [ra (expr ctx a) rb (expr ctx b)]
     (when (and (= op :eq) (not (and (= :int (:type ra)) (= :int (:type rb)))))
       (throw (ex-info (str "equal on non-integers: " (pr-str a) " " (pr-str b)) {})))
@@ -308,6 +346,7 @@
         (= op 'integerp) (let [r (expr ctx (first xs))]
                            (when-not (= :int (:type r)) (throw (ex-info "integerp of a non-integer" {:x x})))
                            (assoc r :code ".true." :type :bool))
+        (extern-fields op) {:stmts [] :code (str (first (extern-fields op)) "()") :type :int}
         (fields op) {:stmts [] :code (sref (fields op)) :type :int}
         (arrays op) (let [r (expr ctx (first xs)) [_ a :as oa] (arrays op)]
                       {:stmts (:stmts r) :code (if (externs a) (str (first (externs a)) "(" (:code r) ")") (str (sref oa) "(" (:code r) ")"))
@@ -420,8 +459,9 @@
         (= op 'cons) (tuple ctx self x)
         (updaters op) (let [oa (updaters op) inner (assoc ctx :tail false)]
                         (if (fields (symbol (subs (name op) 7)))
-                          (let [r (expr ctx (first xs))]
-                            (vec (concat (stmt inner self (second xs)) (:stmts r) [(str (sref oa) " = " (:code r))])))
+                          (let [r (expr ctx (first xs)) ef (extern-fields (symbol (subs (name op) 7)))]
+                            (vec (concat (stmt inner self (second xs)) (:stmts r)
+                                         [(if ef (str "call " (second ef) "(" (:code r) ")") (str (sref oa) " = " (:code r)))])))
                           (let [ri (expr ctx (first xs)) rv (expr ctx (second xs))
                                 ti (fresh ctx "i" :int) tv (fresh ctx "v" (:type rv))]
                             ;; the index and value are read from the stobj before the inner update runs

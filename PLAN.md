@@ -4374,6 +4374,37 @@ young collection finds them, stacks too small to finish -- with ACL2's
 hpg-drain and with the generated code, under gfortran and flang (make
 check-vm-gen); its control, an object's last slot left unread, is caught.
 
+**Stage 1b, the sweep, generated (2026-10-09).** model/heapsw.lisp: the
+frees a sweep and a young collection make, and the sweep over each pool.
+An object freed has its finalizer asked for (a native array's buffer, a
+regex handle: the runtime's, a write to h-ofin), its kind cleared, and
+goes on the free list; a run's words go back on their size class's free
+list through the first word's third field, as slab_push did, its place
+and length cleared, and the run on the run free list; a text's storage is
+released (h-srel) and the text goes on its free list. Guard-verified,
+with two total helpers where a word read from one array is stored in
+another or used as a place (hpg-s64, hpg-n40): the identity on what the
+runtime holds, and what lets the guard proofs see the bounds.
+model/heapsw-proof.lisp proves the sweep frees EXACTLY the slots neither
+marked nor free (objects, runs, texts), never writes an object's slot,
+keeps a marked object's kind and a marked run's place and length, and
+writes no arena word but the first of a run it frees (`no-start`): with
+hpg-drain-closed, what the roots reach is marked and the sweep changes
+none of it.
+
+GC.f90's sweep, free_obj, free_vec and free_str are the generated
+hpg_sweep_* and hpg_free_*; GC's counts (live, swept, frees, live arena
+words) are taken from the model's where they are read. The translator
+learned extern scalar fields (the free lists' heads are GC's variables),
+folds a comparison with a literal past 64 bits, and writes the least
+64-bit integer as an expression (it has no literal). The young
+collection's sweep costs ~6% more than the hand-written one (77 against
+71 ms over a run of three yardsticks); the yardstick does not move
+(849-866 ms against the previous build's 875-878, the same machine).
+scripts/fuzz-heap-gen now sweeps after marking, from free flags, free
+lists, class heads and arena words of its own, and compares everything
+the sweep wrote.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

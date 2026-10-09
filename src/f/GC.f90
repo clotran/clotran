@@ -706,6 +706,9 @@ module GC
   ! them at each collection's start (mark_begin), cannot overflow.
   type :: heap_state
      integer(int64) :: err = 0, msp = 0, nobj = 0, nvec = 0, nstr = 0, alive = 0
+     ! the sweep's (stage 1b, model/heapsw.lisp): slots freed by pool, and
+     ! arena words freed
+     integer(int64) :: nswo = 0, nswv = 0, nsws = 0, afree = 0
      integer(int64), allocatable :: mtag(:), mref(:)
   end type heap_state
   type(heap_state) :: hstate
@@ -2178,6 +2181,7 @@ contains
        s%n_defer = 0; s%n_loose = 0
     end do
     obj_pend_dead = 0; vec_pend_dead = 0; str_pend_dead = 0
+    call sweep_counts_take()
   end subroutine finish_pending
 
   ! After a young collection's marking, the world stopped: each thread's
@@ -3140,6 +3144,7 @@ contains
           if (.not. vec_rem(j)) call remember_vec(pv)
        end if
     end do
+    call sweep_counts_take()
     call hand_off_young(ta_obj, ta_vec, str_marked - (n_str_young - str_swept))
     call system_clock(tm0)
     gc_ysweep_ms = gc_ysweep_ms + real(tm0 - tm1, 8) * 1000d0 / real(rate, 8)
@@ -4425,78 +4430,186 @@ contains
     hp_n_str = int(str_used, int64) + 1
   end function hp_n_str
 
+  ! the sweep's view (stage 1b)
+  integer(int64) function hp_okind(i)
+    integer(int64), intent(in) :: i
+    hp_okind = obj_pool(i)%kind
+  end function hp_okind
+  subroutine hp_set_okind(i, x)
+    integer(int64), intent(in) :: i, x
+    obj_pool(i)%kind = int(x)
+  end subroutine hp_set_okind
+  integer(int64) function hp_ofree(i)
+    integer(int64), intent(in) :: i
+    hp_ofree = merge(1_int64, 0_int64, obj_free(i))
+  end function hp_ofree
+  subroutine hp_set_ofree(i, x)
+    integer(int64), intent(in) :: i, x
+    obj_free(i) = x /= 0
+  end subroutine hp_set_ofree
+  integer(int64) function hp_onext(i)
+    integer(int64), intent(in) :: i
+    hp_onext = obj_free_next(i)
+  end function hp_onext
+  subroutine hp_set_onext(i, x)
+    integer(int64), intent(in) :: i, x
+    obj_free_next(i) = int(x)
+  end subroutine hp_set_onext
+  ! the owner told before the slot is reused: a native array's buffer, a
+  ! host handle, released exactly once (i2 tells an owner from a slice)
+  subroutine hp_finalize(i, x)
+    integer(int64), intent(in) :: i, x
+    if (x == 0) return
+    if (finalized_kind(obj_pool(i)%kind)) then
+       if (associated(obj_finalizer)) &
+            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
+    end if
+  end subroutine hp_finalize
+  integer(int64) function hp_ohead()
+    hp_ohead = obj_free_head
+  end function hp_ohead
+  subroutine hp_set_ohead(x)
+    integer(int64), intent(in) :: x
+    obj_free_head = int(x)
+  end subroutine hp_set_ohead
+  subroutine hp_set_voff(i, x)
+    integer(int64), intent(in) :: i, x
+    vec_pool(i)%off = int(x)
+  end subroutine hp_set_voff
+  subroutine hp_set_vlen(i, x)
+    integer(int64), intent(in) :: i, x
+    vec_pool(i)%len = int(x)
+  end subroutine hp_set_vlen
+  integer(int64) function hp_vfree(i)
+    integer(int64), intent(in) :: i
+    hp_vfree = merge(1_int64, 0_int64, vec_free(i))
+  end function hp_vfree
+  subroutine hp_set_vfree(i, x)
+    integer(int64), intent(in) :: i, x
+    vec_free(i) = x /= 0
+  end subroutine hp_set_vfree
+  integer(int64) function hp_vnext(i)
+    integer(int64), intent(in) :: i
+    hp_vnext = vec_free_next(i)
+  end function hp_vnext
+  subroutine hp_set_vnext(i, x)
+    integer(int64), intent(in) :: i, x
+    vec_free_next(i) = int(x)
+  end subroutine hp_set_vnext
+  integer(int64) function hp_vhead()
+    hp_vhead = vec_free_head
+  end function hp_vhead
+  subroutine hp_set_vhead(x)
+    integer(int64), intent(in) :: x
+    vec_free_head = int(x)
+  end subroutine hp_set_vhead
+  subroutine hp_set_atag(j, x)
+    integer(int64), intent(in) :: j, x
+    vec_store(j)%tag = int(x)
+  end subroutine hp_set_atag
+  subroutine hp_set_aref(j, x)
+    integer(int64), intent(in) :: j, x
+    vec_store(j)%ref = int(x)
+  end subroutine hp_set_aref
+  integer(int64) function hp_aival(j)
+    integer(int64), intent(in) :: j
+    hp_aival = vec_store(j)%ival
+  end function hp_aival
+  subroutine hp_set_aival(j, x)
+    integer(int64), intent(in) :: j, x
+    vec_store(j)%ival = x
+  end subroutine hp_set_aival
+  integer(int64) function hp_chead(c)
+    integer(int64), intent(in) :: c
+    hp_chead = class_head(c)
+  end function hp_chead
+  subroutine hp_set_chead(c, x)
+    integer(int64), intent(in) :: c, x
+    class_head(c) = int(x)
+  end subroutine hp_set_chead
+  integer(int64) function hp_n_chead()
+    hp_n_chead = VCLASSES + 1
+  end function hp_n_chead
+  integer(int64) function hp_sfree(i)
+    integer(int64), intent(in) :: i
+    hp_sfree = merge(1_int64, 0_int64, str_free(i))
+  end function hp_sfree
+  subroutine hp_set_sfree(i, x)
+    integer(int64), intent(in) :: i, x
+    str_free(i) = x /= 0
+  end subroutine hp_set_sfree
+  integer(int64) function hp_snext(i)
+    integer(int64), intent(in) :: i
+    hp_snext = str_free_next(i)
+  end function hp_snext
+  subroutine hp_set_snext(i, x)
+    integer(int64), intent(in) :: i, x
+    str_free_next(i) = int(x)
+  end subroutine hp_set_snext
+  integer(int64) function hp_shead()
+    hp_shead = str_free_head
+  end function hp_shead
+  subroutine hp_set_shead(x)
+    integer(int64), intent(in) :: x
+    str_free_head = int(x)
+  end subroutine hp_set_shead
+  ! a text's storage released: the one place it belongs, run once per slot
+  subroutine hp_release_str(i, x)
+    integer(int64), intent(in) :: i, x
+    if (x == 0) return
+    if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
+    if (allocated(str_pool(i)%ck)) deallocate(str_pool(i)%ck)
+  end subroutine hp_release_str
+
   include "gen/heap_gen.inc"
 
   ! A per-slot free FLAG, not a scan of the free list: scanning made
   ! sweep O(free^2), quadratic in exactly the case that matters -- a
   ! heap that is mostly garbage.
+  ! THE SWEEP (generated: model/heapsw.lisp, heapsw-proof's theorems): every
+  ! slot neither marked nor free, freed
   subroutine sweep()
-    integer :: i
+    call sweep_counts_take()
+    call hpg_sweep_objs(hstate, 1_int64, int(obj_used, int64))
+    call hpg_sweep_vecs(hstate, 1_int64, int(vec_used, int64))
+    call hpg_sweep_strs(hstate, 1_int64, int(str_used, int64))
     obj_swept = 0; vec_swept = 0; str_swept = 0
-    do i = 1, obj_used
-       if (obj_mark(i) .or. obj_free(i)) cycle
-       call free_obj(i)
-    end do
-    do i = 1, vec_used
-       if (vec_mark(i) .or. vec_free(i)) cycle
-       call free_vec(i)
-    end do
-    do i = 1, str_used
-       if (str_mark(i) .or. str_free(i)) cycle
-       call free_str(i)
-    end do
+    call sweep_counts_take()
   end subroutine sweep
 
+  subroutine sweep_counts_zero()
+    hstate%nswo = 0; hstate%nswv = 0; hstate%nsws = 0; hstate%afree = 0
+  end subroutine sweep_counts_zero
+
+  ! the generated frees' counts into GC's
+  subroutine sweep_counts_take()
+    obj_swept = obj_swept + int(hstate%nswo)
+    vec_swept = vec_swept + int(hstate%nswv)
+    str_swept = str_swept + int(hstate%nsws)
+    obj_live = obj_live - int(hstate%nswo)
+    vec_live = vec_live - int(hstate%nswv)
+    str_live = str_live - int(hstate%nsws)
+    arena_live_now = arena_live_now - int(hstate%afree)
+    gc_frees = gc_frees + int(hstate%nswo + hstate%nswv + hstate%nsws)
+    call sweep_counts_zero()
+  end subroutine sweep_counts_take
+
+  ! one slot freed, as a young collection frees its dead; the counts are
+  ! taken where they are read (sweep_counts_take): the end of
+  ! finish_pending, before hand_off_young, the end of the sweep
   subroutine free_obj(i)
     integer, intent(in) :: i
-    integer :: j
-    obj_swept = obj_swept + 1
-    ! Tell the owner before the slot is reused, so a buffer or a
-    ! host handle is released exactly once, here, rather than
-    ! leaking for the life of the process.
-    ! `i2` too: a native array SLICE shares its parent's buffer
-    ! handle rather than owning one, and only the owner may release
-    ! it. i2 is how Eval tells the two apart -- see OBJ_ARRAY there.
-    if (finalized_kind(obj_pool(i)%kind)) then
-       if (associated(obj_finalizer)) &
-            call obj_finalizer(obj_pool(i)%kind, obj_pool(i)%i1, obj_pool(i)%i2)
-    end if
-    ! the slots are left as they are: nothing reads a free slot's (the
-    ! marker never reaches one, the verifier skips it) and allocation
-    ! writes every one of them
-    obj_pool(i)%kind = 0
-    obj_free(i) = .true.
-    obj_free_next(i) = obj_free_head
-    obj_free_head = i
-    obj_live = obj_live - 1
-    gc_frees = gc_frees + 1
+    call hpg_free_obj(hstate, int(i, int64))
   end subroutine free_obj
 
   subroutine free_vec(i)
     integer, intent(in) :: i
-    arena_live_now = arena_live_now - vec_pool(i)%len
-    call slab_free(i)
-    vec_swept = vec_swept + 1
-    vec_free(i) = .true.
-    vec_free_next(i) = vec_free_head
-    vec_free_head = i
-    vec_live = vec_live - 1
-    gc_frees = gc_frees + 1
+    call hpg_free_vec(hstate, int(i, int64))
   end subroutine free_vec
 
   subroutine free_str(i)
     integer, intent(in) :: i
-    ! Released here rather than at process exit: this is the one
-    ! place a finalizer genuinely belongs, run once per object by
-    ! sweep instead of once per copy.
-    if (allocated(str_pool(i)%text)) deallocate(str_pool(i)%text)
-    if (allocated(str_pool(i)%ck)) deallocate(str_pool(i)%ck)
-    str_swept = str_swept + 1
-    str_free(i) = .true.
-    str_free_next(i) = str_free_head
-    str_free_head = i
-    str_live = str_live - 1
-    gc_frees = gc_frees + 1
+    call hpg_free_str(hstate, int(i, int64))
   end subroutine free_str
 
   function gc_live_count() result(n)

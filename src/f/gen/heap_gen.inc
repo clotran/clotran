@@ -330,3 +330,441 @@
       exit
     end do
   end subroutine hpg_drain
+
+  pure function hpg_s64(x_) result(r)
+    integer(int64), value :: x_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    if (.true.) then
+      if ((.not. (x_ < (-huge(0_int64) - 1_int64)))) then
+        t_1 = .true.
+      else
+        t_1 = .false.
+      end if
+      t_2 = t_1
+    else
+      t_2 = .false.
+    end if
+    if (t_2) then
+      r = x_
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function hpg_s64
+
+  pure function hpg_n40(x_) result(r)
+    integer(int64), value :: x_
+    integer(int64) :: r
+    logical :: t_1
+    if ((x_ >= 0_int64)) then
+      t_1 = (.not. (1099511627776_int64 < x_))
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = x_
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function hpg_n40
+
+  pure function hpg_size_class(n_, c_, p_) result(r)
+    integer(int64), value :: n_
+    integer(int64), value :: c_
+    integer(int64), value :: p_
+    integer(int64) :: r
+    integer(int64) :: c_7
+    integer(int64) :: n_6
+    integer(int64) :: p_8
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    do
+      if ((.not. (p_ >= 0_int64))) then
+        t_5 = (.not. (p_ >= 0_int64))
+      else
+        if ((p_ < 1_int64)) then
+          t_4 = (p_ < 1_int64)
+        else
+          if ((.not. (p_ < n_))) then
+            t_3 = (.not. (p_ < n_))
+          else
+            if ((1099511627776_int64 < p_)) then
+              t_2 = (1099511627776_int64 < p_)
+            else
+              if ((.not. (c_ >= 0_int64))) then
+                t_1 = (.not. (c_ >= 0_int64))
+              else
+                t_1 = (.not. (c_ < 64_int64))
+              end if
+              t_2 = t_1
+            end if
+            t_3 = t_2
+          end if
+          t_4 = t_3
+        end if
+        t_5 = t_4
+      end if
+      if (t_5) then
+        r = c_
+        return
+      else
+        n_6 = n_
+        c_7 = (1_int64 + c_)
+        p_8 = (2_int64 * p_)
+        n_ = n_6
+        c_ = c_7
+        p_ = p_8
+        cycle
+      end if
+    end do
+  end function hpg_size_class
+
+  subroutine hpg_free_obj(hs, i_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: i_1
+    integer(int64) :: i_3
+    integer(int64) :: i_5
+    integer(int64) :: i_7
+    integer(int64) :: v_2
+    integer(int64) :: v_4
+    integer(int64) :: v_6
+    integer(int64) :: v_8
+    i_1 = i_
+    v_2 = 1_int64
+    call hp_finalize(i_1, v_2)
+    i_3 = i_
+    v_4 = 0_int64
+    call hp_set_okind(i_3, v_4)
+    i_5 = i_
+    v_6 = 1_int64
+    call hp_set_ofree(i_5, v_6)
+    i_7 = i_
+    v_8 = hpg_s64(hp_ohead())
+    call hp_set_onext(i_7, v_8)
+    call hp_set_ohead(i_)
+    hs%nswo = hpg_add(hs%nswo, 1_int64)
+  end subroutine hpg_free_obj
+
+  subroutine hpg_slab_free(hs, i_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: c_3
+    integer(int64) :: i_11
+    integer(int64) :: i_13
+    integer(int64) :: i_15
+    integer(int64) :: i_17
+    integer(int64) :: i_7
+    integer(int64) :: i_9
+    integer(int64) :: len_1
+    integer(int64) :: off_2
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    integer(int64) :: v_10
+    integer(int64) :: v_12
+    integer(int64) :: v_14
+    integer(int64) :: v_16
+    integer(int64) :: v_18
+    integer(int64) :: v_8
+    len_1 = hpg_n40(hp_vlen(i_))
+    if ((0_int64 < len_1)) then
+      off_2 = hpg_n40(hp_voff(i_))
+      c_3 = hpg_size_class(len_1, 1_int64, 1_int64)
+      if ((off_2 < hp_n_arena())) then
+        if ((off_2 < hp_n_arena())) then
+          if ((off_2 < hp_n_arena())) then
+            t_4 = (c_3 < hp_n_chead())
+          else
+            t_4 = .false.
+          end if
+          t_5 = t_4
+        else
+          t_5 = .false.
+        end if
+        t_6 = t_5
+      else
+        t_6 = .false.
+      end if
+      if (t_6) then
+        i_7 = off_2
+        v_8 = 0_int64
+        call hp_set_atag(i_7, v_8)
+        i_9 = off_2
+        v_10 = 0_int64
+        call hp_set_aref(i_9, v_10)
+        i_11 = off_2
+        v_12 = hpg_s64(hp_chead(c_3))
+        call hp_set_aival(i_11, v_12)
+        i_13 = c_3
+        v_14 = off_2
+        call hp_set_chead(i_13, v_14)
+        i_15 = i_
+        v_16 = 0_int64
+        call hp_set_voff(i_15, v_16)
+        i_17 = i_
+        v_18 = 0_int64
+        call hp_set_vlen(i_17, v_18)
+      else
+      end if
+    else
+    end if
+  end subroutine hpg_slab_free
+
+  subroutine hpg_free_vec(hs, i_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: i_2
+    integer(int64) :: i_4
+    integer(int64) :: len_1
+    integer(int64) :: v_3
+    integer(int64) :: v_5
+    len_1 = hp_vlen(i_)
+    hs%afree = hpg_add(hs%afree, hpg_n40(len_1))
+    call hpg_slab_free(hs, i_)
+    i_2 = i_
+    v_3 = 1_int64
+    call hp_set_vfree(i_2, v_3)
+    i_4 = i_
+    v_5 = hpg_s64(hp_vhead())
+    call hp_set_vnext(i_4, v_5)
+    call hp_set_vhead(i_)
+    hs%nswv = hpg_add(hs%nswv, 1_int64)
+  end subroutine hpg_free_vec
+
+  subroutine hpg_free_str(hs, i_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: i_1
+    integer(int64) :: i_3
+    integer(int64) :: i_5
+    integer(int64) :: v_2
+    integer(int64) :: v_4
+    integer(int64) :: v_6
+    i_1 = i_
+    v_2 = 1_int64
+    call hp_release_str(i_1, v_2)
+    i_3 = i_
+    v_4 = 1_int64
+    call hp_set_sfree(i_3, v_4)
+    i_5 = i_
+    v_6 = hpg_s64(hp_shead())
+    call hp_set_snext(i_5, v_6)
+    call hp_set_shead(i_)
+    hs%nsws = hpg_add(hs%nsws, 1_int64)
+  end subroutine hpg_free_str
+
+  subroutine hpg_sweep_objs(hs, i_, n_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64), value :: n_
+    integer(int64) :: i_9
+    integer(int64) :: n_10
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    do
+      if ((.not. (i_ >= 0_int64))) then
+        t_2 = (.not. (i_ >= 0_int64))
+      else
+        if ((.not. (n_ >= 0_int64))) then
+          t_1 = (.not. (n_ >= 0_int64))
+        else
+          t_1 = (n_ < i_)
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+      else
+        if ((i_ < hp_n_obj())) then
+          if ((i_ < hp_n_obj())) then
+            if ((i_ < hp_n_obj())) then
+              if ((i_ < hp_n_obj())) then
+                if ((i_ < hp_n_obj())) then
+                  if ((hp_omark(i_) == 0_int64)) then
+                    t_3 = (hp_ofree(i_) == 0_int64)
+                  else
+                    t_3 = .false.
+                  end if
+                  t_4 = t_3
+                else
+                  t_4 = .false.
+                end if
+                t_5 = t_4
+              else
+                t_5 = .false.
+              end if
+              t_6 = t_5
+            else
+              t_6 = .false.
+            end if
+            t_7 = t_6
+          else
+            t_7 = .false.
+          end if
+          t_8 = t_7
+        else
+          t_8 = .false.
+        end if
+        if (t_8) then
+          call hpg_free_obj(hs, i_)
+        else
+        end if
+        i_9 = (1_int64 + i_)
+        n_10 = n_
+        i_ = i_9
+        n_ = n_10
+        cycle
+      end if
+      exit
+    end do
+  end subroutine hpg_sweep_objs
+
+  subroutine hpg_sweep_vecs(hs, i_, n_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64), value :: n_
+    integer(int64) :: i_9
+    integer(int64) :: n_10
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    do
+      if ((.not. (i_ >= 0_int64))) then
+        t_2 = (.not. (i_ >= 0_int64))
+      else
+        if ((.not. (n_ >= 0_int64))) then
+          t_1 = (.not. (n_ >= 0_int64))
+        else
+          t_1 = (n_ < i_)
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+      else
+        if ((i_ < hp_n_vec())) then
+          if ((i_ < hp_n_vec())) then
+            if ((i_ < hp_n_vec())) then
+              if ((i_ < hp_n_vec())) then
+                if ((i_ < hp_n_vec())) then
+                  if ((hp_vmark(i_) == 0_int64)) then
+                    t_3 = (hp_vfree(i_) == 0_int64)
+                  else
+                    t_3 = .false.
+                  end if
+                  t_4 = t_3
+                else
+                  t_4 = .false.
+                end if
+                t_5 = t_4
+              else
+                t_5 = .false.
+              end if
+              t_6 = t_5
+            else
+              t_6 = .false.
+            end if
+            t_7 = t_6
+          else
+            t_7 = .false.
+          end if
+          t_8 = t_7
+        else
+          t_8 = .false.
+        end if
+        if (t_8) then
+          call hpg_free_vec(hs, i_)
+        else
+        end if
+        i_9 = (1_int64 + i_)
+        n_10 = n_
+        i_ = i_9
+        n_ = n_10
+        cycle
+      end if
+      exit
+    end do
+  end subroutine hpg_sweep_vecs
+
+  subroutine hpg_sweep_strs(hs, i_, n_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64), value :: n_
+    integer(int64) :: i_8
+    integer(int64) :: n_9
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    do
+      if ((.not. (i_ >= 0_int64))) then
+        t_2 = (.not. (i_ >= 0_int64))
+      else
+        if ((.not. (n_ >= 0_int64))) then
+          t_1 = (.not. (n_ >= 0_int64))
+        else
+          t_1 = (n_ < i_)
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+      else
+        if ((i_ < hp_n_str())) then
+          if ((i_ < hp_n_str())) then
+            if ((i_ < hp_n_str())) then
+              if ((i_ < hp_n_str())) then
+                if ((hp_smark(i_) == 0_int64)) then
+                  t_3 = (hp_sfree(i_) == 0_int64)
+                else
+                  t_3 = .false.
+                end if
+                t_4 = t_3
+              else
+                t_4 = .false.
+              end if
+              t_5 = t_4
+            else
+              t_5 = .false.
+            end if
+            t_6 = t_5
+          else
+            t_6 = .false.
+          end if
+          t_7 = t_6
+        else
+          t_7 = .false.
+        end if
+        if (t_7) then
+          call hpg_free_str(hs, i_)
+        else
+        end if
+        i_8 = (1_int64 + i_)
+        n_9 = n_
+        i_ = i_8
+        n_ = n_9
+        cycle
+      end if
+      exit
+    end do
+  end subroutine hpg_sweep_strs
