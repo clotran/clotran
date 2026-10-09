@@ -1,7 +1,11 @@
 #!/usr/bin/env bb
 ;; calibrate: the weights of clotran's cost model, measured (PLAN step 34).
 ;;
-;;   scripts/calibrate [-o weights.edn]
+;;   scripts/calibrate [-m vm] [-o weights.edn]
+;;
+;; -m vm calibrates the VM (CLOTRAN_VM=1) by model/vmx2-time.lisp's own
+;; classes: a step (ws), a prim step's extra (wp), and the runtime's work
+;; the machine does not see (seq operations, builtins, forces, allocation).
 ;;
 ;; The model's cost theorems bound WEIGHTED work: each instruction class and
 ;; each allocation a weight in ns, the theorem true for any weights. This
@@ -18,7 +22,9 @@
             (if (empty? as) o
                 (case (first as)
                   "-o" (recur (drop 2 as) (assoc o :out (second as)))
-                  (do (println "usage: scripts/calibrate [-o weights.edn]") (System/exit 2))))))
+                  "-m" (recur (drop 2 as) (assoc o :mode (second as)))
+                  (do (println "usage: scripts/calibrate [-m vm] [-o weights.edn]") (System/exit 2))))))
+(def vm? (= "vm" (:mode opts)))
 
 ;; THE FIT: loops that each add one kind of work to a base loop, so the
 ;; classes come apart; THE CHECK: real programs the fit never saw, whose
@@ -65,7 +71,9 @@
    "var" :var "dlvar" :var
    "call" :call "ret" :ret "recur" :recur "callw" :callw "callb" :callb
    "lazy" :lazy "fn" :fn "dot" :dot "new" :new})
-(def features [:one :move :branch :var :call :ret :recur :callw :callb :lazy :fn :dot :new :other :seqop :builtin :force :entry :alloc])
+(def features (if vm?
+                 [:one :vmstep :vmprim :seqop :builtin :force :alloc]
+                 [:one :move :branch :var :call :ret :recur :callw :callb :lazy :fn :dot :new :other :seqop :builtin :force :entry :alloc]))
 
 ;; builtin ids -> names, from Eval.f90's own table; the seq operations
 (def bnames (into {} (for [[_ nm b] (re-seq #"bind_builtin\(\w+, \"([^\"]+)\", (B_\w+)\)" (slurp "src/f/Eval.f90"))] [b nm])))
@@ -78,7 +86,7 @@
   (let [f (str scratch "/f.clj")]
     (spit f body)
     (let [r (p/shell {:out :string :err :string :continue true :in ""
-                      :extra-env {"CLOTRAN_STATS" "1"}}
+                      :extra-env (cond-> {"CLOTRAN_STATS" "1"} vm? (assoc "CLOTRAN_VM" "1"))}
                      "./clotran-bin" "src/clj/clojure/core.clj" f)]
       (str (:out r) (:err r)))))
 
@@ -88,22 +96,27 @@
         bis (for [[_ id a b] (re-seq #"(?m)^    builtin (\d+) (\d+) (\d+)" out)] [(get bids (parse-long id)) (+ (parse-long a) (parse-long b))])
         force (or (some-> (re-find #"lazy forces=(\d+)" out) second parse-long) 0)
         entry (or (some-> (re-find #"evals=(\d+)" out) second parse-long) 0)
+        vmstep (reduce + 0 (for [[_ n] (re-seq #"\d+:(\d+)" (or (re-find #"vm: steps by opcode.*" out) ""))] (parse-long n)))
+        vmprim (reduce + 0 (map parse-long (re-seq #"\d+" (or (some-> (re-find #"vm: prims [a-z ]+((?: \d+)+)" out) second) ""))))
         pause (fn [k] (or (some-> (re-find (re-pattern (str k " \\d+ total_ms=([\\d.]+)")) out) second parse-double) 0.0))
         el (some-> (re-find #"Elapsed time: ([\d.]+) msecs" out) second parse-double)]
     {:ops ops :allocs (or allocs 0) :gc-ms (+ (pause "young") (pause "full")) :ms el
      :seqop (reduce + 0 (for [[nm n] bis :when (seq-ops nm)] n))
      :builtin (reduce + 0 (for [[nm n] bis :when (not (seq-ops nm))] n))
-     :force force :entry entry}))
+     :force force :entry entry :vmstep vmstep :vmprim vmprim}))
 
-(defn feats [{:keys [ops allocs seqop builtin force entry]}]
+(defn feats [{:keys [ops allocs seqop builtin force entry vmstep vmprim]}]
   (let [by (reduce-kv (fn [m op n] (update m (get classes op :other) (fnil + 0) n)) {} ops)]
-    (assoc by :alloc allocs :one 2 :seqop seqop :builtin builtin :force force :entry entry)))
+    (assoc by :alloc allocs :one 2 :seqop seqop :builtin builtin :force force :entry entry :vmstep vmstep :vmprim vmprim)))
 
 (def base (parse (run-stats "nil\n")))
 (def base-f (feats base))
 
 (defn measure [form]
-  (let [s (parse (run-stats (str form "\n(time " form ")\n")))
+  ;; the VM compiles fn bodies, not top-level forms: in VM mode each form
+  ;; runs as the body of a fn called at once
+  (let [body (if vm? (str "((fn [] " form "))") form)
+        s (parse (run-stats (str body "\n(time " body ")\n")))
         f (feats s)
         ;; two runs counted, one timed: half the counts
         d (into {} (for [k features] [k (/ (- (get f k 0) (get base-f k 0)) 2.0)]))

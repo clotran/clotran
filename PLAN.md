@@ -4579,6 +4579,33 @@ machine (a nested run, a call from the runtime) without setup; (4) what
 the VM keeps alive, found, and a dead slot proved cleared; (5) instance?
 with a constant class answered at link time.
 
+**Done so far (2026-10-09).** (1) The translator writes an integer case
+as SELECT CASE; the plain step now is one, and the yardstick did not
+move (the fused step tests its patterns first, and the chain of compares
+was not where the time went). A call through a DIRECT-LINKED Var whose fn
+only wraps a builtin is now that builtin's prim, resolved when the VM
+translates the site -- the fn was fixed when the site was analysed
+(DEVIATIONS 55), so its builtin is -- not a callw that derefs the Var and
+looks the wrapper up every call: 7 callw prims an element went to 0, the
+yardstick under the VM 1690 -> ~1420 ms.
+
+**THE TIME THEOREM (model/vmx2-time.lisp).** The clock split by kind: the
+machine's PRIM steps are at most x2prims, the prims the meaning evaluates
+(s2pclk-prims -- the compiled code crosses the boundary no more often than
+the language says), and for ANY weights ws and wp, ws x s2clk + wp x
+s2pclk <= 2 ws x2evals + wp x2prims (vm-time-bound). Which steps are prim
+instructions is read off the clock's structure, the :prim case's step,
+the one the compiler emits as the prim (s2code-len's). `scripts/calibrate
+-m vm` fits those classes -- each form run as a fn's body, since the VM
+compiles bodies -- with the runtime's own work besides: a step ~13 ns, a
+prim's extra ~4, a seq operation through a prim ~107, another builtin
+~139, a force ~73, an allocation ~37; held out, the yardstick +16%,
+iterate -4%, filter +15%, map -18%, a reduce with a Clojure fn -67% (the
+runtime's call into a VM body, not yet a class). By that account the
+yardstick's eight seq operations an element are ~850 of its ~1230 ns
+under the VM: THE SEQ OPERATIONS ON A REALISED CELL, ANSWERED IN THE
+MACHINE, are next.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
