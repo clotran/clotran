@@ -482,13 +482,33 @@
          (vmi (update-v-sp (i64 (1+ sp)) vmi)))
     (vmg-next vmi)))
 
+; the runtime's call of c on the m values from slot a: none, one or two
+; written out, so it is handed them without a list built
+(defun vmg-invoke-call (c a m vmi)
+  (declare (xargs :stobjs vmi :guard (and (natp a) (natp m) (<= (+ a m) (* 2 *b40*)))))
+  (cond ((equal m 0) (rt-prim :invoke (list c)))
+        ((equal m 1) (rt-prim :invoke (list c (vmg-sreg a vmi))))
+        ((equal m 2) (rt-prim :invoke (list c (vmg-sreg a vmi) (vmg-sreg (i64 (1+ a)) vmi))))
+        (t (rt-prim :invoke (cons c (vmg-stk-from a m vmi))))))
+
+(defthm vmg-invoke-call-is
+  (implies (natp a) (equal (vmg-invoke-call c a m vmi) (rt-prim :invoke (cons c (vmg-stk-from a m vmi)))))
+  :hints (("Goal" :expand ((vmg-stk-from a 0 vmi) (vmg-stk-from a 1 vmi) (vmg-stk-from a 2 vmi)
+                           (vmg-stk-from (+ 1 a) 1 vmi) (vmg-stk-from (+ 1 a) 0 vmi) (vmg-stk-from (+ 2 a) 0 vmi)))))
+(in-theory (disable vmg-invoke-call))
+
 (defins-call vmg-callv
   (let ((sp (nfix (v-sp vmi))) (m (nfix (vmg-w (v-pc vmi) 1 vmi))))
     (if (< sp (i64 (1+ m)))
         vmi
       (let ((c (vmg-sreg (i64 (1- sp)) vmi)))
         (if (not (rt-clop c))
-            (vmg-unwind :not-fn vmi)
+            (let* ((fb2 (i64 (- sp (i64 (1+ m))))) (a (vmg-invoke-call c fb2 m vmi)))
+              (if (rt-throwp a)
+                  (vmg-unwind (rt-thrown a) vmi)
+                (let* ((vmi (vmg-sset fb2 a vmi))
+                       (vmi (update-v-sp (i64 (1+ fb2)) vmi)))
+                  (vmg-next vmi))))
           (let ((ci (vmg-pick (rt-clo-f c) m vmi)))
             (if (< ci 0)
                 (vmg-unwind :arity vmi)
@@ -782,11 +802,14 @@
            (vmg-bnd (vmg-callv vmi)))
   :hints (("Goal" :do-not-induct t
                   :in-theory (e/d (vmg-callv vmg-bnd bnd40p)
-                                  (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w vmg-pick-clause))
+                                  (nth update-nth words-ok cls-ok fns-ok recs-ok vmg-lens vmg-w vmg-pick-clause vmg-invoke-call-is))
                   :use ((:instance vmg-pick-clause
                                    (f (rt-clo-f (vmg-sreg (+ -1 (nfix (v-sp vmi))) vmi)))
                                    (m (nfix (vmg-w (v-pc vmi) 1 vmi))))
-                        (:instance vmg-unwind-bnd (v :not-fn))
+                        (:instance vmg-unwind-bnd
+                                   (v (rt-thrown (vmg-invoke-call (vmg-sreg (+ -1 (nfix (v-sp vmi))) vmi)
+                                                                  (- (nfix (v-sp vmi)) (+ 1 (nfix (vmg-w (v-pc vmi) 1 vmi))))
+                                                                  (nfix (vmg-w (v-pc vmi) 1 vmi)) vmi))))
                         (:instance vmg-unwind-bnd (v :arity))))))
 (def-bnd vmg-ret-bnd vmg-ret 11 (:instance rok-nth (j (nth *v-ctop* vmi)) (i (+ -1 (nth *v-ctop* vmi))) (kinds (nth *v-ckindi* vmi))
                                    (as (nth *v-cai* vmi)) (bs (nth *v-cbi* vmi)) (cs (nth *v-cci* vmi)) (prevs (nth *v-cprevi* vmi))))

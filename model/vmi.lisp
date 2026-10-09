@@ -253,7 +253,13 @@
         vmi
       (let ((c (vmi-sreg (1- sp) vmi)))
         (if (not (clop c))
-            (vmi-unwind :not-fn vmi)
+            ;; not one of the machine's closures: the runtime's call
+            (let* ((fb2 (- sp (1+ m))) (a (prim :invoke (cons c (vmi-stk-from fb2 m vmi)))))
+              (if (throwp a)
+                  (vmi-unwind (cdr a) vmi)
+                (let* ((vmi (vmi-sset fb2 a vmi))
+                       (vmi (update-v-sp (1+ fb2) vmi)))
+                  (vmi-next vmi))))
           (let ((ci (vmi-pick (clo-f c) m vmi)))
             (if (< ci 0)
                 (vmi-unwind :arity vmi)

@@ -63,9 +63,9 @@ module Eval
   use DynLoad
   use Socket
   use Threads
-  use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_init, rt_keyword
-  use vm_gen, only: vmg_xstep, vmg_fuse_prog, vmg_good
-  use vmc_gen, only: vmicg_program
+  use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword
+  use vm_gen, only: vmg_xstep, vmg_fuse
+  use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
        c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t
   implicit none
@@ -471,27 +471,22 @@ module Eval
        N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28, &
        N_FLAT = 29, &   ! a fn body as flat instructions (flat.inc)
        N_VMB = 30       ! a fn body the generated VM runs (vm.inc)
-  ! vm.inc's: a translation's state, and a compiled program
+  ! vm.inc's: a translation's state
   type :: vm_tr_ctx
      logical :: ok = .true., fn_recur = .false.
-     integer :: rstart = 0, rcount = 0, depth = 0
+     integer :: depth = 0
      logical, allocatable :: reads(:), binds(:)
-     integer, allocatable :: map(:), entry(:)
+     integer, allocatable :: map(:), capt(:)
   end type vm_tr_ctx
-  type :: vm_prog
-     integer(gc_ip), pointer, contiguous :: code(:) => null()
-     type(gc_value), pointer, contiguous :: pool(:) => null()
-     integer(gc_ip), pointer, contiguous :: fnfirst(:) => null(), fncount(:) => null()
-     integer(gc_ip), pointer, contiguous :: cln(:) => null(), clent(:) => null(), clrest(:) => null()
-     integer, allocatable :: entry(:)
-     integer :: nent = 0, nstk = 0, nctl = 0
-  end type vm_prog
-  ! one table for the process, never moved -- threads read it while
-  ! another adds -- and added to under the state lock; a full table
-  ! leaves an arity to the flat form
-  integer, parameter :: VM_PROGS_MAX = 65536
-  type(vm_prog), allocatable :: vm_progs(:)
-  integer :: n_vm_progs = 0
+  ! THE PROGRAM (vm.inc): one for the process, its arrays made once and
+  ! never moved -- threads run it while another adds to it -- and added
+  ! to at reserved places, reserved under the state lock
+  integer, parameter :: VMP_INSTRS = 2097152, VMP_CLAUSES = 262144, VMP_FNS = 131072
+  type(vm_state), save :: vmp
+  integer(gc_ip), save :: vmp_pc = 0
+  integer, save :: vmp_ci = 0, vmp_f = 0
+  ! a run's stack, at most, and a thread's control records
+  integer, parameter :: VM_WINDOW = 65536, VM_CTL = 65536
   ! CLOTRAN_VM: 0 unread, 1 on, 2 off
   integer, save :: vm_mode = 0
   ! CLOTRAN_VM_TRACE=1: each arity's core language and each run, on stderr

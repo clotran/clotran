@@ -1393,7 +1393,7 @@
           call flat_run(tctx, kbot, vbase, val)
           if (tctx%yield_flag) exit
        case (N_VMB)
-          call vm_run(tctx, nd, vs_get(vst, b + 2), val)
+          call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST)
           val = gc_slot(nd, 2)

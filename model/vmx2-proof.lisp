@@ -290,7 +290,11 @@
            (equal (vcs2-step prog s)
                   (let* ((m (nfix (cadr (sins s)))) (c (nth (1- (caddr s)) (cadddr s))) (fb2 (- (caddr s) (1+ m)))
                          (cl (pick-arity (cdr (assoc-equal (clo-f c) (cdr prog))) m)))
-                    (cond ((not (clop c)) (unwind :not-fn (s-ctl s) (cadddr s)))
+                    (cond ((not (clop c))
+                           (let ((a (prim :invoke (cons c (stk-from fb2 m (cadddr s))))))
+                             (if (throwp a)
+                                 (unwind (cdr a) (s-ctl s) (cadddr s))
+                               (list (1+ (car s)) (cadr s) (1+ fb2) (ssetreg fb2 a (cadddr s)) (s-ctl s)))))
                           ((not (consp cl)) (unwind :arity (s-ctl s) (cadddr s)))
                           ((not (restp cl)) (list (nfix (cadr cl)) fb2 (caddr s) (cadddr s)
                                                   (cons (list (1+ (car s)) (cadr s)) (s-ctl s))))
@@ -2104,7 +2108,9 @@
            (equal (mx2 e env caps defs fuel)
                   (cond ((not (valp (c2-ra))) (c2-ra))
                         ((not (valp (c2-rf))) (c2-rf))
-                        ((not (clop (c2-c))) (cons :thrown :not-fn))
+                        ((not (clop (c2-c)))
+                         (let ((a (prim :invoke (cons (c2-c) (c2-vs)))))
+                           (if (throwp a) (cons :thrown (cdr a)) (cons :val a))))
                         ((not (consp (c2-cl))) (cons :thrown :arity))
                         ((zp fuel) (list :out))
                         (t (c2-r)))))
@@ -2215,15 +2221,48 @@
                         (:instance callv-args-stay (r2 (cadddr (c2-s2))) (r1 (cadddr (c2-s1)))
                                    (g (+ (caddr s) (c2-n))) (w (c2-c)) (k (caddr s)) (vs (c2-vs)))))))
 
-; NOT A FUNCTION, or NO CLAUSE FOR THE COUNT: the call's step throws
+; NOT ONE OF THE MACHINE'S CLOSURES: the runtime's call, (prim :invoke
+; (c . args)), its answer where the arguments began -- or its throw
+(defmacro c2-a () '(prim :invoke (cons (c2-c) (c2-vs))))
+
+(defthm callv2-step-invoke
+  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (not (clop (c2-c))))
+           (equal (vcs2-step prog (c2-s2))
+                  (if (throwp (c2-a))
+                      (unwind (cdr (c2-a)) (s-ctl s) (cadddr (c2-s2)))
+                    (list (1+ (c2-pc2)) (cadr s) (1+ (caddr s)) (update-nth (caddr s) (c2-a) (cadddr (c2-s2))) (s-ctl s)))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (union-theories '(s2step-callv ssetreg) (c2-thy)) :do-not-induct t
+                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
+                        (:instance stk-from-vals (a (caddr s)) (vs (c2-vs)) (stk (cadddr (c2-s2))))))))
+
+(defthm callv2-invoke-val
+  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (not (clop (c2-c))) (not (throwp (c2-a))))
+           (s2-val e s (cons :val (c2-a)) (vcs2-step prog (c2-s2))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (union-theories '(s2-val) (c2-thy)) :do-not-induct t
+                  :use ((:instance callv2-step-invoke) (:instance callv2-args) (:instance callv2-at-call)
+                        (:instance (:definition s2-hyps))
+                        (:instance callv2-code (code (car prog)) (pc (car s)))
+                        (:instance cagree-write-at (n (caddr s)) (a (cadddr (c2-s2))) (b (cadddr s)) (x (c2-a)))))))
+
+(defthm callv2-invoke-thr
+  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (not (clop (c2-c))) (throwp (c2-a)))
+           (thrown-at s (cdr (c2-a)) (vcs2-step prog (c2-s2))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (c2-thy) :do-not-induct t
+                  :use ((:instance callv2-step-invoke) (:instance callv2-at-call) (:instance (:definition s2-hyps))
+                        (:instance unwind-thrown-at (s (c2-s2)) (v (cdr (c2-a))))
+                        (:instance thrown-at-transfer (s1 (c2-s2)) (v (cdr (c2-a))) (s2 (vcs2-step prog (c2-s2))))))))
+
+; NO CLAUSE FOR THE COUNT: the call's step throws
 (defthm callv2-step-throw
-  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (or (not (clop (c2-c))) (not (consp (c2-cl)))))
+  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (not (consp (c2-cl))))
            (thrown-at s (cdr (mx2 e env caps defs fuel)) (vcs2-step prog (c2-s2))))
   :rule-classes nil
   :hints (("Goal" :in-theory (union-theories '(s2step-callv mx2-callv) (c2-thy)) :do-not-induct t
                   :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
                         (:instance pick-arity-corr (cls (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) defs))) (ents (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) (cdr prog)))) (code (car prog)) (m (len (cdr (mx2-args (cddr e) env caps defs fuel))))) (:instance s2fns-ok-necc (name (clo-f (cdr (mx2 (cadr e) env caps defs fuel)))))
-                        (:instance unwind-thrown-at (s (c2-s2)) (v :not-fn))
                         (:instance unwind-thrown-at (s (c2-s2)) (v :arity))
                         (:instance thrown-at-transfer (s1 (c2-s2)) (v (cdr (mx2 e env caps defs fuel)))
                                    (s2 (vcs2-step prog (c2-s2))))))))
@@ -2446,6 +2485,7 @@
                   :do-not-induct t
                   :use ((:instance callv2-args) (:instance callv2-fn) (:instance callv2-fn-thr)
                         (:instance callv2-step-throw) (:instance callv2-s3)
+                        (:instance callv2-invoke-val) (:instance callv2-invoke-thr)
                         (:instance callv2-path-val) (:instance callv2-path-thr) (:instance callv2-body)
                         (:instance callv2-clock-gen (s3 (vcs2-step prog (c2-s2))))
                         (:instance callv2-clock-gen (s3 (c2-s3)))))))

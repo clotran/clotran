@@ -238,6 +238,9 @@ contains
     else if (is_kw(op, "count")) then
        r = vint(0_int64)
        if (consp(vals)) r = vint(len_of(car(vals)))
+    else if (is_kw(op, "invoke")) then
+       ! a call of what is not a closure: here nothing else is callable
+       r = cons(rt_keyword("throw"), rt_keyword("not-fn"))
     else if (is_kw(op, "div")) then
        a = car(vals)
        b = car(cdr(vals))
@@ -258,6 +261,18 @@ contains
     type(value) :: r
     r = rt_prim(op, cons(a, value(VT_NIL, 0)))
   end function rt_prim1
+
+  function rt_cons(a, l) result(r)
+    type(value), intent(in) :: a, l
+    type(value) :: r
+    r = cons(a, l)
+  end function rt_cons
+
+  function rt_prim3(op, a, b, c) result(r)
+    type(value), intent(in) :: op, a, b, c
+    type(value) :: r
+    r = rt_prim(op, cons(a, cons(b, cons(c, value(VT_NIL, 0)))))
+  end function rt_prim3
 
   function rt_prim2(op, a, b) result(r)
     type(value), intent(in) :: op, a, b

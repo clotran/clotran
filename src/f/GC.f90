@@ -601,6 +601,9 @@ module GC
      ! the generated VM's running body: its entry values are vstack(vm_args_rb + i + 1)
      ! (src/f/VmRuntime.f90, vm.inc) -- per thread, as two threads run VM code at once
      integer :: vm_args_rb = 0
+     ! its control records, (record, field): a run takes them from vm_ctl_top up
+     integer(8), pointer, contiguous :: vm_ctl(:, :) => null()
+     integer :: vm_ctl_top = 0
      ! SPARE FRAMES: a compiled procedure's frame, cleared, once its call
      ! has returned (gc_frame_give) -- nothing keeps a frame after its
      ! call -- by size, a few of each. Not roots: every collection empties

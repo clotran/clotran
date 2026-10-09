@@ -347,6 +347,33 @@ contains
     end if
   end function vmg_prim_call
 
+  function vmg_invoke_call(st, c_, a_, m_) result(r)
+    type(vm_state), intent(in) :: st
+    type(value), value :: c_
+    integer(int64), value :: a_
+    integer(int64), value :: m_
+    type(value) :: r
+    integer(int64) :: var_1
+    if ((m_ == 0_int64)) then
+      r = rt_prim1(rt_keyword("invoke"), c_)
+      return
+    else
+      if ((m_ == 1_int64)) then
+        r = rt_prim2(rt_keyword("invoke"), c_, vmg_sreg(st, a_))
+        return
+      else
+        if ((m_ == 2_int64)) then
+          var_1 = (1_int64 + a_)
+          r = rt_prim3(rt_keyword("invoke"), c_, vmg_sreg(st, a_), vmg_sreg(st, var_1))
+          return
+        else
+          r = rt_prim(rt_keyword("invoke"), rt_cons(c_, rt_list_from(st, a_, m_)))
+          return
+        end if
+      end if
+    end if
+  end function vmg_invoke_call
+
   pure function vmg_w(st, pc_, k_) result(r)
     type(vm_state), intent(in) :: st
     integer(int64), value :: pc_
@@ -808,23 +835,29 @@ contains
 
   subroutine vmg_callv(st)
     type(vm_state), intent(inout) :: st
+    type(value) :: a_9
     type(value) :: c_5
-    integer(int64) :: ci_6
-    integer(int64) :: ent_11
-    integer(int64) :: fb2_9
+    integer(int64) :: ci_12
+    integer(int64) :: ent_17
+    integer(int64) :: fb2_15
+    integer(int64) :: fb2_8
     integer(int64) :: m_2
-    integer(int64) :: n_10
+    integer(int64) :: n_16
     integer(int64) :: sp_1
-    integer(int64) :: var_12
+    integer(int64) :: var_10
+    integer(int64) :: var_11
     integer(int64) :: var_13
     integer(int64) :: var_14
-    integer(int64) :: var_15
-    integer(int64) :: var_16
-    integer(int64) :: var_17
+    integer(int64) :: var_18
+    integer(int64) :: var_19
+    integer(int64) :: var_20
+    integer(int64) :: var_21
+    integer(int64) :: var_22
+    integer(int64) :: var_23
     integer(int64) :: var_3
     integer(int64) :: var_4
+    integer(int64) :: var_6
     integer(int64) :: var_7
-    integer(int64) :: var_8
     sp_1 = max(0_int64, st%sp)
     m_2 = max(0_int64, vmg_w(st, st%pc, 1_int64))
     var_3 = (1_int64 + m_2)
@@ -833,33 +866,45 @@ contains
       var_4 = (-1_int64 + sp_1)
       c_5 = vmg_sreg(st, var_4)
       if ((.not. rt_clop(c_5))) then
-        call vmg_unwind(st, rt_keyword("not-fn"))
+        var_6 = (1_int64 + m_2)
+        var_7 = (sp_1 + (-var_6))
+        fb2_8 = var_7
+        a_9 = vmg_invoke_call(st, c_5, fb2_8, m_2)
+        if (rt_throwp(a_9)) then
+          call vmg_unwind(st, rt_thrown(a_9))
+        else
+          call vmg_sset(st, fb2_8, a_9)
+          var_10 = (1_int64 + fb2_8)
+          st%sp = var_10
+          var_11 = (1_int64 + max(0_int64, st%pc))
+          st%pc = var_11
+        end if
       else
-        ci_6 = vmg_pick(st, rt_clo_f(c_5), m_2)
-        if ((ci_6 < 0_int64)) then
+        ci_12 = vmg_pick(st, rt_clo_f(c_5), m_2)
+        if ((ci_12 < 0_int64)) then
           call vmg_unwind(st, rt_keyword("arity"))
         else
-          var_7 = (1_int64 + m_2)
-          var_8 = (sp_1 + (-var_7))
-          fb2_9 = var_8
-          n_10 = max(0_int64, st%cln(ci_6))
-          ent_11 = max(0_int64, st%clent(ci_6))
-          var_12 = (1_int64 + max(0_int64, st%pc))
-          call vmg_push_rec(st, 1_int64, var_12, max(0_int64, st%fb), 0_int64)
-          if ((st%clrest(ci_6) == 1_int64)) then
-            var_13 = (fb2_9 + n_10)
-            var_14 = (fb2_9 + n_10)
-            var_15 = (m_2 + (-n_10))
-            call vmg_sset(st, var_13, rt_list_from(st, var_14, var_15))
-            var_16 = (fb2_9 + (n_10 + 1_int64))
-            call vmg_sset(st, var_16, c_5)
-            st%fb = fb2_9
-            var_17 = (fb2_9 + (n_10 + 2_int64))
-            st%sp = var_17
-            st%pc = ent_11
+          var_13 = (1_int64 + m_2)
+          var_14 = (sp_1 + (-var_13))
+          fb2_15 = var_14
+          n_16 = max(0_int64, st%cln(ci_12))
+          ent_17 = max(0_int64, st%clent(ci_12))
+          var_18 = (1_int64 + max(0_int64, st%pc))
+          call vmg_push_rec(st, 1_int64, var_18, max(0_int64, st%fb), 0_int64)
+          if ((st%clrest(ci_12) == 1_int64)) then
+            var_19 = (fb2_15 + n_16)
+            var_20 = (fb2_15 + n_16)
+            var_21 = (m_2 + (-n_16))
+            call vmg_sset(st, var_19, rt_list_from(st, var_20, var_21))
+            var_22 = (fb2_15 + (n_16 + 1_int64))
+            call vmg_sset(st, var_22, c_5)
+            st%fb = fb2_15
+            var_23 = (fb2_15 + (n_16 + 2_int64))
+            st%sp = var_23
+            st%pc = ent_17
           else
-            st%fb = fb2_9
-            st%pc = ent_11
+            st%fb = fb2_15
+            st%pc = ent_17
           end if
         end if
       end if

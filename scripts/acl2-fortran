@@ -33,8 +33,8 @@
 ;;                                it is an expression: only the branch
 ;;                                taken is evaluated, as in ACL2
 ;;   rt-*, vmg-stk-from           the runtime's hand-written routines; a
-;;                                prim on a list of one or two values
-;;                                written out is rt_prim1/rt_prim2, which
+;;                                prim on a list of one to three values
+;;                                written out is rt_prim1 .. rt_prim3, which
 ;;                                the runtime answers as rt_prim on that
 ;;                                list without building it
 ;;   resize-X                     the runtime's rt_resize_int/_val, which
@@ -49,7 +49,7 @@
   '{"vmg"
     {:module "vm_gen" :out "src/f/gen/vm_gen.f90" :book "vmfg"
      ;; the functions generated, callees first
-     :fns [bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good vmg-prim-call
+     :fns [bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good vmg-prim-call vmg-invoke-call
            vmg-w vmg-poolv vmg-sreg vmg-sset vmg-copy-down vmg-push-rec vmg-pop-rec vmg-unwind
            vmg-pick-fixed vmg-pick-rest vmg-pick
            vmg-push vmg-load vmg-add vmg-lt vmg-slide vmg-jmpf vmg-jmp vmg-mkclo vmg-capt vmg-callv
@@ -58,9 +58,9 @@
            vmg-f17 vmg-f18 vmg-f19 vmg-f20-ok vmg-fk-ok vmg-f20 vmg-f21 vmg-f22 vmg-f23
            vmg-xstep vmg-xrun vmg-tag vmg-fuse vmg-fuse-prog]
      ;; formals that hold a value, not an integer
-     :value-formals {vmg-sset #{v} vmg-unwind #{v} vmg-f20-ok #{r} vmg-fk-ok #{r} vmg-prim-call #{op}}
+     :value-formals {vmg-sset #{v} vmg-unwind #{v} vmg-f20-ok #{r} vmg-fk-ok #{r} vmg-prim-call #{op} vmg-invoke-call #{c}}
      ;; functions answering a value, not an integer
-     :value-fns #{vmg-poolv vmg-sreg vmg-prim-call}
+     :value-fns #{vmg-poolv vmg-sreg vmg-prim-call vmg-invoke-call}
      ;; functions answering true or false: the bounds, which a run checks before it starts
      :bool-fns #{bnd40p vmg-lens words-ok cls-ok fns-ok recs-ok vmg-bnd vmg-good}
      :header ["! GENERATED from model/vmg.lisp by scripts/acl2-fortran. Do not edit:"
@@ -291,14 +291,20 @@
                             {:stmts (vec (mapcat :stmts rs)) :code (str f "(" (str/join ", " (map :code rs)) ")") :type t}))
         ;; (rt-prim op (cons a 'nil)) and (rt-prim op (cons a (cons b 'nil)))
         (and (= op 'rt-prim) (seq? (second xs)) (= 'cons (first (second xs))))
-        (let [items (loop [l (second xs) acc []]
-                      (cond (and (seq? l) (= 'cons (first l))) (recur (nth l 2) (conj acc (second l)))
-                            (= l '(quote nil)) acc
-                            :else (throw (ex-info "a prim's list not written out" {:x x}))))
-              _ (when-not (#{1 2} (count items)) (throw (ex-info "a prim of other than one or two" {:x x})))
+        (let [[items tail] (loop [l (second xs) acc []]
+                             (cond (and (seq? l) (= 'cons (first l))) (recur (nth l 2) (conj acc (second l)))
+                                   :else [acc l]))]
+          (if (not= tail '(quote nil))
+            ;; a list whose end is not written out: the items consed on (rt_cons)
+            (let [rop (expr ctx (first xs)) rt (expr ctx tail) ris (map #(coerce (expr ctx %) :val) items)]
+              {:stmts (vec (concat (:stmts rop) (mapcat :stmts ris) (:stmts rt))) :type :val
+               :code (str "rt_prim(" (:code rop) ", "
+                          (reduce (fn [acc r] (str "rt_cons(" (:code r) ", " acc ")")) (:code rt) (reverse ris)) ")")})
+        (let [items items
+              _ (when-not (#{1 2 3} (count items)) (throw (ex-info "a prim of other than one to three" {:x x})))
               rs (map #(expr ctx %) (cons (first xs) items))]
           {:stmts (vec (mapcat :stmts rs)) :type :val
-           :code (str "rt_prim" (count items) "(" (str/join ", " (map (comp :code #(coerce % :val)) rs)) ")")})
+           :code (str "rt_prim" (count items) "(" (str/join ", " (map (comp :code #(coerce % :val)) rs)) ")")})))
         (rt op) (let [[f _ t] (rt op) rs (map #(expr ctx %) xs)]
                   {:stmts (vec (mapcat :stmts rs)) :code (str f "(" (str/join ", " (map :code rs)) ")") :type t})
         (= op 'vmg-stk-from) (let [rs (map #(expr ctx %) (butlast xs))]

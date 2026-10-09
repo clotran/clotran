@@ -2076,7 +2076,7 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, head, name, fsc, arities, clauses, clause, ar, tmpl, walk
-    integer :: base, self_slot, nfixed, i, nflat
+    integer :: base, self_slot, nfixed, i, nflat, vmfid, vmci
     logical :: hints
     character(len=:), allocatable :: own, outer, saved
 
@@ -2151,20 +2151,55 @@
        call apply_clears(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), gc_i1(scope_info(vs_get(vst, base + 5))))
     end do
 
+    ! with CLOTRAN_VM=1, the fn one function of the generated VM's program
+    ! where it can run every arity (vm.inc): each arity's body then an
+    ! N_VMB naming its clause, the function's constants kept alive by it
+    vmfid = -1
+    if (vm_enabled()) then
+       block
+         type(gc_value) :: consts, nm
+         nm = gc_str(tctx%fn_path, [vs_get(vst, base + 5), vs_get(vst, base + 7)])
+         call vs_set(vst, base + 8, nm)
+         vmfid = vm_compile_fn(vs_get(vst, base + 7), gc_i1(scope_info(vs_get(vst, base + 5))), &
+              gc_slot(scope_info(vs_get(vst, base + 5)), 1), self_slot, vs_get(vst, base + 8), vmci, consts, &
+              [vs_get(vst, base + 5), vs_get(vst, base + 7), vs_get(vst, base + 8)])
+         if (vmfid >= 0) then
+            call vs_set(vst, base + 6, consts)
+            do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
+               block
+                 type(gc_value) :: info, nd2, ar0, ar2
+                 integer :: nl
+                 ar0 = gcv_nth(vs_get(vst, base + 7), i)
+                 nl = int_of(gcv_nth(ar0, 0))
+                 if (truthy(gcv_nth(ar0, 1))) nl = nl + 1
+                 info = int_vec([int_of(gcv_nth(ar0, 2)), nl], [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7)])
+                 call vs_set(vst, base + 8, info)
+                 nd2 = mk_node(N_VMB, gc_nil(), vs_get(vst, base + 6), vs_get(vst, base + 8), vmci + i, &
+                      [vs_get(vst, base + 5), vs_get(vst, base + 7)])
+                 call gc_set_slot(nd2, 4, gc_slot(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), 4))
+                 call gc_set_slot(nd2, 5, gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3))
+                 call vs_set(vst, base + 8, nd2)
+                 ar2 = gcv_conj(gcv_nth(vs_get(vst, base + 7), i), vs_get(vst, base + 8), [vs_get(vst, base + 5), vs_get(vst, base + 7)])
+                 call vs_set(vst, base + 8, ar2)
+                 arities = gcv_assoc(vs_get(vst, base + 7), i, vs_get(vst, base + 8), [vs_get(vst, base + 5)])
+                 call vs_set(vst, base + 7, arities)
+               end block
+            end do
+            call vs_set(vst, base + 6, gc_nil())
+         end if
+       end block
+    end if
+
     ! the flat form of each arity, beside its tree (flat.inc); its
     ! temporaries widen the frame past the named slots
     nflat = 0
     do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
+       if (vmfid >= 0) exit
        block
          type(gc_value) :: fl, ar2
          integer :: nt
-         ! the generated VM's form where it can run the arity (vm.inc),
-         ! with CLOTRAN_VM=1; else the flat form
-         fl = gc_nil()
          nt = 0
-         if (vm_enabled()) fl = vm_compile_arity(gcv_nth(vs_get(vst, base + 7), i), &
-              gc_i1(scope_info(vs_get(vst, base + 5))), [vs_get(vst, base + 5), vs_get(vst, base + 7)])
-         if (fl%tag == GCT_NIL) fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), gc_i1(scope_info(vs_get(vst, base + 5))), nt, &
+         fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), gc_i1(scope_info(vs_get(vst, base + 5))), nt, &
               [vs_get(vst, base + 5), vs_get(vst, base + 7)])
          if (fl%tag /= GCT_NIL) then
             call vs_set(vst, base + 8, fl)
@@ -2216,6 +2251,9 @@
     ! and the display name, for frames and traces (fn_display)
     call vs_set(vst, base + 6, gc_str(tctx%fn_path, [vs_get(vst, base + 5), vs_get(vst, base + 8)]))
     tmpl = gcv_conj(vs_get(vst, base + 8), vs_get(vst, base + 6), [vs_get(vst, base + 5)])
+    call vs_set(vst, base + 8, tmpl)
+    ! and the generated VM's function id, or -1 (vm.inc; VmRuntime rt_clop)
+    tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(int(vmfid, gc_ip)), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
     tctx%fn_path = saved
     nd = mk_node(N_FN, gc_nil(), vs_get(vst, base + 8), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])

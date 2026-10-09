@@ -2,27 +2,32 @@
   ! vm.inc -- fn bodies run by the GENERATED VM (PLAN step 30). Included
   ! into Eval.f90. CLOTRAN_VM=1 turns it on; off, nothing here runs.
   !
-  ! An arity whose nodes are all ones this file knows is translated to
-  ! vmx2's core language, compiled by the generated compiler
-  ! (src/f/gen/vmc_gen.f90, vmicg_program), its superinstructions tagged
-  ! by the generated pass (vmg_fuse_prog), checked inside the bounds a
-  ! run assumes (vmg_good), and run by the generated fused step
-  ! (vmg_xstep). vmfg-correct is the theorem: what that pipeline runs
-  ! answers what the core expression means. This file is the glue the
-  ! theorem does not cover -- the translation from clotran's tree, and
-  ! the runtime under the VM (VmRuntime.f90) -- and the fuzzers compare
-  ! it with the tree and flat modes.
+  ! ONE PROGRAM. Every fn the VM can run is one function of a single
+  ! program that grows as fns are analysed: its arities are the
+  ! function's clauses, compiled by the generated compiler
+  ! (src/f/gen/vmc_gen.f90, vmicg_defs) at the end of the code, their
+  ! superinstructions tagged by the generated pass (vmg_fuse), and run by
+  ! the generated fused step (vmg_xstep). The fn's template carries its
+  ! function id (index 9), so a clotran closure of it IS one of the
+  ! machine's closures (VmRuntime rt_clop): a call from VM code to it is
+  ! the machine's own call -- a record pushed and a jump -- and only a
+  ! call of anything else goes up to the evaluator ((prim :invoke ..),
+  ! which vmx2 makes of a call of what is not a closure).
   !
-  ! THE PROGRAM for an arity is one function, clause 0, whose parameters
-  ! are the body's ENTRY values: the slots it reads but never binds --
-  ! its arguments, its captures, the fn itself. Main calls it with each
-  ! fetched by a prim, so the whole run is the compiled program from pc 0:
-  !
-  !   e    = (:callv (:mkclo 0) (:prim :clotran.vm/arg (:const 0)) ...)
-  !   defs = ((0 (m body)))
+  ! The theorem (vmfg-correct) is about a program compiled whole and run
+  ! from pc 0. What this file adds and the theorem does not cover, the
+  ! fuzzers check (scripts/fuzz -m vm against clj):
+  !   - the translation from clotran's tree to vmx2's core language;
+  !   - the program built a function at a time, each where a whole
+  !     compile would put it;
+  !   - the entry from the evaluator: the frame a call would make (the
+  !     arguments, the rest packed, the closure above), a call record
+  !     returning to the halt at pc 0, and a jump to the clause.
   !
   ! The translation, node by node:
-  !   const, local          (:const v), (:local i)
+  !   const                 (:const v)
+  !   a parameter           (:local i)
+  !   a capture, the fn     (:capt i), the fn itself (:capt ncap)
   !   var                   (:prim :clotran.vm/deref (:const var))
   !   if, throw             (:if c a b), (:throw e)
   !   do                    nested (:let e1 ..), each value a dead local
@@ -36,11 +41,11 @@
   !   vector, map, set, new, a dot call, fn, lazy-seq
   !                         (:prim NODE parts..): the runtime does what
   !                         flat does with the node (vm_node_hook)
-  !   a call                (:prim f args), f the builtin or Var the
-  !                         analyzer wrote as the head; any other head
-  !                         (:prim :clotran.vm/invoke head args)
-  ! Anything else -- try, letfn, case, def -- and the arity runs as
-  ! before.
+  !   a call of a builtin   (:prim builtin args)
+  !   any other call        (:callv head args)
+  ! and a last clause (0 .. :rest) for a call of no arity the fn has,
+  ! clj's ArityException. Anything else -- try, letfn, case, def -- and
+  ! the fn runs as before.
   ! ===================================================================
 
   ! CLOTRAN_VM=1: fn bodies the VM can run, it runs
@@ -53,16 +58,38 @@
           vmrt_call => vm_call_hook
           vmrt_deref => vm_deref_hook
           vmrt_node => vm_node_hook
+          vmrt_arity => vm_arity_hook
           block
             character(len=8) :: tr
             call get_environment_variable("CLOTRAN_VM_TRACE", tr)
             vm_trace = (trim(tr) == "1")
           end block
-          if (.not. allocated(vm_progs)) allocate(vm_progs(VM_PROGS_MAX))
+          call vm_program_make()
        end if
     end if
     vm_enabled = vm_mode == 1
   end function vm_enabled
+
+  ! The program's arrays, made once and never moved -- threads run it
+  ! while another adds to it. pc 0 is the halt: a return with nothing
+  ! under it, where an entry's call returns to.
+  subroutine vm_program_make()
+    allocate(vmp%code(0:4 * VMP_INSTRS - 1), vmp%pool(0:VMP_INSTRS - 1))
+    allocate(vmp%cln(0:VMP_CLAUSES - 1), vmp%clent(0:VMP_CLAUSES - 1), vmp%clrest(0:VMP_CLAUSES - 1))
+    allocate(vmp%fnfirst(0:VMP_FNS - 1), vmp%fncount(0:VMP_FNS - 1))
+    allocate(vmp%stk(0:0), vmp%ckind(0:0), vmp%ca(0:0), vmp%cb(0:0), vmp%cc(0:0), vmp%cprev(0:0))
+    vmp%code = 0
+    vmp%pool = gc_nil()
+    vmp%cln = 0
+    vmp%clent = 0
+    vmp%clrest = 0
+    vmp%fnfirst = 0
+    vmp%fncount = 0
+    vmp%code(0) = 11
+    vmp_pc = 1
+    vmp_ci = 0
+    vmp_f = 0
+  end subroutine vm_program_make
 
   ! the runtime's call: fn on the nargs values above argbase. A throw
   ! answers the thrown value -- or, for an error raised as a message
@@ -79,6 +106,14 @@
     tctx => ctx_self()
     vst => tctx%stk
     out = gce_apply_slots(vst, fn, argbase, nargs)
+    call vm_took(tctx, ok, out, fn)
+  end subroutine vm_call_hook
+
+  subroutine vm_took(tctx, ok, out, root)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    logical, intent(out) :: ok
+    type(gc_value), intent(inout) :: out
+    type(gc_value), intent(in) :: root
     ok = .not. tctx%has_error
     if (.not. ok) then
        out = thrown_value()
@@ -86,11 +121,38 @@
           block
             character(len=:), allocatable :: msg
             call gce_error(s=msg)
-            out = error_value(msg, [fn])
+            out = error_value(msg, [root])
           end block
        end if
     end if
-  end subroutine vm_call_hook
+  end subroutine vm_took
+
+  ! a call of no arity the fn has: clj's ArityException, the count the
+  ! arguments' (the last clause's rest list), the fn named by its display
+  ! name (the constant in argbase+1)
+  recursive subroutine vm_arity_hook(name, argbase, nargs, out, ok)
+    type(gc_value), intent(in) :: name
+    integer, intent(in) :: argbase, nargs
+    type(gc_value), intent(out) :: out
+    logical, intent(out) :: ok
+    type(eval_ctx), pointer :: tctx
+    type(gc_stack), pointer :: vst
+    character(len=:), allocatable :: who
+    character(len=16) :: buf
+    tctx => ctx_self()
+    vst => tctx%stk
+    out = gc_nil()
+    call gcp_str(vs_get(vst, argbase + 1), .false., s=who)
+    write(buf, '(i0)') seq_len(vs_get(vst, argbase + nargs))
+    call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(buf) // ") passed to: " // who, [name])
+    call vm_took(tctx, ok, out, name)
+  end subroutine vm_arity_hook
+
+  function vm_deref_hook(var) result(v)
+    type(gc_value), intent(in) :: var
+    type(gc_value) :: v
+    v = var_deref(var, [var])
+  end function vm_deref_hook
 
   ! the runtime's node: what flat does for a node the VM leaves to it
   ! (F_COLL, F_NEW, F_DOT, F_FN, F_LAZY), on the n values above argbase --
@@ -104,7 +166,7 @@
     logical, intent(out) :: ok
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value) :: argv, x, capv
+    type(gc_value) :: x, capv
     integer :: base, j, from, ncap, hi
     tctx => ctx_self()
     vst => tctx%stk
@@ -155,17 +217,7 @@
           call gc_set_i1(out, LAZY_PENDING)
        end if
     end select
-    ok = .not. tctx%has_error
-    if (.not. ok) then
-       out = thrown_value()
-       if (out%tag == GCT_NIL) then
-          block
-            character(len=:), allocatable :: msg
-            call gce_error(s=msg)
-            out = error_value(msg, [nd])
-          end block
-       end if
-    end if
+    call vm_took(tctx, ok, out, nd)
     call vs_leave(vst, base)
   end subroutine vm_node_hook
 
@@ -186,12 +238,6 @@
     v = vs_get(vst, base + 1)
     call vs_leave(vst, base)
   end function vm_slots_vec
-
-  function vm_deref_hook(var) result(v)
-    type(gc_value), intent(in) :: var
-    type(gc_value) :: v
-    v = var_deref(var, [var])
-  end function vm_deref_hook
 
   ! ---- THE TRANSLATION -------------------------------------------------
 
@@ -218,8 +264,8 @@
     k = rt_keyword(name)
   end function vm_kw
 
-  ! The slots a body binds and the slots it reads, and whether it holds a
-  ! node the VM cannot run (vm_scan); the fn's own recur's parameters.
+  ! The slots a body binds and reads, and whether it holds a node the VM
+  ! cannot run; whether the fn's own recur is in it.
   recursive subroutine vm_scan(c, nd)
     type(vm_tr_ctx), intent(inout) :: c
     type(gc_value), intent(in) :: nd
@@ -235,11 +281,21 @@
     case (N_CONST, N_VAR)
     case (N_LOCAL)
        call vm_mark(c%reads, gc_i2(nd), c)
-    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT)
+    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT, N_CALL)
        if (gcv_is(kids)) then
           do i = 0, gcv_count(kids) - 1
              call vm_scan(c, gcv_nth(kids, i))
           end do
+       end if
+       if (gc_i1(nd) == N_CALL) then
+          head = gcv_nth(kids, 0)
+          if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST) then
+             ! a builtin that is a runtime fn of the analyzer's own, as flat refuses it
+             if (gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) then
+                if (gc_i1(strip_meta(gc_slot(head, 2))) == B_RTFN .or. gc_i1(strip_meta(gc_slot(head, 2))) == B_UUIDFN) &
+                     c%ok = .false.
+             end if
+          end if
        end if
     case (N_FN, N_LAZY)
        ! the slots its template captures, read here
@@ -258,27 +314,10 @@
        end do
     case (N_RECUR)
        rinfo = gc_slot(nd, 2)
-       if (int_of(gcv_nth(rinfo, 0)) /= 0) then
-          c%fn_recur = .true.
-          c%rstart = int_of(gcv_nth(rinfo, 1))
-          c%rcount = int_of(gcv_nth(rinfo, 2))
-       end if
+       if (int_of(gcv_nth(rinfo, 0)) /= 0) c%fn_recur = .true.
        do i = 0, gcv_count(kids) - 1
           call vm_scan(c, gcv_nth(kids, i))
        end do
-    case (N_CALL)
-       head = gcv_nth(kids, 0)
-       do i = 0, gcv_count(kids) - 1
-          call vm_scan(c, gcv_nth(kids, i))
-       end do
-       if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST) then
-          ! a builtin that is a runtime fn of the analyzer's own (B_RTFN),
-          ! as flat refuses it
-          if (gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) then
-             if (gc_i1(strip_meta(gc_slot(head, 2))) == B_RTFN .or. gc_i1(strip_meta(gc_slot(head, 2))) == B_UUIDFN) &
-                  c%ok = .false.
-          end if
-       end if
     case default
        c%ok = .false.
        if (gc_i1(nd) >= 0 .and. gc_i1(nd) <= 40) vm_refused_by(gc_i1(nd)) = vm_refused_by(gc_i1(nd)) + 1
@@ -296,7 +335,8 @@
     end if
   end subroutine vm_mark
 
-  ! nd as core language; c%map holds each slot's local, c%depth the count
+  ! nd as core language: c%map holds each slot's local, c%capt each
+  ! captured slot's capture index, c%depth the locals' count
   recursive function vm_tr(c, nd, roots) result(e)
     type(vm_tr_ctx), intent(inout) :: c
     type(gc_value), intent(in) :: nd, roots(:)
@@ -310,7 +350,7 @@
     kids = gc_slot(nd, 1)
     nk = 0
     if (gcv_is(kids)) nk = gcv_count(kids)
-    ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw
+    ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
@@ -318,20 +358,9 @@
        call vs_set(vst, base + 5, vm_kw("const"))
        e = vm_l([vs_get(vst, base + 5), gc_slot(nd, 2)], [roots, vs_get(vst, base + 1)])
     case (N_LOCAL)
-       i = c%map(gc_i2(nd))
-       if (i < 0) then
-          c%ok = .false.
-       else
-          call vs_set(vst, base + 5, vm_kw("local"))
-          e = vm_l([vs_get(vst, base + 5), gc_int(int(i, gc_ip))], roots)
-       end if
+       e = vm_slot_ref(c, gc_i2(nd), roots)
     case (N_VAR)
-       call vs_set(vst, base + 5, vm_kw("const"))
-       x = vm_l([vs_get(vst, base + 5), gc_slot(nd, 2)], [roots, vs_get(vst, base + 1)])
-       call vs_set(vst, base + 3, x)
-       call vs_set(vst, base + 5, vm_kw("prim"))
-       call vs_set(vst, base + 4, vm_kw("clotran.vm/deref"))
-       e = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 4), vs_get(vst, base + 3)], roots)
+       e = vm_deref_of(gc_slot(nd, 2), [roots, vs_get(vst, base + 1)])
     case (N_IF)
        call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
        if (nk == 2) then
@@ -351,14 +380,10 @@
        call vs_set(vst, base + 2, gcv_empty(roots))
        x = gcv_nth(gc_slot(nd, 2), 2)
        call vs_set(vst, base + 6, x)
-       call vs_set(vst, base + 5, vm_kw("local"))
        do i = 0, gcv_count(vs_get(vst, base + 6)) / 2 - 1
-          n = c%map(int_of(gcv_nth(vs_get(vst, base + 6), 2 * i)))
-          if (n < 0) then
-             c%ok = .false.
-             exit
-          end if
-          x = vm_l([vs_get(vst, base + 5), gc_int(int(n, gc_ip))], [roots, vs_get(vst, base + 2), vs_get(vst, base + 6)])
+          x = vm_slot_ref(c, int_of(gcv_nth(vs_get(vst, base + 6), 2 * i)), [roots, vs_get(vst, base + 2), &
+               vs_get(vst, base + 6)])
+          if (.not. c%ok) exit
           call vs_set(vst, base + 3, x)
           x = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [roots, vs_get(vst, base + 2), vs_get(vst, base + 6)])
           call vs_set(vst, base + 2, x)
@@ -442,25 +467,29 @@
        head = gcv_nth(kids, 0)
        call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
        if (c%ok) then
-          if (gc_kind(head) == OBJ_AST .and. (gc_i1(head) == N_CONST .or. gc_i1(head) == N_VAR)) then
-             ! the head a constant of the program: (:prim f args ..)
+          if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST .and. &
+               gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) then
+             ! a builtin: the runtime's own operation, (:prim f args ..)
              call vs_set(vst, base + 4, gc_slot(head, 2))
-          else
-             x = vm_tr(c, head, [roots, vs_get(vst, base + 2)])
-             call vs_set(vst, base + 3, x)
-             x = vm_l([vs_get(vst, base + 3)], [roots, vs_get(vst, base + 2)])
-             call vs_set(vst, base + 3, x)
-             x = list_to_vec_prepend(vs_get(vst, base + 3), vs_get(vst, base + 2), [roots])
-             call vs_set(vst, base + 2, x)
-             call vs_set(vst, base + 4, vm_kw("clotran.vm/invoke"))
-          end if
-          if (c%ok) then
              x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
              call vs_set(vst, base + 3, x)
              x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
              call vs_set(vst, base + 3, x)
              call vs_set(vst, base + 5, vm_kw("prim"))
              e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
+          else
+             ! anything else: the machine's call, (:callv f args ..) -- its
+             ! own when f is one of its closures, the runtime's otherwise
+             x = vm_tr(c, head, [roots, vs_get(vst, base + 2)])
+             call vs_set(vst, base + 4, x)
+             if (c%ok) then
+                x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
+                call vs_set(vst, base + 3, x)
+                x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
+                call vs_set(vst, base + 3, x)
+                call vs_set(vst, base + 5, vm_kw("callv"))
+                e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
+             end if
           end if
        end if
     case default
@@ -470,6 +499,48 @@
     call vs_leave(vst, base)
     e = v
   end function vm_tr
+
+  ! a slot read: a local, a capture (:capt i), or the fn itself
+  function vm_slot_ref(c, s, roots) result(e)
+    type(vm_tr_ctx), intent(inout) :: c
+    integer, intent(in) :: s
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: e
+    type(gc_stack), pointer :: vst
+    integer :: base
+    e = gc_nil()
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
+    if (s < 0 .or. s > ubound(c%map, 1)) then
+       c%ok = .false.
+    else if (c%map(s) >= 0) then
+       call vs_set(vst, base + 1, vm_kw("local"))
+       e = vm_l([vs_get(vst, base + 1), gc_int(int(c%map(s), gc_ip))], roots)
+    else if (c%capt(s) >= 0) then
+       call vs_set(vst, base + 1, vm_kw("capt"))
+       e = vm_l([vs_get(vst, base + 1), gc_int(int(c%capt(s), gc_ip))], roots)
+    else
+       c%ok = .false.
+    end if
+    call vs_leave(vst, base)
+  end function vm_slot_ref
+
+  ! (:prim :clotran.vm/deref (:const var))
+  function vm_deref_of(var, roots) result(e)
+    type(gc_value), intent(in) :: var, roots(:)
+    type(gc_value) :: e, x
+    type(gc_stack), pointer :: vst
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, vm_kw("const"))
+    x = vm_l([vs_get(vst, base + 1), var], [roots, var])
+    call vs_set(vst, base + 2, x)
+    call vs_set(vst, base + 1, vm_kw("prim"))
+    call vs_set(vst, base + 3, vm_kw("clotran.vm/deref"))
+    e = vm_l([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 2)], roots)
+    call vs_leave(vst, base)
+  end function vm_deref_of
 
   ! kids i..j translated into a vector in slot acc; bump: each a dead local
   recursive subroutine vm_tr_kids(c, kids, i, j, acc, roots, bump)
@@ -566,307 +637,295 @@
     call vs_leave(vst, base)
   end function vec_to_list
 
-  ! [first-of-l v0 v1 ..]: l's one element, then v's
-  function list_to_vec_prepend(l, v, roots) result(out)
-    type(gc_value), intent(in) :: l, v, roots(:)
-    type(gc_value) :: out
-    type(gc_stack), pointer :: vst
-    integer :: base, i
-    vst => gc_my_stack()
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, l)
-    call vs_set(vst, base + 2, v)
-    out = gcv_empty([roots, l, v])
-    call vs_set(vst, base + 3, out)
-    out = gcv_conj(vs_get(vst, base + 3), gcl_first(vs_get(vst, base + 1)), [roots, vs_get(vst, base + 1), &
-         vs_get(vst, base + 2), vs_get(vst, base + 3)])
-    call vs_set(vst, base + 3, out)
-    do i = 0, gcv_count(v) - 1
-       out = gcv_conj(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 2), i), [roots, vs_get(vst, base + 2), &
-            vs_get(vst, base + 3)])
-       call vs_set(vst, base + 3, out)
-    end do
-    out = vs_get(vst, base + 3)
-    call vs_leave(vst, base)
-  end function list_to_vec_prepend
+  ! ---- A FN: its arities one function of the program -------------------
 
-  ! ---- THE COMPILE -----------------------------------------------------
-
-  ! The arity ar as an N_VMB node, or nil when the VM cannot run it.
-  function vm_compile_arity(ar, nslots, roots) result(nd)
-    type(gc_value), intent(in) :: ar, roots(:)
-    integer, intent(in) :: nslots
-    type(gc_value) :: nd, x, body
+  ! One arity ar of a fn whose frame has nslots slots, captures capv
+  ! (outer, inner) pairs and the fn itself in self_slot, as a clause
+  ! (n body) or (n body :rest); nil when the VM cannot run it.
+  function vm_clause(ar, nslots, capv, self_slot, roots) result(cl)
+    type(gc_value), intent(in) :: ar, capv, roots(:)
+    integer, intent(in) :: nslots, self_slot
+    type(gc_value) :: cl, x, body
     type(gc_stack), pointer :: vst
     type(vm_tr_ctx), allocatable :: c
-    type(vm_state) :: cst
-    type(vc_state) :: cce
-    integer :: base, i, m, s, p
-    integer(gc_ip), parameter :: one = 1
-    nd = gc_nil()
+    integer :: base, i, nfixed, start, nl, ncap, s
+    logical :: variadic
+    cl = gc_nil()
     if (nslots > 4000) return
     vst => gc_my_stack()
+    nfixed = int_of(gcv_nth(ar, 0))
+    variadic = truthy(gcv_nth(ar, 1))
+    start = int_of(gcv_nth(ar, 2))
     body = gcv_nth(ar, 3)
+    nl = nfixed
+    if (variadic) nl = nl + 1
+    ncap = gcv_count(capv) / 2
     allocate(c)
-    allocate(c%reads(0:nslots + 8), c%binds(0:nslots + 8), c%map(0:nslots + 8))
+    allocate(c%reads(0:nslots + 8), c%binds(0:nslots + 8), c%map(0:nslots + 8), c%capt(0:nslots + 8))
     c%reads = .false.
     c%binds = .false.
     c%map = -1
+    c%capt = -1
     call vm_scan(c, body)
-    if (.not. c%ok) then
-       vm_n_refused = vm_n_refused + 1
-       return
-    end if
-    ! the entry values: read and never bound, and the fn recur's parameters
-    if (c%fn_recur) then
-       do s = c%rstart, c%rstart + c%rcount - 1
-          call vm_mark(c%reads, s, c)
-       end do
-    end if
-    m = 0
-    allocate(c%entry(0:nslots + 8))
-    do s = 0, ubound(c%reads, 1)
-       if (c%reads(s) .and. .not. c%binds(s)) then
-          c%map(s) = m
-          c%entry(m) = s
-          m = m + 1
-       end if
+    if (.not. c%ok) return
+    ! the parameters the clause's locals, the captures and the fn its closure's
+    do i = 0, nl - 1
+       c%map(start + i) = i
     end do
-    c%depth = m
-    ! slots: 1 body, 2 the body's core, 3 4 scratch, 5 e, 6 defs, 7 kw
-    base = vs_enter(vst, 8)
+    do i = 0, ncap - 1
+       s = int_of(gcv_nth(capv, 2 * i + 1))
+       if (s >= 0 .and. s <= ubound(c%capt, 1)) c%capt(s) = i
+    end do
+    if (self_slot >= 0 .and. self_slot <= ubound(c%capt, 1)) c%capt(self_slot) = ncap
+    c%depth = nl
+    base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, body)
     if (c%fn_recur) then
-       ! (:loop ((:local p0) ..) body): the parameters the loop's
+       ! (:loop ((:local 0) .. (:local nl-1)) body): the parameters the loop's
        call vs_set(vst, base + 3, gcv_empty(roots))
-       call vs_set(vst, base + 7, vm_kw("local"))
-       do i = 0, c%rcount - 1
-          x = vm_l([vs_get(vst, base + 7), gc_int(int(c%map(c%rstart + i), gc_ip))], [roots, vs_get(vst, base + 3)])
+       call vs_set(vst, base + 5, vm_kw("local"))
+       do i = 0, nl - 1
+          x = vm_l([vs_get(vst, base + 5), gc_int(int(i, gc_ip))], [roots, vs_get(vst, base + 3)])
           call vs_set(vst, base + 4, x)
           x = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
           call vs_set(vst, base + 3, x)
+          c%map(start + i) = nl + i
        end do
-       do i = 0, c%rcount - 1
-          c%map(c%rstart + i) = c%depth + i
-       end do
-       c%depth = c%depth + c%rcount
+       c%depth = 2 * nl
        x = vm_tr(c, vs_get(vst, base + 1), [roots, vs_get(vst, base + 3)])
        call vs_set(vst, base + 2, x)
        if (c%ok) then
           x = vec_to_list(vs_get(vst, base + 3), [roots, vs_get(vst, base + 2)])
           call vs_set(vst, base + 3, x)
-          call vs_set(vst, base + 7, vm_kw("loop"))
-          x = vm_l([vs_get(vst, base + 7), vs_get(vst, base + 3), vs_get(vst, base + 2)], roots)
+          call vs_set(vst, base + 5, vm_kw("loop"))
+          x = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 3), vs_get(vst, base + 2)], roots)
           call vs_set(vst, base + 2, x)
        end if
     else
        x = vm_tr(c, vs_get(vst, base + 1), roots)
        call vs_set(vst, base + 2, x)
     end if
-    if (.not. c%ok) then
-       vm_n_refused = vm_n_refused + 1
-       call vs_leave(vst, base)
-       return
+    if (c%ok) then
+       if (variadic) then
+          call vs_set(vst, base + 5, vm_kw("rest"))
+          cl = vm_l([gc_int(int(nfixed, gc_ip)), vs_get(vst, base + 2), vs_get(vst, base + 5)], roots)
+       else
+          cl = vm_l([gc_int(int(nfixed, gc_ip)), vs_get(vst, base + 2)], roots)
+       end if
     end if
-    ! defs = ((0 (m body)))
-    x = vm_l([gc_int(int(m, gc_ip)), vs_get(vst, base + 2)], roots)
-    call vs_set(vst, base + 3, x)
-    x = vm_l([gc_int(0_gc_ip), vs_get(vst, base + 3)], roots)
-    call vs_set(vst, base + 3, x)
-    x = vm_l([vs_get(vst, base + 3)], roots)
-    call vs_set(vst, base + 6, x)
-    ! e = (:callv (:mkclo 0) (:prim :clotran.vm/arg (:const i)) ..)
-    call vs_set(vst, base + 4, gc_nil())
-    do i = m - 1, 0, -1
-       call vs_set(vst, base + 7, vm_kw("const"))
-       x = vm_l([vs_get(vst, base + 7), gc_int(int(i, gc_ip))], [roots, vs_get(vst, base + 4), vs_get(vst, base + 6)])
-       call vs_set(vst, base + 3, x)
-       call vs_set(vst, base + 7, vm_kw("clotran.vm/arg"))
-       call vs_set(vst, base + 8, vm_kw("prim"))
-       x = vm_l([vs_get(vst, base + 8), vs_get(vst, base + 7), vs_get(vst, base + 3)], [roots, vs_get(vst, base + 4), &
-            vs_get(vst, base + 6)])
-       call vs_set(vst, base + 3, x)
-       x = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 4), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4), &
-            vs_get(vst, base + 6)])
-       call vs_set(vst, base + 4, x)
-    end do
-    call vs_set(vst, base + 7, vm_kw("mkclo"))
-    x = vm_l([vs_get(vst, base + 7), gc_int(0_gc_ip)], [roots, vs_get(vst, base + 4), vs_get(vst, base + 6)])
-    call vs_set(vst, base + 3, x)
-    x = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 4), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4), &
-         vs_get(vst, base + 6)])
-    call vs_set(vst, base + 4, x)
-    call vs_set(vst, base + 7, vm_kw("callv"))
-    x = gcl_cons(vs_get(vst, base + 7), vs_get(vst, base + 4), [roots, vs_get(vst, base + 4), vs_get(vst, base + 6)])
-    call vs_set(vst, base + 5, x)
-
-    ! CLOTRAN_VM_TRACE=1: each arity's core language, on stderr
-    block
-      character(len=:), allocatable :: txt
-      if (vm_trace) then
-         call gcp_str(vs_get(vst, base + 6), .true., s=txt)
-         write(0, '(a, *(1x, i0))') 'vm: entry slots', c%entry(0:m - 1)
-         write(0, '(a, a)') 'vm: defs ', txt
-      end if
-    end block
-    ! the generated compiler, the generated pass, the bounds
-    call vm_state_empty(cst)
-    allocate(cce%env(0:-1))
-    call vmicg_program(cst, cce, vs_get(vst, base + 5), vs_get(vst, base + 6), one, 4_gc_ip)
-    if (cce%err /= 0 .or. cst%status /= 0) then
-       vm_n_refused = vm_n_refused + 1
-       call vm_state_free(cst, .true.)
-       deallocate(cce%env)
-       call vs_leave(vst, base)
-       return
-    end if
-    call vmg_fuse_prog(cst)
-    deallocate(cce%env)
-    if (.not. vmg_good(cst)) then
-       vm_n_refused = vm_n_refused + 1
-       call vm_state_free(cst, .true.)
-       call vs_leave(vst, base)
-       return
-    end if
-    p = vm_prog_add(cst, m, c%entry)
-    if (p < 0) then
-       vm_n_refused = vm_n_refused + 1
-       call vm_state_free(cst, .true.)
-       call vs_leave(vst, base)
-       return
-    end if
-    ! the program's constants, kept alive by the node; the tree beside it
-    x = gc_vec(size(cst%pool), [roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 3, x)
-    do i = 1, size(cst%pool)
-       call gc_vec_set(vs_get(vst, base + 3), i, cst%pool(i - 1))
-    end do
-    call vm_state_free(cst, .false.)
-    nd = mk_node(N_VMB, gc_nil(), vs_get(vst, base + 3), gc_nil(), p, [roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 4, nd)
-    call gc_set_slot(nd, 4, gc_slot(vs_get(vst, base + 1), 4))
-    call gc_set_slot(nd, 5, vs_get(vst, base + 1))
-    vm_n_ok = vm_n_ok + 1
     call vs_leave(vst, base)
-  end function vm_compile_arity
+  end function vm_clause
 
-  subroutine vm_state_empty(st)
-    type(vm_state), intent(inout) :: st
-    allocate(st%code(0:-1), st%pool(0:-1), st%stk(0:-1), st%ckind(0:-1), st%ca(0:-1), st%cb(0:-1), st%cc(0:-1))
-    allocate(st%cprev(0:-1), st%fnfirst(0:-1), st%fncount(0:-1), st%cln(0:-1), st%clent(0:-1), st%clrest(0:-1))
-  end subroutine vm_state_empty
-
-  ! the compile's arrays let go; the program's too unless the table took them
-  subroutine vm_state_free(st, all)
-    type(vm_state), intent(inout) :: st
-    logical, intent(in) :: all
-    deallocate(st%stk, st%ckind, st%ca, st%cb, st%cc, st%cprev)
-    if (all) deallocate(st%code, st%pool, st%fnfirst, st%fncount, st%cln, st%clent, st%clrest)
-  end subroutine vm_state_free
-
-  ! the program into the table: code, pool and the function table move;
-  ! the stack it needs is at most one slot an instruction past its entry
-  ! values, the control stack main's call and nothing else
-  integer function vm_prog_add(cst, m, entry) result(p)
-    type(vm_state), intent(inout) :: cst
-    integer, intent(in) :: m, entry(0:)
+  ! The fn whose arities, frame size, captures and self slot these are,
+  ! compiled as one function of the program: its id, or -1. clause0 the
+  ! first arity's clause index (arity i is clause0 + i); consts the
+  ! program's constants of it, which the caller keeps alive.
+  function vm_compile_fn(arities, nslots, capv, self_slot, display, clause0, consts, roots) result(f)
+    type(gc_value), intent(in) :: arities, capv, display, roots(:)
+    integer, intent(in) :: nslots, self_slot
+    integer, intent(out) :: clause0
+    type(gc_value), intent(out) :: consts
+    integer :: f
+    type(gc_value) :: x
+    type(gc_stack), pointer :: vst
+    type(vm_state) :: t
+    type(vc_state) :: cce
+    integer :: base, i, na, p0, c0
+    integer(gc_ip) :: sz, pend, j
+    f = -1
+    clause0 = -1
+    consts = gc_nil()
+    vst => gc_my_stack()
+    na = gcv_count(arities)
+    ! slots: 1 the clauses, 2 3 scratch, 4 kw, 5 kw
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, gcv_empty(roots))
+    do i = 0, na - 1
+       x = vm_clause(gcv_nth(arities, i), nslots, capv, self_slot, [roots, vs_get(vst, base + 1)])
+       if (x%tag == GCT_NIL) then
+          vm_n_refused = vm_n_refused + 1
+          call vs_leave(vst, base)
+          return
+       end if
+       call vs_set(vst, base + 2, x)
+       x = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 1, x)
+    end do
+    ! the last clause: a call of no arity the fn has, clj's ArityException
+    ! (0 (:prim :clotran.vm/arity (:const name) (:local 0)) :rest)
+    call vs_set(vst, base + 4, vm_kw("const"))
+    x = vm_l([vs_get(vst, base + 4), display], [roots, vs_get(vst, base + 1), display])
+    call vs_set(vst, base + 2, x)
+    call vs_set(vst, base + 4, vm_kw("local"))
+    x = vm_l([vs_get(vst, base + 4), gc_int(0_gc_ip)], [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, x)
+    call vs_set(vst, base + 4, vm_kw("clotran.vm/arity"))
+    call vs_set(vst, base + 5, vm_kw("prim"))
+    x = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 4), vs_get(vst, base + 2), vs_get(vst, base + 3)], &
+         [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, x)
+    call vs_set(vst, base + 4, vm_kw("rest"))
+    x = vm_l([gc_int(0_gc_ip), vs_get(vst, base + 2), vs_get(vst, base + 4)], [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, x)
+    x = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 1, x)
+    x = vec_to_list(vs_get(vst, base + 1), roots)
+    call vs_set(vst, base + 1, x)
+    ! its place in the program, reserved: the code, the clauses, the id
+    sz = vmicg_size_clauses(vs_get(vst, base + 1))
     call gc_state_lock()
-    if (n_vm_progs < VM_PROGS_MAX) then
-       n_vm_progs = n_vm_progs + 1
-       p = n_vm_progs
-    else
-       p = -1
+    if (vmp_pc + sz + 1 < VMP_INSTRS .and. vmp_ci + na + 1 < VMP_CLAUSES .and. vmp_f + 1 < VMP_FNS) then
+       f = vmp_f
+       c0 = vmp_ci
+       p0 = int(vmp_pc)
+       vmp_f = vmp_f + 1
+       vmp_ci = vmp_ci + na + 1
+       vmp_pc = vmp_pc + int(sz)
     end if
     call gc_state_unlock()
-    if (p < 0) return
-    vm_progs(p)%code => cst%code
-    vm_progs(p)%pool => cst%pool
-    vm_progs(p)%fnfirst => cst%fnfirst
-    vm_progs(p)%fncount => cst%fncount
-    vm_progs(p)%cln => cst%cln
-    vm_progs(p)%clent => cst%clent
-    vm_progs(p)%clrest => cst%clrest
-    vm_progs(p)%nent = m
-    allocate(vm_progs(p)%entry(0:max(m, 1) - 1))
-    vm_progs(p)%entry(0:m - 1) = entry(0:m - 1)
-    vm_progs(p)%nstk = size(cst%code) / 4 + m + 8
-    vm_progs(p)%nctl = 4
-  end function vm_prog_add
+    if (f < 0) then
+       vm_n_refused = vm_n_refused + 1
+       call vs_leave(vst, base)
+       return
+    end if
+    ! ((f . clauses)), compiled at p0 by the generated compiler
+    x = gcl_cons(gc_int(int(f, gc_ip)), vs_get(vst, base + 1), [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, x)
+    x = vm_l([vs_get(vst, base + 2)], roots)
+    call vs_set(vst, base + 3, x)
+    if (vm_trace) then
+       block
+         character(len=:), allocatable :: txt
+         call gcp_str(vs_get(vst, base + 3), .true., s=txt)
+         write(0, '(a, i0, a, i0, a, a)') 'vm: fn ', f, ' at ', p0, ' ', txt
+       end block
+    end if
+    t = vmp
+    t%status = 0
+    allocate(cce%env(0:4095))
+    cce%env = 0
+    cce%err = 0
+    call vmicg_defs(t, cce, vs_get(vst, base + 3), int(f, gc_ip), int(c0, gc_ip), int(p0, gc_ip), pend)
+    deallocate(cce%env)
+    if (cce%err /= 0 .or. t%status /= 0 .or. pend /= p0 + sz) then
+       ! the place stays reserved and unreachable: no template names f
+       vm_n_refused = vm_n_refused + 1
+       f = -1
+       call vs_leave(vst, base)
+       return
+    end if
+    call vmg_fuse(t, int(p0, gc_ip), pend)
+    ! every word the compile wrote inside the bounds a run assumes
+    do j = 4 * p0, 4 * pend - 1
+       if (vmp%code(j) < 0 .or. vmp%code(j) > 1099511627776_gc_ip) then
+          vm_n_refused = vm_n_refused + 1
+          f = -1
+          call vs_leave(vst, base)
+          return
+       end if
+    end do
+    ! the constants, kept alive by the caller
+    x = gc_vec(int(sz), [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, x)
+    do j = 0, sz - 1
+       call gc_vec_set(vs_get(vst, base + 2), int(j) + 1, vmp%pool(p0 + j))
+    end do
+    consts = vs_get(vst, base + 2)
+    clause0 = c0
+    vm_n_ok = vm_n_ok + 1
+    call vs_leave(vst, base)
+  end function vm_compile_fn
 
   ! ---- THE RUN -----------------------------------------------------------
 
-  ! An N_VMB body on frame fr: its entry values copied out of the frame,
-  ! the VM's stack a window of the value stack, stepped until main
-  ! returns. A throw nothing caught is raised again as clotran's error.
-  recursive subroutine vm_run(tctx, nd, fr, val)
+  ! An arity's body, its clause ci of the program, on frame fr of a call of
+  ! fn: the frame a call makes on the VM's stack -- the parameters, the
+  ! rest already packed, the fn above them -- a call record returning to
+  ! the halt at pc 0, and the clause's code until the halt.
+  recursive subroutine vm_run(tctx, nd, fr, fn, val)
     type(eval_ctx), pointer, intent(in) :: tctx
-    type(gc_value), intent(in) :: nd, fr
+    type(gc_value), intent(in) :: nd, fr, fn
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
     type(vm_state) :: st
-    integer :: p, ebase, sbase, i, nstk, nctl, saved_rb
-    integer(gc_ip) :: steps
+    type(gc_value) :: info
+    integer :: sbase, i, nl, start, ci, win, top, hi
+    integer(gc_ip) :: steps, ct0
     character(len=:), allocatable :: msg
-    ! the control stack: main's call is its only record, so four, here
-    integer(gc_ip), target :: ck(0:3), ca(0:3), cb(0:3), cc(0:3), cprev(0:3)
     vst => tctx%stk
-    p = gc_i2(nd)
-    nstk = vm_progs(p)%nstk
-    nctl = vm_progs(p)%nctl
-    ebase = vs_enter(vst, vm_progs(p)%nent + nstk)
-    do i = 0, vm_progs(p)%nent - 1
-       call vs_set(vst, ebase + i + 1, frame_get(fr, vm_entry_slot(nd, i)))
+    ci = gc_i2(nd)
+    info = gc_slot(nd, 3)
+    start = int_of(gcv_nth(info, 0))
+    nl = int_of(gcv_nth(info, 1))
+    ! the stack: a window of the value stack, as much as is free up to 64K
+    ! slots; it is nil already (vs_leave clears what it releases)
+    win = min(VM_WINDOW, (size(vst%vstack) - vst%vs_top) / 4)
+    if (win < nl + 64) then
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [nd])
+       val = gc_nil()
+       return
+    end if
+    sbase = vs_enter(vst, win)
+    do i = 0, nl - 1
+       vst%vstack(sbase + i + 1) = frame_get(fr, start + i)
     end do
-    ! the window is nil already: vs_leave clears what it releases
-    sbase = ebase + vm_progs(p)%nent
-    st%stk(0:nstk - 1) => vst%vstack(sbase + 1:sbase + nstk)
-    st%code => vm_progs(p)%code
-    st%pool => vm_progs(p)%pool
-    st%fnfirst => vm_progs(p)%fnfirst
-    st%fncount => vm_progs(p)%fncount
-    st%cln => vm_progs(p)%cln
-    st%clent => vm_progs(p)%clent
-    st%clrest => vm_progs(p)%clrest
-    ck = 0
-    ca = 0
-    cb = 0
-    cc = 0
-    cprev = 0
-    st%ckind(0:nctl - 1) => ck(0:nctl - 1)
-    st%ca(0:nctl - 1) => ca(0:nctl - 1)
-    st%cb(0:nctl - 1) => cb(0:nctl - 1)
-    st%cc(0:nctl - 1) => cc(0:nctl - 1)
-    st%cprev(0:nctl - 1) => cprev(0:nctl - 1)
-    st%pc = 0
-    st%fb = 0
-    st%sp = 0
-    st%status = 0
-    st%ctop = 0
+    vst%vstack(sbase + nl + 1) = fn
+    st%stk(0:win - 1) => vst%vstack(sbase + 1:sbase + win)
+    st%code => vmp%code
+    st%pool => vmp%pool
+    st%fnfirst => vmp%fnfirst
+    st%fncount => vmp%fncount
+    st%cln => vmp%cln
+    st%clent => vmp%clent
+    st%clrest => vmp%clrest
+    ! the control stack: this thread's, from where an enclosing run left it
+    if (.not. associated(vst%vm_ctl)) then
+       allocate(vst%vm_ctl(0:VM_CTL - 1, 5))
+       vst%vm_ctl_top = 0
+    end if
+    ct0 = vst%vm_ctl_top
+    if (VM_CTL - ct0 < 64) then
+       call vs_leave(vst, sbase)
+       call raise_class("clotran.host.stack_overflow_error", "stack overflow", [nd])
+       val = gc_nil()
+       return
+    end if
+    st%ckind(0:VM_CTL - ct0 - 1) => vst%vm_ctl(ct0:VM_CTL - 1, 1)
+    st%ca(0:VM_CTL - ct0 - 1) => vst%vm_ctl(ct0:VM_CTL - 1, 2)
+    st%cb(0:VM_CTL - ct0 - 1) => vst%vm_ctl(ct0:VM_CTL - 1, 3)
+    st%cc(0:VM_CTL - ct0 - 1) => vst%vm_ctl(ct0:VM_CTL - 1, 4)
+    st%cprev(0:VM_CTL - ct0 - 1) => vst%vm_ctl(ct0:VM_CTL - 1, 5)
+    ! the call record the entry's call pushed: back to the halt
+    st%ckind(0) = 1
+    st%ca(0) = 0
+    st%cb(0) = 0
+    st%cc(0) = 0
+    st%cprev(0) = -1
+    st%ctop = 1
     st%hidx = -1
-    saved_rb = vst%vm_args_rb
-    vst%vm_args_rb = ebase
+    st%fb = 0
+    st%sp = nl + 1
+    st%pc = vmp%clent(ci)
+    st%status = 0
+    ! a run nested in this one (through the evaluator) takes the records
+    ! above; this one's records are below at most how deep it calls, so
+    ! it is told the whole rest and a nested one starts past the most
+    ! this one can have used -- the records are counted as they are taken
+    vst%vm_ctl_top = int(ct0)
+    hi = nl + 1
     steps = 0
     do
        if (st%status /= 0) exit
        if (st%code(4 * st%pc) == 11 .and. st%ctop == 0) exit
+       vst%vm_ctl_top = int(ct0 + st%ctop + 1)
        call vmg_xstep(st)
+       if (st%sp > hi) hi = int(st%sp)
        steps = steps + 1
        if (iand(steps, 4095_gc_ip) == 0) then
           if (gc_stop_pending()) call gc_poll()
        end if
     end do
-    vst%vm_args_rb = saved_rb
-    block
-      character(len=:), allocatable :: txt
-      if (vm_trace) then
-         do i = 0, vm_progs(p)%nent - 1
-            call gcp_str(vs_get(vst, ebase + i + 1), .true., s=txt)
-            write(0, '(a, i0, a, i0, a, a)') 'vm run ', p, ' entry ', i, ': ', txt
-         end do
-         call gcp_str(st%stk(max(st%sp - 1, 0_gc_ip)), .true., s=txt)
-         write(0, '(a, i0, a, i0, a, i0, a, a)') 'vm run ', p, ' status ', st%status, ' sp ', st%sp, ' top ', txt
-      end if
-    end block
+    vst%vm_ctl_top = int(ct0)
     select case (int(st%status))
     case (0)
        val = st%stk(st%sp - 1)
@@ -883,24 +942,22 @@
        end if
        val = gc_nil()
     case default
-       call raise_class("clotran.host.stack_overflow_error", "the VM's stack overflowed", [nd])
+       if (.not. tctx%has_error) call raise_class("clotran.host.stack_overflow_error", "stack overflow", [nd])
        val = gc_nil()
     end select
-    call vs_leave(vst, ebase)
+    if (vm_trace) then
+       write(0, '(a, i0, a, i0, a, i0)') 'vm run clause ', ci, ' status ', st%status, ' steps ', steps
+    end if
+    ! only the slots the run touched to clear: the rest are nil still
+    top = sbase + min(hi + 8, win)
+    if (vst%vs_top > top) vst%vs_top = top
+    call vs_leave(vst, sbase)
   end subroutine vm_run
 
-  ! the frame slot entry value i comes from
-  integer function vm_entry_slot(nd, i)
-    type(gc_value), intent(in) :: nd
-    integer, intent(in) :: i
-    vm_entry_slot = vm_progs(gc_i2(nd))%entry(i)
-  end function vm_entry_slot
-
-  ! CLOTRAN_STATS: how many arities the VM took
+  ! CLOTRAN_STATS: how many fns the VM took
   subroutine vm_stats_print()
     integer :: k
     if (vm_mode /= 1) return
-    write(0, '(a, i0, a, i0, a)') 'vm: ', vm_n_ok, ' arities compiled, ', vm_n_refused, ' refused'
-    write(0, '(a, *(1x, i0, ":", i0))') 'vm: refused by node kind', &
-         (k, vm_refused_by(k), k = 0, 40)
+    write(0, '(a, i0, a, i0, a)') 'vm: ', vm_n_ok, ' fns compiled, ', vm_n_refused, ' refused'
+    write(0, '(a, *(1x, i0, ":", i0))') 'vm: refused by node kind', (k, vm_refused_by(k), k = 0, 40)
   end subroutine vm_stats_print

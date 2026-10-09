@@ -12,10 +12,15 @@
 ;   the builtins compute -- and may throw: an answer (:throw . v) throws v.
 ;   For the checks below an executable one is attached (defattach).
 ;
+;   A CALL OF WHAT IS NOT ONE OF THE MACHINE'S CLOSURES is the runtime's:
+;   (prim :invoke (f . args)), its answer the call's or its throw thrown --
+;   so a call of a builtin, a Var or a fn the machine did not compile is a
+;   call like any other, and the runtime decides what it is.
+;
 ;   THROW AND TRY. (:throw e); (:try body handler), the handler's new
-;   local the thrown value. A call of what is not a function, or with no
-;   clause of its arity, THROWS (:not-fn, :arity), so a try catches it,
-;   as clj's ClassCastException and ArityException are caught. finally is
+;   local the thrown value. A call of a closure with no clause of its
+;   arity THROWS :arity, so a try catches it, as clj's ArityException is
+;   caught. finally is
 ;   not a form: (try B (finally F)) is
 ;       (let [r (try B (catch t (do F (throw t))))] (do F r))
 ;   exactly, F's value being discarded.
@@ -97,7 +102,9 @@
                    rs
                  (let ((rf (mx2 (cadr e) env caps defs fuel)))
                    (cond ((not (valp rf)) rf)
-                         ((not (clop (val rf))) (cons :thrown :not-fn))
+                         ((not (clop (val rf)))
+                          (let ((a (prim :invoke (cons (val rf) (val rs)))))
+                            (if (throwp a) (cons :thrown (cdr a)) (cons :val a))))
                          (t (let* ((cls (cdr (assoc-equal (clo-f (val rf)) defs)))
                                    (cl (pick-arity cls (len (val rs)))))
                               (cond ((not (consp cl)) (cons :thrown :arity))
@@ -197,7 +204,11 @@
                       s
                     (let* ((c (sreg (1- sp) stk)) (fb2 (- sp (1+ m)))
                            (cl (and (clop c) (pick-arity (cdr (assoc-equal (clo-f c) fntab)) m))))
-                      (cond ((not (clop c)) (unwind :not-fn ctl stk))
+                      (cond ((not (clop c))
+                             (let ((a (prim :invoke (cons c (stk-from fb2 m stk)))))
+                               (if (throwp a)
+                                   (unwind (cdr a) ctl stk)
+                                 (list (1+ pc) fb (1+ fb2) (ssetreg fb2 a stk) ctl))))
                             ((not (consp cl)) (unwind :arity ctl stk))
                             ((not (restp cl)) (list (nfix (cadr cl)) fb2 sp stk (cons (list (1+ pc) fb) ctl)))
                             (t (let ((n (nfix (car cl))))
@@ -325,6 +336,8 @@
                    (not (equal (cadr vals) 0)))
               (floor (car vals) (cadr vals))
             (cons :throw :arith)))
+    ;; a call of what is not a closure: here nothing else is callable
+    (:invoke (cons :throw :not-fn))
     (otherwise nil)))
 
 (defattach prim prim-impl)
