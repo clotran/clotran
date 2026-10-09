@@ -4539,6 +4539,19 @@ aim. And a finding on the way: `integer?` costs ~196 ns and `even?` ~357
 (pos? ~33), because core.clj's integer? is a chain of instance? checks
 that clotran resolves at run time and clj's compiler inlines.
 
+**Second fit (2026-10-09).** Interop (`dot`) and `new` their own classes,
+loops for a chunk's .nth and a chunk buffer made, a fn called from the
+host, the hand-written lazy recursion moved into the fit; a class the fit
+set does not exercise is now pinned to 0 and named rather than left free
+-- the first unpinned fit had put 161 us on a lazy force to soak up error.
+Held out: the yardstick +7%, filter -8%, iterate +11%, map -15%, a
+reduce with a Clojure fn -33% (the host's call into the fn is not yet a
+class). Weights: a Clojure frame's return ~88 ns, a host seq operation ~64,
+a var read ~36, an allocation ~34, interop ~21, a recur ~12, a builtin
+through callb ~7, moves and branches ~0 beside them. Lazy forces are not
+measured: the fit's forcing goes through flat_force in line, which
+force_n does not see.
+
 **Order.** (1) the calibration good to ~15% held out (interop and chunk
 operations their own classes); (2) the calling convention in the model --
 a call's frame, its arguments, its return -- with WEIGHTED cost theorems;

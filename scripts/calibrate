@@ -34,7 +34,6 @@
    "(loop [i 0] (if (< i 1000000) (do (lazy-seq nil) (recur (inc i))) i))"
    "(loop [i 0] (if (< i 1000000) (do (seq (lazy-seq nil)) (recur (inc i))) i))"
    "(loop [i 0] (if (< i 1000000) (let [a i b a] (recur (inc b))) i))"
-   "(loop [i 0] (if (< i 1000000) (recur (if (even? i) (inc i) (inc i))) i))"
    "((fn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) 25)"
    "(dotimes [_ 100] ((fn f [n] (if (zero? n) 0 (inc (f (dec n))))) 5000))"
    "(let [v [1 2 3]] (loop [i 0] (if (< i 1000000) (do (first v) (recur (inc i))) i)))"
@@ -42,15 +41,22 @@
    "(let [l (list 1 2 3)] (loop [i 0] (if (< i 1000000) (do (first l) (next l) (recur (inc i))) i)))"
    "(let [l (list 1 2 3)] (loop [i 0] (if (< i 1000000) (do (seq l) (rest l) (recur (inc i))) i)))"
    "(let [s (lazy-seq (cons 1 nil))] (loop [i 0] (if (< i 1000000) (do (seq s) (first s) (recur (inc i))) i)))"
-   "(let [m {:a 1}] (loop [i 0] (if (< i 1000000) (do (get m :a) (recur (inc i))) i)))"])
+   "(let [m {:a 1}] (loop [i 0] (if (< i 1000000) (do (get m :a) (recur (inc i))) i)))"
+   ;; interop: a chunk's .nth, and a chunk buffer made
+   "(let [b (chunk-buffer 32)] (dotimes [i 32] (chunk-append b i)) (let [c (chunk b)] (loop [i 0] (if (< i 1000000) (do (.nth c 3) (recur (inc i))) i))))"
+   "(loop [i 0] (if (< i 300000) (do (chunk-buffer 32) (recur (inc i))) i))"
+   ;; a Clojure fn called from the host, by a builtin
+   "(reduce (fn [a x] a) 0 (range 1000000))"
+   ;; a lazy cell forced by the host
+   "(dorun ((fn step [n] (lazy-seq (when (pos? n) (cons n (step (dec n)))))) 200000))"])
 (def check-forms
   ["(apply + (take 1000000 (range)))"
    "(count (map inc (range 300000)))"
    "(dorun (take 300000 (iterate inc 0)))"
    "(count (filter even? (range 300000)))"
    "(reduce (fn [a x] (+ a x)) 0 (range 300000))"
-   "(dorun ((fn step [n] (lazy-seq (when (pos? n) (cons n (step (dec n)))))) 200000))"
-   "(loop [i 0 l nil] (if (< i 300000) (recur (inc i) (cons i l)) (count l)))"])
+   "(loop [i 0 l nil] (if (< i 300000) (recur (inc i) (cons i l)) (count l)))"
+   "(loop [i 0] (if (< i 1000000) (recur (if (even? i) (inc i) (inc i))) i))"])
 
 (def classes
   ;; opcode -> class: what one weight covers
@@ -58,8 +64,8 @@
    "jmpf" :branch "jmp" :branch "case" :branch
    "var" :var "dlvar" :var
    "call" :call "ret" :ret "recur" :recur "callw" :callw "callb" :callb
-   "lazy" :lazy "fn" :fn "dot" :dot})
-(def features [:one :move :branch :var :call :ret :recur :callw :callb :lazy :fn :dot :other :seqop :builtin :force :alloc])
+   "lazy" :lazy "fn" :fn "dot" :dot "new" :new})
+(def features [:one :move :branch :var :call :ret :recur :callw :callb :lazy :fn :dot :new :other :seqop :builtin :force :entry :alloc])
 
 ;; builtin ids -> names, from Eval.f90's own table; the seq operations
 (def bnames (into {} (for [[_ nm b] (re-seq #"bind_builtin\(\w+, \"([^\"]+)\", (B_\w+)\)" (slurp "src/f/Eval.f90"))] [b nm])))
@@ -81,16 +87,17 @@
         allocs (some-> (re-find #"allocs=(\d+)" out) second parse-long)
         bis (for [[_ id a b] (re-seq #"(?m)^    builtin (\d+) (\d+) (\d+)" out)] [(get bids (parse-long id)) (+ (parse-long a) (parse-long b))])
         force (or (some-> (re-find #"lazy forces=(\d+)" out) second parse-long) 0)
+        entry (or (some-> (re-find #"evals=(\d+)" out) second parse-long) 0)
         pause (fn [k] (or (some-> (re-find (re-pattern (str k " \\d+ total_ms=([\\d.]+)")) out) second parse-double) 0.0))
         el (some-> (re-find #"Elapsed time: ([\d.]+) msecs" out) second parse-double)]
     {:ops ops :allocs (or allocs 0) :gc-ms (+ (pause "young") (pause "full")) :ms el
      :seqop (reduce + 0 (for [[nm n] bis :when (seq-ops nm)] n))
      :builtin (reduce + 0 (for [[nm n] bis :when (not (seq-ops nm))] n))
-     :force force}))
+     :force force :entry entry}))
 
-(defn feats [{:keys [ops allocs seqop builtin force]}]
+(defn feats [{:keys [ops allocs seqop builtin force entry]}]
   (let [by (reduce-kv (fn [m op n] (update m (get classes op :other) (fnil + 0) n)) {} ops)]
-    (assoc by :alloc allocs :one 2 :seqop seqop :builtin builtin :force force)))
+    (assoc by :alloc allocs :one 2 :seqop seqop :builtin builtin :force force :entry entry)))
 
 (def base (parse (run-stats "nil\n")))
 (def base-f (feats base))
@@ -127,7 +134,17 @@
 
 (defn xs-of [rows] (mapv (fn [r] (mapv #(get (:x r) % 0.0) features)) rows))
 (defn ys-of [rows] (mapv (fn [r] (* 1e6 (max 0.0 (- (:ms r) (:gc r))))) rows))
-(def w (nnls (xs-of fit-rows) (ys-of fit-rows)))
+; a class the fit set does not exercise -- under 1000 a run -- has no
+; measured weight: pinned to 0 and named, not left free to soak up error
+(def unexercised
+  (set (for [[j f] (map-indexed vector features)
+             :when (and (not= f :one) (< (apply max 0.0 (map #(nth % j) (xs-of fit-rows))) 1000))]
+         j)))
+(def w (let [xs (mapv (fn [x] (vec (map-indexed (fn [j v] (if (unexercised j) 0.0 v)) x))) (xs-of fit-rows))]
+         (nnls xs (ys-of fit-rows))))
+(when (seq unexercised)
+  (println "NOT MEASURED (the fit set does not exercise them; weight 0):"
+           (str/join " " (map #(name (nth features %)) (sort unexercised)))))
 (def weights (zipmap features w))
 
 (println "weights, ns each (fit to" (count fit-rows) "loops by relative error; collector pauses off):")
