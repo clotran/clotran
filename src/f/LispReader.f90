@@ -1010,6 +1010,17 @@ contains
        t = trim(b)
     case (GCT_CHAR)
        call gcp_str(k, .false., s=t)
+    case (GCT_REAL)
+       ! a double as toString writes it: Infinity and NaN, not ##Inf
+       if (gc_rval(k) /= gc_rval(k)) then
+          t = "NaN"
+       else if (gc_rval(k) > huge(1.0_gc_dp)) then
+          t = "Infinity"
+       else if (gc_rval(k) < -huge(1.0_gc_dp)) then
+          t = "-Infinity"
+       else
+          call gcp_str(k, .false., s=t)
+       end if
     case default
        ! printed, as toString prints it: a BigInt without its N, a
        ! BigDecimal without its M

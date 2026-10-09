@@ -135,4 +135,9 @@
  (let [r (float ##-Inf)] [r (class r)])
  (let [r (float ##Inf)] [r (class r)])
  [(pr-str (unchecked-float ##Inf)) (pr-str (unchecked-float ##-Inf)) (pr-str (float ##NaN)) (pr-str (float 1.5))]
+ ;; a duplicated double key named as toString names it: Infinity, not
+ ;; ##Inf (scripts/fuzz-read)
+ (try (read-string "{##Inf 1 ##Inf 2}") (catch clotran.host.exception e (ex-message e)))
+ (try (read-string "{##-Inf 1 ##-Inf 2}") (catch clotran.host.exception e (ex-message e)))
+ (try (read-string "{1.5 1 1.5 2}") (catch clotran.host.exception e (ex-message e)))
 ]
