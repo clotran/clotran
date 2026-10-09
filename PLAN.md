@@ -4451,6 +4451,34 @@ after the sweep; skipping the vector fill or the text fill in its driver
 is caught. The yardstick does not move (~857 ms). Next, the arena: the
 size-class runs (run_take, runs_fill, slab_alloc).
 
+**Stage 1b, allocation, the arena's runs (2026-10-09).** model/heaprn.lisp:
+a vector's run of 2^(c-1) words for its size class c, from the class's
+free list (linked through the first word's ival, as hpg-slab-free left
+it) or fresh past the arena's used end if it fits; with batching and
+classes 1 to 8, through the thread's batch of 64 per class, filled when
+empty. A run that does not fit is 0, and GC.f90 grows the arena with the
+world stopped and asks again. heaprn-proof.lisp proves, per class over a
+ghost free list and a ghost list R of every other class's free and
+batched runs, that RUNS ARE APART: what run_take hands out lies inside the
+used arena and overlaps no run still free or batched in its class or in
+R (hpg-run-take-safe); taking keeps every other class's invariant
+(hpg-run-take-other); and the sweep's free of a run apart from all free
+runs puts it on its class's list and keeps every class's invariant
+(hpg-slab-free-safe, -other). Intervals, not slots: the invariant is
+pairwise apartness of (off . len) pairs, and the proof is layered --
+run-new, push, pop, fill, from-batch, take-c, take -- because one theorem
+over run_take's composition split past 150 cases. Two small changes to
+the model for the proof: run-pop does not pop an entry that is not a run
+(a batch never holds one), and run_take is three functions. GC.f90's
+run_take is the generated one; runs_fill and slab_alloc are gone, the
+arena's growth kept as arena_grow; gc_vec's in-line batch pop on its fast
+path stays hand-written, as gc_obj's does. One latent bug the model
+caught: a vector longer than 2^29 has a size class past class_head's 30,
+which the hand-written slab_alloc indexed out of bounds; the model takes
+no list for it, only fresh arena. scripts/fuzz-heap-gen makes up to eight
+run takes after the pools' allocations; forcing batching off in its
+driver is caught. The yardstick does not move (~866 ms).
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

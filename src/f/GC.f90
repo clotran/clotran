@@ -2360,53 +2360,28 @@ contains
     str_take = int(r)
   end function str_take
 
-  ! Under the heap lock: this thread's runs of class c topped up from the
-  ! class's free list, then fresh arena if it fits WITHOUT growing (growth
-  ! stays slab_alloc's, with the world stopped). Counted as handed out
-  ! when batched, which is what the arena's collection rule counts.
-  subroutine runs_fill(s, c)
-    type(gc_stack), pointer, intent(in) :: s
-    integer, intent(in) :: c
-    integer :: l, off
-    l = ishft(1, c - 1)
-    do while (s%n_run_b(c) < RUN_BATCH)
-       if (class_head(c) /= 0) then
-          off = class_head(c)
-          class_head(c) = int(vec_store(off)%ival)
-          arena_reused = arena_reused + 1
-       else if (store_used + l <= size(vec_store)) then
-          off = store_used + 1
-          store_used = store_used + l
-          arena_fresh = arena_fresh + 1
-       else
-          exit
-       end if
-       arena_alloc_since = arena_alloc_since + l
-       s%n_run_b(c) = s%n_run_b(c) + 1
-       s%run_b(s%n_run_b(c), c) = off
-    end do
-  end subroutine runs_fill
-
-  ! A run of n for a vector, under the heap lock: from this thread's
-  ! batch of its class when batching and the class is a small one.
+  ! A run of n for a vector, under the heap lock (generated:
+  ! model/heaprn.lisp; heaprn-proof's theorems: the run is inside the
+  ! arena and apart from every run still free or batched, in any class).
+  ! With batching and a small class, from this thread's batch of its class,
+  ! filled from the class's free list and fresh arena WITHOUT growing when
+  ! empty; else from the class's list or fresh arena. A run that does not
+  ! fit grows the arena, with the world stopped, and is asked for again.
   subroutine run_take(n, off)
     integer, intent(in) :: n
     integer, intent(out) :: off
-    type(gc_stack), pointer :: s
-    integer :: c
+    integer(int64) :: r, c, l
     off = 0
     if (n <= 0) return
-    c = size_class(n)
-    if (batching() .and. c <= RUN_CLASSES) then
-       s => my_stack()
-       if (s%n_run_b(c) == 0) call runs_fill(s, c)
-       if (s%n_run_b(c) > 0) then
-          off = s%run_b(s%n_run_b(c), c)
-          s%n_run_b(c) = s%n_run_b(c) - 1
-          return
-       end if
+    call hpg_run_take(hstate, int(n, int64), merge(1_int64, 0_int64, batching()), r)
+    if (r == 0) then
+       c = hpg_size_class(int(n, int64), 1_int64, 1_int64)
+       l = hpg_class_len(c, 1_int64, 1_int64)
+       call arena_grow(int(l))
+       call hpg_run_new(hstate, c, l, r)
+       if (r <= 0) error stop "clotran: run_take with the arena full"
     end if
-    call slab_alloc(n, off)
+    off = int(r)
   end subroutine run_take
 
   subroutine young_add(list, n, idx)
@@ -2446,40 +2421,25 @@ contains
     arena_would_grow = (store_used + ishft(1, c - 1) > size(vec_store))
   end function arena_would_grow
 
-  ! A run of n slots: a free run of its class, or fresh arena.
-  subroutine slab_alloc(n, off)
-    integer, intent(in) :: n
-    integer, intent(out) :: off
+  ! The arena grown, with the world stopped, until l more words fit past
+  ! its used end.
+  subroutine arena_grow(l)
+    integer, intent(in) :: l
     type(gc_value), allocatable :: bigger(:)
-    integer :: c, l, sz
+    integer :: sz
     logical :: stopped
-    off = 0
-    if (n <= 0) return
-    c = size_class(n)
-    arena_alloc_since = arena_alloc_since + ishft(1, c - 1)
-    if (class_head(c) /= 0) then
-       off = class_head(c)
-       class_head(c) = int(vec_store(off)%ival)
-       arena_reused = arena_reused + 1
-       return
-    end if
-    arena_fresh = arena_fresh + 1
-    l = ishft(1, c - 1)
-    if (store_used + l > size(vec_store)) then
-       call world_stop(stopped)
-       sz = size(vec_store)
-       do while (store_used + l > sz)
-          sz = 2 * sz
-       end do
-       allocate(bigger(sz))
-       bigger(1:store_used) = vec_store(1:store_used)
-       bigger(store_used + 1:) = nilv
-       call move_alloc(bigger, vec_store)
-       call world_start(stopped)
-    end if
-    off = store_used + 1
-    store_used = store_used + l
-  end subroutine slab_alloc
+    if (store_used + l <= size(vec_store)) return
+    call world_stop(stopped)
+    sz = size(vec_store)
+    do while (store_used + l > sz)
+       sz = 2 * sz
+    end do
+    allocate(bigger(sz))
+    bigger(1:store_used) = vec_store(1:store_used)
+    bigger(store_used + 1:) = nilv
+    call move_alloc(bigger, vec_store)
+    call world_start(stopped)
+  end subroutine arena_grow
 
   ! A dead run goes back to its class's free list; its first slot
   ! carries the link.
@@ -4545,6 +4505,69 @@ contains
   integer(int64) function hp_n_ob()
     hp_n_ob = ALLOC_BATCH + 1
   end function hp_n_ob
+  ! the arena's allocation (stage 1b): its used end and size, its counts,
+  ! and the calling thread's batches of runs, class c's k-th at (c-1)*64 + k
+  integer(int64) function hp_aused()
+    hp_aused = store_used
+  end function hp_aused
+  subroutine hp_set_aused(x)
+    integer(int64), intent(in) :: x
+    store_used = int(x)
+  end subroutine hp_set_aused
+  integer(int64) function hp_acap()
+    hp_acap = size(vec_store, kind=int64)
+  end function hp_acap
+  integer(int64) function hp_areu()
+    hp_areu = arena_reused
+  end function hp_areu
+  subroutine hp_set_areu(x)
+    integer(int64), intent(in) :: x
+    arena_reused = x
+  end subroutine hp_set_areu
+  integer(int64) function hp_afre()
+    hp_afre = arena_fresh
+  end function hp_afre
+  subroutine hp_set_afre(x)
+    integer(int64), intent(in) :: x
+    arena_fresh = x
+  end subroutine hp_set_afre
+  integer(int64) function hp_asince()
+    hp_asince = arena_alloc_since
+  end function hp_asince
+  subroutine hp_set_asince(x)
+    integer(int64), intent(in) :: x
+    arena_alloc_since = int(x)
+  end subroutine hp_set_asince
+  integer(int64) function hp_rb(j)
+    integer(int64), intent(in) :: j
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_rb = s%run_b(int(mod(j - 1, int(RUN_BATCH, int64))) + 1, int((j - 1) / RUN_BATCH) + 1)
+  end function hp_rb
+  subroutine hp_set_rb(j, x)
+    integer(int64), intent(in) :: j, x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%run_b(int(mod(j - 1, int(RUN_BATCH, int64))) + 1, int((j - 1) / RUN_BATCH) + 1) = int(x)
+  end subroutine hp_set_rb
+  integer(int64) function hp_n_rb()
+    hp_n_rb = int(RUN_BATCH, int64) * RUN_CLASSES + 1
+  end function hp_n_rb
+  integer(int64) function hp_nrb(c)
+    integer(int64), intent(in) :: c
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    hp_nrb = s%n_run_b(c)
+  end function hp_nrb
+  subroutine hp_set_nrb(c, x)
+    integer(int64), intent(in) :: c, x
+    type(gc_stack), pointer :: s
+    s => my_stack()
+    s%n_run_b(c) = int(x)
+  end subroutine hp_set_nrb
+  integer(int64) function hp_n_nrb()
+    hp_n_nrb = RUN_CLASSES + 1
+  end function hp_n_nrb
   integer(int64) function hp_vused()
     hp_vused = vec_used
   end function hp_vused

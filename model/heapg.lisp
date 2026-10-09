@@ -90,7 +90,18 @@
   (h-sused :type (signed-byte 64) :initially 0)
   (h-scap :type (signed-byte 64) :initially 0)
   (h-sb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
-  (h-nsb :type (signed-byte 64) :initially 0))
+  (h-nsb :type (signed-byte 64) :initially 0)
+  ;; THE ARENA's allocation (stage 1b): how far it is used and how big it
+  ;; is, runs reused and fresh and words handed out since the last
+  ;; collection, and the calling thread's batches of runs, class c's k-th at
+  ;; (c-1)*64 + k
+  (h-aused :type (signed-byte 64) :initially 0)
+  (h-acap :type (signed-byte 64) :initially 0)
+  (h-areu :type (signed-byte 64) :initially 0)
+  (h-afre :type (signed-byte 64) :initially 0)
+  (h-asince :type (signed-byte 64) :initially 0)
+  (h-rb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-nrb :type (array (signed-byte 64) (0)) :initially 0 :resizable t))
 
 ; ---- BOUNDS ---------------------------------------------------------------------------
 

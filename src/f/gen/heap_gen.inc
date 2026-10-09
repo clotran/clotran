@@ -1212,3 +1212,290 @@
       r = 0_int64
     end if
   end subroutine hpg_str_pop
+
+  pure function hpg_class_len(c_, k_, p_) result(r)
+    integer(int64), value :: c_
+    integer(int64), value :: k_
+    integer(int64), value :: p_
+    integer(int64) :: r
+    integer(int64) :: c_4
+    integer(int64) :: k_5
+    integer(int64) :: p_6
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    do
+      if ((.not. (c_ >= 0_int64))) then
+        t_3 = (.not. (c_ >= 0_int64))
+      else
+        if ((.not. (k_ >= 0_int64))) then
+          t_2 = (.not. (k_ >= 0_int64))
+        else
+          if ((.not. (k_ < c_))) then
+            t_1 = (.not. (k_ < c_))
+          else
+            t_1 = (64_int64 < c_)
+          end if
+          t_2 = t_1
+        end if
+        t_3 = t_2
+      end if
+      if (t_3) then
+        r = hpg_n40(p_)
+        return
+      else
+        c_4 = c_
+        k_5 = (1_int64 + k_)
+        p_6 = hpg_n40((2_int64 * hpg_n40(p_)))
+        c_ = c_4
+        k_ = k_5
+        p_ = p_6
+        cycle
+      end if
+    end do
+  end function hpg_class_len
+
+  subroutine hpg_run_new(hs, c_, l_, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: c_
+    integer(int64), value :: l_
+    integer(int64), intent(out) :: r
+    integer(int64) :: h_2
+    integer(int64) :: i_4
+    integer(int64) :: off_7
+    integer(int64) :: t_1
+    logical :: t_3
+    logical :: t_6
+    integer(int64) :: v_5
+    if ((c_ < hp_n_chead())) then
+      t_1 = hp_chead(c_)
+    else
+      t_1 = 0_int64
+    end if
+    h_2 = t_1
+    if ((0_int64 < h_2)) then
+      t_3 = (h_2 < hp_n_arena())
+    else
+      t_3 = .false.
+    end if
+    if (t_3) then
+      i_4 = c_
+      v_5 = hpg_s64(hp_aival(h_2))
+      call hp_set_chead(i_4, v_5)
+      call hp_set_areu(hpg_add(hp_areu(), 1_int64))
+      call hp_set_asince(hpg_add(hp_asince(), l_))
+      r = h_2
+    else
+      if ((0_int64 < l_)) then
+        t_6 = (.not. (hp_acap() < (hp_aused() + l_)))
+      else
+        t_6 = .false.
+      end if
+      if (t_6) then
+        off_7 = (1_int64 + hp_aused())
+        call hp_set_aused((hp_aused() + l_))
+        call hp_set_afre(hpg_add(hp_afre(), 1_int64))
+        call hp_set_asince(hpg_add(hp_asince(), l_))
+        r = off_7
+      else
+        r = 0_int64
+      end if
+    end if
+  end subroutine hpg_run_new
+
+  subroutine hpg_run_push(hs, c_, n_, off_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: c_
+    integer(int64), value :: n_
+    integer(int64), value :: off_
+    integer(int64) :: i_1
+    integer(int64) :: i_3
+    integer(int64) :: v_2
+    integer(int64) :: v_4
+    i_1 = (((-1_int64 + c_) * 64_int64) + (1_int64 + n_))
+    v_2 = off_
+    call hp_set_rb(i_1, v_2)
+    i_3 = c_
+    v_4 = (1_int64 + n_)
+    call hp_set_nrb(i_3, v_4)
+  end subroutine hpg_run_push
+
+  subroutine hpg_runs_fill(hs, c_, l_, fuel_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: c_
+    integer(int64), value :: l_
+    integer(int64), value :: fuel_
+    integer(int64) :: c_9
+    integer(int64) :: fuel_11
+    integer(int64) :: l_10
+    integer(int64) :: mv_7
+    integer(int64) :: n_4
+    integer(int64) :: off_8
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_5
+    logical :: t_6
+    do
+      if ((fuel_ <= 0_int64)) then
+        t_3 = (fuel_ <= 0_int64)
+      else
+        if ((.not. (c_ < 1_int64))) then
+          if ((.not. (8_int64 < c_))) then
+            t_1 = (c_ < hp_n_nrb())
+          else
+            t_1 = .false.
+          end if
+          t_2 = t_1
+        else
+          t_2 = .false.
+        end if
+        t_3 = (.not. t_2)
+      end if
+      if (t_3) then
+      else
+        n_4 = hp_nrb(c_)
+        if ((.not. (n_4 < 0_int64))) then
+          if ((n_4 < 64_int64)) then
+            t_5 = ((((-1_int64 + c_) * 64_int64) + (1_int64 + n_4)) < hp_n_rb())
+          else
+            t_5 = .false.
+          end if
+          t_6 = t_5
+        else
+          t_6 = .false.
+        end if
+        if ((.not. t_6)) then
+        else
+          call hpg_run_new(hs, c_, l_, mv_7)
+          off_8 = mv_7
+          if ((off_8 == 0_int64)) then
+          else
+            call hpg_run_push(hs, c_, n_4, off_8)
+            c_9 = c_
+            l_10 = l_
+            fuel_11 = (-1_int64 + fuel_)
+            c_ = c_9
+            l_ = l_10
+            fuel_ = fuel_11
+            cycle
+          end if
+        end if
+      end if
+      exit
+    end do
+  end subroutine hpg_runs_fill
+
+  subroutine hpg_run_pop(hs, c_, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: c_
+    integer(int64), intent(out) :: r
+    integer(int64) :: i_7
+    integer(int64) :: n_3
+    integer(int64) :: off_6
+    logical :: t_1
+    logical :: t_2
+    logical :: t_4
+    logical :: t_5
+    integer(int64) :: v_8
+    if ((.not. (c_ < 1_int64))) then
+      if ((.not. (8_int64 < c_))) then
+        t_1 = (c_ < hp_n_nrb())
+      else
+        t_1 = .false.
+      end if
+      t_2 = t_1
+    else
+      t_2 = .false.
+    end if
+    if (t_2) then
+      n_3 = hp_nrb(c_)
+      if ((0_int64 < n_3)) then
+        if ((.not. (64_int64 < n_3))) then
+          t_4 = ((((-1_int64 + c_) * 64_int64) + n_3) < hp_n_rb())
+        else
+          t_4 = .false.
+        end if
+        t_5 = t_4
+      else
+        t_5 = .false.
+      end if
+      if (t_5) then
+        off_6 = hp_rb((((-1_int64 + c_) * 64_int64) + n_3))
+        if ((0_int64 < off_6)) then
+          i_7 = c_
+          v_8 = (-1_int64 + n_3)
+          call hp_set_nrb(i_7, v_8)
+          r = off_6
+        else
+          r = 0_int64
+        end if
+      else
+        r = 0_int64
+      end if
+    else
+      r = 0_int64
+    end if
+  end subroutine hpg_run_pop
+
+  subroutine hpg_run_from_batch(hs, c_, l_, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: c_
+    integer(int64), value :: l_
+    integer(int64), intent(out) :: r
+    integer(int64) :: mv_1
+    integer(int64) :: off_2
+    call hpg_run_pop(hs, c_, mv_1)
+    off_2 = mv_1
+    if ((0_int64 < off_2)) then
+      r = off_2
+    else
+      call hpg_run_new(hs, c_, l_, r)
+    end if
+  end subroutine hpg_run_from_batch
+
+  subroutine hpg_run_take_c(hs, c_, l_, batching_, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: c_
+    integer(int64), value :: l_
+    integer(int64), value :: batching_
+    integer(int64), intent(out) :: r
+    logical :: t_1
+    logical :: t_2
+    if ((.not. (batching_ == 0_int64))) then
+      t_1 = (.not. (8_int64 < c_))
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      if ((c_ < hp_n_nrb())) then
+        t_2 = (hp_nrb(c_) == 0_int64)
+      else
+        t_2 = .false.
+      end if
+      if (t_2) then
+        call hpg_runs_fill(hs, c_, l_, 64_int64)
+        call hpg_run_from_batch(hs, c_, l_, r)
+      else
+        call hpg_run_from_batch(hs, c_, l_, r)
+      end if
+    else
+      call hpg_run_new(hs, c_, l_, r)
+    end if
+  end subroutine hpg_run_take_c
+
+  subroutine hpg_run_take(hs, n_, batching_, r)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: n_
+    integer(int64), value :: batching_
+    integer(int64), intent(out) :: r
+    integer(int64) :: c_1
+    integer(int64) :: l_2
+    if ((.not. (0_int64 < n_))) then
+      r = 0_int64
+    else
+      c_1 = hpg_size_class(n_, 1_int64, 1_int64)
+      l_2 = hpg_class_len(c_1, 1_int64, 1_int64)
+      call hpg_run_take_c(hs, c_1, l_2, batching_, r)
+    end if
+  end subroutine hpg_run_take

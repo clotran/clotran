@@ -88,7 +88,7 @@
               "! program vmicg_program compiles without an error or an overflow"
               "! answers, run, what it means."]}
     "heapg"
-    {:out "src/f/gen/heap_gen.inc" :include true :book "heapal"
+    {:out "src/f/gen/heap_gen.inc" :include true :book "heaprn"
      :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain
            ;; the sweep and the frees (model/heapsw.lisp)
            hpg-s64 hpg-n40 hpg-size-class hpg-free-obj hpg-slab-free hpg-free-vec hpg-free-str
@@ -96,7 +96,10 @@
            ;; allocation (model/heapal.lisp)
            hpg-obj-take hpg-obj-use hpg-obj-fill-list hpg-obj-fill-end hpg-obj-fill hpg-obj-pop
            hpg-vec-take hpg-vec-use hpg-vec-fill-list hpg-vec-fill-end hpg-vec-fill hpg-vec-pop
-           hpg-str-take hpg-str-use hpg-str-fill-list hpg-str-fill-end hpg-str-fill hpg-str-pop]
+           hpg-str-take hpg-str-use hpg-str-fill-list hpg-str-fill-end hpg-str-fill hpg-str-pop
+           ;; the arena's runs (model/heaprn.lisp)
+           hpg-class-len hpg-run-new hpg-run-push hpg-runs-fill hpg-run-pop hpg-run-from-batch hpg-run-take-c
+           hpg-run-take]
      :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
      :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]
@@ -104,17 +107,22 @@
               h-ohead ["hs" "ohead"] h-vhead ["hs" "vhead"] h-shead ["hs" "shead"]
               h-oused ["hs" "oused"] h-ocap ["hs" "ocap"] h-nob ["hs" "nob"]
               h-vused ["hs" "vused"] h-vcap ["hs" "vcap"] h-nvb ["hs" "nvb"]
-              h-sused ["hs" "sused"] h-scap ["hs" "scap"] h-nsb ["hs" "nsb"]}
+              h-sused ["hs" "sused"] h-scap ["hs" "scap"] h-nsb ["hs" "nsb"]
+              h-aused ["hs" "aused"] h-acap ["hs" "acap"] h-areu ["hs" "areu"] h-afre ["hs" "afre"]
+              h-asince ["hs" "asince"]}
      ;; the free lists' heads are GC's own variables
      :extern-fields {h-ohead ["hp_ohead" "hp_set_ohead"] h-vhead ["hp_vhead" "hp_set_vhead"]
                      h-shead ["hp_shead" "hp_set_shead"]
                      h-oused ["hp_oused" "hp_set_oused"] h-ocap ["hp_ocap" "-"]
                      h-vused ["hp_vused" "hp_set_vused"] h-vcap ["hp_vcap" "-"]
                      h-sused ["hp_sused" "hp_set_sused"] h-scap ["hp_scap" "-"]
+                     h-aused ["hp_aused" "hp_set_aused"] h-acap ["hp_acap" "-"]
+                     h-areu ["hp_areu" "hp_set_areu"] h-afre ["hp_afre" "hp_set_afre"]
+                     h-asince ["hp_asince" "hp_set_asince"]
                      ;; the calling thread's batches
                      h-nob ["hp_nob" "hp_set_nob"] h-nvb ["hp_nvb" "hp_set_nvb"] h-nsb ["hp_nsb" "hp_set_nsb"]}
      :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"
-                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob" "vb" "sb"]}
+                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob" "vb" "sb" "rb" "nrb"]}
      :prefix {"hs" "h-"}
      :value-arrays #{}
      ;; GC.f90's pools, through its accessors (GC.f90, "the marker's view")
@@ -131,7 +139,8 @@
                "srel" ["-" "hp_release_str" "hp_n_str"]
                "aival" ["hp_aival" "hp_set_aival" "hp_n_arena"] "chead" ["hp_chead" "hp_set_chead" "hp_n_chead"]
                "ob" ["hp_ob" "hp_set_ob" "hp_n_ob"] "vb" ["hp_vb" "hp_set_vb" "hp_n_ob"]
-               "sb" ["hp_sb" "hp_set_sb" "hp_n_ob"]}
+               "sb" ["hp_sb" "hp_set_sb" "hp_n_ob"]
+               "rb" ["hp_rb" "hp_set_rb" "hp_n_rb"] "nrb" ["hp_nrb" "hp_set_nrb" "hp_n_nrb"]}
      :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag}
      :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"

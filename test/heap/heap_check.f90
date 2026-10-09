@@ -18,6 +18,8 @@ module heap_check_m
   integer(int64) :: ohead = 0, vhead = 0, shead = 0
   integer(int64) :: oused = 0, ocap = 0, nob = 0, vused = 0, vcap = 0, nvb = 0, sused = 0, scap = 0, nsb = 0
   integer(int64), allocatable :: ob(:), vb(:), sb(:)
+  integer(int64) :: aused = 0, acap = 0, areu = 0, afre = 0, asince = 0
+  integer(int64), allocatable :: rb(:), nrb(:)
   logical :: broken = .false.
 contains
   integer(int64) function hp_otag(j)
@@ -231,6 +233,59 @@ contains
     integer(int64), intent(in) :: k, x
     ob(k) = x
   end subroutine hp_set_ob
+  integer(int64) function hp_aused()
+    hp_aused = aused
+  end function hp_aused
+  subroutine hp_set_aused(x)
+    integer(int64), intent(in) :: x
+    aused = x
+  end subroutine hp_set_aused
+  integer(int64) function hp_acap()
+    hp_acap = acap
+  end function hp_acap
+  integer(int64) function hp_areu()
+    hp_areu = areu
+  end function hp_areu
+  subroutine hp_set_areu(x)
+    integer(int64), intent(in) :: x
+    areu = x
+  end subroutine hp_set_areu
+  integer(int64) function hp_afre()
+    hp_afre = afre
+  end function hp_afre
+  subroutine hp_set_afre(x)
+    integer(int64), intent(in) :: x
+    afre = x
+  end subroutine hp_set_afre
+  integer(int64) function hp_asince()
+    hp_asince = asince
+  end function hp_asince
+  subroutine hp_set_asince(x)
+    integer(int64), intent(in) :: x
+    asince = x
+  end subroutine hp_set_asince
+  integer(int64) function hp_rb(j)
+    integer(int64), intent(in) :: j
+    hp_rb = rb(j)
+  end function hp_rb
+  subroutine hp_set_rb(j, x)
+    integer(int64), intent(in) :: j, x
+    rb(j) = x
+  end subroutine hp_set_rb
+  integer(int64) function hp_n_rb()
+    hp_n_rb = size(rb, kind=int64)
+  end function hp_n_rb
+  integer(int64) function hp_nrb(c)
+    integer(int64), intent(in) :: c
+    hp_nrb = nrb(c)
+  end function hp_nrb
+  subroutine hp_set_nrb(c, x)
+    integer(int64), intent(in) :: c, x
+    nrb(c) = x
+  end subroutine hp_set_nrb
+  integer(int64) function hp_n_nrb()
+    hp_n_nrb = size(nrb, kind=int64)
+  end function hp_n_nrb
   integer(int64) function hp_n_ob()
     hp_n_ob = size(ob, kind=int64)
   end function hp_n_ob
@@ -293,7 +348,8 @@ program heap_check
   implicit none
   type(heap_state) :: hs
   integer :: u, i, nr
-  integer(int64) :: no, nv, na, ns, cap, t, r, tk(3), pp(4), k
+  integer(int64) :: no, nv, na, ns, cap, t, r, tk(3), pp(4), k, nt
+  integer(int64), allocatable :: tn(:), tb(:), toff(:)
   character(len=256) :: path, arg2
   call get_command_argument(1, path)
   call get_command_argument(2, arg2)
@@ -327,6 +383,14 @@ program heap_check
   read(u, *) chead
   read(u, *) ohead, vhead, shead
   read(u, *) oused, ocap, vused, vcap, sused, scap
+  read(u, *) aused, acap
+  read(u, *) nt
+  allocate(tn(nt), tb(nt), toff(nt), rb(0:512), nrb(0:8))
+  rb = 0
+  nrb = 0
+  do k = 1, nt
+     read(u, *) tn(k), tb(k)
+  end do
   allocate(ob(0:7), vb(0:7), sb(0:7))
   ob = 0
   vb = 0
@@ -403,4 +467,12 @@ program heap_check
   write(*, '(a, 4(1x, i0))') 'salloc', nsb, sused, shead, scap
   write(*, '(a, *(1x, i0))') 'sfree2', sfree
   write(*, '(a, *(1x, i0))') 'smark2', smark
+  do k = 1, nt
+     call hpg_run_take(hs, tn(k), tb(k), toff(k))
+  end do
+  write(*, '(a, *(1x, i0))') 'runs', toff
+  write(*, '(a, 4(1x, i0))') 'arena', aused, areu, afre, asince
+  write(*, '(a, *(1x, i0))') 'chead2', chead
+  write(*, '(a, *(1x, i0))') 'nrb', nrb
+  write(*, '(a, *(1x, i0))') 'rb', rb
 end program heap_check
