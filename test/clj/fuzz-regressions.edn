@@ -3,6 +3,11 @@
 ;; modes (make test, check-fuzz), and the VM's (CLOTRAN_VM=1). Add a
 ;; shrunk form here with each fix.
 [
+ ;; the ## reader's complaint inside #(...) names the form with its %-args
+ ;; already rewritten, as ArgReader leaves them (scripts/fuzz-read); the
+ ;; gensym numbers and clotran's location suffix taken off the message
+ (-> (try (read-string "#(##(x#\"\" %1 %&))") (catch clotran.host.runtime_exception e (.getMessage e))) (clojure.string/replace #"__\d+#" "__N#") (clojure.string/replace #"  at .*" ""))
+ (-> (try (read-string "#(##%1)") (catch clotran.host.runtime_exception e (.getMessage e))) (clojure.string/replace #"__\d+#" "__N#") (clojure.string/replace #"  at .*" ""))
  ;; compiled, (long x) of exactly 2^63 refused as out of range, where clj's
  ;; longCast accepts it and saturates (scripts/fuzz-fn, seed 1061557021)
  ((fn [^double x] (long x)) 9.223372036854776E18)

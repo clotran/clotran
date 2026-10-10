@@ -1473,6 +1473,9 @@ contains
          character(len=:), allocatable :: ot
          o = read_form(text, pos, roots)
          if (gcr_has_error()) return
+         ! inside #(...) the message shows the form as ArgReader left it, each
+         ! %-arg already its p1__N# or rest__N# (scripts/fuzz-read found it)
+         if (rd_self_in_anon()) o = rewrite_percent(o, [roots, o])
          if (o%tag == GCT_SYM) then
             call gc_ref_text(o%ref, s=ot)
             call fail("Unknown symbolic value: ##" // ot)
