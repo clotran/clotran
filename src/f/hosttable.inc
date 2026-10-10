@@ -255,7 +255,7 @@
   ! the builtin itself as the value, so every send looked like send-off.)
        hm("clotran.host.agent", "pooledExecutor", HK_SELFKEY), &
        hm("clotran.host.agent", "soloExecutor", HK_SELFKEY), &
-       hm("clotran.host.agent", "shutdown", B_ALWAYS_NIL, "clotran-nil"), &
+       hm("clotran.host.agent", "shutdown", B_AGENTSHUTDOWN, "clotran-agent-shutdown"), &
        hm("clotran.host.compiler", "specials", HK_SPECIALS), &
        hm("clotran.host.compiler", "macroexpand1", B_MACROEXP1, "clotran-macroexpand-1"), &
        hm("clotran.host.compiler", "eval", B_EVAL, "eval"), &

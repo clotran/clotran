@@ -2191,3 +2191,15 @@ tests what abs means rather than which overload reflection picks.
 ClojureScript has no overloads to pick between.
 
 **Removal**: none intended -- it would mean narrowing a long on purpose.
+
+## 78. A future after shutdown-agents still runs
+
+In clj, `future` submits to the agents' solo executor, so after
+`(shutdown-agents)` a `future` is rejected with an exception from the
+executor; a `send` after it is accepted and its action never runs. In
+clotran a future is a thread of its own (tasks.inc, PLAN step 14f) and
+shutdown-agents (PLAN step 24) ends the agent pool's workers and stops
+sends from starting work, as clj does, but leaves futures alone: a
+`future` after it runs. Removing it would mean refusing futures after
+shutdown, which nothing we have wants; ClojureScript has neither
+agents nor shutdown-agents, so this is the host's to decide.

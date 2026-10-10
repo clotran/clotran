@@ -2458,9 +2458,25 @@ scheduler's. Checks: the language test's scheduler block (100 agents
 on the pool, nested sends, send-off beside send); scripts/fuzz-threads
 grew send-off, nested sends and 40 agents and runs on a 2-worker pool
 in the gate's nightly set, 20 of 20 agreeing with clj on both pool
-sizes. Not done: `shutdown-agents` is still a no-op; a worker parked
-forever is counted among the waiters with no deadline, which is right
-for the deadlock verdict but means an idle pool keeps K threads.
+sizes.
+
+**Closed 2026-10-10.** `shutdown-agents` is Agent.shutdown as clj
+behaves (measured through `clj`): the workers wake and end, a send
+after it is accepted and queued and never runs, `await-for` times
+out. The language test checks it, last, after every agent above is
+done with. An idle pool keeps its K threads parked, as clj's pool
+keeps its threads; they are counted among the waiters with no
+deadline, which is what the deadlock verdict needs. Parallel marking
+in the collector: not taken up -- step 14's measurement put the pause
+in the sweep, which lazy per-thread sweeping fixed, and nothing since
+has shown marking there. The cost of a send, measured: 10^5 `swap!`
+on an atom take 0.14 s and 10^5 `send` 1.6 s with nothing draining,
+so a send is eleven swaps; that is `send-via`'s binding conveyor (a
+`binding` and a closure per send, in core.clj) and the dispatch's map
+update, not the scheduler, and it goes with step 19's slow spots.
+What clotran does that clj does not: a `future` after
+`shutdown-agents` still runs (DEVIATIONS 78); clj's futures share the
+solo executor and are rejected with it.
 
 Sources read 2026-10-10: the BEAM scheduler
 (blog.appsignal.com/2024/04/23/deep-diving-into-the-erlang-scheduler),

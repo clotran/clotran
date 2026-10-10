@@ -151,7 +151,8 @@
 ;; a pool worker's loop: take an agent, run a batch, file it on
 (defn agent-worker [w]
   (loop []
-    (let [a (clotran-sched-take! w)]
+    ;; nil from the take: shutdown-agents, and the worker ends
+    (when-let [a (clotran-sched-take! w)]
       (loop [i 1]
         (when-let [act (clotran-agent-pop! a)]
           (clotran-agent-run1 a (nth act 0) (nth act 1))

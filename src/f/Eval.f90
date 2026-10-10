@@ -253,7 +253,7 @@ module Eval
   integer, parameter :: B_REALPATH = 426, B_FSKIND = 427, B_FSLIST = 428, B_INSTALLED = 429, B_LIBMANIFEST = 430
   integer, parameter :: B_RATIONALIZE = 431
   ! the agent scheduler (PLAN step 24, model/agents.lisp)
-  integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434
+  integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434, B_AGENTSHUTDOWN = 435
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -378,6 +378,9 @@ module Eval
   ! image: made on the first pool send of a process.
   type(gc_root), save :: sched_root
   integer, save :: sched_k = 0
+  ! shutdown-agents (Agent.shutdown): the workers end, and an idle agent
+  ! sent to is queued but never started, as clj's rejected action is
+  logical, save :: sched_shutdown = .false.
   integer, allocatable, save :: sched_ticks(:)
   integer, parameter :: SCHED_PERIOD = 32
   ! A task's thread gets a big stack: it runs the interpreter, as the
@@ -1196,6 +1199,7 @@ contains
     call bind_builtin(core, "clotran-sched-take!", B_SCHEDTAKE)
     call bind_builtin(core, "clotran-sched-push!", B_SCHEDPUSH)
     call bind_builtin(core, "clotran-agent-peek", B_AGENTPEEK)
+    call bind_builtin(core, "clotran-agent-shutdown", B_AGENTSHUTDOWN)
     call bind_builtin(core, "rest", B_REST)
     call bind_builtin(core, "next", B_NEXT)
     call bind_builtin(core, "cons", B_CONS)
@@ -4986,6 +4990,8 @@ contains
        end if
        ! nothing to run: no drain
        if (gcv_count(vs_get(vst, ab + 2)) - hd == 0) start = .false.
+       ! after shutdown-agents the action is queued and never started
+       if (sched_shutdown) start = .false.
        ! the head's executor decides where the agent goes (model/agents.lisp,
        ! home): the scheduler's queues for :pool, a thread of its own else
        if (start) then
@@ -5217,6 +5223,10 @@ contains
     tctx%worker = w
     a = gc_nil()
     do
+       if (sched_shutdown) then
+          tctx%worker = 0
+          return
+       end if
        if (sched_count(0) > 0 .and. (sched_count(w) == 0 .or. sched_ticks(w) >= SCHED_PERIOD)) then
           a = sched_pop(0)
           if (a%tag /= GCT_NIL) then
@@ -5236,7 +5246,7 @@ contains
        ! parked: counted among the waiters with no deadline, as a task's
        ! wait is (block_on), so an idle pool is not mistaken for progress
        call gc_state_lock()
-       if (sched_any_work()) then
+       if (sched_any_work() .or. sched_shutdown) then
           call gc_state_unlock()
           cycle
        end if
@@ -14146,6 +14156,15 @@ contains
             out = vs_get(vst, base + 2)
          end if
        end block
+    case (B_AGENTSHUTDOWN)
+       ! (shutdown-agents): the workers wake and end; sends are still
+       ! accepted and queued, and start nothing (clj: the executor rejects
+       ! the action quietly, await-for times out)
+       call gc_state_lock()
+       sched_shutdown = .true.
+       call gc_state_unlock()
+       call gc_state_notify()
+       out = gc_nil()
     case (B_SCHEDTAKE)
        ! (clotran-sched-take! w): the next agent for pool worker w, waited for
        a = gcv_nth(args, 0)

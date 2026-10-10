@@ -1517,6 +1517,16 @@
         {:tag :ret :val "nil" :ns "lt-p" :form "(clotran.host.thread/sleep 200)"}
         {:tag :tap :val ":t"}])
 
+;;; ---- shutdown-agents, after every agent above is done with: a send
+;;; is still accepted, and queued, and never runs; await-for times out
+;;; (clj: the executor rejects the action quietly). The pool's workers end.
+(let [sd (agent 1)]
+  (send sd inc) (await sd)
+  (shutdown-agents)
+  (check "a send after shutdown-agents is accepted" (= sd (send sd inc)) true)
+  (check "and never runs" (await-for 300 sd) false)
+  (check "the state is as it was" @sd 2))
+
 ;;; ---- the verdict: LAST, so every check above counts. It once sat
 ;;; 140 lines early, and the package and tier checks after it could fail
 ;;; without the gate hearing of it.
