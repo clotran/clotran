@@ -4752,6 +4752,40 @@ boundary (gce_apply_slots, call_builtin -- instance? alone is 1.09 M
 generic calls -- the hooks), and the generated seq op ~2%. Next, in
 James's order: the JIT (stages 2-3), then the heap (1c-1e).
 
+**What the VM keeps alive, found (2026-10-10).** With core compiled by
+the VM (CLOTRAN_IMAGE=0), walking 3x10^6 elements marks ~5.8 M objects a
+collection where flat marks ~0.6 M, the object pool grows to 8.4 M slots
+against 0.26 M, and the run is 3-4x flat's (grow_obj alone is the largest
+item sampled). Bisected: a hand-written lazy recursion walked by a loop
+INSIDE a VM fn retains the whole seq; the same loop at top level (flat)
+does not; dorun, reduce1 (the yardstick's `+`) and any `loop` do. THE
+CAUSE is the translation of loops (vm.inc's vm_tr and vm_clause): a
+`loop`'s bindings are bound by lets and the (:loop ...) starts from copies
+of them, and a fn whose body recurs becomes (:loop ((:local 0) ..) body)
+over copies of its parameters -- the originals, the lets' slots and the
+parameters, hold the seq's head for the loop's whole life. Flat clears a
+local at its last read (the analyser's liveness pass); the VM has no
+instruction that can.
+
+Tried and reverted the same day: scanning a VM run's window of the value
+stack only up to its sp (the slots above are dead). It changed nothing --
+the holders are below sp -- and rests on a property proved for the stage-1
+JIT's machine, not for vmi.
+
+THE FIX IS A MODEL CHANGE, and the design: a loop over locals that
+already exist, (:loopl n body) -- the body run with the env's last n
+locals as the loop's, recur copying down to them -- so a let-bound loop
+and a recurring fn need no copies at all, rather than copies and a clear.
+Its meaning is :loop's with those values; its code is :loop's without the
+inits. What it breaks is vmx2-proof's central invariant, "nothing below
+the expression's start is changed": recur now writes slots below the
+loop's own start. The invariant becomes "nothing below the start less the
+locals the expression owns" (a let owns its slot, so the let around a
+:loopl still preserves everything below itself), threaded through
+vcs2-good's every case, then vmi, vmic, the generated step and compiler,
+the fused patterns and the JIT's blocks. Several days of proof, not a
+night's: the next item for step 34.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
