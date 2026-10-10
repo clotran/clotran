@@ -1293,7 +1293,16 @@ force. That is the same plumbing PLAN stage 2 removes in the other
 direction (roots leaving signatures once the operand stack holds
 them), so it is worth doing after that, not before.
 
-## 36. `binding` accepts a Var that was not declared `^:dynamic`
+## 36. RESOLVED -- `binding` refuses a Var not declared `^:dynamic`
+
+**RESOLVED 2026-10-10 (PLAN step 35).** `push-thread-bindings` refuses a
+Var whose metadata has no `:dynamic`, with clj's wording and class:
+`Can't dynamically bind non-dynamic var: user/g`, an
+IllegalStateException, at run time as `Var.pushThreadBindings` does.
+A `def` puts `:dynamic` in the Var's metadata; the host's own earmuffed
+Vars (`*ns*`, `*out*`, `*print-length*` ...) get it when they are made
+(bind_var), as clj declares each of them. Measured against clj in
+test/clj/oracle.clj. The original entry follows.
 
 `(def g nil) (binding [g 1] g)` answers `1` here. Clojure refuses it
 at run time -- `Can't dynamically bind non-dynamic var: user/g`, an

@@ -2038,6 +2038,39 @@ contains
     call vs_leave(vst, base)
   end subroutine gce_set_command_line_args
 
+  ! Whether a Var was declared ^:dynamic: its metadata's :dynamic, as a
+  ! def puts it there and bind_var does for the host's earmuffed Vars.
+  ! Metadata that is not an array map (none is) is taken as dynamic.
+  logical function var_dynamic(v)
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: m
+    m = gc_slot(v, 2)
+    var_dynamic = .true.
+    if (gca_is(m)) var_dynamic = truthy(gca_get(m, gc_key("dynamic", [m])))
+    if (m%tag == GCT_NIL) var_dynamic = .false.
+  end function var_dynamic
+
+  ! :dynamic true into a Var's metadata (slot 2): what `def ^:dynamic`
+  ! leaves there, done here for the Vars the host makes, and by
+  ! .setDynamic (with-local-vars)
+  subroutine mark_var_dynamic(v)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: v
+    type(gc_value) :: m
+    integer :: base
+    if (.not. gcn_is_var(v)) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
+    m = gc_slot(v, 2)
+    if (.not. gca_is(m)) m = gca_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, m)
+    m = gca_assoc(vs_get(vst, base + 2), gc_key("dynamic", [vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+         gc_bool(.true.), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call gc_set_slot(vs_get(vst, base + 1), 2, m)
+    call vs_leave(vst, base)
+  end subroutine mark_var_dynamic
+
   subroutine bind_var(ns, name, val, var_out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: ns, val
@@ -2053,6 +2086,11 @@ contains
     var = gcn_intern(vs_get(vst, base + 1), sym, vs_get(vst, base + 2), &
          [vs_get(vst, base + 1), vs_get(vst, base + 2), sym])
     call gc_set_i1(var, 1)
+    ! an earmuffed host Var is dynamic, as clj declares each of them: its
+    ! metadata says so, which is what `binding` checks (DEVIATIONS 36)
+    if (len(name) > 2) then
+       if (name(1:1) == "*" .and. name(len(name):len(name)) == "*") call mark_var_dynamic(var)
+    end if
     if (present(var_out)) var_out = var
     call vs_leave(vst, base)
   end subroutine bind_var
@@ -12475,7 +12513,9 @@ contains
           out = gc_obj(OBJ_VAR, [gc_nil(), gc_nil(), gc_nil(), gc_nil()], [vs_get(vst, base + 1)])
        end if
     case (B_SETDYNAMIC)
-       ! .setDynamic answers the Var; dynamic binding is not policed here
+       ! .setDynamic: the Var marked dynamic in its metadata, and answered
+       ! (with-local-vars makes its Vars this way; `binding` checks the mark)
+       call mark_var_dynamic(strip_meta(gcv_nth(args, 0)))
        out = gcv_nth(args, 0)
     case (B_NSUNMAP)
        ! (.unmap ns sym): the mapping goes, the Var itself stays
@@ -13504,6 +13544,8 @@ contains
          type(gc_value) :: m, top, fr, box
          type(gc_value), allocatable :: kk(:), vv(:)
          integer :: j, lb
+         logical :: refused
+         refused = .false.
          lb = vs_enter(vst, 4)
          m = strip_meta(gcv_nth(args, 0))
          call vs_set(vst, lb + 1, m)
@@ -13519,6 +13561,19 @@ contains
          call gca_entries(vs_get(vst, lb + 1), kk, vv)
          do j = 1, size(kk)
             if (.not. gcn_is_var(kk(j))) cycle
+            ! a Var not declared ^:dynamic is refused, as Var.pushThreadBindings
+            ! refuses it (DEVIATIONS 36 resolved): its metadata says
+            if (.not. var_dynamic(kk(j))) then
+               call gcp_str(kk(j), .false., s=dlt_1)
+               if (len(dlt_1) > 2) then
+                  if (dlt_1(1:2) == "#'") dlt_1 = dlt_1(3:)
+               end if
+               call raise_class("clotran.host.illegal_state_exception", &
+                    "Can't dynamically bind non-dynamic var: " // dlt_1, &
+                    [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+               refused = .true.
+               exit
+            end if
             box = gc_obj(OBJ_ATOM, [vv(j), gc_nil()], [vs_get(vst, lb + 1), vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
             call vs_set(vst, lb + 4, box)
             top = gca_assoc(vs_get(vst, lb + 3), kk(j), vs_get(vst, lb + 4), &
@@ -13526,12 +13581,14 @@ contains
             call vs_set(vst, lb + 3, top)
             call gc_set_i2(kk(j), 1)
          end do
-         fr = gcv_empty([vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
-         call vs_set(vst, lb + 4, fr)
-         fr = gcv_conj(vs_get(vst, lb + 4), vs_get(vst, lb + 3), [vs_get(vst, lb + 2), vs_get(vst, lb + 4)])
-         call vs_set(vst, lb + 4, fr)
-         fr = gcv_conj(vs_get(vst, lb + 4), vs_get(vst, lb + 2), [vs_get(vst, lb + 4)])
-         call gc_bindings_set(fr)
+         if (.not. refused) then
+            fr = gcv_empty([vs_get(vst, lb + 2), vs_get(vst, lb + 3)])
+            call vs_set(vst, lb + 4, fr)
+            fr = gcv_conj(vs_get(vst, lb + 4), vs_get(vst, lb + 3), [vs_get(vst, lb + 2), vs_get(vst, lb + 4)])
+            call vs_set(vst, lb + 4, fr)
+            fr = gcv_conj(vs_get(vst, lb + 4), vs_get(vst, lb + 2), [vs_get(vst, lb + 4)])
+            call gc_bindings_set(fr)
+         end if
          call vs_leave(vst, lb)
          out = gc_nil()
        end block

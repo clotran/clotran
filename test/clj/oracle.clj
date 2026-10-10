@@ -3162,3 +3162,10 @@
 @sh
 (sh 7)
 (sh 8)
+
+;; binding refuses a Var not declared ^:dynamic (DEVIATIONS 36 resolved)
+(def nd-plain nil)
+(def ^:dynamic *nd-dyn* 1)
+(try (binding [nd-plain 1] nd-plain) (catch clotran.host.illegal_state_exception e :refused))
+(binding [*nd-dyn* 2] *nd-dyn*)
+(binding [*print-length* 2] (pr-str (range 10)))

@@ -151,6 +151,14 @@ contains
     else
        core = gcn_intern(vs_get(base + 2), sym, vs_get(base + 1), &
             [vs_get(base + 1), vs_get(base + 2), sym])
+       ! *ns* is dynamic, as clj declares it: :dynamic in its metadata is
+       ! what `binding` checks (DEVIATIONS 36)
+       call vs_set(base + 2, core)
+       call vs_set(base + 1, gca_empty([vs_get(base + 2)]))
+       call vs_set(base + 1, gca_assoc(vs_get(base + 1), gc_key("dynamic", [vs_get(base + 1), vs_get(base + 2)]), &
+            gc_bool(.true.), [vs_get(base + 1), vs_get(base + 2)]))
+       call gc_set_slot(vs_get(base + 2), 2, vs_get(base + 1))
+       core = vs_get(base + 2)
     end if
     ! Cache the VAR, not its value: gcn_current then derefs it with no
     ! lookup and no allocation, on a path that runs constantly.
