@@ -2487,6 +2487,17 @@ What clotran does that clj does not: a `future` after
 `shutdown-agents` still runs (DEVIATIONS 78); clj's futures share the
 solo executor and are rejected with it.
 
+A race in that shutdown, fixed 2026-10-10 after the language test caught
+it under the gate's load: `await`'s count-down runs as an action, so the
+sender reached `shutdown-agents` and the next `send` while the worker
+was still inside that action's batch, peeked the new action and ran it.
+An action dispatched after shutdown is now filed with kind `:dead`
+(Eval.f90, agent_enqueue); a pop ends the drain at a dead head and leaves
+it queued (B_AGENTPOP), so it never runs, while actions queued before
+shutdown still run, as clj's executor runs what it already holds. NOT in
+the model: `model/agents.lisp` has no shutdown; the dead kind and the
+theorem that no dead action is ever run are owed there.
+
 Sources read 2026-10-10: the BEAM scheduler
 (blog.appsignal.com/2024/04/23/deep-diving-into-the-erlang-scheduler),
 Pony's scheduler (tutorial.ponylang.io/runtime-basics/scheduler,

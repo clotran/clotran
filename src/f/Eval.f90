@@ -5130,11 +5130,22 @@ contains
     pool_kind = .false.
     if (present(clear)) wipe = clear
     vst => gc_my_stack()
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, ag)
     call vs_set(vst, base + 2, ag)
     call vs_set(vst, base + 3, gc_nil())
     if (present(act)) call vs_set(vst, base + 3, act)
+    ! after shutdown-agents an action is queued DEAD, its kind :dead: a
+    ! pop ends the drain at it and it never runs, as clj's executor rejects
+    ! the hand-off and the action stays in the agent's queue. A worker
+    ! still inside an action's batch would otherwise peek it and run it.
+    if (present(act) .and. sched_shutdown) then
+       if (gcv_count(vs_get(vst, base + 3)) >= 3) then
+          call vs_set(vst, base + 4, gc_key("dead", [vs_get(vst, base + 3)]))
+          call vs_set(vst, base + 3, gcv_put(vs_get(vst, base + 3), 2, vs_get(vst, base + 4), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)]))
+       end if
+    end if
     ab = vs_enter(vst, 3)
     start = .false.
     do
@@ -14399,6 +14410,7 @@ contains
        block
          type(gc_value) :: ag, m0, q, rest, h
          integer :: ab, hd
+         logical :: dead
          ag = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          call vs_set(vst, base + 2, ag)
@@ -14418,9 +14430,18 @@ contains
             else
                call vs_set(vst, ab + 2, gc_nil())
             end if
+            ! a DEAD head -- an action sent after shutdown-agents (agent_enqueue)
+            ! -- ends the drain as an empty queue would, and stays queued
+            dead = .false.
+            if (tag_of(vs_get(vst, ab + 2)) /= GCT_NIL) then
+               h = gcv_nth(vs_get(vst, ab + 2), hd)
+               if (gcv_is(h)) then
+                  if (gcv_count(h) >= 3) dead = gc_equal(gcv_nth(h, 2), gc_key("dead", [vs_get(vst, ab + 1), vs_get(vst, ab + 2)]))
+               end if
+            end if
             ! a FAILED agent keeps its queue for restart-agent, so the
             ! drain ends as if it were empty
-            if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL .or. tag_of(gc_slot(vs_get(vst, base + 2), 5)) /= GCT_NIL) then
+            if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL .or. tag_of(gc_slot(vs_get(vst, base + 2), 5)) /= GCT_NIL .or. dead) then
                call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)]), &
                     gc_bool(.false.), [vs_get(vst, ab + 1)]))
                if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL) then
