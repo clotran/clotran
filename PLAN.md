@@ -4821,6 +4821,19 @@ with core compiled by the VM ~1387 -> ~1327 ms. Flat with the heap image
 never asked it per element, and does not move. Not yet the item as
 planned -- the class constant answered when the site is linked.
 
+**What the recurring-fn fix would buy, measured (2026-10-10).** The
+yardstick three times, core from source (CLOTRAN_IMAGE=0), CLOTRAN_STATS,
+less a run with no yardstick: collector pauses per run ~17 ms flat, ~165
+ms VM (marked 5.8 M against 0.62 M, pool 8.4 M slots against 0.26 M). So
+the :loopl change's direct ceiling on the yardstick is ~150 ms of the VM's
+~1400 (~10%), plus the unmeasured pool growth -- VM+JIT ~1200 -> ~1050,
+still behind flat's ~900. The larger share is the boundary: per run 21 M
+calls of a value that is not a builtin, 12 M seq ops, 3.1 M evaluator
+nodes (vm_prim_n). So for the yardstick the calling convention (step 33
+stage 3, JIT stage 3) comes first; :loopl is a space fix first (a long
+dorun/reduce in a VM fn holds the whole seq). Next session: choose
+between them.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
