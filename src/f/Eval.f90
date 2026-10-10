@@ -8724,17 +8724,8 @@ contains
          ! then Math.toIntExact -- past an int is "integer overflow",
          ! not the index wrapped (4294967296 read element 0)
          walk = strip_meta(gcv_nth(vs_get(vst, base + 1), 1))
-         if (is_number(walk) .and. walk%tag /= GCT_INT) then
-            call long_cast(walk, idx, [vs_get(vst, base + 1)])
-            if (tctx%has_error) then
-               call vs_leave(vst, base)
-               return
-            end if
-         else
-            idx = as_index(walk)
-         end if
-         if (idx%tag == GCT_INT .and. (idx%ival > 2147483647_gc_ip .or. idx%ival < -2147483648_gc_ip)) then
-            call raise_class("clotran.host.arithmetic_exception", "integer overflow", [vs_get(vst, base + 1)])
+         call nth_index(walk, idx, [vs_get(vst, base + 1)])
+         if (tctx%has_error) then
             call vs_leave(vst, base)
             return
          end if
@@ -18897,6 +18888,33 @@ contains
          .or. o%tag == GCT_RATIO .or. o%tag == GCT_BIGRATIO) o = gc_int(int_of_number(o))
   end function as_index
 
+  ! nth's index, as RT.nth takes it: an int cast from a long, which the
+  ! compiler reads from a Number only -- nil is a NullPointerException,
+  ! anything else (a vector, a char, a keyword) a ClassCastException,
+  ! and that is decided BEFORE the collection is looked at: (nth {} [0])
+  ! throws the cast, not "nth not supported". Past an int is "integer
+  ! overflow" (Math.toIntExact), not the index wrapped. Both nth
+  ! builtins (persistent and transient) come through here; reading a
+  ! non-number as 0 made (nth [] [0 18]) an index error where clj has
+  ! the cast (scripts/fuzz seed 1091353629).
+  subroutine nth_index(walk, idx, roots)
+    type(gc_value), intent(in) :: walk
+    type(gc_value), intent(out) :: idx
+    type(gc_value), intent(in) :: roots(:)
+    idx = gc_nil()
+    if (walk%tag == GCT_INT) then
+       idx = walk
+    else if (is_number(walk)) then
+       call long_cast(walk, idx, roots)
+       if (gce_has_error()) return
+    else
+       call raise_number_cast(walk, roots)
+       return
+    end if
+    if (idx%ival > 2147483647_gc_ip .or. idx%ival < -2147483648_gc_ip) &
+         call raise_class("clotran.host.arithmetic_exception", "integer overflow", roots)
+  end subroutine nth_index
+
 
   ! MathContext.DECIMAL128 as the map (MathContext. p mode) builds:
   ! 34 significant digits, rounding half to even. It is what
@@ -19961,21 +19979,16 @@ contains
        x = strip_meta(gcv_nth(args, 1))
        ! nth's index as the persistent nth takes it (B_NTH): a long, then
        ! an int or "integer overflow"; get's an integer or nothing
-       if (id == B_NTH .and. is_number(x) .and. x%tag /= GCT_INT) then
+       if (id == B_NTH) then
           block
             type(gc_value) :: lx
-            call long_cast(x, lx, [vs_get(vst, base + 1)])
+            call nth_index(x, lx, [vs_get(vst, base + 1)])
             if (gce_has_error()) then
                call vs_leave(vst, base)
                return
             end if
             x = lx
           end block
-       end if
-       if (id == B_NTH .and. x%tag == GCT_INT .and. (x%ival > 2147483647_gc_ip .or. x%ival < -2147483648_gc_ip)) then
-          call raise_class("clotran.host.arithmetic_exception", "integer overflow", [vs_get(vst, base + 1)])
-          call vs_leave(vst, base)
-          return
        end if
        k = -1
        if (x%tag == GCT_INT) then

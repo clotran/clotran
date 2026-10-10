@@ -151,4 +151,12 @@
  ;; took the whole library with it; it is cl_abs now, and wraps as Math.abs
  (abs -9223372036854775808)
  (abs -5)
+ ;; nth with an index that is not a number read it as 0, so (nth [] [0 18])
+ ;; was an index error where clj has the cast; nil is the null pointer, and
+ ;; the index is decided before the collection is looked at (fuzz seed 1091353629)
+ (try (nth [] [0 18]) (catch clotran.host.class_cast_exception e :cast))
+ (try (nth [1 2] nil) (catch clotran.host.null_pointer_exception e :npe))
+ (try (nth {} [0]) (catch clotran.host.class_cast_exception e :cast))
+ (try (nth (transient [1 2]) :k) (catch clotran.host.class_cast_exception e :cast))
+ (nth [1 2] 1.5)
 ]
