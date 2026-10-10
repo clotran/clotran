@@ -104,7 +104,11 @@
   (h-nrb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
   ;; THE SEQ OPERATIONS (stage 2, model/heapsq.lisp): an object's first
   ;; integer field, a list's count or a lazy cell's state
-  (h-oi1 :type (array (signed-byte 64) (0)) :initially 0 :resizable t))
+  (h-oi1 :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  ;; AGING (stage 1c, model/heapgn.lisp): an object or run aged by the last
+  ;; collection, survived once and young again
+  (h-oaged :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (h-vaged :type (array (signed-byte 64) (0)) :initially 0 :resizable t))
 
 ; ---- BOUNDS ---------------------------------------------------------------------------
 

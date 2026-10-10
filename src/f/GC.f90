@@ -3075,31 +3075,20 @@ contains
     call young_add(vec_aged_list, n_vec_aged, j)
   end subroutine age_vec
 
+  ! an object's slots, a run's words: any a reference to something aged --
+  ! generated (model/heapgn.lisp's hpg-obj-refs-aged, hpg-vec-refs-aged;
+  ! heapgn-proof's obj-refs-aged-finds: each finds every reference that
+  ! aging-keeps asks to be remembered)
   logical function any_aged_slot(j)
     integer, intent(in) :: j
-    integer :: k
-    any_aged_slot = .false.
-    do k = 1, OBJ_SLOTS
-       if (aged_ref(obj_pool(j)%slot(k))) any_aged_slot = .true.
-    end do
+    any_aged_slot = hpg_obj_refs_aged(hstate, int(j, int64), 0_int64)
   end function any_aged_slot
 
   logical function any_aged_run(j)
     integer, intent(in) :: j
-    integer :: k
-    any_aged_run = .false.
-    do k = 1, vec_pool(j)%len
-       if (aged_ref(vec_store(vec_pool(j)%off + k - 1))) any_aged_run = .true.
-    end do
+    any_aged_run = hpg_vec_refs_aged(hstate, int(j, int64))
   end function any_aged_run
 
-  logical function aged_ref(x)
-    type(gc_value), intent(in) :: x
-    aged_ref = .false.
-    if (x%ref == 0) return
-    if (x%tag == GCT_OBJ) aged_ref = obj_aged(x%ref)
-    if (x%tag == GCT_VEC) aged_ref = vec_aged(x%ref)
-  end function aged_ref
 
   ! A full collection ages the young it finds alive rather than promoting
   ! them, as a young collection does. Promoted, the cell a lazy walk was
@@ -3176,14 +3165,10 @@ contains
     do i = 1, n_rem
        keep = .false.
        if (rem_set(i)%tag == GCT_OBJ) then
-          do j = 1, OBJ_SLOTS
-             if (aged_ref(obj_pool(rem_set(i)%ref)%slot(j))) keep = .true.
-          end do
+          keep = any_aged_slot(rem_set(i)%ref)
           if (.not. keep) obj_rem(rem_set(i)%ref) = .false.
        else if (rem_set(i)%tag == GCT_VEC) then
-          do j = 1, vec_pool(rem_set(i)%ref)%len
-             if (aged_ref(vec_store(vec_pool(rem_set(i)%ref)%off + j - 1))) keep = .true.
-          end do
+          keep = any_aged_run(rem_set(i)%ref)
           if (.not. keep) vec_rem(rem_set(i)%ref) = .false.
        end if
        if (keep) then
@@ -4297,7 +4282,7 @@ contains
   pure integer(int64) function hp_n_obj()
     hp_n_obj = size(obj_pool, kind=int64) + 1
   end function hp_n_obj
-  integer(int64) function hp_voff(i)
+  pure integer(int64) function hp_voff(i)
     integer(int64), intent(in) :: i
     hp_voff = vec_pool(i)%off
   end function hp_voff
@@ -4316,15 +4301,15 @@ contains
   pure integer(int64) function hp_n_vec()
     hp_n_vec = size(vec_pool, kind=int64) + 1
   end function hp_n_vec
-  integer(int64) function hp_atag(j)
+  pure integer(int64) function hp_atag(j)
     integer(int64), intent(in) :: j
     hp_atag = vec_store(j)%tag
   end function hp_atag
-  integer(int64) function hp_aref(j)
+  pure integer(int64) function hp_aref(j)
     integer(int64), intent(in) :: j
     hp_aref = vec_store(j)%ref
   end function hp_aref
-  integer(int64) function hp_n_arena()
+  pure integer(int64) function hp_n_arena()
     hp_n_arena = size(vec_store, kind=int64) + 1
   end function hp_n_arena
   pure integer(int64) function hp_smark(i)
@@ -4369,6 +4354,21 @@ contains
     integer(int64), intent(in) :: i
     hp_oi1 = obj_pool(i)%i1
   end function hp_oi1
+  ! aging's view (stage 1c): an object or run aged, and the flags' lengths
+  pure integer(int64) function hp_oaged(i)
+    integer(int64), intent(in) :: i
+    hp_oaged = merge(1_int64, 0_int64, obj_aged(i))
+  end function hp_oaged
+  pure integer(int64) function hp_vaged(i)
+    integer(int64), intent(in) :: i
+    hp_vaged = merge(1_int64, 0_int64, vec_aged(i))
+  end function hp_vaged
+  pure integer(int64) function hp_n_oaged()
+    hp_n_oaged = size(obj_aged, kind=int64) + 1
+  end function hp_n_oaged
+  pure integer(int64) function hp_n_vaged()
+    hp_n_vaged = size(vec_aged, kind=int64) + 1
+  end function hp_n_vaged
   subroutine hp_set_okind(i, x)
     integer(int64), intent(in) :: i, x
     obj_pool(i)%kind = int(x)

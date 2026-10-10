@@ -1870,3 +1870,167 @@
       return
     end if
   end function hpg_young_ref
+
+  pure function hpg_aged_ref(hs, tag_, ref_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: tag_
+    integer(int64), value :: ref_
+    logical :: r
+    if ((0_int64 < ref_)) then
+      if ((tag_ == 8_int64)) then
+        if ((ref_ < hp_n_oaged())) then
+          r = (.not. (hp_oaged(ref_) == 0_int64))
+          return
+        else
+          r = .false.
+          return
+        end if
+      else
+        if ((tag_ == 9_int64)) then
+          if ((ref_ < hp_n_vaged())) then
+            r = (.not. (hp_vaged(ref_) == 0_int64))
+            return
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      end if
+    else
+      r = .false.
+      return
+    end if
+  end function hpg_aged_ref
+
+  recursive pure function hpg_obj_refs_aged(hs, i_, k_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: i_
+    integer(int64), value :: k_
+    logical :: r
+    integer(int64) :: j_2
+    logical :: t_1
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    if ((.not. (k_ >= 0_int64))) then
+      t_1 = (.not. (k_ >= 0_int64))
+    else
+      t_1 = (.not. (k_ < 5_int64))
+    end if
+    if (t_1) then
+      r = .false.
+      return
+    else
+      j_2 = ((5_int64 * i_) + k_)
+      if ((j_2 < hp_n_oslot())) then
+        t_3 = (j_2 < hp_n_oslot())
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        if (hpg_aged_ref(hs, hp_otag(j_2), hp_oref(j_2))) then
+          t_4 = hpg_aged_ref(hs, hp_otag(j_2), hp_oref(j_2))
+        else
+          t_4 = hpg_obj_refs_aged(hs, i_, (1_int64 + k_))
+        end if
+        t_5 = t_4
+      else
+        t_5 = .false.
+      end if
+      r = t_5
+      return
+    end if
+  end function hpg_obj_refs_aged
+
+  pure function hpg_run_refs_aged(hs, j_, e_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: j_
+    integer(int64), value :: e_
+    logical :: r
+    integer(int64) :: e_5
+    integer(int64) :: j_4
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    do
+      if ((.not. (j_ >= 0_int64))) then
+        t_2 = (.not. (j_ >= 0_int64))
+      else
+        if ((.not. (e_ >= 0_int64))) then
+          t_1 = (.not. (e_ >= 0_int64))
+        else
+          t_1 = (.not. (j_ < e_))
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+        r = .false.
+        return
+      else
+        if ((j_ < hp_n_arena())) then
+          t_3 = (j_ < hp_n_arena())
+        else
+          t_3 = .false.
+        end if
+        if (t_3) then
+          if (hpg_aged_ref(hs, hp_atag(j_), hp_aref(j_))) then
+            r = hpg_aged_ref(hs, hp_atag(j_), hp_aref(j_))
+            return
+          else
+            j_4 = (1_int64 + j_)
+            e_5 = e_
+            j_ = j_4
+            e_ = e_5
+            cycle
+          end if
+        else
+          r = .false.
+          return
+        end if
+      end if
+    end do
+  end function hpg_run_refs_aged
+
+  pure function hpg_vec_refs_aged(hs, i_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: i_
+    logical :: r
+    integer(int64) :: n_3
+    integer(int64) :: off_2
+    logical :: t_1
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    if ((i_ < hp_n_vec())) then
+      t_1 = (i_ < hp_n_vec())
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      off_2 = max(0_int64, hp_voff(i_))
+      n_3 = max(0_int64, hp_vlen(i_))
+      if ((.not. (1099511627776_int64 < off_2))) then
+        if ((.not. (1099511627776_int64 < n_3))) then
+          t_4 = (.not. (1099511627776_int64 < (off_2 + n_3)))
+        else
+          t_4 = .false.
+        end if
+        t_5 = t_4
+      else
+        t_5 = .false.
+      end if
+      if (t_5) then
+        t_6 = hpg_run_refs_aged(hs, off_2, (off_2 + n_3))
+      else
+        t_6 = .false.
+      end if
+      r = t_6
+      return
+    else
+      r = .false.
+      return
+    end if
+  end function hpg_vec_refs_aged

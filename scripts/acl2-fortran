@@ -103,7 +103,9 @@
            ;; the seq operations (model/heapsq.lisp)
            hpg-ot hpg-or hpg-okd hpg-oi hpg-obj-at hpg-next-tail hpg-seq-op
            ;; the write barrier's test (model/heapgn.lisp)
-           hpg-young-ref]
+           hpg-young-ref
+           ;; aging's tests (model/heapgn.lisp)
+           hpg-aged-ref hpg-obj-refs-aged hpg-run-refs-aged hpg-vec-refs-aged]
      :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
      :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]
@@ -126,7 +128,7 @@
                      ;; the calling thread's batches
                      h-nob ["hp_nob" "hp_set_nob"] h-nvb ["hp_nvb" "hp_set_nvb"] h-nsb ["hp_nsb" "hp_set_nsb"]}
      :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"
-                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob" "vb" "sb" "rb" "nrb" "oi1"]}
+                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob" "vb" "sb" "rb" "nrb" "oi1" "oaged" "vaged"]}
      :prefix {"hs" "h-"}
      :value-arrays #{}
      ;; GC.f90's pools, through its accessors (GC.f90, "the marker's view")
@@ -145,8 +147,9 @@
                "ob" ["hp_ob" "hp_set_ob" "hp_n_ob"] "vb" ["hp_vb" "hp_set_vb" "hp_n_ob"]
                "sb" ["hp_sb" "hp_set_sb" "hp_n_ob"]
                "rb" ["hp_rb" "hp_set_rb" "hp_n_rb"] "nrb" ["hp_nrb" "hp_set_nrb" "hp_n_nrb"]
-               "oi1" ["hp_oi1" "-" "hp_n_obj"]}
-     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag hpg-obj-at hpg-young-ref}
+               "oi1" ["hp_oi1" "-" "hp_n_obj"]
+               "oaged" ["hp_oaged" "-" "hp_n_oaged"] "vaged" ["hp_vaged" "-" "hp_n_vaged"]}
+     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag hpg-obj-at hpg-young-ref hpg-aged-ref hpg-obj-refs-aged hpg-run-refs-aged hpg-vec-refs-aged}
      :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"
               "  ! GC.f90's contains part: the collector's marking, guard-verified, on GC's"

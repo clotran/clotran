@@ -4606,9 +4606,14 @@ condition in two places, read against the theorem: collect_young
 remembers each newly promoted object that points at an aged one
 (any_aged_slot, any_aged_run), and forget_young keeps in the set every
 remembered entry that still does -- the old ones were remembered by the
-barrier while their target was young, which barrier-keeps covers. Those
-two passes are still hand-written Fortran; generating them is what
-remains of 1c.
+barrier while their target was young, which barrier-keeps covers. Their tests --
+does this object's slots, this run's words, reference anything aged --
+are generated now (model/heapgn.lisp's hpg-obj-refs-aged and
+hpg-vec-refs-aged over two new stobj arrays, the aged flags), and
+heapgn-proof's obj-refs-aged-finds and vec-refs-aged-finds show each
+finds every reference aging-keeps needs remembered; GC.f90's
+any_aged_slot, any_aged_run and forget_young call them, and
+scripts/fuzz-heap-gen asks them of random heaps with random aged flags.
 
 ### 34. Dispatch and the calling convention, timed (decided 2026-10-09)
 

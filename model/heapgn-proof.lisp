@@ -413,3 +413,25 @@
            :use ((:instance young-start-necc (r (young-start-witness (hpg-unmark a h) os vs)))
                  (:instance aged-covered-necc (r (young-start-witness (hpg-unmark a h) os vs)))
                  (:instance aging-keeps-one (r (young-start-witness (hpg-unmark a h) os vs)))))))
+
+; ---- THE GENERATED TESTS FIND WHAT AGING NEEDS REMEMBERED -----------------------------------
+
+; a reference to an aged object a, in object o's slots or run v's words, is
+; what hpg-obj-refs-aged and hpg-vec-refs-aged answer true for: so the
+; passes that remember those, remember every one aged-covered asks for
+(defmacro aged-obj (a h) `(and (natp ,a) (< 0 ,a) (< ,a (len (nth *h-oagedi* ,h))) (not (equal (nth ,a (nth *h-oagedi* ,h)) 0))))
+
+(defthm obj-refs-aged-finds
+  (implies (and (natp o) (slots-ref o k a h) (aged-obj a h))
+           (hpg-obj-refs-aged o k h))
+  :hints (("Goal" :induct (slots-ref o k a h))))
+
+(defthm run-refs-aged-finds
+  (implies (and (run-ref j e a h) (aged-obj a h))
+           (hpg-run-refs-aged j e h))
+  :hints (("Goal" :induct (run-ref j e a h))))
+
+(defthm vec-refs-aged-finds
+  (implies (and (hpgp h) (vec-ref v a h) (aged-obj a h))
+           (hpg-vec-refs-aged v h))
+  :hints (("Goal" :in-theory (disable run-ref hpg-run-refs-aged))))

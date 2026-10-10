@@ -15,7 +15,7 @@ module heap_check_m
   end type heap_state
   integer(int64), allocatable :: otag(:), oref(:), omark(:), voff(:), vlen(:), vmark(:), atag(:), aref(:), smark(:)
   integer(int64), allocatable :: okind(:), ofree(:), onext(:), vfree(:), vnext(:), sfree(:), snext(:), aival(:), chead(:)
-  integer(int64), allocatable :: ofin(:), srel(:), oi1(:)
+  integer(int64), allocatable :: ofin(:), srel(:), oi1(:), oaged(:), vaged(:)
   integer(int64) :: ohead = 0, vhead = 0, shead = 0
   integer(int64) :: oused = 0, ocap = 0, nob = 0, vused = 0, vcap = 0, nvb = 0, sused = 0, scap = 0, nsb = 0
   integer(int64), allocatable :: ob(:), vb(:), sb(:)
@@ -46,7 +46,7 @@ contains
   pure integer(int64) function hp_n_obj()
     hp_n_obj = size(omark, kind=int64)
   end function hp_n_obj
-  integer(int64) function hp_voff(i)
+  pure integer(int64) function hp_voff(i)
     integer(int64), intent(in) :: i
     hp_voff = voff(i)
   end function hp_voff
@@ -65,15 +65,15 @@ contains
   pure integer(int64) function hp_n_vec()
     hp_n_vec = min(size(voff, kind=int64), size(vlen, kind=int64), size(vmark, kind=int64))
   end function hp_n_vec
-  integer(int64) function hp_atag(j)
+  pure integer(int64) function hp_atag(j)
     integer(int64), intent(in) :: j
     hp_atag = atag(j)
   end function hp_atag
-  integer(int64) function hp_aref(j)
+  pure integer(int64) function hp_aref(j)
     integer(int64), intent(in) :: j
     hp_aref = aref(j)
   end function hp_aref
-  integer(int64) function hp_n_arena()
+  pure integer(int64) function hp_n_arena()
     hp_n_arena = size(atag, kind=int64)
   end function hp_n_arena
   pure integer(int64) function hp_smark(i)
@@ -93,6 +93,21 @@ contains
     integer(int64), intent(in) :: i
     hp_okind = okind(i)
   end function hp_okind
+  pure integer(int64) function hp_oaged(i)
+    integer(int64), intent(in) :: i
+    hp_oaged = oaged(i)
+  end function hp_oaged
+  pure integer(int64) function hp_vaged(i)
+    integer(int64), intent(in) :: i
+    hp_vaged = vaged(i)
+    if (broken) hp_vaged = 1 - vaged(i)
+  end function hp_vaged
+  pure integer(int64) function hp_n_oaged()
+    hp_n_oaged = size(oaged, kind=int64)
+  end function hp_n_oaged
+  pure integer(int64) function hp_n_vaged()
+    hp_n_vaged = size(vaged, kind=int64)
+  end function hp_n_vaged
   pure integer(int64) function hp_oi1(i)
     integer(int64), intent(in) :: i
     hp_oi1 = oi1(i)
@@ -358,7 +373,7 @@ program heap_check
   integer(int64) :: no, nv, na, ns, cap, t, r, tk(3), pp(4), k, nt
   integer(int64), allocatable :: tn(:), tb(:), toff(:), sq(:)
   integer(int64) :: nq, qo, qt, qr, nro, nrv
-  integer(int64), allocatable :: yq(:), ro(:), rv(:)
+  integer(int64), allocatable :: yq(:), ro(:), rv(:), aq(:)
   character(len=256) :: path, arg2
   call get_command_argument(1, path)
   call get_command_argument(2, arg2)
@@ -417,6 +432,20 @@ program heap_check
   do k = 1, nq
      read(u, *) qt, qr
      yq(k) = merge(1_int64, 0_int64, hpg_young_ref(hs, qt, qr))
+  end do
+  ! aging's tests: an object's slots or a run's words referencing the aged
+  allocate(oaged(0:no - 1), vaged(0:nv - 1))
+  read(u, *) oaged
+  if (nv > 0) read(u, *) vaged
+  read(u, *) nq
+  allocate(aq(nq))
+  do k = 1, nq
+     read(u, *) qt, qr
+     if (qt == 0) then
+        aq(k) = merge(1_int64, 0_int64, hpg_obj_refs_aged(hs, qr, 0_int64))
+     else
+        aq(k) = merge(1_int64, 0_int64, hpg_vec_refs_aged(hs, qr))
+     end if
   end do
   ! the remembered objects and runs, scanned after the roots
   read(u, *) nro
@@ -515,4 +544,5 @@ program heap_check
   write(*, '(a, *(1x, i0))') 'rb', rb
   write(*, '(a, *(1x, i0))') 'seq', sq
   write(*, '(a, *(1x, i0))') 'young', yq
+  write(*, '(a, *(1x, i0))') 'aged', aq
 end program heap_check

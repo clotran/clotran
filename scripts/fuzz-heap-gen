@@ -29,12 +29,14 @@
 ;; roots, a remembered set of objects and runs is scanned (scan-objs,
 ;; scan-vecs: the generated hpg_scan_obj and hpg_scan_vec, as collect_young
 ;; calls them) before the drain; and the write barrier's test, hpg-young-ref,
-;; is asked of random references on the heap as it starts.
+;; is asked of random references on the heap as it starts, and aging's tests
+;; (hpg-obj-refs-aged, hpg-vec-refs-aged) of random objects and runs, with
+;; random aged flags.
 ;;
 ;; -x is the NEGATIVE CONTROL: the generated side reads every object's last
-;; slot as no reference, a delegating lazy cell as pending and a text's mark
-;; inverted, and the marks, the seq answers and the barrier's answers must
-;; all part.
+;; slot as no reference, a delegating lazy cell as pending, a text's mark
+;; and a run's aged flag inverted, and the marks, the seq answers, the
+;; barrier's and aging's answers must all part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -83,6 +85,8 @@
      :okind (vec (repeatedly no #(pick [1 6 6 (rnd 20)])))
      :oi1 (vec (repeatedly no #(pick [0 1 1 2 3 4 (rnd 9) (- (rnd 3))])))
      :yq (vec (repeatedly (+ 1 (rnd 10)) #(gen-ref no nv ns)))
+     :oaged (vec (repeatedly no #(rnd 2))) :vaged (vec (repeatedly nv #(rnd 2)))
+     :aq (vec (repeatedly (+ 1 (rnd 8)) #(let [k (rnd 2)] [k (rnd (+ 2 (if (zero? k) no nv)))])))
      :remo (vec (repeatedly (rnd 4) #(rnd (+ no 2))))
      :remv (vec (repeatedly (rnd 3) #(rnd (+ nv 2))))
      :seqq (vec (repeatedly (+ 1 (rnd 12))
@@ -107,7 +111,7 @@
                 "takes" "pops" "ob" "alloc" "ofree2" "omark2"
                 "vtakes" "vpops" "vb" "valloc" "vfree2" "vmark2"
                 "stakes" "spops" "sb" "salloc" "sfree2" "smark2"
-                "runs" "arena" "chead2" "nrb" "rb" "seq" "young"])
+                "runs" "arena" "chead2" "nrb" "rb" "seq" "young" "aged"])
 
 ;; ---- ACL2 -------------------------------------------------------------------------
 
@@ -117,7 +121,7 @@
 (def acl2-arrays
   (array-map "otag" 0 "oref" 1 "omark" 2 "voff" 3 "vlen" 4 "vmark" 5 "atag" 6 "aref" 7 "smark" 8
              "okind" 9 "ofree" 10 "onext" 11 "vfree" 12 "vnext" 13 "sfree" 14 "snext" 15 "aival" 16 "chead" 17
-             "ofin" 18 "srel" 19 "ob" 20 "vb" 21 "sb" 22 "rb" 23 "nrb" 24 "oi1" 25))
+             "ofin" 18 "srel" 19 "ob" 20 "vb" 21 "sb" 22 "rb" 23 "nrb" 24 "oi1" 25 "oaged" 26 "vaged" 27))
 
 (def driver
   (str "(include-book \"heapgn-proof\")\n"
@@ -150,7 +154,9 @@
   (if (endp qs) nil (cons (hpg-seq-op (caar qs) (cadar qs) (caddar qs) hpg) (seq-ops (cdr qs) hpg))))
 (defun young-refs (qs hpg) (declare (xargs :stobjs hpg :mode :program))
   (if (endp qs) nil (cons (if (hpg-young-ref (caar qs) (cadar qs) hpg) 1 0) (young-refs (cdr qs) hpg))))
-(defun run-case (k arrs cap hd us ar ts roots oi qs yq ro rv hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+(defun aged-tests (qs hpg) (declare (xargs :stobjs hpg :mode :program))
+  (if (endp qs) nil (cons (if (if (equal (caar qs) 0) (hpg-obj-refs-aged (cadar qs) 0 hpg) (hpg-vec-refs-aged (cadar qs) hpg)) 1 0) (aged-tests (cdr qs) hpg))))
+(defun run-case (k arrs cap hd us ar ts roots oi qs yq ro rv oa va aq hpg) (declare (xargs :stobjs hpg :mode :program))\n"
        "  (let* ((hpg (put 0 (nth 0 arrs) hpg)) (hpg (put 1 (nth 1 arrs) hpg)) (hpg (put 2 (nth 2 arrs) hpg))\n"
        "         (hpg (put 3 (nth 3 arrs) hpg)) (hpg (put 4 (nth 4 arrs) hpg)) (hpg (put 5 (nth 5 arrs) hpg))\n"
        "         (hpg (put 6 (nth 6 arrs) hpg)) (hpg (put 7 (nth 7 arrs) hpg)) (hpg (put 8 (nth 8 arrs) hpg))\n"
@@ -160,6 +166,7 @@
        "         (hpg (put 18 (make-list (len (nth 2 arrs)) :initial-element 0) hpg))\n"
        "         (hpg (put 19 (make-list (len (nth 8 arrs)) :initial-element 0) hpg))\n"
        "         (hpg (put 25 oi hpg)) (sq (seq-ops qs hpg)) (yq (young-refs yq hpg))\n"
+       "         (hpg (put 26 oa hpg)) (hpg (put 27 va hpg)) (aq (aged-tests aq hpg))\n"
        "         (hpg (resize-h-mtag cap hpg)) (hpg (resize-h-mref cap hpg))\n"
        "         (hpg (update-h-msp 0 hpg)) (hpg (update-h-err 0 hpg)) (hpg (update-h-nobj 0 hpg))\n"
        "         (hpg (update-h-nvec 0 hpg)) (hpg (update-h-nstr 0 hpg)) (hpg (update-h-alive 0 hpg))\n"
@@ -180,7 +187,7 @@
        "      (mv-let (rv hpg) (alloc-vec hpg)\n"
        "        (mv-let (rs hpg) (alloc-str hpg)\n"
        "          (mv-let (rr hpg) (alloc-runs ar ts hpg)\n"
-       "            (prog2$ (cw \"CASE ~x0 ~x1~%\" k (append mk ro rv rs rr (list sq yq))) hpg))))))))\n"
+       "            (prog2$ (cw \"CASE ~x0 ~x1~%\" k (append mk ro rv rs rr (list sq yq aq))) hpg))))))))\n"
        (str/join (map-indexed (fn [k c]
                                 (str "(run-case " k " (list "
                                      (str/join " " (map #(l (% c)) [:otag :oref :omark :voff :vlen :vmark :atag :aref :smark
@@ -191,7 +198,9 @@
                                      " " (l (:oi1 c))
                                      " '(" (str/join " " (map (fn [[o t r]] (str "(" o " " t " " r ")")) (:seqq c))) ")"
                                      " '(" (str/join " " (map (fn [[t r]] (str "(" t " " r ")")) (:yq c))) ")"
-                                     " " (l (:remo c)) " " (l (:remv c)) " hpg)\n"))
+                                     " " (l (:remo c)) " " (l (:remv c))
+                                     " " (l (:oaged c)) " " (l (:vaged c))
+                                     " '(" (str/join " " (map (fn [[t r]] (str "(" t " " r ")")) (:aq c))) ") hpg)\n"))
                               cases))
        "(good-bye)\n"))
 
@@ -223,6 +232,8 @@
                  (count (:rtakes c)) "\n" (str/join "\n" (map (fn [[a b]] (str a " " b)) (:rtakes c))) "\n"
                  (nums (:oi1 c)) "\n" (count (:seqq c)) "\n" (str/join "\n" (map #(nums %) (:seqq c))) "\n"
                  (count (:yq c)) "\n" (str/join "\n" (map #(nums %) (:yq c))) "\n"
+                 (nums (:oaged c)) "\n" (nums (:vaged c)) "\n"
+                 (count (:aq c)) "\n" (str/join "\n" (map #(nums %) (:aq c))) "\n"
                  (count (:remo c)) " " (nums (:remo c)) "\n" (count (:remv c)) " " (nums (:remv c)) "\n"
                  (count (:roots c)) "\n" (str/join "\n" (map (fn [[t r]] (str t " " r)) (:roots c))) "\n"))
     f))
@@ -240,15 +251,18 @@
            {:k k :ok (= got want) :got got :want want :overflow (= 1 (first (nth (expected k) 3)))}))))
 
 (def bad (remove :ok results))
-(def seq-bad (remove (fn [r] (= (last (butlast (:got r))) (last (butlast (:want r))))) results))
-(def young-bad (remove (fn [r] (= (last (:got r)) (last (:want r)))) results))
+(defn nth-last [xs k] (nth (reverse xs) k))
+(def seq-bad (remove (fn [r] (= (nth-last (:got r) 2) (nth-last (:want r) 2))) results))
+(def young-bad (remove (fn [r] (= (nth-last (:got r) 1) (nth-last (:want r) 1))) results))
+(def aged-bad (remove (fn [r] (= (nth-last (:got r) 0) (nth-last (:want r) 0))) results))
 (println (str n " heaps, seed " seed (when broken " (negative control: an object's last slot unread)")
               "; " (count (filter :overflow results)) " overflowed their stack"))
 (println (str "generated marking, sweep, allocation and seq operations against ACL2's: " (count bad) " differ"))
 (println (str "  of them in the seq operations' answers: " (count seq-bad)))
 (println (str "  of them in the write barrier's answers: " (count young-bad)))
+(println (str "  of them in aging's answers: " (count aged-bad)))
 (doseq [b (take 2 bad)]
   (println "  case" (:k b))
   (doseq [[nm w g] (map vector out-names (:want b) (:got b)) :when (not= w g)]
     (println "    " nm "ACL2" (pr-str w) "generated" (pr-str g))))
-(System/exit (if (if broken (or (empty? bad) (empty? seq-bad) (empty? young-bad)) (seq bad)) 1 0))
+(System/exit (if (if broken (or (empty? bad) (empty? seq-bad) (empty? young-bad) (empty? aged-bad)) (seq bad)) 1 0))
