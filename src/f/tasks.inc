@@ -382,8 +382,13 @@
           if (gc_i1(tctx%cur_task) == TASK_RUNNING) call gc_set_i1(tctx%cur_task, TASK_RUNNABLE)
        end if
        if (deadline < 0) then
+          ! Re-checked every 200 ms rather than slept forever: a thread that
+          ! parks AFTER this one decided "not a deadlock" -- a pool worker
+          ! woken by a notify and re-parking (sched_take) -- wakes nobody,
+          ! and the verdict would never be reached. The thread is blocked
+          ! either way; the re-check is what the verdict costs.
           blocked_nodl = blocked_nodl + 1
-          call gc_state_wait(-1_8)
+          call gc_state_wait(200_8)
           blocked_nodl = blocked_nodl - 1
        else
           blocked_dl = blocked_dl + 1
