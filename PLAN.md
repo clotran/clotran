@@ -4791,6 +4791,15 @@ vcs2-good's every case, then vmi, vmic, the generated step and compiler,
 the fused patterns and the JIT's blocks. Several days of proof, not a
 night's: the next item for step 34.
 
+**instance? in place (2026-10-10).** Under the VM the yardstick asked
+instance? 1.09 M times through the generic builtin call (chunked-seq? in
+reduce1). It is now an in-place case beside cons (flat_cons_op: a class
+and any value, is_instance as call_builtin answers it; anything else the
+builtin's, which throws): the generic calls 1.09 M -> 10, the yardstick
+with core compiled by the VM ~1387 -> ~1327 ms. Flat with the heap image
+never asked it per element, and does not move. Not yet the item as
+planned -- the class constant answered when the site is linked.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

@@ -1821,12 +1821,22 @@
   ! tail -- without its argument vector or its dispatch. It allocates:
   ! x and y are the caller's registers, rooted where they lie. Nothing
   ! here can fail; any other tail is the builtin's.
+  ! And (instance? c x) with c a class: is_instance, as call_builtin's
+  ! B_INSTANCE answers it -- chunked-seq? asks it of every element reduce1
+  ! walks; a c that is no class throws there, and goes there.
   logical function flat_cons_op(id, n, x, y, out) result(done)
     integer, intent(in) :: id, n
     type(gc_value), intent(in) :: x, y
     type(gc_value), intent(inout) :: out
     type(gc_value) :: tl
     done = .false.
+    if (id == B_INSTANCE .and. n == 2) then
+       tl = strip_meta(x)
+       if (tl%tag /= GCT_CLASS) return
+       out = gc_bool(is_instance(tl, y))
+       done = .true.
+       return
+    end if
     if (id /= B_CONS .or. n /= 2) return
     if (y%tag == GCT_NIL) then
        tl = gcl_empty([x])
