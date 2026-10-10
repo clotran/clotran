@@ -543,6 +543,10 @@
       ;; test (CLOTRAN_JIT_BREAK), which this mode must catch
       "jit-control" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                       (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1" "CLOTRAN_JIT_BREAK" "1"} bin core f))))
+      ;; the compiled prims' control: an integer sum one off
+      ;; (CLOTRAN_JIT_BREAK=2, model/vmj2.lisp's prim-fast-ok broken)
+      "jit-control-prim" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+                           (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1" "CLOTRAN_JIT_BREAK" "2"} bin core f))))
       "noimage" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                   (outputs (:out (sh {"CLOTRAN_IMAGE" "0"} bin core f))))
       "compiled"

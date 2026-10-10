@@ -664,7 +664,7 @@ module Eval
   integer(c_int64_t), save :: vmj_cap = 0, vmj_used = 0, vmj_enter = 0, vmj_stub = 0
   integer(c_int64_t), allocatable, target, save :: vmj_tab(:)
   integer, save :: vmj_n_fns = 0, vmj_n_inline = 0
-  logical, save :: vmj_break = .false.
+  logical, save :: vmj_break = .false., vmj_break_prim = .false.
   interface
      function clotran_jit_alloc(n) bind(c, name="clotran_jit_alloc") result(p)
        import :: c_ptr, c_int64_t

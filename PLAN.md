@@ -4094,6 +4094,32 @@ next of a realised cell) inline, the runtime otherwise, with the
 builtin's meaning on those cases a stated property of the runtime
 that the fuzzer checks (prim is unconstrained in the model).
 
+**Stage 2 on the machine clotran runs: the prims compiled (2026-10-09).**
+model/vmj2.lisp: a prim whose operator -- a pool constant, so known when
+the block is translated -- is a builtin with an integer fast case
+(flat_int_op's: + - = < > <= >= inc dec zero? pos? neg?) is a native
+`(:fast id n)`: when its arguments are integers and the answer fits 64
+bits, slot sp-n := the answer and sp := sp-n+1; otherwise the step. prim
+is unconstrained in the model, so what a builtin answers there is a
+STATED PROPERTY OF THE RUNTIME, `prim-fast-ok`; under it, `vmj2-block-is`
+(a block is one vmi-step) and `vmj2-run-is` (the native machine, blocks
+translated once, is vmi-run step for step); `vmj2-ops`, a block is at
+most 5 native ops. src/f/vmjit.inc emits it (vmj_fast): tags checked,
+adds/subs with b.vs to the slow tail on overflow, cmp and cset for the
+tests. scripts/fuzz -m jit checks prim-fast-ok against clj; its new
+control, CLOTRAN_JIT_BREAK=2 (a sum one off), is caught (make
+check-fuzz-jit, 20 cases).
+
+| | flat | VM | VM + JIT stage 2 |
+|---|---|---|---|
+| `(apply + (take 10^6 (range)))` | ~910 ms | ~1420 ms | ~908 ms |
+| a 10^7-iteration loop | 274 ms | 549 ms | 273 ms |
+| the same, summing | 363 ms | 801 ms | 359 ms |
+
+The VM with the JIT is level with flat on all three. What is left in a
+loop's turn: recur (a step), and what the step costs; next, recur as
+native moves.
+
 ### 31a. The unified debugger (decided 2026-10-06)
 
 James, 2026-10-06: no Python. Make one debugger, with our own UX,

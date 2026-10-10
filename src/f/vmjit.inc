@@ -1,9 +1,13 @@
   ! ===================================================================
-  ! THE JIT, stage 1 (PLAN step 31; model/vmj.lisp). Each function the VM
-  ! compiles is translated once to arm64: push, load, slide, jmpf and jmp
-  ! as native code (vmj-block's ops), everything else a call of the step
-  ! the interpreter runs (vm_jit_step -> vmg_xstep). vmj-run-is: this
-  ! machine is the interpreter step for step.
+  ! THE JIT, stages 1 and 2 (PLAN step 31; model/vmj.lisp, vmj2.lisp). Each
+  ! function the VM compiles is translated once to arm64: push, load, slide,
+  ! jmpf and jmp as native code (vmj-block's ops); a prim of a builtin with
+  ! an integer fast case -- flat_int_op's: + - = < > <= >= inc dec zero?
+  ! pos? neg? -- as native arithmetic when its arguments are integers and
+  ! the answer fits (vmj2-block's :fast); everything else a call of the step
+  ! the interpreter runs (vm_jit_step -> vmg_xstep). vmj2-run-is: this
+  ! machine is the interpreter step for step, given that the builtins
+  ! answer so on those cases (prim-fast-ok, which scripts/fuzz -m jit checks).
   !
   ! The registers while native code runs:
   !   x19 the run's vm_jit_ctx   x20 fb   x21 sp   x22 the stack's base
@@ -28,6 +32,7 @@
        ! the fuzzer's negative control (scripts/fuzz -m jit-control)
        call get_environment_variable("CLOTRAN_JIT_BREAK", tr)
        vmj_break = trim(tr) == "1"
+       vmj_break_prim = trim(tr) == "2"
        if (trim(e) == "1" .and. vm_enabled()) then
           if (clotran_jit_arch() == 1) then
              if (vmj_init()) vmj_mode = 1
@@ -121,6 +126,26 @@
     integer, intent(in) :: d, n, m, c
     a_csel = int(z'9A800000', c_int64_t) + m * 65536_gc_ip + c * 4096 + n * 32 + d
   end function a_csel
+  integer(c_int64_t) function a_adds(d, n, m)          ! adds xd, xn, xm
+    integer, intent(in) :: d, n, m
+    a_adds = int(z'AB000000', c_int64_t) + m * 65536_gc_ip + n * 32 + d
+  end function a_adds
+  integer(c_int64_t) function a_subs(d, n, m)          ! subs xd, xn, xm
+    integer, intent(in) :: d, n, m
+    a_subs = int(z'EB000000', c_int64_t) + m * 65536_gc_ip + n * 32 + d
+  end function a_subs
+  integer(c_int64_t) function a_addsi(d, n, i)         ! adds xd, xn, #i
+    integer, intent(in) :: d, n, i
+    a_addsi = int(z'B1000000', c_int64_t) + i * 1024_gc_ip + n * 32 + d
+  end function a_addsi
+  integer(c_int64_t) function a_subsi(d, n, i)         ! subs xd, xn, #i
+    integer, intent(in) :: d, n, i
+    a_subsi = int(z'F1000000', c_int64_t) + i * 1024_gc_ip + n * 32 + d
+  end function a_subsi
+  integer(c_int64_t) function a_cset(d, c)             ! cset xd, c (csinc xd, xzr, xzr, !c)
+    integer, intent(in) :: d, c
+    a_cset = int(z'9A9F07E0', c_int64_t) + ieor(c, 1) * 4096 + d
+  end function a_cset
   integer(c_int64_t) function a_mov(d, m)              ! mov xd, xm
     integer, intent(in) :: d, m
     a_mov = int(z'AA0003E0', c_int64_t) + m * 65536_gc_ip + d
@@ -272,11 +297,11 @@
   end subroutine vmj_slot
 
   ! (:chk-ix b k): to the block's slow tail unless base(b)+k < the length
-  subroutine vmj_chk_ix(buf, nw, b, k, nf, fails)
+  subroutine vmj_chk_ix(buf, nw, b, k, nf, fails, fcond)
     integer(c_int32_t), allocatable, intent(inout) :: buf(:)
     integer, intent(inout) :: nw, nf
     integer, intent(in) :: b, k
-    integer, intent(inout) :: fails(:)
+    integer, intent(inout) :: fails(:), fcond(:)
     integer :: br
     br = merge(20, 21, b == 0)
     if (k > 0) then
@@ -288,10 +313,99 @@
     else
        call vmj_put(buf, nw, a_cmp(br, 23))
     end if
-    call vmj_put(buf, nw, 0_gc_ip)                     ! b.hs SLOW, patched
+    call vmj_fail(buf, nw, 2, nf, fails, fcond)        ! b.hs SLOW
+  end subroutine vmj_chk_ix
+
+  ! b.c to the block's slow tail, patched once the tail is placed
+  subroutine vmj_fail(buf, nw, c, nf, fails, fcond)
+    integer(c_int32_t), allocatable, intent(inout) :: buf(:)
+    integer, intent(inout) :: nw, nf
+    integer, intent(in) :: c
+    integer, intent(inout) :: fails(:), fcond(:)
+    call vmj_put(buf, nw, 0_gc_ip)
     nf = nf + 1
     fails(nf) = nw
-  end subroutine vmj_chk_ix
+    fcond(nf) = c
+  end subroutine vmj_fail
+
+  ! vmj2-block's (:fast id n): the arguments at sp-n .. sp-1 integers (tag
+  ! 2, the integer at byte 8), the answer computed, overflow to the slow
+  ! tail; slot sp-n := an integer or a boolean (tag 1, 1 or 0), sp := sp-n+1
+  logical function vmj_fast(buf, nw, id, n, nf, fails, fcond) result(done)
+    integer(c_int32_t), allocatable, intent(inout) :: buf(:)
+    integer, intent(inout) :: nw, nf
+    integer(c_int64_t), intent(in) :: id, n
+    integer, intent(inout) :: fails(:), fcond(:)
+    integer :: tag, c
+    done = .false.
+    tag = 1
+    c = -1
+    select case (int(id))
+    case (B_ADD, B_SUB)
+       if (n /= 2) return
+       tag = 2
+    case (B_EQ);  c = 0
+    case (B_LT);  c = 11
+    case (B_GT);  c = 12
+    case (B_LTE); c = 13
+    case (B_GTE); c = 10
+    case (B_INC, B_DEC)
+       if (n /= 1) return
+       tag = 2
+    case (B_ZERO); c = 0
+    case (B_POS);  c = 12
+    case (B_NEG);  c = 11
+    case default
+       return
+    end select
+    select case (int(id))
+    case (B_EQ, B_LT, B_GT, B_LTE, B_GTE)
+       if (n /= 2) return
+    case (B_ZERO, B_POS, B_NEG)
+       if (n /= 1) return
+    end select
+    done = .true.
+    call vmj_put(buf, nw, a_cmpi(21, int(n)))
+    call vmj_fail(buf, nw, 3, nf, fails, fcond)        ! b.lo: sp < n
+    call vmj_chk_ix(buf, nw, 1, -1, nf, fails, fcond)
+    call vmj_slot(buf, nw, 9, 1, -int(n))
+    call vmj_put(buf, nw, a_ldrw(10, 9, 0))
+    call vmj_put(buf, nw, a_cmpwi(10, 2))
+    call vmj_fail(buf, nw, 1, nf, fails, fcond)        ! b.ne: not an integer
+    call vmj_put(buf, nw, a_ldr(11, 9, 8))
+    if (n == 2) then
+       call vmj_slot(buf, nw, 12, 1, -1)
+       call vmj_put(buf, nw, a_ldrw(13, 12, 0))
+       call vmj_put(buf, nw, a_cmpwi(13, 2))
+       call vmj_fail(buf, nw, 1, nf, fails, fcond)
+       call vmj_put(buf, nw, a_ldr(14, 12, 8))
+    end if
+    select case (int(id))
+    case (B_ADD)
+       call vmj_put(buf, nw, a_adds(15, 11, 14))
+       call vmj_fail(buf, nw, 6, nf, fails, fcond)     ! b.vs: overflow
+       ! the fuzzer's control (CLOTRAN_JIT_BREAK=2): a sum one off
+       if (vmj_break_prim) call vmj_put(buf, nw, a_addi(15, 15, 1))
+    case (B_SUB)
+       call vmj_put(buf, nw, a_subs(15, 11, 14))
+       call vmj_fail(buf, nw, 6, nf, fails, fcond)
+    case (B_INC)
+       call vmj_put(buf, nw, a_addsi(15, 11, 1))
+       call vmj_fail(buf, nw, 6, nf, fails, fcond)
+    case (B_DEC)
+       call vmj_put(buf, nw, a_subsi(15, 11, 1))
+       call vmj_fail(buf, nw, 6, nf, fails, fcond)
+    case (B_ZERO, B_POS, B_NEG)
+       call vmj_put(buf, nw, a_cmpi(11, 0))
+       call vmj_put(buf, nw, a_cset(15, c))
+    case default
+       call vmj_put(buf, nw, a_cmp(11, 14))
+       call vmj_put(buf, nw, a_cset(15, c))
+    end select
+    call vmj_put(buf, nw, a_movz(16, int(tag, c_int64_t), 0))
+    call vmj_put(buf, nw, a_stp(16, 15, 9, 0))
+    if (n == 2) call vmj_put(buf, nw, a_subi(21, 21, 1))
+  end function vmj_fast
 
   ! x25 := v
   subroutine vmj_movpc(buf, nw, r, v)
@@ -327,7 +441,7 @@
   subroutine vmj_compile(p0, pend)
     integer(c_int64_t), intent(in) :: p0, pend
     integer(c_int32_t), allocatable :: buf(:)
-    integer :: nw, nf, nj, ns, i, fails(8)
+    integer :: nw, nf, nj, ns, i, fails(16), fcond(16)
     integer, allocatable :: blk(:), jat(:), sat(:)
     integer(c_int64_t), allocatable :: jto(:), sto(:)
     integer(c_int64_t) :: p, op, a, at, n
@@ -347,7 +461,7 @@
        select case (op)
        case (1)                                        ! push
           if (a >= 0 .and. a < VMP_INSTRS) then
-             call vmj_chk_ix(buf, nw, 1, 0, nf, fails)
+             call vmj_chk_ix(buf, nw, 1, 0, nf, fails, fcond)
              call vmj_movpc(buf, nw, 9, a)
              call vmj_put(buf, nw, a_addl(9, 24, 9, 4))
              call vmj_put(buf, nw, a_ldp(10, 11, 9, 0))
@@ -359,8 +473,8 @@
           end if
        case (2)                                        ! load
           if (a >= 0 .and. a < 4096) then
-             call vmj_chk_ix(buf, nw, 0, int(a), nf, fails)
-             call vmj_chk_ix(buf, nw, 1, 0, nf, fails)
+             call vmj_chk_ix(buf, nw, 0, int(a), nf, fails, fcond)
+             call vmj_chk_ix(buf, nw, 1, 0, nf, fails, fcond)
              call vmj_slot(buf, nw, 9, 0, int(a))
              call vmj_put(buf, nw, a_ldp(10, 11, 9, 0))
              call vmj_slot(buf, nw, 12, 1, 0)
@@ -371,10 +485,8 @@
           end if
        case (5)                                        ! slide
           call vmj_put(buf, nw, a_cmpi(21, 2))
-          call vmj_put(buf, nw, 0_gc_ip)               ! b.lo SLOW
-          nf = nf + 1
-          fails(nf) = -nw
-          call vmj_chk_ix(buf, nw, 1, -1, nf, fails)
+          call vmj_fail(buf, nw, 3, nf, fails, fcond)  ! b.lo SLOW
+          call vmj_chk_ix(buf, nw, 1, -1, nf, fails, fcond)
           call vmj_slot(buf, nw, 9, 1, -1)
           call vmj_put(buf, nw, a_ldp(10, 11, 9, 0))
           call vmj_slot(buf, nw, 12, 1, -2)
@@ -382,10 +494,8 @@
           call vmj_put(buf, nw, a_subi(21, 21, 1))
        case (6)                                        ! jmpf
           call vmj_put(buf, nw, a_cmpi(21, 1))
-          call vmj_put(buf, nw, 0_gc_ip)               ! b.lo SLOW
-          nf = nf + 1
-          fails(nf) = -nw
-          call vmj_chk_ix(buf, nw, 1, -1, nf, fails)
+          call vmj_fail(buf, nw, 3, nf, fails, fcond)  ! b.lo SLOW
+          call vmj_chk_ix(buf, nw, 1, -1, nf, fails, fcond)
           call vmj_put(buf, nw, a_subi(21, 21, 1))
           call vmj_slot(buf, nw, 9, 1, 0)
           call vmj_put(buf, nw, a_ldrw(10, 9, 0))
@@ -403,6 +513,13 @@
           call vmj_patch(buf, int(at) + 4, a_cbnz(11, nw + 1 - (int(at) + 4)))
        case (7)                                        ! jmp
           call vmj_jump(buf, nw, a, p0, pend, nj, jat, jto)
+       case (13)                                       ! prim
+          ! a builtin's integer fast case (vmj2-block), else the step
+          inl = .false.
+          if (a >= 0 .and. a < VMP_INSTRS) then
+             if (gc_kind(vmp%pool(a)) == OBJ_BUILTIN) &
+                  inl = vmj_fast(buf, nw, int(gc_i1(vmp%pool(a)), c_int64_t), vmp%code(4 * p + 2), nf, fails, fcond)
+          end if
        case default
           inl = .false.
        end select
@@ -426,11 +543,7 @@
              call vmj_put(buf, nw, a_b(int(4, c_int64_t)))
           end if
           do i = 1, nf
-             if (fails(i) > 0) then
-                call vmj_patch(buf, fails(i), a_bc(nw + 1 - fails(i), 2))     ! b.hs
-             else
-                call vmj_patch(buf, -fails(i), a_bc(nw + 1 + fails(i), 3))    ! b.lo
-             end if
+             call vmj_patch(buf, fails(i), a_bc(nw + 1 - fails(i), fcond(i)))
           end do
           call vmj_movpc(buf, nw, 25, p)
           call vmj_put(buf, nw, 0_gc_ip)
