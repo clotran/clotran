@@ -1346,12 +1346,31 @@ of bounds for length 2" both ways, and `(fact 25)` arithmetic_exception
 "long overflow" both ways. scripts/bench's compiled column shows the
 three rows this way (test/clj/bench_loops.cljf, the loops as defns).
 
-NOT DONE, said plainly: strings, records and array RESULTS stay tier B
-(no dispatcher: a result array needs an ABI entry that makes a clotran
-array from Fortran storage); the tier is still the hand-written emitter,
-not a model -- it has an oracle the VM never had, and modelling the
-translation is the candidate for the model's next book, not a
-precondition for this.
+NOT DONE, said plainly: strings and records stay tier B; the tier is
+still the hand-written emitter, not a model -- it has an oracle the VM
+never had, and modelling the translation is the candidate for the
+model's next book, not a precondition for this.
+
+**Array results (2026-10-10, same day).** A version answering a
+`doubles` or `longs` is dispatched to as well: the dispatcher takes the
+allocatable the Fortran made and `clotran_array_new` (ClotranABI.f90)
+makes a clotran array of it -- one copy, since the registry's buffer
+cannot be handed over through a C interface, and a memory pass beside
+the loop that made the values. A library's array-valued function
+allocates its result empty before anything can fail (the emitter), as a
+failed call returns on err and the caller's copy of an unallocated
+result was a segfault -- pure-check's `(zeros -1)` found it the first
+run. pure-check: 460 of 460 agree, 32 functions pure in the library (27
+before); fuzz-pure 275 of 275. Measured: `scaled-copy` of 10^6 doubles,
+a new array out, 1456 ms interpreted and 2.4 ms through the library,
+copy included. The gate's fuzz-fn (seed 3339268384) then found the one
+message a pure version writes a number into -- "Value out of range for
+long: 1.0E300" -- in Fortran's ES form through the library, where the
+interpreter writes clj's; the double now rides back in the error record
+and the runtime writes it (clotran_fail_double), pure-check's library
+road compares messages exactly (its by-value comparison of DEVIATIONS 50
+is the standalone road's, and had hidden this), and DEVIATIONS 50 says
+which road it is about.
 
 **The pure loop and the other threads (2026-10-10, same day).** A pure
 loop polled no safepoint, so another thread's collection waited for it

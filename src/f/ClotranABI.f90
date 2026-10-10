@@ -50,6 +50,7 @@ module ClotranABI
   use DynLoad
   use NativeArray
   use Namespace
+  use Printer, only: gcp_str
   use Eval
   implicit none
   private
@@ -68,8 +69,8 @@ module ClotranABI
   public :: clotran_collect, clotran_live_count, clotran_set_torture
   public :: clotran_frame_new, clotran_frame_get, clotran_frame_put, clotran_frame_stack
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
-  public :: clotran_load_compiled, clotran_array_view
-  public :: clotran_rest_args, clotran_arity_error, clotran_fail
+  public :: clotran_load_compiled, clotran_array_view, clotran_array_new
+  public :: clotran_rest_args, clotran_arity_error, clotran_fail, clotran_fail_double
   public :: clotran_native_begin, clotran_reacquire
   public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith, clotran_frame_done, clotran_poll
   public :: clotran_frame_clear, clotran_clear_args
@@ -1047,6 +1048,19 @@ contains
   ! library mode, PLAN step 13): Clojure's exception, its class by the
   ! support module's code, raised in this thread's context; the generated
   ! code returns on its flag and the dispatcher answers the error
+  ! The same, with a double written after the message as the printer
+  ! writes it (1.0E300, as clj): pure code carries the number back
+  ! rather than formatting it in Fortran's own form (DEVIATIONS 50).
+  subroutine clotran_fail_double(code, msg, n, x) bind(C, name="clotran_fail_double")
+    integer(c_int), value :: code, n
+    character(kind=c_char), intent(in) :: msg(*)
+    real(c_double), value :: x
+    character(len=:), allocatable :: dlt_1, dlt_2
+    call c_text(msg, n, s=dlt_1)
+    call gcp_str(gc_real(real(x, gc_dp)), .false., s=dlt_2)
+    call gce_raise_coded(code, dlt_1 // dlt_2)
+  end subroutine clotran_fail_double
+
   subroutine clotran_fail(code, msg, n) bind(C, name="clotran_fail")
     integer(c_int), value :: code, n
     character(kind=c_char), intent(in) :: msg(*)
@@ -1181,6 +1195,45 @@ contains
     end select
     ok = 1
   end function clotran_array_view
+
+  ! A NEW one-dimensional array into slot dst, kind as above, its n
+  ! elements copied from ptr: how a pure version's array result (an
+  ! allocatable the Fortran made) becomes a clotran array. One copy; the
+  ! pure code allocates its own result and the registry's buffer cannot
+  ! be handed over through a C interface, and the copy is a memory pass
+  ! beside the loop that made the values.
+  subroutine clotran_array_new(cs, dst, kind, n, ptr) bind(C, name="clotran_array_new")
+    type(c_ptr), value :: cs, ptr
+    type(gc_stack), pointer :: vst
+    integer(c_int), value :: dst, kind
+    integer(c_int64_t), value :: n
+    type(gc_value) :: out, none(0)
+    real(c_double), pointer, contiguous :: rp(:), rs(:)
+    integer(8), pointer, contiguous :: ip(:), is(:)
+    character(len=:), allocatable :: err
+    logical :: good
+    integer :: h
+    call c_f_pointer(cs, vst)
+    h = gcna_new(trim(merge("real8", "int8 ", kind == 1)), [int(n)], [0], err)
+    if (h == 0) then
+       call gce_raise_coded(3, err)
+       return
+    end if
+    out = gc_obj(OBJ_ARRAY, [gc_nil()], none)
+    call vs_set(vst, int(dst), out)
+    call gc_set_i1(vs_get(vst, int(dst)), h)
+    call gc_set_i2(vs_get(vst, int(dst)), -1) ! owns the handle
+    if (n <= 0) return
+    if (kind == 1) then
+       call gcna_real8_ptr(h, rp, good)
+       call c_f_pointer(ptr, rs, [n])
+       rp = rs
+    else
+       call gcna_int8_ptr(h, ip, good)
+       call c_f_pointer(ptr, is, [n])
+       ip = is
+    end if
+  end subroutine clotran_array_new
 
   ! --- errors ------------------------------------------------------
 

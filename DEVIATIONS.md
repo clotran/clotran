@@ -1620,6 +1620,14 @@ string that holds a number differs too: `(str 2.5)` is `"2.5"`
 interpreted and `"2.5000000000000000E+000"` as pure Fortran, and
 `(count (str 2.5))` differs with it.
 
+This is the STANDALONE road's. Inside a compiled library (PLAN step
+13) a pure version's message is the interpreter's: the double is
+carried back to the dispatcher in the error record and the runtime
+writes it, so `(long 1.0E300)` says `1.0E300` either way (fuzz-fn
+found the Fortran text there, seed 3339268384). Versions that print
+are not dispatched to in a library, so no other text reaches a user
+from pure code there.
+
 A decision, not an accident: pure Fortran is meant to read as Fortran
 to the Fortran programs that use it. **Removal** is not planned.
 

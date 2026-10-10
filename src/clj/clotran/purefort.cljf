@@ -59,6 +59,12 @@
   type :: cl_err
      integer :: code = 0
      character(len=200) :: msg = ''
+     integer :: n = 0
+     ! a double in the message, written by the runtime as clj writes it
+     ! (DEVIATIONS 50 is the standalone road's): the message is the text
+     ! before it
+     logical :: has_x = .false.
+     real(real64) :: x = 0.0_real64
   end type cl_err
 ")
          "contains\n"
@@ -69,6 +75,7 @@
     type(cl_err), intent(inout) :: err
     err%code = code
     err%msg = msg
+    err%n = min(len(msg), len(err%msg))
   end subroutine cl_fail
 "
            "  pure subroutine cl_fail(msg)
@@ -157,12 +164,17 @@
   " P "function cl_long_of(x" E ") result(r)
     real(real64), intent(in) :: x
 " ED "    integer(int64) :: r
-    character(len=32) :: buf
-    if (.not. (x >= -9.223372036854775808d18 .and. x < 9.223372036854775808d18)) then
-       ! Fortran's own ES form, the same text from every compiler; clj
+" (when-not lib? "    character(len=32) :: buf\n") "    if (.not. (x >= -9.223372036854775808d18 .and. x < 9.223372036854775808d18)) then
+" (if lib?
+    "       ! the runtime writes the double, as clj does
+       err%has_x = .true.
+       err%x = x
+       call cl_fail('Value out of range for long: ', 3, err)
+       return"
+    (str "       ! Fortran's own ES form, the same text from every compiler; clj
        ! writes 1.0E30 (DEVIATIONS 50)
        write(buf, '(es24.16e3)') x
-       " (fail "'Value out of range for long: ' // trim(adjustl(buf))" 3) "
+       " (fail "'Value out of range for long: ' // trim(adjustl(buf))" 3))) "
     end if
     r = int(x, int64)
   end function cl_long_of
@@ -183,7 +195,7 @@
     character(len=24) :: b
     if (n < 0) then
        write(b, '(i0)') n
-       " (fail "trim(b)" 4) "
+       " (when lib? "allocate(r(0))\n       ") (fail "trim(b)" 4) "
     end if
     allocate(r(n))
     r = 0.0_real64
@@ -194,7 +206,7 @@
     character(len=24) :: b
     if (n < 0) then
        write(b, '(i0)') n
-       " (fail "trim(b)" 4) "
+       " (when lib? "allocate(r(0))\n       ") (fail "trim(b)" 4) "
     end if
     allocate(r(n))
     r = 0_int64
@@ -1179,6 +1191,10 @@ end module " mod "
                   (str/join "\n" decl-lines) (when (seq decl-lines) "\n")
                   (apply str (for [[i t] (map-indexed vector ts) :when (not (#{:doubles :longs} t))]
                                (str "    " (locals i) " = " (pnames i) "\n")))
+                  ;; a library's array result is allocated (empty) before
+                  ;; anything can fail: a failed call returns on err, and the
+                  ;; caller's copy of an unallocated result is a crash
+                  (when (and *library* (not sub?) (#{:doubles :longs} rt)) "    allocate(r(0))\n")
                   "    " label ": do\n"
                   (apply str (map #(str "       " % "\n") body-lines))
                   "    end do " label "\n"

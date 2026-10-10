@@ -347,7 +347,7 @@ functions in place of the interpreted ones. No hints needed:
 interpreted and 0.192 ms compiled; a warmed clj takes 0.202 ms with a
 `^doubles` hint and 515 ms without one. Each function's road is
 printed: a function the tier report calls A (numbers and arrays in,
-a number out) is compiled as PURE Fortran, a plain loop with no
+a number or an array out) is compiled as PURE Fortran, a plain loop with no
 clotran runtime underneath, behind a dispatcher that unboxes the
 arguments by their tags and boxes the answer; one version per
 combination of argument types, so `total` of a `long-array` is its

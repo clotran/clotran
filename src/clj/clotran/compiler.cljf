@@ -246,11 +246,23 @@
        integer(c_int), value :: me
        integer(c_int), intent(inout) :: rel
      end subroutine clotran_reacquire
+     subroutine clotran_array_new(cs, dst, kind, n, ptr) bind(C, name=\"clotran_array_new\")
+       import :: c_int, c_int64_t, c_ptr
+       type(c_ptr), value :: cs, ptr
+       integer(c_int), value :: dst, kind
+       integer(c_int64_t), value :: n
+     end subroutine clotran_array_new
      subroutine clotran_fail(code, msg, n) bind(C, name=\"clotran_fail\")
        import :: c_int, c_char
        integer(c_int), value :: code, n
        character(kind=c_char), intent(in) :: msg(*)
      end subroutine clotran_fail
+     subroutine clotran_fail_double(code, msg, n, x) bind(C, name=\"clotran_fail_double\")
+       import :: c_int, c_char, c_double
+       integer(c_int), value :: code, n
+       character(kind=c_char), intent(in) :: msg(*)
+       real(c_double), value :: x
+     end subroutine clotran_fail_double
      subroutine clotran_rest_args(cs, dst, argbase, from, nargs) bind(C, name=\"clotran_rest_args\")
        import :: c_int, c_ptr
        type(c_ptr), value :: cs
@@ -1864,7 +1876,7 @@ end module clotran_rt_decl
 ;; returns with no answer, as a tier-B procedure does after an error.
 
 (def ^:private pure-arg-types #{:long :double :doubles :longs})
-(def ^:private pure-ret-types #{:long :double :bool :nil})
+(def ^:private pure-ret-types #{:long :double :bool :nil :doubles :longs})
 
 (defn- pure-version-ok? [v]
   ;; a version that prints writes Fortran's standard output, not *out*
@@ -1901,12 +1913,19 @@ end module clotran_rt_decl
                :nil (str "call " name "(" args ")")
                :long (str "rl = " name "(" args ")")
                :double (str "rd = " name "(" args ")")
-               :bool (str "rb = " name "(" args ")"))
+               :bool (str "rb = " name "(" args ")")
+               :doubles (str "ra = " name "(" args ")")
+               :longs (str "la = " name "(" args ")"))
+        ;; an array result is copied into a new clotran array (clotran_array_new)
         box (case ret
-              :nil "clotran_val(0, 0, 0_c_int64_t)"
-              :long "clotran_val(2, 0, rl)"
-              :double "clotran_val(3, 0, transfer(rd, 0_c_int64_t))"
-              :bool "clotran_val(1, 0, merge(1_c_int64_t, 0_c_int64_t, rb))")]
+              :nil "sv(dst) = clotran_val(0, 0, 0_c_int64_t)"
+              :long "sv(dst) = clotran_val(2, 0, rl)"
+              :double "sv(dst) = clotran_val(3, 0, transfer(rd, 0_c_int64_t))"
+              :bool "sv(dst) = clotran_val(1, 0, merge(1_c_int64_t, 0_c_int64_t, rb))"
+              :doubles (str "ap = c_null_ptr\n             if (size(ra) > 0) ap = c_loc(ra)\n"
+                            "             call clotran_array_new(cs, dst, 1_c_int, int(size(ra), c_int64_t), ap)")
+              :longs (str "ap = c_null_ptr\n             if (size(la) > 0) ap = c_loc(la)\n"
+                          "             call clotran_array_new(cs, dst, 2_c_int, int(size(la), c_int64_t), ap)"))]
     (str "       ok = " (if (seq scalar-tests) (str/join " .and. " scalar-tests) ".true.") "\n"
          (apply str views)
          "       if (ok) then\n"
@@ -1917,9 +1936,13 @@ end module clotran_rt_decl
          "          if (nrel /= 0) call clotran_reacquire(nme, nrel)\n"
          "          call clotran_clear_args(cs, argbase, nargs)\n"
          "          if (err%code == 0) then\n"
-         "             sv(dst) = " box "\n"
+         "             " box "\n"
          "          else\n"
-         "             call clotran_fail(int(err%code, c_int), err%msg, int(len_trim(err%msg), c_int))\n"
+         "             if (err%has_x) then\n"
+         "                call clotran_fail_double(int(err%code, c_int), err%msg, int(err%n, c_int), err%x)\n"
+         "             else\n"
+         "                call clotran_fail(int(err%code, c_int), err%msg, int(err%n, c_int))\n"
+         "             end if\n"
          "          end if\n"
          "          return\n"
          "       end if\n")))
@@ -1943,6 +1966,8 @@ end module clotran_rt_decl
            "    logical :: ok, rb\n"
            "    type(cl_err) :: err\n"
            "    integer(c_int) :: nme, nrel\n"
+           "    real(c_double), allocatable, target :: ra(:)\n"
+           "    integer(c_int64_t), allocatable, target :: la(:)\n"
            "    real(c_double), target :: nod(0)\n"
            "    integer(c_int64_t), target :: nol(0)\n"
            (apply str (for [i (range width)]

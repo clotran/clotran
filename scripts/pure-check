@@ -199,7 +199,7 @@
 (def pure-fns (set (map second (re-seq #"(?m)^pure Fortran: (\S+)" compile-out))))
 (let [supported (set (for [[f vs] lib-sigs
                            :when (some (fn [[ts rt prints]] (and (every? #{:long :double :doubles :longs} ts)
-                                                                 (#{:long :double :bool :nil} rt)
+                                                                 (#{:long :double :bool :nil :doubles :longs} rt)
                                                                  (not prints)))
                                        vs)]
                        f))
@@ -395,8 +395,10 @@
             (println "   pure       :" (pr-str got)))))
       ;; and through the installed library, from the REPL
       (swap! ran inc)
+      ;; exactly: a library's message is the interpreter's, a double in it
+      ;; written by the runtime (DEVIATIONS 50 is the standalone road's)
       (let [got (lib-side i)]
-        (when-not (same? want got)
+        (when-not (and (same? want got) (or (not= :threw (first want)) (= (second want) (second got))))
           (swap! fails inc)
           (println "DIFFER library" (pr-str c))
           (println "   clj        :" (pr-str want))
