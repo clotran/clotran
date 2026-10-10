@@ -4791,6 +4791,27 @@ vcs2-good's every case, then vmi, vmic, the generated step and compiler,
 the fused patterns and the JIT's blocks. Several days of proof, not a
 night's: the next item for step 34.
 
+A complication found reading the compiler (vcs2-body): a clause's frame
+is its arguments and then ITS CLOSURE (slot n, which :capt reads), so a
+recurring fn's loop over its parameters has a live slot above its
+locals, and recur sets sp to just past the locals it writes -- it would
+drop the closure. So the recur of a :loopl needs its own stack top,
+(:recur k b l d) with sp := fb+d, or the clause's loop takes the closure
+as one more local. The let-bound loop (a loop's bindings) has no such
+slot above and needs only :loopl.
+
+**The let-bound loop, fixed without a model change (2026-10-10).** When no
+binding of a loop reads one before it -- the common case, and every loop
+the fuzzer generates -- the translator now writes (:loop (init ..) body)
+with the inits themselves, as vmx2 has always allowed, and no lets: there
+is no slot beside the loop's to keep a head (vm.inc's vm_loop_indep and
+vm_reads_in, a scan of the inits that counts any node kind it does not
+know as a read). A loop walking 3x10^6 elements inside a VM fn: 4.45 M
+objects marked -> 0.87 M, the pool 8.4 M -> 0.26 M slots, 2.8 -> 2.25 s.
+Loops whose bindings read earlier ones keep the let translation, and a
+fn that recurs (dorun, reduce1) still holds its parameters: those need
+the model change above.
+
 **instance? in place (2026-10-10).** Under the VM the yardstick asked
 instance? 1.09 M times through the generic builtin call (chunked-seq? in
 reduce1). It is now an in-place case beside cons (flat_cons_op: a class

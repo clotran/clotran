@@ -381,6 +381,56 @@
     end select
   end subroutine vm_scan
 
+  ! whether no binding of a loop reads one before it: init i reads no slot
+  ! of start .. start+i-1
+  logical function vm_loop_indep(kids, start, n) result(yes)
+    type(gc_value), intent(in) :: kids
+    integer, intent(in) :: start, n
+    integer :: i
+    yes = .true.
+    do i = 1, n - 1
+       if (vm_reads_in(gcv_nth(kids, i), start, start + i)) then
+          yes = .false.
+          return
+       end if
+    end do
+  end function vm_loop_indep
+
+  ! whether nd reads a slot in lo .. hi-1: a local, or a capture of a fn or
+  ! a lazy seq; a node kind not known here counts as reading one
+  recursive logical function vm_reads_in(nd, lo, hi) result(yes)
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: lo, hi
+    type(gc_value) :: kids, caps
+    integer :: i, s
+    yes = .true.
+    if (gc_kind(nd) /= OBJ_AST) return
+    kids = gc_slot(nd, 1)
+    select case (gc_i1(nd))
+    case (N_CONST, N_VAR)
+       yes = .false.
+    case (N_LOCAL)
+       yes = gc_i2(nd) >= lo .and. gc_i2(nd) < hi
+    case (N_FN, N_LAZY)
+       caps = gcv_nth(gc_slot(nd, 2), 2)
+       yes = .false.
+       do i = 0, gcv_count(caps) / 2 - 1
+          s = int_of(gcv_nth(caps, 2 * i))
+          if (s >= lo .and. s < hi) yes = .true.
+       end do
+    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT, N_CALL, N_LET, N_LOOP, N_RECUR)
+       yes = .false.
+       if (gcv_is(kids)) then
+          do i = 0, gcv_count(kids) - 1
+             if (vm_reads_in(gcv_nth(kids, i), lo, hi)) then
+                yes = .true.
+                return
+             end if
+          end do
+       end if
+    end select
+  end function vm_reads_in
+
   subroutine vm_mark(set, s, c)
     logical, intent(inout) :: set(0:)
     integer, intent(in) :: s
@@ -401,6 +451,7 @@
     type(gc_stack), pointer :: vst
     integer :: base, i, n, start, nk, d0
     integer, allocatable :: saved(:)
+    logical :: indep
     e = gc_nil()
     if (.not. c%ok) return
     vst => gc_my_stack()
@@ -472,6 +523,11 @@
        do i = 0, n - 1
           saved(i) = c%map(start + i)
        end do
+       ! a loop whose bindings read none of the ones before them starts
+       ! from its inits themselves, (:loop (init ..) body): no let holds an
+       ! init beside the loop's copy -- the copy that kept a walked seq's
+       ! head alive for the whole loop (PLAN step 34)
+       indep = gc_i1(nd) == N_LOOP .and. vm_loop_indep(kids, start, n)
        ! the bindings, each a let, each in scope for the next
        call vs_set(vst, base + 2, gcv_empty(roots))
        do i = 0, n - 1
@@ -480,10 +536,25 @@
           call vs_set(vst, base + 3, x)
           x = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [roots, vs_get(vst, base + 2)])
           call vs_set(vst, base + 2, x)
-          c%map(start + i) = c%depth
-          c%depth = c%depth + 1
+          if (.not. indep) then
+             c%map(start + i) = c%depth
+             c%depth = c%depth + 1
+          end if
        end do
-       if (c%ok .and. gc_i1(nd) == N_LOOP) then
+       if (c%ok .and. indep) then
+          do i = 0, n - 1
+             c%map(start + i) = d0 + i
+          end do
+          c%depth = d0 + n
+          x = vm_tr(c, gcv_nth(kids, n), [roots, vs_get(vst, base + 2)])
+          call vs_set(vst, base + 3, x)
+          if (c%ok) then
+             x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 3)])
+             call vs_set(vst, base + 2, x)
+             call vs_set(vst, base + 5, vm_kw("loop"))
+             e = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 2), vs_get(vst, base + 3)], roots)
+          end if
+       else if (c%ok .and. gc_i1(nd) == N_LOOP) then
           ! (:loop ((:local d0) ..) body), the slots now the loop's
           call vs_set(vst, base + 6, gcv_empty(roots))
           call vs_set(vst, base + 5, vm_kw("local"))
