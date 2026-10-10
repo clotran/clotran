@@ -164,7 +164,9 @@
   " P "function cl_long_of(x" E ") result(r)
     real(real64), intent(in) :: x
 " ED "    integer(int64) :: r
-" (when-not lib? "    character(len=32) :: buf\n") "    if (.not. (x >= -9.223372036854775808d18 .and. x < 9.223372036854775808d18)) then
+" (when-not lib? "    character(len=32) :: buf\n") "    ! 2^63 itself is in range: RT's comparison promotes Long.MAX_VALUE to
+    ! it, and the host's cast then saturates (the interpreter's long_of_double)
+    if (.not. (x >= -9.223372036854775808d18 .and. x <= 9.223372036854775808d18)) then
 " (if lib?
     "       ! the runtime writes the double, as clj does
        err%has_x = .true.
@@ -176,7 +178,11 @@
        write(buf, '(es24.16e3)') x
        " (fail "'Value out of range for long: ' // trim(adjustl(buf))" 3))) "
     end if
-    r = int(x, int64)
+    if (x >= 9.223372036854775808d18) then
+       r = huge(r)
+    else
+       r = int(x, int64)
+    end if
   end function cl_long_of
   " P "subroutine cl_bounds(i, n" E ")
     integer(int64), intent(in) :: i, n

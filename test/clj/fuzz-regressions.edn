@@ -3,6 +3,12 @@
 ;; modes (make test, check-fuzz), and the VM's (CLOTRAN_VM=1). Add a
 ;; shrunk form here with each fix.
 [
+ ;; compiled, (long x) of exactly 2^63 refused as out of range, where clj's
+ ;; longCast accepts it and saturates (scripts/fuzz-fn, seed 1061557021)
+ ((fn [^double x] (long x)) 9.223372036854776E18)
+ ((fn [^double x] (double (long x))) 9.223372036854776E18)
+ ((fn [^double x] (long x)) -9.223372036854776E18)
+ ((fn [^double x] (try (long x) (catch clotran.host.illegal_argument_exception e :out))) 9.223372036854778E18)
  ;; compiled, (int x) boxed as a long: the class differs from the
  ;; interpreted int (scripts/fuzz-num)
  (class (int 9.75))
