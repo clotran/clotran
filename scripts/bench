@@ -6,7 +6,12 @@
 ;;   scripts/bench            all forms below
 ;;   scripts/bench '(form)'   one form
 ;;
-;; A third column times compiled core: clotran with CLOTRAN_AUTOCOMPILE=use,
+;; The bb column is babashka: sci interprets the form over a compiled
+;; core, so a form whose work is in core (take, reduce1) runs compiled
+;; there, and one whose work is in the form itself runs interpreted. Read
+;; it as what a mature interpreter does, never as an oracle.
+;;
+;; The compiled column times compiled core: clotran with CLOTRAN_AUTOCOMPILE=use,
 ;; core installed from the compile cache (~/.cache/clotran, which
 ;; CLOTRAN_AUTOCOMPILE=1 ./clotran fills). When core is not in the
 ;; cache the column is "-" and says so, rather than timing the
@@ -18,7 +23,20 @@
 (load-file (str repo "/upstream/names.clj"))
 (def forms
   (or (seq *command-line-args*)
-      ["(reduce + (range 100000))"
+      [;; the yardstick, in its parts (PLAN step 34, 2026-10-10): the dispatch
+       ;; floor, the native iterate, a force from interpreted code, the
+       ;; take layer, the whole. The ratio of the whole mixes four costs.
+       "(loop [i 0] (when (< i 1000000) (recur (inc i))))"
+       "(nth (iterate inc' 0) 1000000)"
+       "(loop [i 0 s (range)] (when (< i 1000000) (recur (inc i) (next s))))"
+       "(dorun (take 1000000 (range)))"
+       "(apply + (take 1000000 (range)))"
+       ;; step 13's target: a scientist's loops over a double array, where
+       ;; the pure-Fortran tier is meant to beat clj, not catch it
+       "(let [n 1000000 a (double-array n 1.5) b (double-array n 2.0)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))"
+       "(let [n 1000000 a (double-array n 1.0) o (double-array n)] (dotimes [i (- n 2)] (aset o (inc i) (* 0.25 (+ (aget a i) (* 2.0 (aget a (inc i))) (aget a (+ i 2)))))) (aget o 1))"
+       "(loop [i 0 x 12345 acc 0.0] (if (< i 1000000) (let [x (mod (+ (* x 1103515245) 12345) 2147483648)] (recur (inc i) x (+ acc (/ (double x) 2147483648.0)))) acc))"
+       "(reduce + (range 100000))"
        "(loop [i 0 acc 0] (if (< i 200000) (recur (inc i) (+ acc i)) acc))"
        "(count (into [] (map inc (range 100000))))"
        "((fn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) 20)"
@@ -47,6 +65,9 @@
   (spit clj-file (names/to-upstream (timed-script true)))
   (spit cl-file (timed-script false))
   (let [clj-ms (run-lines {} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-file)
+        ;; bb: sci interprets the form, its core is compiled -- what an
+        ;; interpreter over a compiled runtime does on the same work
+        bb-ms (run-lines {} "bb" clj-file)
         cl (run-lines {"CLOTRAN_AUTOCOMPILE" "0"} "./clotran-bin" "src/clj/clojure/core.clj" cl-file)
         cc-file (str repo "/test/clj/.bench-compiled.clj")
         _ (spit cc-file (timed-script :compiled))
@@ -54,9 +75,9 @@
         cc (if (= ":installed" @core-status) cc (vec (repeat (count forms) nil)))]
     (.delete (fs/file cc-file))
     (.delete (fs/file clj-file)) (.delete (fs/file cl-file))
-    (println (format "%-72s %10s %10s %8s %12s" "form" "clj ms" "clotran ms" "ratio" "compiled ms"))
-    (doseq [[f j c k] (map vector forms clj-ms cl cc)]
-      (println (format "%-72s %10.2f %10.1f %8.0fx %12s" (subs f 0 (min 72 (count f))) j c (/ c j)
+    (println (format "%-72s %10s %10s %10s %8s %12s" "form" "clj ms" "bb ms" "clotran ms" "ratio" "compiled ms"))
+    (doseq [[f j b c k] (map vector forms clj-ms bb-ms cl cc)]
+      (println (format "%-72s %10.2f %10.1f %10.1f %8.0fx %12s" (subs f 0 (min 72 (count f))) j b c (/ c j)
                        (if k (format "%.1f" k) "-"))))
     (when-not (= ":installed" @core-status)
       (println "compiled core is not in the cache (core.clj:" (or @core-status "not loaded")

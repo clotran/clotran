@@ -1255,6 +1255,31 @@ library with only `:clj` and `:cljs` reads as nothing here.
 
 ### 13. As much as possible into pure Fortran: tiers, and warnings that say how to fix (decided 2026-09-24)
 
+**THE NEXT SPEED WORK (decided 2026-10-10, step 34's closure).** The
+yardstick's road ended at the interpreter's floor; this tier is where a
+Fortran host wins outright, because clj's host cannot vectorize what
+gfortran can. The target is stated before the work, as the yardstick
+was, so the gain is attributed: three loops a scientist writes, over a
+`double-array` of 10^6, interpreted today against clj (both answer the
+same value):
+
+| form | clotran ms | clj ms |
+|---|---|---|
+| dot product: `loop` over `(aget a i)` `(aget b i)` | 2400 | 15 |
+| stencil: `dotimes` with `aset` of a 3-point average | 3174 | 127 |
+| an LCG Monte Carlo sum (no array; `mod`, `/`, `double`) | 525 | 26 |
+
+scripts/bench carries them. The goal is each row BELOW clj's, by the tier
+compiling the qualifying `defn` to a Fortran loop (`do concurrent` where
+`amap`'s shape allows), behind `clotran compile`, everything else staying
+interpreted and the warning saying why a body did not qualify. In James's
+rules' order: the tier modelled first (which bodies qualify, the
+translation to a loop, correctness against the flat form's meaning, and
+a cost theorem -- honest here, since the generated code is the loop the
+machine runs); the emitter generated from it, as vmc_gen was; then wired
+in and measured against the table. Found on the way and not yet fixed:
+`aget` costs ~2.4 us a call interpreted, the generic host call.
+
 **Measured, 2026-09-24.** `clotran-bin` is 36.4 MB, of which the machine
 code is 1.86 MB and 33.1 MB is ICU's complete data, linked whole. Linked
 against ICU's empty stub data instead it is 3.07 MB and language_test
@@ -4833,6 +4858,66 @@ nodes (vm_prim_n). So for the yardstick the calling convention (step 33
 stage 3, JIT stage 3) comes first; :loopl is a space fix first (a long
 dorun/reduce in a VM fn holds the whole seq). Next session: choose
 between them.
+
+**CLOSED (2026-10-10): the yardstick is not where the design went wrong,
+and it is not the next work.** James asked whether we had done something
+wrong. Measured, so the next session does not re-derive it:
+
+THREE EXECUTORS, ONE NUMBER. Flat 915 ms (image; 940 from source), the
+generated VM 1410-1650, VM+JIT 1250-1350, and core compiled ahead of time
+to Fortran 1440 (10-07). Removing dispatch entirely did not move it, so
+dispatch is not the cost.
+
+THE PARTS, ms per 10^6 elements, flat with the image against clj:
+
+| form | clotran | clj |
+|---|---|---|
+| empty `loop` | 28 | 1-2 |
+| `(nth (iterate inc' 0) n)` | 97 | 23-30 |
+| `loop` calling `next` on `(range)` | 258 | 30-33 |
+| `(dorun (take n (range)))` | 790 | 50-59 |
+| `(apply + (take n (range)))` | 915 | 56-87 |
+
+The empty loop is the dispatch floor, ~6 ns an instruction: the 45
+instructions an element are ~270 of the 915 ns. The other ~650 is the
+runtime -- a force from interpreted code is ~230 ns against 97 for the
+native walk, and the take layer alone is ~690 an element: one closure
+body plus the force chain around it (flat_force, push_frame, k_push, the
+trampoline's re-entry, k_finish, force_settle, flat_release). The
+line-level profile (xctrace, dSYM) agrees: flat_run's own 22-40% is spread
+over its handlers, the hottest 256 bytes of it 10%, and the other 60% is
+forty helpers at 1-4% each. The collector's pauses are 2% (26 young
+collections, 18.8 ms). Per element: 45 instructions, 4 objects (3 lazy
+cells, a closure), 3 continuation pushes.
+
+A FAIR INTERPRETER. `take` and `reduce1` written in plain Clojure and run
+under babashka, so sci interprets exactly what clotran interprets: 300-385
+ms. clj with the same definitions: 58-84. A mature interpreter is ~5x
+behind the JIT on this form, and clotran is ~2.8x behind that
+interpreter. (bb's stock 60-137 ms is its compiled core, not sci.) The
+floor for a polished interpreter on this design is therefore ~300-400 ms;
+clj's 60-70 needs an inlining JIT with escape analysis and bump
+allocation, a different class of system.
+
+THE MODEL, REVIEWED. `prim` is unconstrained, so the step and time
+theorems bound the ~25% that is the machine; the VM is a second executor
+beside flat and its 40% boundary exists only because of that, and with
+the image on, VM mode runs core as flat anyway; the heap books verify the
+layout GC.f90 has (five slots, 96 bytes a cons) and found a real
+out-of-bounds, but each generated stage landed 0-6% slower, never faster;
+and the stages that would move the number (the nursery, the convention,
+a lean force) are the ones the hand-written runtime's `roots(:)`
+convention blocks. 28.6k lines of ACL2 produced a VM 1.5x slower than the
+executor it was to replace. The model stays the correctness oracle for
+what it generates; it is not a road to this number.
+
+DECIDED (James, 2026-10-10: "that is a fair point about the speed ... let's
+do your plan"): the single yardstick is retired as the north star --
+scripts/bench now times the five parts and step 13's forms, with a bb
+column; `:loopl` stays a space fix, noted, not next; the VM's calling
+convention, the moving nursery and JIT stages 2-3 are not next. The speed
+work is step 13, the pure-Fortran tier, where a Fortran host wins
+outright; then step 24's thread pool and step 21's remaining pieces.
 
 ### 29. Fuzz everything (begun 2026-10-02)
 
