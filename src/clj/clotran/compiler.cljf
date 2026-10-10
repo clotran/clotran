@@ -246,6 +246,11 @@
        integer(c_int), value :: me
        integer(c_int), intent(inout) :: rel
      end subroutine clotran_reacquire
+     subroutine clotran_fail(code, msg, n) bind(C, name=\"clotran_fail\")
+       import :: c_int, c_char
+       integer(c_int), value :: code, n
+       character(kind=c_char), intent(in) :: msg(*)
+     end subroutine clotran_fail
      subroutine clotran_rest_args(cs, dst, argbase, from, nargs) bind(C, name=\"clotran_rest_args\")
        import :: c_int, c_ptr
        type(c_ptr), value :: cs
@@ -1866,8 +1871,11 @@ end module clotran_rt_decl
   (and (every? pure-arg-types (:ts v)) (contains? pure-ret-types (:ret v)) (not (:prints v))))
 
 (defn- pure-branch
-  "One version tried: its arguments' tags tested, unboxed, the call, the
-  answer boxed, and a return; or on to the next."
+  "One version tried: its arguments' tags tested, unboxed, the call with
+  the mutators released (the pure code touches no clotran object, and
+  an array's buffer stays where it is, NativeArray.f90), the mutators
+  taken back, the answer boxed or the failure the version recorded
+  raised, and a return; or on to the next."
   [{:keys [name ts ret]}]
   (let [arg (fn [i] (str "argbase + " (inc i)))
         scalar-tests (for [[i t] (map-indexed vector ts) :when (#{:long :double} t)]
@@ -1903,10 +1911,16 @@ end module clotran_rt_decl
          (apply str views)
          "       if (ok) then\n"
          (apply str unbox)
-         "          err = .false.\n"
+         "          err%code = 0\n"
+         "          call clotran_native_begin(nme, nrel)\n"
          "          " call "\n"
+         "          if (nrel /= 0) call clotran_reacquire(nme, nrel)\n"
          "          call clotran_clear_args(cs, argbase, nargs)\n"
-         "          if (.not. err) sv(dst) = " box "\n"
+         "          if (err%code == 0) then\n"
+         "             sv(dst) = " box "\n"
+         "          else\n"
+         "             call clotran_fail(int(err%code, c_int), err%msg, int(len_trim(err%msg), c_int))\n"
+         "          end if\n"
          "          return\n"
          "       end if\n")))
 
@@ -1926,7 +1940,9 @@ end module clotran_rt_decl
            "    integer(c_int) :: nsv\n"
            "    integer(c_int64_t) :: an, rl\n"
            "    real(c_double) :: rd\n"
-           "    logical :: err, ok, rb\n"
+           "    logical :: ok, rb\n"
+           "    type(cl_err) :: err\n"
+           "    integer(c_int) :: nme, nrel\n"
            "    real(c_double), target :: nod(0)\n"
            "    integer(c_int64_t), target :: nol(0)\n"
            (apply str (for [i (range width)]

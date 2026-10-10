@@ -354,7 +354,9 @@ combination of argument types, so `total` of a `long-array` is its
 own loop. Any other arguments go to the same function compiled
 through the runtime, and an error inside the pure loop -- an index
 out of bounds, a long overflow -- is the exception the interpreter
-throws, with its class and message, caught by the same `try`. What
+throws, with its class and message, caught by the same `try`. A pure
+loop runs with the mutators released, as a foreign routine does, so
+one in a `future` never holds up another thread's collection. What
 the compiler declines -- a variadic function, say -- stays
 interpreted and says why. Edit the source and the library is
 reported stale and not used until it is recompiled.

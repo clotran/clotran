@@ -374,7 +374,8 @@
       src (fs/file dir "cc_space.cljf")
       lib (fs/file dir (str "cc_space." soext))
       run (fs/file dir "run.cljf")
-      go (fn [] (->> (str/split-lines (run-clotran run))
+      stall (fs/file dir "stall.cljf")
+      go (fn [f] (->> (str/split-lines (run-clotran f))
                (remove #(or (str/starts-with? % "note: skipping") (str/includes? % "WARNING") (str/starts-with? % "user=>")))))]
   (.mkdirs dir)
   (spit src (str "(ns cc-space)\n"
@@ -385,7 +386,15 @@
                  "(defn summary [a] {:total (total a) :scaled (scaled (alength a)) :kw ::k :v [1 \"two\" 3.0]})\n"
                  "(defn guarded [^long n] (try (quot 10 n) (catch clotran.host.arithmetic_exception e :div0)))\n"
                  "(defn many [& xs] (count xs))\n"
-                 "(defn quartic-sum [n] (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s (* i i i i))) s)))\n"))
+                 "(defn quartic-sum [n] (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s (* i i i i))) s)))\n"
+                 "(defn lcg-sum [n] (loop [i 0 x 12345 acc 0.0] (if (< i n) (let [x (mod (+ (* x 1103515245) 12345) 2147483648)] (recur (inc i) x (+ acc (/ (double x) 2147483648.0)))) acc)))\n"))
+  ;; a pure loop in a future runs with the mutators released (PLAN step
+  ;; 13): the main thread allocates and collects while it runs, and the
+  ;; loop (~0.6 s compiled) is still going when that is done
+  (spit stall (str "(load-file \"" src "\")\n"
+                   "(let [f (future (cc-space/lcg-sum 500000000))]\n"
+                   "  (apply + (take 100000 (range)))\n"
+                   "  (prn [:pure-loop-still-running (not (realized? f)) :sum (< 0.0 (deref f))]))\n"))
   (spit run (str "(load-file \"" src "\")\n"
                  "(prn [(cc-space/total (double-array [1 2 3])) (cc-space/total (long-array [1 2]))\n"
                  "      (cc-space/summary (double-array 4)) (cc-space/guarded 5) (cc-space/guarded 0) (cc-space/guarded 2.5)\n"
@@ -396,17 +405,20 @@
                  "           (mapv (fn [n] (future (cc-space/quartic-sum n))) [10 1000 100000 3000000])))\n"
                  "(prn (mapv deref (mapv (fn [a] (future (cc-space/total a))) [(double-array [1 2 3]) (long-array [4 5])])))\n"))
   (.delete lib)
-  (let [interp (go)
+  (let [interp (go run)
         r (shell {:out :string :err :string :dir (str repo) :continue true :in ""} "./clotran" "compile" (str src))
-        compiled (go)
+        compiled (go run)
+        beside (go stall)
         _ (spit src (str (slurp src) "(defn added [] 1)\n"))
-        stale (go)]
+        stale (go run)]
     (println "namespace: compile says" (pr-str (str/join " / " (remove str/blank? (str/split-lines (:out r))))))
     (cond
       (not (.exists lib))
       (do (println "namespace: NO LIBRARY" (:err r)) (System/exit 1))
       (not= interp compiled)
       (do (println "namespace: DIFFER\n   interpreted:" interp "\n   compiled:   " compiled) (System/exit 1))
+      (not (some #(str/includes? % "[:pure-loop-still-running true :sum true]") beside))
+      (do (println "namespace: a pure loop in a future held the main thread up, or answered wrong:" beside) (System/exit 1))
       (not (some #(str/includes? % "has changed since it was compiled") stale))
       (do (println "namespace: a STALE library was not refused:" stale) (System/exit 1))
       (not= (remove #(str/starts-with? % "note: not using") stale) interp)

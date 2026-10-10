@@ -31,43 +31,44 @@
   procedure, so every helper can be called inside do concurrent; each
   compiler prefixes the message its own way (gfortran ERROR STOP, flang
   Fortran ERROR STOP:). IN A LIBRARY (lib? true, PLAN step 13): nothing
-  is pure, every procedure that can fail takes a trailing `err`, and a
-  failure raises Clojure's exception in the running clotran
-  (clotran_fail, with the class by code) and sets err, which the
-  generated code checks after every such call and returns on."
+  is pure, every procedure that can fail takes a trailing `err`, a
+  cl_err, and a failure is recorded in it -- code and message -- which
+  the generated code checks after every such call and returns on; the
+  dispatcher (clotran.compiler) raises it as Clojure's exception once
+  it holds the mutators again. The pure code calls nothing of the
+  runtime, so it runs with the mutators released, as a foreign routine
+  does, and never holds up another thread's collection."
   [lib? mod]
   (let [P (if lib? "" "pure ")
         E (if lib? ", err" "")
-        ED (if lib? "    logical, intent(inout) :: err\n" "")
+        ED (if lib? "    type(cl_err), intent(inout) :: err\n" "")
         fail (fn [msg code] (if lib?
                               (str "call cl_fail(" msg ", " code ", err)\n       return")
                               (str "call cl_fail(" msg ")")))]
     (str "module " mod "\n"
          "  use iso_fortran_env, only: int64, real64\n"
-         (when lib? "  use iso_c_binding, only: c_int, c_char\n")
          "  implicit none
   integer, parameter :: k16 = selected_int_kind(38)
 "
          (when lib?
-           "  ! the exception classes clotran_fail raises, by code: 1 arithmetic,
+           "  ! A failure, carried back to the dispatcher, which raises it in the
+  ! running clotran (clotran_fail, with the class by code: 1 arithmetic,
   ! 2 array index out of bounds, 3 illegal argument, 4 negative array
-  ! size, 5 arity, 6 string index out of bounds
-  interface
-     subroutine clotran_fail(code, msg, n) bind(C, name=\"clotran_fail\")
-       import :: c_int, c_char
-       integer(c_int), value :: code, n
-       character(kind=c_char), intent(in) :: msg(*)
-     end subroutine clotran_fail
-  end interface
+  ! size, 5 arity, 6 string index out of bounds). Nothing here touches
+  ! the runtime, so the pure code runs with the mutators released.
+  type :: cl_err
+     integer :: code = 0
+     character(len=200) :: msg = ''
+  end type cl_err
 ")
          "contains\n"
          (if lib?
-           "  subroutine cl_fail(msg, code, err)
+           "  pure subroutine cl_fail(msg, code, err)
     character(len=*), intent(in) :: msg
     integer, intent(in) :: code
-    logical, intent(inout) :: err
-    err = .true.
-    call clotran_fail(int(code, c_int), msg, int(len(msg), c_int))
+    type(cl_err), intent(inout) :: err
+    err%code = code
+    err%msg = msg
   end subroutine cl_fail
 "
            "  pure subroutine cl_fail(msg)
@@ -150,7 +151,7 @@
     integer(int64), intent(in) :: a, b
 " ED "    integer(int64) :: r
     r = cl_rem(a, b" E ")
-" (when lib? "    if (err) return\n") "    if (r /= 0 .and. ((r < 0) .neqv. (b < 0))) r = r + b
+" (when lib? "    if (err%code /= 0) return\n") "    if (r /= 0 .and. ((r < 0) .neqv. (b < 0))) r = r + b
   end function cl_mod
   ! RT.longCast of a double: in range, truncated toward zero
   " P "function cl_long_of(x" E ") result(r)
@@ -320,7 +321,7 @@ end module " mod "
                    (if any
                      (do (when (re-find #"^\s*(else\s*)?(if|do while) \(" l)
                            (decline "a checked operation inside a condition (library mode)"))
-                         [l2 (str (re-find #"^\s*" l) "if (err) return")])
+                         [l2 (str (re-find #"^\s*" l) "if (err%code /= 0) return")])
                      [l])))
                lines)))
 
@@ -1164,7 +1165,7 @@ end module " mod "
        :text (str (if sub?
                     (str "  " pre "subroutine " nm "(" params ")\n")
                     (str "  " pre "function " nm "(" params ") result(r)\n"))
-                  (when *library* "    logical, intent(inout) :: err\n")
+                  (when *library* "    type(cl_err), intent(inout) :: err\n")
                   (apply str (for [[i t] (map-indexed vector ts)]
                                (str "    " (if (= t :string) "character(len=*), intent(in)" (fort-type t))
                                     (cond
@@ -1293,8 +1294,9 @@ end module " mod "
                       "  implicit none\n"
                       "  private\n"
                       (when *library*
-                        (apply str (for [[_ vs] (sort-by key emitted) v vs]
-                                     (str "  public :: " (:name v) "\n"))))
+                        (str "  public :: cl_err\n"
+                             (apply str (for [[_ vs] (sort-by key emitted) v vs]
+                                          (str "  public :: " (:name v) "\n")))))
                       (apply str (for [[_ r] (sort-by key records)]
                                    (str "  public :: " (type-name (:type r)) "\n"
                                         "  type :: " (type-name (:type r)) "\n"

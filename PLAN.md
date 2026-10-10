@@ -1348,11 +1348,31 @@ three rows this way (test/clj/bench_loops.cljf, the loops as defns).
 
 NOT DONE, said plainly: strings, records and array RESULTS stay tier B
 (no dispatcher: a result array needs an ABI entry that makes a clotran
-array from Fortran storage); a pure loop polls no safepoint, so another
-thread's collection waits for it to finish; the tier is still the
-hand-written emitter, not a model -- it has an oracle the VM never had,
-and modelling the translation is the candidate for the model's next book,
-not a precondition for this.
+array from Fortran storage); the tier is still the hand-written emitter,
+not a model -- it has an oracle the VM never had, and modelling the
+translation is the candidate for the model's next book, not a
+precondition for this.
+
+**The pure loop and the other threads (2026-10-10, same day).** A pure
+loop polled no safepoint, so another thread's collection waited for it
+to finish: with `lcg-sum` of 10^9 (1.25 s) in a future, the main
+thread's `(apply + (take 10^6 (range)))` took 2180 ms against 918
+alone. Polling is not the fix; the dispatcher now gives the mutators up
+around the pure call, as `call-package*` does around a foreign routine
+(tasks.inc, step 14), and takes them back before it boxes the answer.
+That is safe for the same reason it is for dgemm: the pure code
+touches no clotran object, and an array's buffer stays where it is
+while the registry grows (NativeArray.f90's move_alloc, written for
+exactly this). A failure can no longer be raised from inside the pure
+code -- the raise allocates -- so library mode's `err` is a record
+(`cl_err`, code and message) that cl_fail fills and the dispatcher
+raises through clotran_fail once it holds the mutators again; the pure
+module calls nothing of the runtime, and cl_fail is pure again. The
+same run: 942 ms beside the loop. scripts/compiler-check runs a pure
+loop in a future and requires it still running after the main thread
+has allocated; pure-check's library road covers the failures (460 of
+460 agree, 27 pure). No new design decision: the baton is step 14's,
+the handle rules step 27's.
 
 **Measured, 2026-09-24.** `clotran-bin` is 36.4 MB, of which the machine
 code is 1.86 MB and 33.1 MB is ICU's complete data, linked whole. Linked
