@@ -105,6 +105,32 @@ MPICH 4.x rather than the newer 5.0.1 because OpenCoarrays 2.10.3 predates
 it and its notes mention MPICH 4 fixes. MPICH was configured with
 `CC=clang FC=gfortran --enable-fortran=all`.
 
+### `ui`, `plot`, and games: libui-ng with a native view handed to Metal or Vulkan (decided before 2026-10-10, recorded then)
+
+James: a plotting library and "a very minimal clean gui framework",
+and games in it. Settled: **libui-ng** is the one C library -- native
+widgets on each platform (Cocoa, Win32, GTK), a small C API that
+`iso_c_binding` reaches with no bridge, vendored by sha256 behind the
+package door as every package is. Its `uiArea` gives a 2D draw context
+(CoreGraphics, Direct2D, Cairo underneath) that the plots draw on; the
+area's native handle -- an `NSView` on macOS, an `HWND`, a `GtkWidget`
+-- is handed to **Metal** (an Objective-C shim of a few lines) or
+**Vulkan** for games and GPU-drawn plots. Three packages, none in the
+root language:
+
+- `ui`: the libui-ng binding (what the step-7 generator would write)
+  and the framework over it -- immediate-mode, the frame as a value,
+  the widget tree as data, so a REPL inspects and rebuilds it.
+- `plot`: axes, ticks, lines, scatter, heatmaps straight from a Fortran
+  array's memory, the plot itself a value; PNG and SVG out through the
+  same code, for papers.
+- games: the Metal/Vulkan view and a frame loop; the first test is a
+  60 Hz loop with no collector pause in it (steps 16 and 17 measured
+  the pauses; this is where they show).
+
+1.x, not 1.0 (PLAN step 35); they wait on the binding generator so the
+libui-ng binding is generated, not hand-written.
+
 ### Later
 
 - A GPU BLAS (`cublas`): cuBLAS, cuFFT and cuRAND have C interfaces a
