@@ -1733,30 +1733,10 @@
     type(gc_value), intent(in) :: x0
     type(gc_value), intent(inout) :: out
     type(gc_value) :: x, t
-    integer :: st
-    done = .false.
     x = x0
-    if (x%tag == GCT_NIL) then
-       select case (id)
-       case (B_FIRST, B_NEXT, B_SEQ)
-          out = gc_nil()
-          done = .true.
-       end select
-       return
-    end if
-    if (gcl_is(x)) then
-       select case (id)
-       case (B_FIRST)
-          out = gc_nil()
-          if (gcl_count(x) > 0) out = gcl_first(x)
-          done = .true.
-       case (B_SEQ)
-          out = gc_nil()
-          if (gcl_count(x) > 0) out = x
-          done = .true.
-       end select
-       return
-    end if
+    ! nil, a list, a realised lazy cell: the generated op (model/heapsq.lisp)
+    done = gc_seq_fast(id, x, out)
+    if (done) return
     ! a vector's seq view (i2 0): an index into the vector, so first
     ! reads it, next is the view one on, and seq is itself while any is
     ! left -- sq_first, sq_rest and to_seq's answers
@@ -1789,51 +1769,6 @@
        done = .true.
        return
     end if
-    if (gc_kind(x) /= OBJ_LAZY) return
-    st = gc_i1(x)
-    select case (id)
-    case (B_SEQ)
-       select case (st)
-       case (LAZY_CONS);  out = x
-       case (LAZY_EMPTY); out = gc_nil()
-       case (LAZY_DELEG); out = gc_slot(x, 2)
-       case default; return
-       end select
-    case (B_FIRST)
-       if (st /= LAZY_CONS .and. st /= LAZY_EMPTY) return
-       out = gc_nil()
-       if (st == LAZY_CONS) out = gc_slot(x, 2)
-    case (B_REST)
-       if (st /= LAZY_CONS) return
-       out = gc_slot(x, 3)
-    case (B_NEXT)
-       if (st == LAZY_EMPTY) then
-          out = gc_nil()
-       else if (st == LAZY_CONS) then
-          ! (seq (rest x)), when that needs nothing done
-          t = gc_slot(x, 3)
-          if (t%tag == GCT_NIL) then
-             out = gc_nil()
-          else if (gcl_is(t)) then
-             out = gc_nil()
-             if (gcl_count(t) > 0) out = t
-          else if (gc_kind(t) == OBJ_LAZY) then
-             select case (gc_i1(t))
-             case (LAZY_CONS);  out = t
-             case (LAZY_EMPTY); out = gc_nil()
-             case (LAZY_DELEG); out = gc_slot(t, 2)
-             case default; return
-             end select
-          else
-             return
-          end if
-       else
-          return
-       end if
-    case default
-       return
-    end select
-    done = .true.
   end function flat_seq_op
 
   ! The pending cell a one-argument first, rest, next or seq would

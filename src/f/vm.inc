@@ -115,6 +115,7 @@
        if (gc_kind(b) == OBJ_BUILTIN) then
           vst => gc_my_stack()
           ok = .true.
+          if (gc_i1(b) >= 0 .and. gc_i1(b) <= 1023) bi_fast_n(gc_i1(b)) = bi_fast_n(gc_i1(b)) + 1
           if (nargs == 1) then
              if (flat_seq_op(gc_i1(b), vst%vstack(argbase + 1), out)) return
              if (flat_int_op(gc_i1(b), 1, vst%vstack(argbase + 1), vst%vstack(argbase + 1), out)) return
@@ -1197,5 +1198,5 @@
     write(0, '(a, i0, a, i0, a)') 'vm: ', vm_n_ok, ' fns compiled, ', vm_n_refused, ' refused'
     write(0, '(a, *(1x, i0, ":", i0))') 'vm: refused by node kind', (k, vm_refused_by(k), k = 0, 40)
     write(0, '(a, *(1x, i0, ":", i0))') 'vm: steps by opcode', (k, vm_op_n(k), k = 0, 63)
-    write(0, '(a, 7(1x, i0))') 'vm: prims arg arity deref callw invoke node other', vm_prim_n
+    write(0, '(a, 8(1x, i0))') 'vm: prims arg arity deref callw invoke node other seq', vm_prim_n
   end subroutine vm_stats_print

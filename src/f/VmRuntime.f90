@@ -111,7 +111,7 @@ module vm_runtime
   logical :: heads_made = .false.
   ! prims called, by kind (CLOTRAN_STATS): arg, arity, deref, callw,
   ! invoke, a node of the evaluator's, and any other value called
-  integer(8), public :: vm_prim_n(1:7) = 0
+  integer(8), public :: vm_prim_n(1:8) = 0
 
 contains
 
@@ -472,6 +472,14 @@ contains
     type(value) :: r
     type(gc_stack), pointer :: vst
     integer :: base
+    ! a builtin seq operation on what is already there: answered here, by
+    ! the generated op (model/heapsq.lisp), with nothing put on the stack
+    if (gc_kind(op) == OBJ_BUILTIN) then
+       if (gc_seq_fast(gc_i1(op), a, r)) then
+          vm_prim_n(8) = vm_prim_n(8) + 1
+          return
+       end if
+    end if
     vst => gc_my_stack()
     base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, a)

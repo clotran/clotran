@@ -1490,3 +1490,334 @@
       call hpg_run_take_c(hs, c_1, l_2, batching_, r)
     end if
   end subroutine hpg_run_take
+
+  pure function hpg_ot(hs, j_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: j_
+    integer(int64) :: r
+    logical :: t_1
+    if ((.not. (j_ < 0_int64))) then
+      t_1 = (j_ < hp_n_oslot())
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = hp_otag(j_)
+      return
+    else
+      r = -1_int64
+      return
+    end if
+  end function hpg_ot
+
+  pure function hpg_or(hs, j_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: j_
+    integer(int64) :: r
+    logical :: t_1
+    if ((.not. (j_ < 0_int64))) then
+      t_1 = (j_ < hp_n_oslot())
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = hp_oref(j_)
+      return
+    else
+      r = -1_int64
+      return
+    end if
+  end function hpg_or
+
+  pure function hpg_okd(hs, o_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: o_
+    integer(int64) :: r
+    logical :: t_1
+    if ((.not. (o_ < 0_int64))) then
+      t_1 = (o_ < hp_n_obj())
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = hp_okind(o_)
+      return
+    else
+      r = -1_int64
+      return
+    end if
+  end function hpg_okd
+
+  pure function hpg_oi(hs, o_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: o_
+    integer(int64) :: r
+    logical :: t_1
+    if ((.not. (o_ < 0_int64))) then
+      t_1 = (o_ < hp_n_obj())
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = hp_oi1(o_)
+      return
+    else
+      r = -1_int64
+      return
+    end if
+  end function hpg_oi
+
+  pure function hpg_obj_at(hs, tag_, ref_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: tag_
+    integer(int64), value :: ref_
+    logical :: r
+    if ((tag_ == 8_int64)) then
+      if ((0_int64 < ref_)) then
+        if ((ref_ < 1099511627776_int64)) then
+          if (((4_int64 + (5_int64 * ref_)) < hp_n_oslot())) then
+            r = ((4_int64 + (5_int64 * ref_)) < hp_n_oslot())
+            return
+          else
+            r = .false.
+            return
+          end if
+        else
+          r = .false.
+          return
+        end if
+      else
+        r = .false.
+        return
+      end if
+    else
+      r = .false.
+      return
+    end if
+  end function hpg_obj_at
+
+  pure function hpg_next_tail(hs, o_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: o_
+    integer(int64) :: r
+    integer(int64) :: case_do_not_use_elsewhere_5
+    integer(int64) :: t_10
+    integer(int64) :: t_11
+    integer(int64) :: t_12
+    integer(int64) :: t_4
+    integer(int64) :: t_6
+    integer(int64) :: t_7
+    integer(int64) :: t_8
+    integer(int64) :: t_9
+    integer(int64) :: tg_2
+    integer(int64) :: tr_3
+    integer(int64) :: w_1
+    w_1 = (2_int64 + (5_int64 * o_))
+    tg_2 = hpg_ot(hs, w_1)
+    tr_3 = hpg_or(hs, w_1)
+    if ((tg_2 == 0_int64)) then
+      t_12 = 1_int64
+    else
+      if ((.not. hpg_obj_at(hs, tg_2, tr_3))) then
+        t_11 = 0_int64
+      else
+        if ((hpg_okd(hs, tr_3) == 1_int64)) then
+          if ((0_int64 < hpg_oi(hs, tr_3))) then
+            t_4 = w_1
+          else
+            t_4 = 1_int64
+          end if
+          t_10 = t_4
+        else
+          if ((hpg_okd(hs, tr_3) == 6_int64)) then
+            case_do_not_use_elsewhere_5 = hpg_oi(hs, tr_3)
+            if ((case_do_not_use_elsewhere_5 == 1_int64)) then
+              t_8 = w_1
+            else
+              if ((case_do_not_use_elsewhere_5 == 2_int64)) then
+                t_7 = 1_int64
+              else
+                if ((case_do_not_use_elsewhere_5 == 3_int64)) then
+                  t_6 = (1_int64 + (5_int64 * tr_3))
+                else
+                  t_6 = 0_int64
+                end if
+                t_7 = t_6
+              end if
+              t_8 = t_7
+            end if
+            t_9 = t_8
+          else
+            t_9 = 0_int64
+          end if
+          t_10 = t_9
+        end if
+        t_11 = t_10
+      end if
+      t_12 = t_11
+    end if
+    r = t_12
+    return
+  end function hpg_next_tail
+
+  pure function hpg_seq_op(hs, op_, tag_, ref_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: op_
+    integer(int64), value :: tag_
+    integer(int64), value :: ref_
+    integer(int64) :: r
+    integer(int64) :: b_6
+    integer(int64) :: kd_4
+    integer(int64) :: n_5
+    logical :: t_1
+    integer(int64) :: t_10
+    integer(int64) :: t_11
+    integer(int64) :: t_12
+    integer(int64) :: t_13
+    integer(int64) :: t_14
+    integer(int64) :: t_15
+    integer(int64) :: t_16
+    integer(int64) :: t_17
+    integer(int64) :: t_18
+    integer(int64) :: t_19
+    logical :: t_2
+    integer(int64) :: t_20
+    integer(int64) :: t_21
+    integer(int64) :: t_22
+    integer(int64) :: t_23
+    integer(int64) :: t_24
+    logical :: t_3
+    integer(int64) :: t_7
+    integer(int64) :: t_8
+    integer(int64) :: t_9
+    if ((op_ == 9_int64)) then
+      t_3 = (op_ == 9_int64)
+    else
+      if ((op_ == 39_int64)) then
+        t_2 = (op_ == 39_int64)
+      else
+        if ((op_ == 27_int64)) then
+          t_1 = (op_ == 27_int64)
+        else
+          t_1 = (op_ == 10_int64)
+        end if
+        t_2 = t_1
+      end if
+      t_3 = t_2
+    end if
+    if ((.not. t_3)) then
+      r = 0_int64
+      return
+    else
+      if ((tag_ == 0_int64)) then
+        if ((op_ == 10_int64)) then
+          r = 0_int64
+          return
+        else
+          r = 1_int64
+          return
+        end if
+      else
+        if ((.not. hpg_obj_at(hs, tag_, ref_))) then
+          r = 0_int64
+          return
+        else
+          kd_4 = hpg_okd(hs, ref_)
+          n_5 = hpg_oi(hs, ref_)
+          b_6 = (5_int64 * ref_)
+          if ((kd_4 == 6_int64)) then
+            if ((op_ == 27_int64)) then
+              if ((n_5 == 1_int64)) then
+                t_9 = 2_int64
+              else
+                if ((n_5 == 2_int64)) then
+                  t_8 = 1_int64
+                else
+                  if ((n_5 == 3_int64)) then
+                    t_7 = (1_int64 + b_6)
+                  else
+                    t_7 = 0_int64
+                  end if
+                  t_8 = t_7
+                end if
+                t_9 = t_8
+              end if
+              t_18 = t_9
+            else
+              if ((op_ == 9_int64)) then
+                if ((n_5 == 1_int64)) then
+                  t_11 = (1_int64 + b_6)
+                else
+                  if ((n_5 == 2_int64)) then
+                    t_10 = 1_int64
+                  else
+                    t_10 = 0_int64
+                  end if
+                  t_11 = t_10
+                end if
+                t_17 = t_11
+              else
+                if ((op_ == 10_int64)) then
+                  if ((n_5 == 1_int64)) then
+                    t_12 = (2_int64 + b_6)
+                  else
+                    t_12 = 0_int64
+                  end if
+                  t_16 = t_12
+                else
+                  if ((op_ == 39_int64)) then
+                    if ((n_5 == 1_int64)) then
+                      t_14 = hpg_next_tail(hs, ref_)
+                    else
+                      if ((n_5 == 2_int64)) then
+                        t_13 = 1_int64
+                      else
+                        t_13 = 0_int64
+                      end if
+                      t_14 = t_13
+                    end if
+                    t_15 = t_14
+                  else
+                    t_15 = 0_int64
+                  end if
+                  t_16 = t_15
+                end if
+                t_17 = t_16
+              end if
+              t_18 = t_17
+            end if
+            t_24 = t_18
+          else
+            if ((kd_4 == 1_int64)) then
+              if ((op_ == 9_int64)) then
+                if ((0_int64 < n_5)) then
+                  t_19 = b_6
+                else
+                  t_19 = 1_int64
+                end if
+                t_22 = t_19
+              else
+                if ((op_ == 27_int64)) then
+                  if ((0_int64 < n_5)) then
+                    t_20 = 2_int64
+                  else
+                    t_20 = 1_int64
+                  end if
+                  t_21 = t_20
+                else
+                  t_21 = 0_int64
+                end if
+                t_22 = t_21
+              end if
+              t_23 = t_22
+            else
+              t_23 = 0_int64
+            end if
+            t_24 = t_23
+          end if
+          r = t_24
+          return
+        end if
+      end if
+    end if
+  end function hpg_seq_op

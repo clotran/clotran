@@ -101,7 +101,10 @@
   (h-afre :type (signed-byte 64) :initially 0)
   (h-asince :type (signed-byte 64) :initially 0)
   (h-rb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
-  (h-nrb :type (array (signed-byte 64) (0)) :initially 0 :resizable t))
+  (h-nrb :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  ;; THE SEQ OPERATIONS (stage 2, model/heapsq.lisp): an object's first
+  ;; integer field, a list's count or a lazy cell's state
+  (h-oi1 :type (array (signed-byte 64) (0)) :initially 0 :resizable t))
 
 ; ---- BOUNDS ---------------------------------------------------------------------------
 

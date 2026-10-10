@@ -783,7 +783,7 @@ module GC
   public :: mix32, m3_mix_coll, m3_ordered_step, m3_add, gc_utf16, gc_text_hasheq
   public :: gc_obj, gc_vec, gc_cons
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
-  public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2
+  public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2, gc_seq_fast
   public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word, gc_reg, gc_reg_set, gc_vec_clone
   ! the vector store itself, for the executor's register reads and writes
   ! inline (flat.inc reg_get, reg_set): a call each was a tenth of a call
@@ -4282,15 +4282,15 @@ contains
 
   ! ---- the marker's view of the pools (heap_gen.inc's externs) ----
   ! object i's slot k is word 5i+k; a mark is 1 or 0
-  integer(int64) function hp_otag(j)
+  pure integer(int64) function hp_otag(j)
     integer(int64), intent(in) :: j
     hp_otag = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%tag
   end function hp_otag
-  integer(int64) function hp_oref(j)
+  pure integer(int64) function hp_oref(j)
     integer(int64), intent(in) :: j
     hp_oref = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%ref
   end function hp_oref
-  integer(int64) function hp_n_oslot()
+  pure integer(int64) function hp_n_oslot()
     hp_n_oslot = 5_int64 * (size(obj_pool, kind=int64) + 1)
   end function hp_n_oslot
   integer(int64) function hp_omark(i)
@@ -4302,7 +4302,7 @@ contains
     obj_mark(i) = x /= 0
   end subroutine hp_set_omark
   ! the pool's slots and slot 0, as every array the model reads of it
-  integer(int64) function hp_n_obj()
+  pure integer(int64) function hp_n_obj()
     hp_n_obj = size(obj_pool, kind=int64) + 1
   end function hp_n_obj
   integer(int64) function hp_voff(i)
@@ -4348,10 +4348,35 @@ contains
   end function hp_n_str
 
   ! the sweep's view (stage 1b)
-  integer(int64) function hp_okind(i)
+  pure integer(int64) function hp_okind(i)
     integer(int64), intent(in) :: i
     hp_okind = obj_pool(i)%kind
   end function hp_okind
+  ! THE SEQ OPERATIONS on what is already there (stage 2): first, next,
+  ! rest or seq -- builtin id bid -- of nil, a list or a realised lazy cell,
+  ! answered by the generated hpg_seq_op (model/heapsq.lisp) as a place:
+  ! nil, x itself, or the slot it names, copied whole. False when it needs
+  ! the runtime's full way (a cell to force, a seq view, a chunk).
+  logical function gc_seq_fast(bid, x, out) result(done)
+    integer, intent(in) :: bid
+    type(gc_value), intent(in) :: x
+    type(gc_value), intent(inout) :: out
+    integer(int64) :: a
+    a = hpg_seq_op(hstate, int(bid, int64), int(x%tag, int64), int(x%ref, int64))
+    done = a /= 0
+    select case (a)
+    case (0)
+    case (1); out = gc_nil()
+    case (2); out = x
+    case default; out = obj_pool(a / 5)%slot(mod(a, 5_int64) + 1)
+    end select
+  end function gc_seq_fast
+
+  ! the seq operations' view (stage 2): a list's count, a lazy cell's state
+  pure integer(int64) function hp_oi1(i)
+    integer(int64), intent(in) :: i
+    hp_oi1 = obj_pool(i)%i1
+  end function hp_oi1
   subroutine hp_set_okind(i, x)
     integer(int64), intent(in) :: i, x
     obj_pool(i)%kind = int(x)

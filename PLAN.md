@@ -4606,6 +4606,43 @@ yardstick's eight seq operations an element are ~850 of its ~1230 ns
 under the VM: THE SEQ OPERATIONS ON A REALISED CELL, ANSWERED IN THE
 MACHINE, are next.
 
+**The seq operations, generated (stage 33's 2, 2026-10-09).** James:
+model the seq and lazy-cell operations, then the JIT, then the heap's
+1c-1e. model/heapsq.lisp: first, next, rest and seq of nil, a list and a
+lazy cell already realised, as reads of the heap stobj (an object's kind,
+its first integer field -- h-oi1, new -- and its slots), guard-verified
+and generated into heap_gen.inc. The answer is a PLACE -- nil, the
+argument, or the word 5o+k whose slot holds the value -- since a slot is
+more than the tag and ref the model sees; the runtime copies that slot,
+and nothing allocates. The operation is named by the runtime's builtin id,
+so neither caller translates. Proved: a place answered is inside the pool
+(hpg-seq-op-place); a lazy cell is read only realised, the argument's and
+next's tail's (hpg-seq-op-realised: with lazy-cell.lisp's
+done-reads-realised and realised-stays, why no lock is needed); seq
+answers a cell itself only non-empty, and next its tail only non-empty
+(hpg-seq-op-nonempty, hpg-next-tail-nonempty); at most 7 heap reads
+(hpg-seq-op-reads), and that time at any weight a read
+(hpg-seq-op-time). flat_seq_op's nil, list and lazy-cell cases are the
+generated op (GC.f90's gc_seq_fast); the VM's one-argument prim of a
+builtin asks it before the boundary (rt_prim1), 4.1 M of the yardstick's
+seq operations answered there (CLOTRAN_STATS: the prims' new `seq`
+column). scripts/fuzz-heap-gen asks random seq operations of every heap,
+ACL2's hpg-seq-op against the generated one; its control (a delegating
+cell read as pending) is caught.
+
+WHAT IT DID NOT DO: the yardstick did not get faster -- flat ~2-4% slower
+(the hot path is ~30 instructions with no calls; the rest is a call more
+and the binary's layout: a loop with no seq operations moved by 1 ns too),
+the VM unchanged at ~1420 ms though 4.1 M operations now skip dispatch,
+vmrt_call and the call hook. So calibrate's ~107 ns "seq operation
+through a prim" was not the layering: the regression put there the
+forcing and allocation that go with them. Sampled under the VM, the
+yardstick is about a third the collector and allocation (grow_obj and
+marking: the retention above), a quarter the steps, a quarter the
+boundary (gce_apply_slots, call_builtin -- instance? alone is 1.09 M
+generic calls -- the hooks), and the generated seq op ~2%. Next, in
+James's order: the JIT (stages 2-3), then the heap (1c-1e).
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

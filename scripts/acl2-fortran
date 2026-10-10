@@ -88,7 +88,7 @@
               "! program vmicg_program compiles without an error or an overflow"
               "! answers, run, what it means."]}
     "heapg"
-    {:out "src/f/gen/heap_gen.inc" :include true :book "heaprn"
+    {:out "src/f/gen/heap_gen.inc" :include true :book "heapsq"
      :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain
            ;; the sweep and the frees (model/heapsw.lisp)
            hpg-s64 hpg-n40 hpg-size-class hpg-free-obj hpg-slab-free hpg-free-vec hpg-free-str
@@ -99,7 +99,9 @@
            hpg-str-take hpg-str-use hpg-str-fill-list hpg-str-fill-end hpg-str-fill hpg-str-pop
            ;; the arena's runs (model/heaprn.lisp)
            hpg-class-len hpg-run-new hpg-run-push hpg-runs-fill hpg-run-pop hpg-run-from-batch hpg-run-take-c
-           hpg-run-take]
+           hpg-run-take
+           ;; the seq operations (model/heapsq.lisp)
+           hpg-ot hpg-or hpg-okd hpg-oi hpg-obj-at hpg-next-tail hpg-seq-op]
      :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
      :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]
@@ -122,7 +124,7 @@
                      ;; the calling thread's batches
                      h-nob ["hp_nob" "hp_set_nob"] h-nvb ["hp_nvb" "hp_set_nvb"] h-nsb ["hp_nsb" "hp_set_nsb"]}
      :array-names {"hs" ["otag" "oref" "omark" "voff" "vlen" "vmark" "atag" "aref" "smark" "mtag" "mref"
-                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob" "vb" "sb" "rb" "nrb"]}
+                         "okind" "ofree" "onext" "vfree" "vnext" "sfree" "snext" "aival" "chead" "ofin" "srel" "ob" "vb" "sb" "rb" "nrb" "oi1"]}
      :prefix {"hs" "h-"}
      :value-arrays #{}
      ;; GC.f90's pools, through its accessors (GC.f90, "the marker's view")
@@ -140,8 +142,9 @@
                "aival" ["hp_aival" "hp_set_aival" "hp_n_arena"] "chead" ["hp_chead" "hp_set_chead" "hp_n_chead"]
                "ob" ["hp_ob" "hp_set_ob" "hp_n_ob"] "vb" ["hp_vb" "hp_set_vb" "hp_n_ob"]
                "sb" ["hp_sb" "hp_set_sb" "hp_n_ob"]
-               "rb" ["hp_rb" "hp_set_rb" "hp_n_rb"] "nrb" ["hp_nrb" "hp_set_nrb" "hp_n_nrb"]}
-     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag}
+               "rb" ["hp_rb" "hp_set_rb" "hp_n_rb"] "nrb" ["hp_nrb" "hp_set_nrb" "hp_n_nrb"]
+               "oi1" ["hp_oi1" "-" "hp_n_obj"]}
+     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag hpg-obj-at}
      :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"
               "  ! GC.f90's contains part: the collector's marking, guard-verified, on GC's"

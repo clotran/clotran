@@ -2,8 +2,9 @@
 ! model/heapg.lisp) on a heap read from a file: scripts/fuzz-heap-gen's
 ! case, the same one ACL2's hpg-drain marks and hpg-sweep-* sweeps (model/heapsw.lisp).
 ! Prints the marks, what the sweep freed and wrote, and the counts.
+! Before marking, the seq operations (model/heapsq.lisp) on the heap as read.
 ! With a second argument "broken", the negative control: an object's last
-! slot reads as no reference.
+! slot reads as no reference, and a delegating lazy cell as one pending.
 module heap_check_m
   use iso_fortran_env, only: int64
   implicit none
@@ -14,7 +15,7 @@ module heap_check_m
   end type heap_state
   integer(int64), allocatable :: otag(:), oref(:), omark(:), voff(:), vlen(:), vmark(:), atag(:), aref(:), smark(:)
   integer(int64), allocatable :: okind(:), ofree(:), onext(:), vfree(:), vnext(:), sfree(:), snext(:), aival(:), chead(:)
-  integer(int64), allocatable :: ofin(:), srel(:)
+  integer(int64), allocatable :: ofin(:), srel(:), oi1(:)
   integer(int64) :: ohead = 0, vhead = 0, shead = 0
   integer(int64) :: oused = 0, ocap = 0, nob = 0, vused = 0, vcap = 0, nvb = 0, sused = 0, scap = 0, nsb = 0
   integer(int64), allocatable :: ob(:), vb(:), sb(:)
@@ -22,16 +23,16 @@ module heap_check_m
   integer(int64), allocatable :: rb(:), nrb(:)
   logical :: broken = .false.
 contains
-  integer(int64) function hp_otag(j)
+  pure integer(int64) function hp_otag(j)
     integer(int64), intent(in) :: j
     hp_otag = otag(j)
   end function hp_otag
-  integer(int64) function hp_oref(j)
+  pure integer(int64) function hp_oref(j)
     integer(int64), intent(in) :: j
     hp_oref = oref(j)
     if (broken .and. mod(j, 5_int64) == 4) hp_oref = 0
   end function hp_oref
-  integer(int64) function hp_n_oslot()
+  pure integer(int64) function hp_n_oslot()
     hp_n_oslot = size(otag, kind=int64)
   end function hp_n_oslot
   integer(int64) function hp_omark(i)
@@ -42,7 +43,7 @@ contains
     integer(int64), intent(in) :: i, x
     omark(i) = x
   end subroutine hp_set_omark
-  integer(int64) function hp_n_obj()
+  pure integer(int64) function hp_n_obj()
     hp_n_obj = size(omark, kind=int64)
   end function hp_n_obj
   integer(int64) function hp_voff(i)
@@ -87,10 +88,15 @@ contains
     hp_n_str = size(smark, kind=int64)
   end function hp_n_str
 
-  integer(int64) function hp_okind(i)
+  pure integer(int64) function hp_okind(i)
     integer(int64), intent(in) :: i
     hp_okind = okind(i)
   end function hp_okind
+  pure integer(int64) function hp_oi1(i)
+    integer(int64), intent(in) :: i
+    hp_oi1 = oi1(i)
+    if (broken .and. hp_oi1 == 3) hp_oi1 = 0
+  end function hp_oi1
   subroutine hp_set_okind(i, x)
     integer(int64), intent(in) :: i, x
     okind(i) = x
@@ -349,7 +355,8 @@ program heap_check
   type(heap_state) :: hs
   integer :: u, i, nr
   integer(int64) :: no, nv, na, ns, cap, t, r, tk(3), pp(4), k, nt
-  integer(int64), allocatable :: tn(:), tb(:), toff(:)
+  integer(int64), allocatable :: tn(:), tb(:), toff(:), sq(:)
+  integer(int64) :: nq, qo, qt, qr
   character(len=256) :: path, arg2
   call get_command_argument(1, path)
   call get_command_argument(2, arg2)
@@ -360,7 +367,7 @@ program heap_check
   allocate(voff(0:nv - 1), vlen(0:nv - 1), vmark(0:nv - 1), atag(0:na - 1), aref(0:na - 1), smark(0:ns - 1))
   allocate(hs%mtag(0:cap - 1), hs%mref(0:cap - 1))
   allocate(okind(0:no - 1), ofree(0:no - 1), onext(0:no - 1), ofin(0:no - 1), vfree(0:nv - 1), vnext(0:nv - 1))
-  allocate(sfree(0:ns - 1), snext(0:ns - 1), srel(0:ns - 1), aival(0:na - 1), chead(0:30))
+  allocate(sfree(0:ns - 1), snext(0:ns - 1), srel(0:ns - 1), aival(0:na - 1), chead(0:30), oi1(0:no - 1))
   ofin = 0
   srel = 0
   read(u, *) otag
@@ -395,6 +402,13 @@ program heap_check
   ob = 0
   vb = 0
   sb = 0
+  read(u, *) oi1
+  read(u, *) nq
+  allocate(sq(nq))
+  do k = 1, nq
+     read(u, *) qo, qt, qr
+     sq(k) = hpg_seq_op(hs, qo, qt, qr)
+  end do
   read(u, *) nr
   do i = 1, nr
      read(u, *) t, r
@@ -475,4 +489,5 @@ program heap_check
   write(*, '(a, *(1x, i0))') 'chead2', chead
   write(*, '(a, *(1x, i0))') 'nrb', nrb
   write(*, '(a, *(1x, i0))') 'rb', rb
+  write(*, '(a, *(1x, i0))') 'seq', sq
 end program heap_check
