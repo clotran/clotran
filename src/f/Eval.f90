@@ -64,7 +64,7 @@ module Eval
   use Socket
   use Threads
   use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword, vm_prim_n
-  use vm_gen, only: vmg_xstep, vmg_fuse
+  use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
        c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t

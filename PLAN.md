@@ -4150,6 +4150,23 @@ allocation and the collector -- not in the steps the JIT compiles.
 scripts/fuzz's JIT runs set the variables as a map, so its findings and
 controls were real throughout.
 
+**Calls under the JIT: the step by opcode (2026-10-10).** fib(35):
+flat 3632 ms, VM ~4190, VM+JIT 2958, clj 78. Sampled under the JIT, a
+call's time was the slow step itself (its stub, vm_jit_step and
+vmg_xstep's tests for the fused patterns, ~35%), the Var's deref through
+the runtime's dispatch (~23%), callv (~16%: rt_clop, the clause's pick,
+the frame's record), ret. Now the slow step runs a call, a return or a
+prim as that instruction's own generated step (vmg_callv, vmg_ret,
+vmg_prim -- vmj-step-op: the step at an opcode is that instruction),
+and rt_prim1 answers a Var's deref through the hook with nothing put on
+the stack: fib(35) under the JIT 2958 -> ~2300 ms, the yardstick with
+core compiled (CLOTRAN_IMAGE=0) ~1320 against the VM's ~1420. Native
+callv and ret -- the closure's call table and the control stack read in
+arm64 -- are what remains of stage 3; not done: what they would save is
+the runtime's own work per call (the Var's value, the closure check, the
+pick), which an inline cache keyed by the closure cannot hold safely
+while the collector reuses a freed object's index.
+
 ### 31a. The unified debugger (decided 2026-10-06)
 
 James, 2026-10-06: no Python. Make one debugger, with our own UX,

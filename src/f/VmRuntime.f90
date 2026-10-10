@@ -472,6 +472,15 @@ contains
     type(value) :: r
     type(gc_stack), pointer :: vst
     integer :: base
+    ! a Var's value (the compiled code's (:prim deref (:const var))): the
+    ! hook, with nothing put on the stack
+    if (op%tag == GCT_KEY) then
+       if (op%ref == kw_deref%ref) then
+          vm_prim_n(3) = vm_prim_n(3) + 1
+          r = vmrt_deref(a)
+          return
+       end if
+    end if
     ! a builtin seq operation on what is already there: answered here, by
     ! the generated op (model/heapsq.lisp), with nothing put on the stack
     if (gc_kind(op) == OBJ_BUILTIN) then

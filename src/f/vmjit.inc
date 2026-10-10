@@ -269,7 +269,15 @@
     if (st%code(4 * st%pc) == 11 .and. st%ctop == 0) return
     vst => gc_my_stack()
     vst%vm_ctl_top = int(cx%ct0 + st%ctop + 1)
-    call vmg_xstep(st)
+    ! a call, a return or a prim is its own step (vmj-step-op: the step at
+    ! an opcode is that instruction), not vmg_xstep's tests for the fused
+    ! patterns first -- what native code leaves to the step is mostly these
+    select case (st%code(4 * st%pc))
+    case (10); call vmg_callv(st)
+    case (11); call vmg_ret(st)
+    case (13); call vmg_prim(st)
+    case default; call vmg_xstep(st)
+    end select
     cx%steps = cx%steps + 1
     ! every slow step: a loop all native comes here every 4096th back edge
     if (gc_stop_pending()) call gc_poll()
