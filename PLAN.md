@@ -4599,12 +4599,16 @@ ACL2 against the generated code; its control (a text's mark read inverted)
 parts the barrier's answers. The yardstick does not move (A/B from source,
 ~900-930 ms both).
 
-What 1c does NOT yet cover: AGING. A young survivor is aged rather than
-promoted, its mark cleared; the old objects that reference it are then
-remembered by collect_young's own pass (any_aged_slot), not the barrier.
-That pass keeps young-start too, and it is the next theorem: clearing a
-mark keeps the invariant when every marked object referencing the
-unmarked one is remembered.
+AGING, too (`aging-keeps`): a young survivor is aged rather than
+promoted, its mark cleared, and that keeps young-start when every marked
+object and run that references it is remembered. GC.f90 meets the
+condition in two places, read against the theorem: collect_young
+remembers each newly promoted object that points at an aged one
+(any_aged_slot, any_aged_run), and forget_young keeps in the set every
+remembered entry that still does -- the old ones were remembered by the
+barrier while their target was young, which barrier-keeps covers. Those
+two passes are still hand-written Fortran; generating them is what
+remains of 1c.
 
 ### 34. Dispatch and the calling convention, timed (decided 2026-10-09)
 

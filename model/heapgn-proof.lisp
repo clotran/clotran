@@ -23,6 +23,10 @@
 ;   young-closed     so a drain that empties its stack with no overflow
 ;                    leaves every marked object and run black
 ;   barrier-keeps    a write with its barrier keeps young-start
+;   aging-keeps      so does AGING a survivor (its mark cleared), when every
+;                    marked object and run that references it is remembered
+;                    -- collect_young's pass over the promoted and
+;                    forget_young's keeping of what points at the aged
 ;   young-cost       the scan of the remembered set is 5 pushes an object
 ;                    and a run's length a run: O(remembered), not O(old)
 
@@ -300,3 +304,112 @@
   (implies (integerp ref)
            (equal (hpg-young-ref tag ref h) (not (marked-ref tag ref h))))
   :hints (("Goal" :in-theory (enable marked-ref omarked vmarked smarked))))
+
+; ---- AGING KEEPS IT ------------------------------------------------------------------------
+
+; a young survivor is AGED, not promoted: its mark cleared, so it is young
+; again at the next collection (collect_young's age_obj). An old object or
+; run that references it is then no longer black; collect_young's own pass
+; remembers each (any_aged_slot, any_aged_run). With that, the invariant
+; holds after the aging.
+
+(defun hpg-unmark (a h)
+  (if (and (natp a) (< a (len (nth *h-omarki* h))))
+      (update-nth *h-omarki* (update-nth a 0 (nth *h-omarki* h)) h)
+    h))
+
+; object i's slots k .. 4 hold a reference to object a
+(defun slots-ref (i k a h)
+  (declare (xargs :measure (nfix (- 5 (nfix k)))))
+  (if (or (not (natp k)) (<= 5 k))
+      nil
+    (let ((j (+ (* 5 i) k)))
+      (if (and (< j (len (nth *h-otagi* h))) (< j (len (nth *h-orefi* h))))
+          (or (and (equal (nth j (nth *h-otagi* h)) 8) (equal (nth j (nth *h-orefi* h)) a))
+              (slots-ref i (+ 1 k) a h))
+        nil))))
+
+(defun run-ref (j e a h)
+  (declare (xargs :measure (nfix (- (nfix e) (nfix j)))))
+  (if (or (not (natp j)) (not (natp e)) (<= e j))
+      nil
+    (if (and (< j (len (nth *h-atagi* h))) (< j (len (nth *h-arefi* h))))
+        (or (and (equal (nth j (nth *h-atagi* h)) 8) (equal (nth j (nth *h-arefi* h)) a))
+            (run-ref (+ 1 j) e a h))
+      nil)))
+
+(defun vec-ref (i a h)
+  (if (and (< i (len (nth *h-voffi* h))) (< i (len (nth *h-vleni* h))))
+      (let ((off (nfix (nth i (nth *h-voffi* h)))) (n (nfix (nth i (nth *h-vleni* h)))))
+        (if (and (<= off *hb40*) (<= n *hb40*) (<= (+ off n) *hb40*))
+            (run-ref off (+ off n) a h)
+          nil))
+    nil))
+
+; the unmarking changes object a's mark alone
+(defthm marked-ref-unmark
+  (implies (not (and (equal tag 8) (equal ref a)))
+           (equal (marked-ref tag ref (hpg-unmark a h)) (marked-ref tag ref h)))
+  :hints (("Goal" :in-theory (enable marked-ref omarked vmarked smarked))))
+
+(defthm unmark-omarked
+  (implies (not (equal r a)) (equal (omarked r (hpg-unmark a h)) (omarked r h)))
+  :hints (("Goal" :in-theory (enable omarked))))
+
+(defthm unmark-omarked-down
+  (implies (omarked r (hpg-unmark a h)) (and (omarked r h) (not (equal r a))))
+  :hints (("Goal" :in-theory (enable omarked)))
+  :rule-classes :forward-chaining)
+
+(defthm unmark-vmarked (equal (vmarked r (hpg-unmark a h)) (vmarked r h))
+  :hints (("Goal" :in-theory (enable vmarked))))
+
+(defthm unmark-fields
+  (and (equal (nth *h-otagi* (hpg-unmark a h)) (nth *h-otagi* h))
+       (equal (nth *h-orefi* (hpg-unmark a h)) (nth *h-orefi* h))
+       (equal (nth *h-atagi* (hpg-unmark a h)) (nth *h-atagi* h))
+       (equal (nth *h-arefi* (hpg-unmark a h)) (nth *h-arefi* h))
+       (equal (nth *h-voffi* (hpg-unmark a h)) (nth *h-voffi* h))
+       (equal (nth *h-vleni* (hpg-unmark a h)) (nth *h-vleni* h))
+       (equal (nth *h-msp* (hpg-unmark a h)) (nth *h-msp* h))))
+
+; slots that reference no a stay marked when a's mark is cleared
+(defthm slots-marked-unmark
+  (implies (and (slots-marked i k h) (not (slots-ref i k a h)))
+           (slots-marked i k (hpg-unmark a h)))
+  :hints (("Goal" :induct (slots-marked i k h) :in-theory (disable hpg-unmark marked-ref))))
+
+(defthm run-marked-unmark
+  (implies (and (run-marked j e h) (not (run-ref j e a h)))
+           (run-marked j e (hpg-unmark a h)))
+  :hints (("Goal" :induct (run-marked j e h) :in-theory (disable hpg-unmark marked-ref))))
+
+(defthm black-vec-unmark
+  (implies (and (black-vec i h) (not (vec-ref i a h)))
+           (black-vec i (hpg-unmark a h)))
+  :hints (("Goal" :in-theory (e/d (black-vec) (hpg-unmark run-marked)))))
+
+; every marked object and run that references a, remembered
+(defun-sk aged-covered (h a os vs)
+  (forall r (and (implies (and (omarked r h) (slots-ref r 0 a h)) (member-equal r os))
+                 (implies (and (vmarked r h) (vec-ref r a h)) (member-equal r vs)))))
+
+(defthm aging-keeps-one
+  (implies (and (equal (msp-of h) 0) (pobj-y r h os) (pvec-y r h vs)
+                (implies (and (omarked r h) (slots-ref r 0 a h)) (member-equal r os))
+                (implies (and (vmarked r h) (vec-ref r a h)) (member-equal r vs)))
+           (and (pobj-y r (hpg-unmark a h) os) (pvec-y r (hpg-unmark a h) vs)))
+  :hints (("Goal" :in-theory (e/d (pobj pvec black-obj) (hpg-unmark marked-ref omarked vmarked)))))
+
+; AGING KEEPS THE INVARIANT: a's mark cleared, with every marked object and
+; run that references it remembered, every old object stays black or
+; remembered
+(defthm aging-keeps
+  (implies (and (equal (msp-of h) 0) (young-start h os vs) (aged-covered h a os vs))
+           (young-start (hpg-unmark a h) os vs))
+  :hints (("Goal" :in-theory (disable hpg-unmark pobj-y pvec-y young-start-necc aged-covered-necc aging-keeps-one
+                                      slots-ref vec-ref omarked vmarked unmark-omarked-down)
+           :expand ((young-start (hpg-unmark a h) os vs))
+           :use ((:instance young-start-necc (r (young-start-witness (hpg-unmark a h) os vs)))
+                 (:instance aged-covered-necc (r (young-start-witness (hpg-unmark a h) os vs)))
+                 (:instance aging-keeps-one (r (young-start-witness (hpg-unmark a h) os vs)))))))
