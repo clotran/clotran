@@ -2476,9 +2476,14 @@
           end if
        end if
     case (3)
-       ! Class/field: the value, discarded
+       ! Class/field: written when the static is a box (RT/checkSpecAsserts),
+       ! else the value, discarded; the symbol is in slot 3
        val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. tctx%has_error) out = val
+       if (.not. tctx%has_error) then
+          call vs_set(vst, base + 3, val)
+          call static_box_set(gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 3))
+          out = vs_get(vst, base + 3)
+       end if
     case default
        ! a deftype instance's field (a mutable one, through this) is
        ! written in place; any other host field: the write is discarded,

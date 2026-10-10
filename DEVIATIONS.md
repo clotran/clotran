@@ -1437,7 +1437,17 @@ is made of; the surrogate pair is what clj is made of.
 
 ---
 
-## 42. `s/check-asserts` cannot be turned on
+## 42. RESOLVED -- `s/check-asserts` turns the checks on
+
+**RESOLVED 2026-10-10 (PLAN step 35).** `RT/checkSpecAsserts` is a
+writable box behind its host-table row (HK_BOXVAR): reading the static
+answers the box WHEN RUN -- every other static is folded at analysis,
+since its value cannot change -- and `(set! clotran.host.rt/checkSpecAsserts flag)`,
+which is what `s/check-asserts` does, writes it. `(s/check-asserts
+true)` then `(s/assert int? "x")` is the ExceptionInfo clj throws,
+`(s/check-asserts?)` answers what was set, and off again `s/assert` is
+its value. Measured against clj in test/clj/oracle.clj. The original
+entry follows.
 
 clojure.spec.alpha's `assert` is
 `(if RT/checkSpecAsserts (assert* ...) x)`, and

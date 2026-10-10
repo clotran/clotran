@@ -3169,3 +3169,12 @@
 (try (binding [nd-plain 1] nd-plain) (catch clotran.host.illegal_state_exception e :refused))
 (binding [*nd-dyn* 2] *nd-dyn*)
 (binding [*print-length* 2] (pr-str (range 10)))
+
+;; s/check-asserts turns the checks on and off (DEVIATIONS 42 resolved):
+;; a set! of the host static RT/checkSpecAsserts, which is a box here
+(require '[clojure.spec.alpha :as spec])
+(do (spec/check-asserts true) (spec/check-asserts?))
+(try (spec/assert int? "x") (catch clotran.host.exception e :assertion-failed))
+(spec/assert int? 3)
+(do (spec/check-asserts false) (spec/check-asserts?))
+(spec/assert int? "y")

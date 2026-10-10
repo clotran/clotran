@@ -932,6 +932,13 @@
           t = dlt_1
        end block
        sl = index(t, "/")
+       ! the one static whose value changes (RT/checkSpecAsserts, a box):
+       ! read when run, not folded
+       if (static_is_box(t(1:sl-1), t(sl+1:))) then
+          nd = analyze(host_box_form([vs_get(vst, base + 1), vs_get(vst, base + 2)]), vs_get(vst, base + 2))
+          call vs_leave(vst, base)
+          return
+       end if
        v = static_member(t(1:sl-1), t(sl+1:), vs_get(vst, base + 1))
        if (tctx%has_error) then
           call gce_clear_error()
@@ -1476,6 +1483,12 @@
           if (gc_kind(find_type(dlt_1)) /= OBJ_TYPE .and. is_host_class(target)) then
              block
                 call gc_ref_text(target%ref, s=dlt_2)
+                ! (. Class member) of the writable static: read when run
+                if (static_is_box(dlt_2, mname)) then
+                   nd = analyze(host_box_form([vs_get(vst, base + 1), vs_get(vst, base + 2)]), vs_get(vst, base + 2))
+                   call vs_leave(vst, base)
+                   return
+                end if
                 fnv = static_member(dlt_2, mname, vs_get(vst, base + 1))
              end block
              if (tctx%has_error) then
@@ -3174,6 +3187,34 @@
     call vs_leave(vst, base)
   end function analyze_quasiquote
 
+  ! (. Class field), the dot form of a static: three elements, the dot,
+  ! a class name, a field symbol
+  logical function static_dot_field(form)
+    type(gc_value), intent(in) :: form
+    type(gc_value) :: h, c, m
+    static_dot_field = .false.
+    if (gcl_count(form) /= 3) return
+    h = strip_meta(gcl_first(form))
+    if (h%tag /= GCT_SYM) return
+    if (.not. gc_ref_is(h%ref, ".")) return
+    c = strip_meta(gcl_first(gcl_rest(form, [form])))
+    m = strip_meta(gcl_first(gcl_rest(gcl_rest(form, [form]), [form])))
+    if (c%tag /= GCT_SYM .or. m%tag /= GCT_SYM) return
+    static_dot_field = is_class_name(c)
+  end function static_dot_field
+
+  ! that form as the symbol Class/field
+  function static_dot_symbol(form) result(sym)
+    type(gc_value), intent(in) :: form
+    type(gc_value) :: sym, c, m
+    character(len=:), allocatable :: ct, mt
+    c = strip_meta(gcl_first(gcl_rest(form, [form])))
+    m = strip_meta(gcl_first(gcl_rest(gcl_rest(form, [form]), [form])))
+    call gc_ref_text(c%ref, s=ct)
+    call gc_ref_text(m%ref, s=mt)
+    sym = gc_sym(ct // "/" // mt, [form])
+  end function static_dot_symbol
+
   ! (set! target value). A symbol target is a Var (resolved now); a
   ! (.field obj) target is a host field write, which for the one field
   ! with storage -- a fn's __methodImplCache -- lands in the closure.
@@ -3262,6 +3303,21 @@
        kids = gcv_conj(vs_get(vst, base + 4), c, [vs_get(vst, base + 1), vs_get(vst, base + 5), c])
        call vs_set(vst, base + 4, kids)
        nd = mk_node(N_SETBANG, vs_get(vst, base + 4), vs_get(vst, base + 5), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    else if (gcl_is(tgt) .and. static_dot_field(tgt)) then
+       ! (set! (. Class field) v): the static as Class/field names it --
+       ! written when it is a box (RT/checkSpecAsserts, exec_setbang), else
+       ! the value, discarded
+       call vs_set(vst, base + 5, static_dot_symbol(vs_get(vst, base + 3)))
+       c = analyze(gcl_first(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)])), vs_get(vst, base + 2))
+       if (tctx%has_error) then
+          call vs_leave(vst, base)
+          return
+       end if
+       kids = gcv_conj(vs_get(vst, base + 4), c, [vs_get(vst, base + 1), vs_get(vst, base + 5), c])
+       call vs_set(vst, base + 4, kids)
+       kids = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 5)])   ! placeholder obj slot
+       call vs_set(vst, base + 4, kids)
+       nd = mk_node(N_SETBANG, vs_get(vst, base + 4), gc_nil(), vs_get(vst, base + 5), 3, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else if (gcl_is(tgt)) then
        ! (.field obj) -- the object, then the value
        objf = gcl_first(gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1)]))

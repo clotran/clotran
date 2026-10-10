@@ -20,7 +20,8 @@
   end type hm
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
-       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14
+       HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14, &
+       HK_BOXVAR = -15
 
   type(hm), parameter :: HOST_STATICS_1(96) = [ &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
@@ -373,9 +374,9 @@
        hm("clotran.uuid.UUID", "fromString", B_UUIDOF, "clotran-uuid-of"), &
        hm("clotran.host.tagged_literal", "create", B_TAGGEDLIT, "tagged-literal"), &
        ! RT.checkSpecAsserts: -Dclojure.spec.check-asserts, off by default,
-       ! so (s/assert spec x) is x. (s/check-asserts true) would set! it,
-       ! which a host static here cannot be (DEVIATIONS 4).
-       hm("clotran.host.rt", "checkSpecAsserts", HK_FALSE), &
+       ! so (s/assert spec x) is x; a WRITABLE box, so (s/check-asserts true)
+       ! -- a set! of this static -- turns the checks on (DEVIATIONS 42).
+       hm("clotran.host.rt", "checkSpecAsserts", HK_BOXVAR), &
        hm("clotran.host.real8", "TYPE", HK_TYPE), &
        hm("clotran.host.real4", "TYPE", HK_TYPE), &
        hm("clotran.host.int4", "TYPE", HK_TYPE), &

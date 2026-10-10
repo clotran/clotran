@@ -89,6 +89,7 @@
  "Eval.f90/rt_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/sched_k" {:class :shared, :note "the agent scheduler (PLAN step 24): written once by the thread whose root CAS made the queues, before the workers start; read by the workers after"}
  "Eval.f90/sched_shutdown" {:class :shared, :note "the agent scheduler: set once by shutdown-agents under the state lock, read by the workers and by send"}
+ "Eval.f90/spec_asserts_root" {:class :shared, :note "RT/checkSpecAsserts's box (DEVIATIONS 42): an atom, made once on first use (gc_global_keep), read and set as any atom"}
  "Eval.f90/sched_root" {:class :shared, :note "the agent scheduler: the vector of run-queue atoms, set once by gc_root_cas; the queues themselves replaced by compare-and-swap"}
  "Eval.f90/sched_ticks" {:class :shared, :note "the agent scheduler: a worker's picks since its last :global pick, one slot per worker, each written by its own worker only"}
  "Eval.f90/spec_check" {:class :fixed, :note "set by a flag before evaluation starts"}

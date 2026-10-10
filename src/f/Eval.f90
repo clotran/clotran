@@ -254,6 +254,7 @@ module Eval
   integer, parameter :: B_RATIONALIZE = 431
   ! the agent scheduler (PLAN step 24, model/agents.lisp)
   integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434, B_AGENTSHUTDOWN = 435
+  integer, parameter :: B_HOSTBOX = 436
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -377,6 +378,9 @@ module Eval
   ! parks on the state condition until a push notifies. Not in the
   ! image: made on the first pool send of a process.
   type(gc_root), save :: sched_root
+  ! the one writable host static, RT/checkSpecAsserts: an atom, made on
+  ! first use (host_box); read by its row, written by set! (DEVIATIONS 42)
+  type(gc_root), save :: spec_asserts_root
   integer, save :: sched_k = 0
   ! shutdown-agents (Agent.shutdown): the workers end, and an idle agent
   ! sent to is queued but never started, as clj's rejected action is
@@ -1200,6 +1204,9 @@ contains
     call bind_builtin(core, "clotran-sched-push!", B_SCHEDPUSH)
     call bind_builtin(core, "clotran-agent-peek", B_AGENTPEEK)
     call bind_builtin(core, "clotran-agent-shutdown", B_AGENTSHUTDOWN)
+    ! the writable host static's value, read at RUN time (analyze_symbol
+    ! folds every other static, whose value cannot change)
+    call bind_builtin(core, "clotran-host-box", B_HOSTBOX)
     call bind_builtin(core, "rest", B_REST)
     call bind_builtin(core, "next", B_NEXT)
     call bind_builtin(core, "cons", B_CONS)
@@ -4410,6 +4417,7 @@ contains
     case (HK_TRUE);     out = gc_bool(.true.)
     case (HK_FALSE);    out = gc_bool(.false.)
     case (HK_LINEBOX);  out = gc_obj(OBJ_ATOM, [gc_int(0_gc_ip), gc_nil()], [roots])
+    case (HK_BOXVAR);   out = gc_cell_get(host_box(), 1)
     case (HK_NIL);      out = gc_nil()
     case (HK_EMPTYMAP); out = gca_empty([roots])
     case (HK_MATHCTX)
@@ -4432,6 +4440,57 @@ contains
     case (HK_SELFKEY);  out = gc_key(trim(row%mem), [roots])
     end select
   end function host_value
+
+  ! The writable static's box (HK_BOXVAR: RT/checkSpecAsserts, the one
+  ! there is; a table of boxes the day there is a second), made on first use
+  function host_box() result(b)
+    type(gc_value) :: b, none(0)
+    if (.not. gc_root_live(spec_asserts_root)) &
+         call gc_global_keep(spec_asserts_root, gc_obj(OBJ_ATOM, [gc_bool(.false.), gc_nil()], none))
+    b = gc_root_get(spec_asserts_root)
+  end function host_box
+
+  ! Whether Class/member is the writable static (HK_BOXVAR): read at run
+  ! time, not folded at analysis as every other static is
+  logical function static_is_box(cls, mname)
+    character(len=*), intent(in) :: cls, mname
+    character(len=:), allocatable :: c
+    integer :: i
+    static_is_box = .false.
+    call canon_class(cls, c=c)
+    do i = 1, size(HOST_STATICS)
+       if (HOST_STATICS(i)%id == HK_BOXVAR .and. HOST_STATICS(i)%cls == c .and. HOST_STATICS(i)%mem == mname) then
+          static_is_box = .true.
+          return
+       end if
+    end do
+  end function static_is_box
+
+  ! the form that reads it: (clotran-host-box)
+  function host_box_form(roots) result(form)
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: form
+    form = gcl_cons(gc_sym("clotran-host-box", roots), gcl_empty(roots), roots)
+  end function host_box_form
+
+  ! (set! Class/field v) where the field is a writable box: written.
+  ! Any other static has no storage and the write is discarded, as before.
+  subroutine static_box_set(sym, val)
+    type(gc_value), intent(in) :: sym, val
+    character(len=:), allocatable :: t, c
+    integer :: slash, i
+    if (sym%tag /= GCT_SYM) return
+    call gc_ref_text(sym%ref, s=t)
+    slash = index(t, "/")
+    if (slash <= 1 .or. slash >= len(t)) return
+    call canon_class(t(1:slash-1), c=c)
+    do i = 1, size(HOST_STATICS)
+       if (HOST_STATICS(i)%id == HK_BOXVAR .and. HOST_STATICS(i)%cls == c .and. HOST_STATICS(i)%mem == t(slash+1:)) then
+          call gc_cell_set(host_box(), 1, val)
+          return
+       end if
+    end do
+  end subroutine static_box_set
 
   ! Class/member: a static member, or a class constant.
   function static_member(cls, mname, roots) result(out)
@@ -14286,6 +14345,8 @@ contains
             out = vs_get(vst, base + 2)
          end if
        end block
+    case (B_HOSTBOX)
+       out = gc_cell_get(host_box(), 1)
     case (B_AGENTSHUTDOWN)
        ! (shutdown-agents): the workers wake and end; sends are still
        ! accepted and queued, and start nothing (clj: the executor rejects
