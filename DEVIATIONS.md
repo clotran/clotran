@@ -640,7 +640,26 @@ It goes away by making the method's recur point exclude its first
 parameter, which is a change to `select_clause`'s partner in
 `eval_recur`, not to `deftype*`.
 
-## 20. Mutable deftype fields are refused, not honoured
+## 20. RESOLVED -- mutable deftype fields are honoured
+
+**RESOLVED 2026-10-10 (PLAN step 35).** A field marked
+`^:volatile-mutable` or `^:unsynchronized-mutable` is read and written
+through `this` wherever its name is not shadowed: the analyser keeps a
+table of the method's fields (`clotran-fields*`, filed by
+`bind_fields`), and `(set! f v)` in the type's own method is
+`(set! (.-f this) v)`, a write into the instance's field vector,
+answering v; a read after it sees the new value, in the method, in a
+loop, and in a fn made there, which reads through its captured `this`.
+A set! of a field not declared mutable, or of a mutable one from a fn
+made in the method, is clj's refusal, "Cannot assign to non-mutable:
+f" -- in clj when the type is defined, here when the method first
+runs, since a method body is analysed when first run; the one
+residual. A mutable field is private, as in clj: read through a
+method, never `.-f` from outside. A local that shadows the name is
+the local, as in clj. Measured against clj in
+test/clj/oracle.clj (Tally, Shadow). Records' `__hash` and `__hasheq`
+are mutable fields, so their caching now happens. The original entry
+follows.
 
 `^:volatile-mutable` and `^:unsynchronized-mutable` on a field are read
 and discarded, and `(set! afield aval)` in a method body fails with

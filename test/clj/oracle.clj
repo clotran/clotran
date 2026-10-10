@@ -3129,3 +3129,36 @@
 ;; two printed a digit longer than clj)
 (let [ups (take 1024 (iterate #(* 2.0 %) 1.0)) downs (take 1075 (iterate #(/ % 2.0) 1.0))]
   (mapv pr-str (concat ups downs (map - ups))))
+
+;; mutable deftype fields (DEVIATIONS 20 resolved): a set! in the type's
+;; own method writes the field and answers the value; a read after it
+;; sees the new value, in the method, in a loop, and in a fn made there
+(deftype Tally [^:volatile-mutable n ^:unsynchronized-mutable hist lim]
+  clotran.host.i_deref
+  (deref [_] (set! n (+ n 1)) (set! hist (conj hist n)) [n hist lim])
+  clotran.host.value
+  (toString [_] (str n ":" (count hist)))
+  clotran.host.i_fn
+  (invoke [this k]
+    (loop [i 0] (when (< i k) (set! n (* n 2)) (recur (inc i))))
+    ;; a fn made here reads the field; a set! from one is clj's refusal
+    ((fn [] (+ n (count hist))))))
+
+(def t (->Tally 1 [] 9))
+@t
+@t
+(str t)
+(t 3)
+@t
+;; a mutable field is private in clj: read through a method, never .-n
+(.-lim t)
+;; a let shadowing the field is the local, as in clj
+(deftype Shadow [^:volatile-mutable v]
+  clotran.host.i_deref
+  (deref [_] (let [v 100] (+ v 1)))
+  clotran.host.i_fn
+  (invoke [_ x] (set! v x) (let [v 5] [v (.-v _)])))
+(def sh (->Shadow 0))
+@sh
+(sh 7)
+(sh 8)

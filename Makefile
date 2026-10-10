@@ -433,7 +433,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           make fuzz-all, every fuzzer at full size, for a release
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
-TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-read check-fuzz-print
+TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-read check-fuzz-print
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
@@ -566,6 +566,9 @@ check-fuzz-macro:
 check-fuzz-fn:
 	@echo "--- typed functions (PLAN 29): generated defns with ^long and ^double parameters, primitive locals and loops, compiled in compiled mode, called with arguments directly and through apply ---"
 	scripts/fuzz-fn -n 30 -k 4 -s $(SEED) -o $(B)/fuzz-fn.edn > $(B)/fuzz-fn.out 2>&1; s=$$?; cat $(B)/fuzz-fn.out; exit $$s
+check-fuzz-deftype:
+	@echo "--- deftypes (PLAN 29): mutable and immutable fields set and read through loops, shadowing lets and nested fns, against clj (DEVIATIONS 20) ---"
+	scripts/fuzz-deftype -n 20 -s $(SEED) -o $(B)/fuzz-deftype.edn > $(B)/fuzz-deftype.out 2>&1; s=$$?; cat $(B)/fuzz-deftype.out; exit $$s
 check-fuzz-read:
 	@echo "--- the reader on malformed text (PLAN 29): generated source, mutated, read by clj and clotran: the value, or the error by class and message ---"
 	scripts/fuzz-read -n 400 -s $(SEED) > $(B)/fuzz-read.out 2>&1; s=$$?; cat $(B)/fuzz-read.out; exit $$s

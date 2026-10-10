@@ -5204,8 +5204,15 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    says resolved; 18, 23, 25, 26 and 15/22 cite entries since resolved;
    56/61 and 57/63 are duplicates. A v1.0 ledger has no scaffolds and
    no stale sentences.
-2. *Mutable deftype fields* (DEVIATIONS 20): a field a method body can
-   `set!`, as the instance's run already allows.
+2. *Mutable deftype fields* (DEVIATIONS 20) -- DONE 2026-10-10: the
+   analyser keeps the method's field table and routes a mutable field's
+   reads and writes through `this`; clj's rules measured and matched
+   (a loop and a let may set it, a fn made in the method may read but
+   not set it, an immutable field is refused, a mutable one is private);
+   the oracle's Tally and Shadow, the language test's refusal, and
+   scripts/fuzz-deftype in the gate, 30 of 30 with clj. The residual:
+   the refusal comes at the method's first run, where clj's comes
+   when the type is defined, since a body is analysed when first run.
 3. *Step 15's tail*: raw bytes to and from files, each item against
    clj; bit-set, bit-clear, bit-flip and bit-test checked rather than
    assumed.

@@ -387,6 +387,70 @@
     call vs_leave(vst, base)
   end function lookup_local
 
+  ! A deftype method's field, by name: [this mutable?] from the table
+  ! clotran-fields* filed in the fn info's slot 5 (bind_fields), or nil
+  ! -- nil too when a local of that name shadows it, in this fn or one
+  ! around it, since the local wins as it does in clj. The walk crosses
+  ! fns outward, so a fn inside the method sees the method's fields and
+  ! reads them through its captured `this`.
+  recursive function lookup_field_alias(sc, sym) result(al)
+    type(gc_value), intent(in) :: sc, sym
+    type(gc_value) :: al, info, m
+    al = gc_nil()
+    if (gc_kind(sc) /= OBJ_AST) return
+    if (lookup_local(sc, sym) >= 0) return
+    info = scope_info(sc)
+    do while (gc_kind(info) == OBJ_AST)
+       m = gc_slot(info, 5)
+       if (gca_is(m)) then
+          if (gca_contains(m, sym)) then
+             al = gca_get(m, sym)
+             return
+          end if
+       end if
+       if (gc_kind(gc_slot(info, 2)) /= OBJ_AST) return
+       info = scope_info(gc_slot(info, 2))
+    end do
+  end function lookup_field_alias
+
+  ! Whether sym is a field of THIS fn (the method itself), not of a fn
+  ! around it: a mutable field is read from a closure made in the method
+  ! but not written there, as clj refuses it
+  logical function field_of_this_fn(sc, sym)
+    type(gc_value), intent(in) :: sc, sym
+    type(gc_value) :: info, m
+    field_of_this_fn = .false.
+    if (gc_kind(sc) /= OBJ_AST) return
+    info = scope_info(sc)
+    if (gc_kind(info) /= OBJ_AST) return
+    m = gc_slot(info, 5)
+    if (.not. gca_is(m)) return
+    field_of_this_fn = gca_contains(m, sym)
+  end function field_of_this_fn
+
+  ! (clotran-fields* this {f [this mutable?] ...} body...): the table of a
+  ! deftype method's fields (bind_fields) into the fn info's slot 5, then
+  ! the body. A mutable field is read and written through `this` wherever
+  ! its name is not shadowed (analyze_symbol, analyze_setbang); a set! of
+  ! an immutable one is clj's refusal.
+  recursive function analyze_fields(rest, sc) result(nd)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: rest, sc
+    type(gc_value) :: nd, body
+    integer :: base
+    tctx => ctx_self()
+    vst => tctx%stk
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, rest)
+    call vs_set(vst, base + 2, sc)
+    call gc_set_slot(scope_info(vs_get(vst, base + 2)), 5, gcl_first(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)])))
+    body = gcl_rest(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, body)
+    nd = analyze_body(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
+  end function analyze_fields
+
   ! --- nodes ---------------------------------------------------------
 
   ! 1 when a call through this Var from the namespace being analysed
@@ -806,7 +870,7 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: sym, sc
-    type(gc_value) :: nd, var, v
+    type(gc_value) :: nd, var, v, al
     character(len=:), allocatable :: t
     integer :: base, slot, sl
 
@@ -823,6 +887,18 @@
        nd = mk_node(N_LOCAL, gc_nil(), vs_get(vst, base + 1), gc_nil(), slot, [vs_get(vst, base + 2)])
        call vs_leave(vst, base)
        return
+    end if
+    ! a deftype method's mutable field: read through this, each time
+    al = lookup_field_alias(vs_get(vst, base + 2), vs_get(vst, base + 1))
+    if (gcv_is(al)) then
+       if (truthy(gcv_nth(al, 1))) then
+          call vs_set(vst, base + 3, al)
+          call gc_ref_text(sym%ref, s=dlt_1)
+          nd = analyze(field_read(gcv_nth(vs_get(vst, base + 3), 0), dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+               vs_get(vst, base + 2))
+          call vs_leave(vst, base)
+          return
+       end if
     end if
     ! clotran.rt/array-list with clotran.rt not loaded yet
     block
@@ -1621,6 +1697,8 @@
        nd = analyze_def(vs_get(vst, base + 3), vs_get(vst, base + 2), .false.)
     else if (gc_ref_is(head%ref, "defmacro*")) then
        nd = analyze_def(vs_get(vst, base + 3), vs_get(vst, base + 2), .true.)
+    else if (gc_ref_is(head%ref, "clotran-fields*")) then
+       nd = analyze_fields(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "let*")) then
        nd = analyze_let(vs_get(vst, base + 3), vs_get(vst, base + 2), .false.)
     else if (gc_ref_is(head%ref, "loop*")) then
@@ -3104,7 +3182,7 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
-    type(gc_value) :: nd, tgt, var, kids, c, objf
+    type(gc_value) :: nd, tgt, var, kids, c, objf, al
     integer :: base
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -3133,15 +3211,35 @@
        call vs_set(vst, base + 4, kids)
        nd = mk_node(N_SETBANG, vs_get(vst, base + 4), gc_nil(), vs_get(vst, base + 3), 3, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else if (tgt%tag == GCT_SYM) then
+       ! a deftype method's field: (set! f v) is (set! (.-f this) v) for
+       ! a mutable one in the method itself; clj's refusal for an
+       ! immutable one, and for a mutable one from a fn made in the method
+       al = lookup_field_alias(vs_get(vst, base + 2), tgt)
+       if (gcv_is(al)) then
+          call gc_ref_text(tgt%ref, s=dlt_1)
+          if (truthy(gcv_nth(al, 1)) .and. field_of_this_fn(vs_get(vst, base + 2), tgt)) then
+             call vs_set(vst, base + 5, gcv_nth(al, 0))
+             call vs_set(vst, base + 5, gcl_cons(vs_get(vst, base + 5), gcl_empty([vs_get(vst, base + 5)]), [vs_get(vst, base + 5)]))
+             call vs_set(vst, base + 5, gcl_cons(gc_sym(".-" // dlt_1, [vs_get(vst, base + 5)]), vs_get(vst, base + 5), [vs_get(vst, base + 5)]))
+             call vs_set(vst, base + 5, gcl_cons(vs_get(vst, base + 5), gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 5)]), &
+                  [vs_get(vst, base + 1), vs_get(vst, base + 5)]))
+             call vs_set(vst, base + 5, gcl_cons(gc_sym("set!", [vs_get(vst, base + 5)]), vs_get(vst, base + 5), [vs_get(vst, base + 5)]))
+             nd = analyze(vs_get(vst, base + 5), vs_get(vst, base + 2))
+          else
+             call fail("Cannot assign to non-mutable: " // dlt_1)
+          end if
+          call vs_leave(vst, base)
+          return
+       end if
        if (lookup_local(vs_get(vst, base + 2), tgt) >= 0) then
-          ! A deftype's mutable field is a local here (bind_fields), and
-          ! assigning one is refused -- at RUN time, as before, so that
-          ! defrecord's hashCode, which does (set! __hash h), still
-          ! defines. DEVIATIONS 20.
+          ! A local -- a let binding, a parameter, or an immutable field
+          ! bound as one (bind_fields) -- is not an assignable place:
+          ! clj's AssignExpr refuses every local binding that is not a
+          ! mutable field with this wording. At run time, as a method body
+          ! is analysed when first run.
           block
              call gc_ref_text(tgt%ref, s=dlt_1)
-             nd = fail_node("Cannot assign to a local: " // dlt_1 // &
-                  " (mutable deftype fields are not supported, DEVIATIONS 20)",  [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+             nd = fail_node("Cannot assign to non-mutable: " // dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
           end block
           call vs_leave(vst, base)
           return

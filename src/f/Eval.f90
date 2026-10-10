@@ -2147,7 +2147,7 @@ contains
           gc_ref_is(sym%ref, "try") .or. gc_ref_is(sym%ref, "throw") .or. &
           gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
           gc_ref_is(sym%ref, "new") .or. gc_ref_is(sym%ref, "clojure.core/import*") .or. &
-          gc_ref_is(sym%ref, "set!") .or. &
+          gc_ref_is(sym%ref, "set!") .or. gc_ref_is(sym%ref, "clotran-fields*") .or. &
           gc_ref_is(sym%ref, "case*") .or. &
           gc_ref_is(sym%ref, "deftype*") .or. gc_ref_is(sym%ref, "reify*") .or. &
           gc_ref_is(sym%ref, "proxy") .or. &
@@ -2509,9 +2509,9 @@ contains
   recursive function bind_fields(clause, fields) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: clause, fields
-    type(gc_value) :: out, params, this, f, tmp
+    type(gc_value) :: out, params, this, f, fraw, mm, tmp
     integer :: base, i
-
+    logical :: mutable
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
@@ -2524,22 +2524,52 @@ contains
     this = strip_meta(gcv_nth(params, 0))
     if (this%tag /= GCT_SYM) return
 
-    base = vs_enter(vst, 6)
+    ! The method's fields: an immutable one is let-bound to (. this -f)
+    ! as before; a MUTABLE one (^:volatile-mutable, ^:unsynchronized-
+    ! mutable) is not bound at all -- the analyser reads and writes it
+    ! through `this` wherever the name is not shadowed, from the table
+    ! {f [this mutable?]} that clotran-fields* files (analyze.inc,
+    ! lookup_field_alias), so a read after a set! sees the new value, and
+    ! a set! of an immutable field is clj's refusal. DEVIATIONS 20 resolved.
+    base = vs_enter(vst, 9)
     call vs_set(vst, base + 1, clause)
     call vs_set(vst, base + 2, fields)
     call vs_set(vst, base + 3, params)
     call vs_set(vst, base + 4, this)
     tmp = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 5, tmp)
+    tmp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 7, tmp)
 
     do i = 0, gcv_count(vs_get(vst, base + 2)) - 1
-       f = strip_meta(gcv_nth(vs_get(vst, base + 2), i))
+       fraw = gcv_nth(vs_get(vst, base + 2), i)
+       f = strip_meta(fraw)
        if (f%tag /= GCT_SYM) cycle
+       call vs_set(vst, base + 8, f)
        block
           call gc_ref_text(f%ref, s=dlt_1)
           if (params_bind(vs_get(vst, base + 3), dlt_1)) cycle
        end block
-       tmp = gcv_conj(vs_get(vst, base + 5), f, [vs_get(vst, base + 5), f])
+       mutable = .false.
+       if (gc_kind(fraw) == OBJ_META) then
+          mm = gc_slot(fraw, 2)
+          if (gca_is(mm)) then
+             call vs_set(vst, base + 9, mm)
+             mutable = truthy(gca_get(vs_get(vst, base + 9), gc_key("volatile-mutable", [vs_get(vst, base + 9)]))) &
+                  .or. truthy(gca_get(vs_get(vst, base + 9), gc_key("unsynchronized-mutable", [vs_get(vst, base + 9)])))
+          end if
+       end if
+       tmp = gcv_empty([vs_get(vst, base + 4), vs_get(vst, base + 8)])
+       call vs_set(vst, base + 6, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 4), [vs_get(vst, base + 6), vs_get(vst, base + 8)])
+       call vs_set(vst, base + 6, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 6), gc_bool(mutable), [vs_get(vst, base + 6), vs_get(vst, base + 8)])
+       call vs_set(vst, base + 6, tmp)
+       tmp = gca_assoc(vs_get(vst, base + 7), vs_get(vst, base + 8), vs_get(vst, base + 6), &
+            [vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 8)])
+       call vs_set(vst, base + 7, tmp)
+       if (mutable) cycle
+       tmp = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 8), [vs_get(vst, base + 5), vs_get(vst, base + 8)])
        call vs_set(vst, base + 5, tmp)
        block
           call gc_ref_text(f%ref, s=dlt_1)
@@ -2551,23 +2581,29 @@ contains
        call vs_set(vst, base + 5, tmp)
     end do
 
+    ! the body: (let* [f (. this -f) ...] body...) when a field is bound, else body...
+    call vs_set(vst, base + 6, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 5)]))
     if (gcv_count(vs_get(vst, base + 5)) > 0) then
-       ! (params (let* [f (. this -f) ...] body...))
-       tmp = gcl_cons(vs_get(vst, base + 5), &
-            gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 5)]), &
-            [vs_get(vst, base + 1), vs_get(vst, base + 5)])
+       tmp = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 6), [vs_get(vst, base + 5), vs_get(vst, base + 6)])
        call vs_set(vst, base + 6, tmp)
-       tmp = gcl_cons(gc_sym("let*", [vs_get(vst, base + 6)]), vs_get(vst, base + 6), &
-            [vs_get(vst, base + 1), vs_get(vst, base + 6)])
+       tmp = gcl_cons(gc_sym("let*", [vs_get(vst, base + 6)]), vs_get(vst, base + 6), [vs_get(vst, base + 6)])
        call vs_set(vst, base + 6, tmp)
-       tmp = gcl_cons(vs_get(vst, base + 6), gcl_empty([vs_get(vst, base + 6)]), &
-            [vs_get(vst, base + 6)])
+       tmp = gcl_cons(vs_get(vst, base + 6), gcl_empty([vs_get(vst, base + 6)]), [vs_get(vst, base + 6)])
        call vs_set(vst, base + 6, tmp)
-       out = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 6), &
-            [vs_get(vst, base + 3), vs_get(vst, base + 6)])
     end if
+    ! (params (clotran-fields* this {f [this mutable?] ...} body...))
+    tmp = gcl_cons(vs_get(vst, base + 7), vs_get(vst, base + 6), [vs_get(vst, base + 6), vs_get(vst, base + 7)])
+    call vs_set(vst, base + 6, tmp)
+    tmp = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 6), [vs_get(vst, base + 4), vs_get(vst, base + 6)])
+    call vs_set(vst, base + 6, tmp)
+    tmp = gcl_cons(gc_sym("clotran-fields*", [vs_get(vst, base + 6)]), vs_get(vst, base + 6), [vs_get(vst, base + 6)])
+    call vs_set(vst, base + 6, tmp)
+    tmp = gcl_cons(vs_get(vst, base + 6), gcl_empty([vs_get(vst, base + 6)]), [vs_get(vst, base + 6)])
+    call vs_set(vst, base + 6, tmp)
+    out = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 6), [vs_get(vst, base + 3), vs_get(vst, base + 6)])
     call vs_leave(vst, base)
   end function bind_fields
+
 
   ! Whether a parameter vector already binds this name. Destructuring
   ! forms are not looked inside: maybe-destructured has already turned
@@ -3171,6 +3207,43 @@ contains
        end if
     end do
   end function inst_field
+
+  ! The field named by sym (`.-f`, `.f` or `f`) of a deftype instance,
+  ! written: the instance's field vector replaced by one with the value
+  ! (a mutable field's set!, exec_setbang). An unknown name writes nothing.
+  subroutine inst_field_set(inst, sym, val)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: inst, sym, val
+    type(gc_value) :: fields, f, nv
+    integer :: i, base, k
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    if (sym%tag /= GCT_SYM) return
+    call gc_ref_text(sym%ref, s=dlt_1)
+    k = 1
+    if (len(dlt_1) > 0) then
+       if (dlt_1(1:1) == ".") k = 2
+    end if
+    if (len(dlt_1) >= k) then
+       if (dlt_1(k:k) == "-") k = k + 1
+    end if
+    if (k > len(dlt_1)) return
+    fields = gc_slot(gc_slot(inst, 1), 2)
+    do i = 0, gcv_count(fields) - 1
+       f = strip_meta(gcv_nth(fields, i))
+       if (f%tag /= GCT_SYM) cycle
+       if (gc_ref_is(f%ref, dlt_1(k:))) then
+          vst => gc_my_stack()
+          base = vs_enter(vst, 2)
+          call vs_set(vst, base + 1, inst)
+          call vs_set(vst, base + 2, val)
+          nv = gcv_assoc(gc_slot(vs_get(vst, base + 1), 2), i, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+          call gc_set_slot(vs_get(vst, base + 1), 2, nv)
+          call vs_leave(vst, base)
+          return
+       end if
+    end do
+  end subroutine inst_field_set
 
   ! Called by the collector for every object it is about to reuse.
   ! A MODULE procedure, not an internal one: flang segfaults passing

@@ -2480,11 +2480,19 @@
        val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
        if (.not. tctx%has_error) out = val
     case default
-       ! any other host field: the write is discarded, the value returned
+       ! a deftype instance's field (a mutable one, through this) is
+       ! written in place; any other host field: the write is discarded,
+       ! the value returned
        tgt = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
        if (.not. tctx%has_error) then
+          call vs_set(vst, base + 3, strip_meta(tgt))
           val = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 1), vs_get(vst, base + 2))
-          if (.not. tctx%has_error) out = val
+          if (.not. tctx%has_error) then
+             call vs_set(vst, base + 4, val)
+             if (gc_kind(vs_get(vst, base + 3)) == OBJ_INST) &
+                  call inst_field_set(vs_get(vst, base + 3), gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 4))
+             out = vs_get(vst, base + 4)
+          end if
        end if
     end select
     call vs_leave(vst, base)
