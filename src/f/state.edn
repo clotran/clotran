@@ -87,6 +87,9 @@
  "Eval.f90/resume_pending" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/resume_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/rt_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
+ "Eval.f90/sched_k" {:class :shared, :note "the agent scheduler (PLAN step 24): written once by the thread whose root CAS made the queues, before the workers start; read by the workers after"}
+ "Eval.f90/sched_root" {:class :shared, :note "the agent scheduler: the vector of run-queue atoms, set once by gc_root_cas; the queues themselves replaced by compare-and-swap"}
+ "Eval.f90/sched_ticks" {:class :shared, :note "the agent scheduler: a worker's picks since its last :global pick, one slot per worker, each written by its own worker only"}
  "Eval.f90/spec_check" {:class :fixed, :note "set by a flag before evaluation starts"}
  "Eval.f90/spec_loaded" {:class :shared, :note "load once: the first load under a lock, the rest wait"}
  "Eval.f90/spec_loading" {:class :shared, :note "load once: the first load under a lock, the rest wait"}

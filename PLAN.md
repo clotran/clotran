@@ -2355,6 +2355,123 @@ own). Parallel marking in the collector only when a measurement shows
 marking in the pause -- step 14's showed the sweep, which was fixed by
 lazy per-thread sweeping instead.
 
+**Decided 2026-10-10: the agent scheduler, designed in ACL2 from what
+the strong runtimes do, not from clj's host Agent class.** James: "threads and
+concurrency are extremely important to get right. both clojure and rust
+are rock solid in concurrency and I want to match that" -- and "you
+don't have to match [the host's Agent class]. let's get this correct." The language
+semantics stay Clojure's (the oracle): an agent's actions run one at a
+time in the order sent; a send inside an action is held until the
+action ends and released in order after the state is set, dropped if it
+threw; `:fail` stops the queue until restart-agent, `:continue` goes on;
+`send` for CPU work, `send-off` for blocking work. Clojure's executor
+underneath -- one shared queue, a fixed pool, the agent resubmitted for
+every action -- is the part that is replaceable (`set-agent-send-executor!`
+exists for that), and it is the part the stronger runtimes do
+differently. What Erlang's BEAM, Pony, Go and Tokio agree on, and the
+design takes:
+
+- *Per-worker run queues of runnable agents, not one shared queue.*
+  Tokio's 2019 rewrite named the single shared queue every worker
+  contends on -- Clojure's design -- as the bottleneck; BEAM has a run
+  queue per scheduler, Pony per thread, Go per P.
+- *Work stealing into an empty queue*: a worker whose queue is empty
+  steals half of a victim's, starting from a random victim (Go, Tokio).
+  Stealing only into an empty queue means a stolen agent runs no later
+  than it would have.
+- *A batch cap*: an agent runs at most B actions per scheduling, then
+  goes to the back of the queue if it has more (Pony's batch, Akka's
+  `throughput`, BEAM's reductions). This is what keeps a flooded agent
+  from starving the rest; clj's host executor has nothing like it.
+- *An injection queue* for agents made runnable from outside the
+  workers (the REPL, a future, a transaction's commit), checked every N
+  local picks so it cannot starve (Go's 61st tick, Tokio's ~60).
+- *Blocking work on a separate, unbounded pool*: BEAM's dirty
+  schedulers are this; `send-off` keeps today's thread per busy agent,
+  draining without a cap, since nothing waits behind it.
+- *Locked run queues, not lock-free deques.* BEAM locks each run queue;
+  the lock-free Chase-Lev deque took Iris and Coq to verify (arXiv
+  2309.03642) and Fortran has no atomics beyond the CAS shim. Each run
+  queue has a lock and a steal takes the victim's; the model's steps
+  are the atomic steps the locks give. A lock-free queue could replace
+  one later behind the same model.
+- Not taken: preemption (Go's signals, BEAM's reductions inside a
+  process). A long action holds its worker, as in Pony, Akka and clj's
+  host; a pure loop gives the mutators up (step 13) so it at least holds
+  up no collection.
+- Not green threads (James, 2026-10-10: "just don't get me in the place
+  of green threads"). A worker is an OS thread from Threads.f90's shim,
+  as every thread here is; an agent is never a thread, only a queue a
+  worker drains. Nothing switches stacks in user space.
+
+The model is `model/agents.lisp`: the state (agents, run queues keyed
+by worker and :global and :solo, running with the batch left, holds,
+log, the sent ghost), the events (new, send, take, steal, finish,
+restart, tx/commit/abort), and the theorems for every interleaving:
+no two workers run one agent (agents-serial); what was sent to an
+agent is what it ran, in order, then its queue (agents-order); an
+agent is on exactly one run queue or one worker exactly when unfailed
+with work (agents-head); unfailed work queued means some take, steal or
+finish is enabled, so the machinery cannot deadlock (agents-live); a
+steal never delays the agents it moves or leaves behind
+(steal-no-delay); and the cost: a scheduler that finishes what runs and
+takes what waits empties every unfailed queue in at most 2n events for
+n actions (drive-cost). The Fortran follows the book, then
+scripts/fuzz-threads grows the pool cases (more agents than workers,
+sends from inside actions, a blocking send-off beside sends) against
+clj.
+
+**LANDED 2026-10-10: the scheduler, as the books state it.** Both
+books certify (`model/agents.lisp`: serial, order, head, live,
+live-take, steal-no-delay; `model/agents-drive.lisp`: drive-finishes,
+drive-cost at 2n). The Fortran follows them (Eval.f90, "the agent
+scheduler"): run queue 0 is :global and 1..K the workers' own, each an
+atom holding a vector replaced by compare-and-swap, so no lock is held
+across an allocation; `sched_take` is the model's take (own, :global
+every 32 picks or when own is empty, a steal of half from the next
+worker round, else parked on the state condition -- the park re-checks
+every queue under the lock, so a push, which notifies under it, is
+never lost); the worker loop and the solo drain are clotran.rt's
+`agent-worker` and `agent-drain`, with the batch of 16 and the hand-off
+by the next action's executor. K is the processors and two, as Clojure
+sizes its send pool, or `CLOTRAN_AGENT_POOL`. The action carries its
+executor as a third element; `pooledExecutor` and `soloExecutor` are
+self-keyed host constants -- a builtin row there answered the builtin
+itself as the value, so every `send` had been a `send-off`.
+
+Found on the way, and fixed: an agent's queue popped by copying the
+rest, so a queue of n drained in O(n^2) -- 10^5 sends to one agent did
+not finish in ten minutes. The queue is now a vector and a head index
+("queue", "head"), copied once more than half is behind the index: O(1)
+a pop amortised, 10^5 sends and the drain in 1.6 s each. A sub-vector
+VIEW with a compaction step was tried first and produced a duplicate
+run of one action in about one run of three, not explained after a
+day's reading; the head index uses nothing but the operations the old
+code used, and showed no duplicate in sixteen runs. The park path
+once read the queues through the sequence-counted cell read while
+holding the state lock, which spins until the lock is free: a plain
+read under the lock. Measured, one agent, 10^5 sends, the sends
+alone: 1.7 s with the queue building, 3.4 s with a worker draining
+beside them -- the compare-and-swap on the agent's map is contended,
+and every retry allocates; that is the cost to take out next, not the
+scheduler's. Checks: the language test's scheduler block (100 agents
+on the pool, nested sends, send-off beside send); scripts/fuzz-threads
+grew send-off, nested sends and 40 agents and runs on a 2-worker pool
+in the gate's nightly set, 20 of 20 agreeing with clj on both pool
+sizes. Not done: `shutdown-agents` is still a no-op; a worker parked
+forever is counted among the waiters with no deadline, which is right
+for the deadlock verdict but means an idle pool keeps K threads.
+
+Sources read 2026-10-10: the BEAM scheduler
+(blog.appsignal.com/2024/04/23/deep-diving-into-the-erlang-scheduler),
+Pony's scheduler (tutorial.ponylang.io/runtime-basics/scheduler,
+ponylang.io/faq/runtime), "Making the Tokio scheduler 10x faster"
+(tokio.rs/blog/2019-10-scheduler), Go's work-stealing scheduler
+(about.sourcegraph.com/go/gos-work-stealing-scheduler), Akka's
+Dispatcher `throughput` (doc.akka.io), the Chase-Lev verification
+(arxiv.org/abs/2309.03642) and the verified OCaml 5 work-stealing
+scheduler (iris-project.org/pdfs/2026-pldi-parabs.pdf).
+
 ### 25. Network clients
 
 Scenario C's event streams, on step 21's sockets: a TCP client first,

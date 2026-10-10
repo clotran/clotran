@@ -876,6 +876,24 @@
   (send d + 5) (await d)
   (check ":error-mode :continue skips the failure" [@d (agent-error d)] [5 nil]))
 
+;; The scheduler (PLAN step 24, model/agents.lisp): more agents than the
+;; pool has workers, sends from inside actions (held until the action
+;; ends, then released in order), send-off beside send on one agent,
+;; and a flood on one agent beside the rest -- every sum exact, every
+;; agent's actions in send order.
+(let [ags (vec (repeatedly 100 #(agent 0)))
+      log (agent [])
+      flood (agent 0)]
+  (dotimes [i 100] (dotimes [k 20] (send (ags i) + k)))
+  (dotimes [k 200] (send flood + 1))
+  (dotimes [i 20] (send (ags i) (fn [v i] (send log conj i) (+ v 1)) i))
+  (send-off flood (fn [v] (+ v 1000)))
+  (dotimes [k 10] (send flood + 1))
+  (apply await ags) (await flood) (await log)
+  (check "100 agents x 20 sends on the pool, every sum exact" (map deref ags) (concat (repeat 20 191) (repeat 80 190)))
+  (check "sends from inside actions arrive, one per sending action" (sort @log) (range 20))
+  (check "send-off beside sends on one agent, all of them, once each" @flood 1210))
+
 ;; Actions run in send order, one at a time, and watches see each one
 ;; -- Agent.doRun notifies them whether or not the state changed, so
 ;; await's own latch action fires them too, but only after the latch

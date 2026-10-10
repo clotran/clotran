@@ -37,17 +37,26 @@
              (g/fmap (fn [k] `(dosync (alter ~'r1 - ~k) (alter ~'r2 + ~k))) (g/choose 1 9))
              (g/return `(dosync (when-not (= 1000 (+ @~'r1 @~'r2)) (swap! ~'bad inc))))
              (g/fmap (fn [k] `(send ~'ag + ~k)) (g/choose 1 9))
+             ;; the scheduler (PLAN step 24): send-off beside send on one agent,
+             ;; a send from inside an action (held until it ends), and sends
+             ;; spread over more agents than the pool has workers
+             (g/fmap (fn [k] `(send-off ~'ag + ~k)) (g/choose 1 9))
+             (g/fmap (fn [k] `(send ~'ag (fn [v# k#] (send ~'ag2 + k#) (+ v# k#)) ~k)) (g/choose 1 9))
+             (g/fmap (fn [[i k]] `(send (~'ags ~i) + ~k)) (g/tuple (g/choose 0 39) (g/choose 1 9)))
              (g/return `(dosync (commute ~'r1 + 0)))]))
 
 (def g-case
   (g/let [threads (g/vector (g/vector g-op 1 30) 2 6)]
     (g/return
-     `(let [~'a (atom 0) ~'r1 (ref 600) ~'r2 (ref 400) ~'ag (agent 0) ~'bad (atom 0)
+     `(let [~'a (atom 0) ~'r1 (ref 600) ~'r2 (ref 400) ~'ag (agent 0) ~'ag2 (agent 0) ~'bad (atom 0)
+            ~'ags (vec (repeatedly 40 (fn [] (agent 0))))
             fs# (mapv (fn [f#] (future (f#)))
                       [~@(for [ops threads] `(fn [] ~@ops nil))])]
         (run! deref fs#)
         (await ~'ag)
-        [@~'a (+ @~'r1 @~'r2) @~'r1 @~'r2 @~'ag @~'bad]))))
+        (await ~'ag2)
+        (apply await ~'ags)
+        [@~'a (+ @~'r1 @~'r2) @~'r1 @~'r2 @~'ag @~'ag2 (reduce + (map deref ~'ags)) @~'bad]))))
 
 (let [{:keys [n seed]} opts
       forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))

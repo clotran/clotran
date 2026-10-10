@@ -117,20 +117,52 @@
   nil)
 
 ;;; ---- agents -----------------------------------------------------------
-;; An agent's actions run on a thread of the agent's own, in order, one
-;; at a time, as Agent.dispatch's executor runs them: send queues the
-;; action (Eval.f90, B_AGENTDISPATCH) and, if none is running, starts
-;; agent-run, whose thread drains the queue until clotran-agent-pop!
-;; answers nil -- which also marks the agent not running, in one step.
+;; An agent's actions run in order, one at a time. The scheduler is
+;; model/agents.lisp's (PLAN step 24): a `send` action goes to the pool
+;; -- K worker threads with a run queue each and a :global one, taking
+;; from their own, from :global every so often, stealing half of
+;; another's when idle (Eval.f90, sched_take) -- and a `send-off` action
+;; to a thread of the agent's own. An agent is on one run queue or one
+;; thread exactly while it has work (the model's agents-head); send
+;; queues the action (B_AGENTDISPATCH) and, if the agent is idle, files
+;; it by its head action's executor.
+;;
+;; A worker runs at most agent-batch actions of one agent, then puts it
+;; at the back of its own queue if it has more: a flooded agent cannot
+;; starve the rest. clotran-agent-pop! answering nil marks the agent idle
+;; in the same step, so a send arriving after sees it and files it again.
+(def ^:private agent-batch 16)  ; ponytail: a constant; Akka's throughput is 5, Pony's batch 100
 
+;; a solo thread's loop: everything queued, handing the agent to the pool
+;; when the next action is a send's
 (defn agent-drain [a]
   (loop []
     (when-let [act (clotran-agent-pop! a)]
       (clotran-agent-run1 a (nth act 0) (nth act 1))
-      (recur))))
+      (let [nxt (clotran-agent-peek a)]
+        (if (and nxt (= :pool (nth nxt 2)))
+          (clotran-sched-push! 0 a)
+          (recur))))))
 
 (defn agent-run [a]
   (future (agent-drain a))
+  nil)
+
+;; a pool worker's loop: take an agent, run a batch, file it on
+(defn agent-worker [w]
+  (loop []
+    (let [a (clotran-sched-take! w)]
+      (loop [i 1]
+        (when-let [act (clotran-agent-pop! a)]
+          (clotran-agent-run1 a (nth act 0) (nth act 1))
+          (let [nxt (clotran-agent-peek a)]
+            (cond (and nxt (= :solo (nth nxt 2))) (agent-run a)
+                  (< i agent-batch) (recur (inc i))
+                  :else (clotran-sched-push! w a)))))
+      (recur))))
+
+(defn agent-pool-start [k]
+  (dotimes [i k] (future (agent-worker (inc i))))
   nil)
 
 ;;; ---- small members the language suite named ---------------------------

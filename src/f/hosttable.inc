@@ -248,10 +248,13 @@
        hm("clotran.host.math", "negateExact", B_MATH0 + 42, "clotran-math-negateExact"), &
        hm("clotran.host.math", "floorDiv", B_MATH0 + 43, "clotran-math-floorDiv"), &
        hm("clotran.host.math", "floorMod", B_MATH0 + 44, "clotran-math-floorMod"), &
-  ! The thread pools send and send-off name go straight to .dispatch, which
-  ! runs the action on the spot, so there is nothing for them to be.
-       hm("clotran.host.agent", "pooledExecutor", B_ALWAYS_NIL, "clotran-nil"), &
-       hm("clotran.host.agent", "soloExecutor", B_ALWAYS_NIL, "clotran-nil"), &
+  ! The executors send and send-off name, as keywords of their own
+  ! names: .dispatch files the action by which it was given --
+  ! :pooledExecutor is the scheduler's bounded workers (PLAN step 24),
+  ! anything else a thread per busy agent. (A builtin row here answered
+  ! the builtin itself as the value, so every send looked like send-off.)
+       hm("clotran.host.agent", "pooledExecutor", HK_SELFKEY), &
+       hm("clotran.host.agent", "soloExecutor", HK_SELFKEY), &
        hm("clotran.host.agent", "shutdown", B_ALWAYS_NIL, "clotran-nil"), &
        hm("clotran.host.compiler", "specials", HK_SPECIALS), &
        hm("clotran.host.compiler", "macroexpand1", B_MACROEXP1, "clotran-macroexpand-1"), &

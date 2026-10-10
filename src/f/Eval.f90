@@ -252,6 +252,8 @@ module Eval
   integer, parameter :: B_SOCKREADB = 422, B_SOCKWRITEB = 423, B_UTF8BYTES = 424, B_UTF8STRING = 425
   integer, parameter :: B_REALPATH = 426, B_FSKIND = 427, B_FSLIST = 428, B_INSTALLED = 429, B_LIBMANIFEST = 430
   integer, parameter :: B_RATIONALIZE = 431
+  ! the agent scheduler (PLAN step 24, model/agents.lisp)
+  integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -367,6 +369,17 @@ module Eval
   ! block may yield; a yield in progress; and the context ids finished
   ! tasks gave back, for the next ones.
   type(gc_root), save :: main_mailbox_root
+  ! The agent scheduler (PLAN step 24; model/agents.lisp is the design):
+  ! run queue 0 is :global, 1..sched_k are the pool workers' own, each
+  ! an atom holding a vector of agents, replaced by compare-and-swap.
+  ! A worker takes from its own queue, from :global every SCHED_PERIOD
+  ! picks or when its own is empty, else steals half of another's, else
+  ! parks on the state condition until a push notifies. Not in the
+  ! image: made on the first pool send of a process.
+  type(gc_root), save :: sched_root
+  integer, save :: sched_k = 0
+  integer, allocatable, save :: sched_ticks(:)
+  integer, parameter :: SCHED_PERIOD = 32
   ! A task's thread gets a big stack: it runs the interpreter, as the
   ! main thread does.
   ! PROGRESS, for telling a wait from a deadlock (tasks.inc, block_on):
@@ -638,6 +651,7 @@ module Eval
      ! the slot holding a REST SEQ apply handed a compiled variadic fn
      ! unrealised, for its prologue's clotran_rest_args; 0 when none
      integer :: rest_slot = 0
+     integer :: worker = 0        ! the pool worker this thread is, or 0
   end type eval_ctx
   ! the VM program's functions: each one's first instruction and name, for a
   ! trace (vm.inc vm_fn_at)
@@ -1177,6 +1191,11 @@ contains
     ! an agent's queue, drained on its own thread by clotran.rt/agent-drain
     call bind_builtin(core, "clotran-agent-pop!", B_AGENTPOP)
     call bind_builtin(core, "clotran-agent-run1", B_AGENTRUN1)
+    ! the pool's run queues (PLAN step 24): a worker's blocking take, a
+    ! push onto a queue (0 is :global), and an agent's next action unpopped
+    call bind_builtin(core, "clotran-sched-take!", B_SCHEDTAKE)
+    call bind_builtin(core, "clotran-sched-push!", B_SCHEDPUSH)
+    call bind_builtin(core, "clotran-agent-peek", B_AGENTPEEK)
     call bind_builtin(core, "rest", B_REST)
     call bind_builtin(core, "next", B_NEXT)
     call bind_builtin(core, "cons", B_CONS)
@@ -4930,10 +4949,11 @@ contains
     type(gc_value), intent(in), optional :: act
     logical, intent(in), optional :: clear
     type(gc_stack), pointer :: vst
-    type(gc_value) :: m0, q, r
-    logical :: start, wipe
-    integer :: base, ab
+    type(gc_value) :: m0, q, r, h
+    logical :: start, wipe, pool_kind
+    integer :: base, ab, hd
     wipe = .false.
+    pool_kind = .false.
     if (present(clear)) wipe = clear
     vst => gc_my_stack()
     base = vs_enter(vst, 3)
@@ -4948,18 +4968,31 @@ contains
        call vs_set(vst, ab + 1, m0)
        q = gc_nil()
        start = .true.
+       hd = 0
        if (gca_is(m0)) then
           q = gca_get(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1)]))
+          h = gca_get(vs_get(vst, ab + 1), gc_key("head", [vs_get(vst, ab + 1)]))
+          if (h%tag == GCT_INT) hd = int(h%ival)
           start = .not. truthy(gca_get(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)])))
        end if
-       if (.not. gcv_is(q) .or. wipe) q = gcv_empty([vs_get(vst, ab + 1)])
+       if (.not. gcv_is(q) .or. wipe) then
+          q = gcv_empty([vs_get(vst, ab + 1)])
+          hd = 0
+       end if
        call vs_set(vst, ab + 2, q)
        if (present(act)) then
           q = gcv_conj(vs_get(vst, ab + 2), vs_get(vst, base + 3), [vs_get(vst, ab + 1), vs_get(vst, ab + 2)])
           call vs_set(vst, ab + 2, q)
        end if
        ! nothing to run: no drain
-       if (gcv_count(vs_get(vst, ab + 2)) == 0) start = .false.
+       if (gcv_count(vs_get(vst, ab + 2)) - hd == 0) start = .false.
+       ! the head's executor decides where the agent goes (model/agents.lisp,
+       ! home): the scheduler's queues for :pool, a thread of its own else
+       if (start) then
+          pool_kind = .false.
+          if (gcv_count(gcv_nth(vs_get(vst, ab + 2), hd)) >= 3) &
+               pool_kind = gc_equal(gcv_nth(gcv_nth(vs_get(vst, ab + 2), hd), 2), gc_key("pool", [vs_get(vst, ab + 1), vs_get(vst, ab + 2)]))
+       end if
        if (gca_is(vs_get(vst, ab + 1))) then
           call vs_set(vst, ab + 3, vs_get(vst, ab + 1))
        else
@@ -4967,18 +5000,265 @@ contains
        end if
        call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("queue", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
             vs_get(vst, ab + 2), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+       call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("head", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+            gc_int(int(hd, gc_ip)), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
        if (start) call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("running", [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
             gc_bool(.true.), [vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
        if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
     end do
     call vs_leave(vst, ab)
     if (start) then
-       call vs_set(vst, base + 3, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
-       call vs_set(vst, base + 3, gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
-       r = rt_call("agent-run", vs_get(vst, base + 3))
+       if (pool_kind) then
+          call sched_submit(vs_get(vst, base + 2))
+       else
+          call vs_set(vst, base + 3, gcv_build(1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+          call vs_set(vst, base + 3, gcv_put(vs_get(vst, base + 3), 0, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+          r = rt_call("agent-run", vs_get(vst, base + 3))
+       end if
     end if
     call vs_leave(vst, base)
   end subroutine agent_enqueue
+
+  ! ---- the agent scheduler (PLAN step 24) -------------------------------
+  !
+  ! What model/agents.lisp states, as Fortran: the run queues, a push, a
+  ! pop, a steal of half, and a worker's take -- own queue, then :global
+  ! every SCHED_PERIOD picks or when its own is empty, then a steal, then
+  ! parked on the state condition until a push notifies. Each queue is
+  ! an atom holding a vector, replaced by compare-and-swap, so no lock is
+  ! held across an allocation; the take's park re-checks every queue
+  ! under the state lock, so a push between the check and the wait is
+  ! not lost (the push notifies under the same lock).
+
+  ! The queues, made on the first pool send of a process: K from
+  ! CLOTRAN_AGENT_POOL, else the processors and two, as Clojure sizes
+  ! its send pool; then the K worker threads (clotran.rt/agent-pool-start).
+  recursive subroutine sched_init()
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: v, q, r
+    integer :: base, i, k, ios
+    character(len=16) :: kb
+    logical :: mine
+    if (gc_root_live(sched_root)) then
+       if (gcv_is(gc_root_get(sched_root))) return
+    end if
+    k = th_ncpus() + 2
+    call get_environment_variable("CLOTRAN_AGENT_POOL", kb)
+    if (len_trim(kb) > 0) then
+       read(kb, *, iostat=ios) i
+       if (ios == 0 .and. i >= 1) k = i
+    end if
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    v = gcv_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, v)
+    do i = 0, k
+       q = gcv_empty([vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, q)
+       q = gc_obj(OBJ_ATOM, [vs_get(vst, base + 2), gc_nil()], [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 2, q)
+       v = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 1, v)
+    end do
+    ! one process makes one set: the loser of the race drops its own
+    mine = gc_root_cas(sched_root, gc_nil(), vs_get(vst, base + 1))
+    if (mine) then
+       sched_k = k
+       allocate(sched_ticks(k))
+       sched_ticks = 0
+       call vs_set(vst, base + 2, gcv_build(1, [vs_get(vst, base + 1)]))
+       call vs_set(vst, base + 2, gcv_put(vs_get(vst, base + 2), 0, gc_int(int(k, gc_ip)), [vs_get(vst, base + 1)]))
+       r = rt_call("agent-pool-start", vs_get(vst, base + 2))
+    end if
+    call vs_leave(vst, base)
+  end subroutine sched_init
+
+  function sched_queue(i) result(q)
+    integer, intent(in) :: i
+    type(gc_value) :: q
+    q = gcv_nth(gc_root_get(sched_root), i)
+  end function sched_queue
+
+  integer function sched_count(i)
+    integer, intent(in) :: i
+    sched_count = gcv_count(gc_cell_get(sched_queue(i), 1))
+  end function sched_count
+
+  ! the agent onto the back of queue i, and the parked told
+  recursive subroutine sched_push(i, a)
+    integer, intent(in) :: i
+    type(gc_value), intent(in) :: a
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: old, new
+    integer :: base
+    call sched_init()
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, a)
+    call vs_set(vst, base + 2, sched_queue(i))
+    do
+       old = gc_cell_get(vs_get(vst, base + 2), 1)
+       call vs_set(vst, base + 3, old)
+       new = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       if (gc_cell_cas(vs_get(vst, base + 2), 1, vs_get(vst, base + 3), new)) exit
+    end do
+    call vs_leave(vst, base)
+    call gc_state_notify()
+  end subroutine sched_push
+
+  ! the agent at the front of queue i, or nil
+  recursive function sched_pop(i) result(a)
+    integer, intent(in) :: i
+    type(gc_value) :: a
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: old, new
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, sched_queue(i))
+    a = gc_nil()
+    do
+       old = gc_cell_get(vs_get(vst, base + 1), 1)
+       call vs_set(vst, base + 2, old)
+       if (gcv_count(old) == 0) then
+          a = gc_nil()
+          exit
+       end if
+       call vs_set(vst, base + 3, gcv_nth(old, 0))
+       ! the rest copied: a run queue is short (ponytail: an index, as the
+       ! agent's queue has, if a run queue ever holds thousands)
+       new = gcv_subvec_from(vs_get(vst, base + 2), 1, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       if (gc_cell_cas(vs_get(vst, base + 1), 1, vs_get(vst, base + 2), new)) then
+          a = vs_get(vst, base + 3)
+          exit
+       end if
+    end do
+    call vs_leave(vst, base)
+  end function sched_pop
+
+  ! The first half, rounded up, of the first other queue with anything
+  ! on it, into w's own (empty) queue -- its head answered, the rest
+  ! behind w's own. Nil when there is nothing to steal.
+  recursive function sched_steal(w) result(a)
+    integer, intent(in) :: w
+    type(gc_value) :: a
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: old, rest, mine, cur, merged
+    integer :: base, v, n, h, j, k, m
+    vst => gc_my_stack()
+    base = vs_enter(vst, 5)
+    a = gc_nil()
+    k = gcv_count(gc_root_get(sched_root)) - 1
+    ! the victims from the next worker round, so two thieves do not
+    ! start on the same one
+    do j = 1, k - 1
+       v = mod(w - 1 + j, k) + 1
+       call vs_set(vst, base + 1, sched_queue(v))
+       old = gc_cell_get(vs_get(vst, base + 1), 1)
+       call vs_set(vst, base + 2, old)
+       n = gcv_count(old)
+       if (n == 0) cycle
+       h = (n + 1) / 2
+       rest = gcv_subvec_from(vs_get(vst, base + 2), h, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 3, rest)
+       if (.not. gc_cell_cas(vs_get(vst, base + 1), 1, vs_get(vst, base + 2), vs_get(vst, base + 3))) cycle
+       ! taken: the head is ours to run, the rest of the half ours to queue
+       a = gcv_nth(vs_get(vst, base + 2), 0)
+       call vs_set(vst, base + 3, a)
+       if (h > 1) then
+          mine = gcv_empty([vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 4, mine)
+          do m = 1, h - 1
+             mine = gcv_conj(vs_get(vst, base + 4), gcv_nth(vs_get(vst, base + 2), m), &
+                  [vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 4, mine)
+          end do
+          call vs_set(vst, base + 1, sched_queue(w))
+          do
+             cur = gc_cell_get(vs_get(vst, base + 1), 1)
+             call vs_set(vst, base + 5, cur)
+             merged = vs_get(vst, base + 4)
+             if (gcv_count(cur) > 0) then
+                merged = vs_get(vst, base + 5)
+                do m = 0, gcv_count(vs_get(vst, base + 4)) - 1
+                   merged = gcv_conj(merged, gcv_nth(vs_get(vst, base + 4), m), &
+                        [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), merged])
+                end do
+             end if
+             if (gc_cell_cas(vs_get(vst, base + 1), 1, vs_get(vst, base + 5), merged)) exit
+          end do
+       end if
+       a = vs_get(vst, base + 3)
+       exit
+    end do
+    call vs_leave(vst, base)
+  end function sched_steal
+
+  ! under the state lock: a plain read of each queue (gc_slot), not the
+  ! sequence-counted one, which spins until the lock is let go
+  logical function sched_any_work()
+    integer :: i
+    sched_any_work = .false.
+    do i = 0, gcv_count(gc_root_get(sched_root)) - 1
+       if (gcv_count(gc_slot(sched_queue(i), 1)) > 0) then
+          sched_any_work = .true.
+          return
+       end if
+    end do
+  end function sched_any_work
+
+  ! A worker's take, blocking: its own queue, :global every SCHED_PERIOD
+  ! picks or when its own is empty, a steal, else parked until a push.
+  recursive function sched_take(w) result(a)
+    integer, intent(in) :: w
+    type(gc_value) :: a
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    tctx%worker = w
+    a = gc_nil()
+    do
+       if (sched_count(0) > 0 .and. (sched_count(w) == 0 .or. sched_ticks(w) >= SCHED_PERIOD)) then
+          a = sched_pop(0)
+          if (a%tag /= GCT_NIL) then
+             sched_ticks(w) = 0
+             return
+          end if
+       end if
+       if (sched_count(w) > 0) then
+          a = sched_pop(w)
+          if (a%tag /= GCT_NIL) then
+             sched_ticks(w) = sched_ticks(w) + 1
+             return
+          end if
+       end if
+       a = sched_steal(w)
+       if (a%tag /= GCT_NIL) return
+       ! parked: counted among the waiters with no deadline, as a task's
+       ! wait is (block_on), so an idle pool is not mistaken for progress
+       call gc_state_lock()
+       if (sched_any_work()) then
+          call gc_state_unlock()
+          cycle
+       end if
+       blocked_nodl = blocked_nodl + 1
+       call gc_state_wait(-1_8)
+       blocked_nodl = blocked_nodl - 1
+       call gc_state_unlock()
+    end do
+  end function sched_take
+
+  ! an idle agent with :pool work, onto the queue of the worker that made
+  ! it runnable, or :global from any other thread (model: home)
+  recursive subroutine sched_submit(ag)
+    type(gc_value), intent(in) :: ag
+    type(eval_ctx), pointer :: tctx
+    integer :: home
+    call sched_init()
+    tctx => ctx_self()
+    home = 0
+    if (tctx%worker > 0 .and. tctx%worker <= gcv_count(gc_root_get(sched_root)) - 1) home = tctx%worker
+    call sched_push(home, ag)
+  end subroutine sched_submit
 
   ! Every watch on a reference, called with the key, the reference,
   ! the old value and the new one -- IRef.notifyWatches, which runs
@@ -13855,17 +14135,60 @@ contains
             call vs_set(vst, base + 4, coll_to_vector(gcv_nth(args, 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
             act = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
             call vs_set(vst, base + 3, act)
+            ! the action's executor, third: :pool for the scheduler's
+            ! workers (send), :solo for a thread of its own (send-off)
+            call vs_set(vst, base + 4, gc_key("solo", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+            if (gc_equal(strip_meta(gcv_nth(args, 3)), gc_key("pooledExecutor", [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)]))) &
+                 call vs_set(vst, base + 4, gc_key("pool", [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+            act = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+            call vs_set(vst, base + 3, act)
             call agent_dispatch(vs_get(vst, base + 2), vs_get(vst, base + 3))
             out = vs_get(vst, base + 2)
+         end if
+       end block
+    case (B_SCHEDTAKE)
+       ! (clotran-sched-take! w): the next agent for pool worker w, waited for
+       a = gcv_nth(args, 0)
+       out = sched_take(int(a%ival))
+    case (B_SCHEDPUSH)
+       ! (clotran-sched-push! i a): the agent onto run queue i (0 is :global)
+       a = gcv_nth(args, 0)
+       call sched_push(int(a%ival), strip_meta(gcv_nth(args, 1)))
+       out = gc_nil()
+    case (B_AGENTPEEK)
+       ! (clotran-agent-peek a): the next queued action, unpopped, or nil
+       block
+         type(gc_value) :: ag, m0, q, h
+         integer :: hd
+         ag = strip_meta(gcv_nth(args, 0))
+         out = gc_nil()
+         if (gc_kind(ag) == OBJ_ATOM) then
+            m0 = gc_slot(ag, 4)
+            if (gca_is(m0)) then
+               call vs_set(vst, base + 2, m0)
+               q = gca_get(vs_get(vst, base + 2), gc_key("queue", [vs_get(vst, base + 2)]))
+               h = gca_get(vs_get(vst, base + 2), gc_key("head", [vs_get(vst, base + 2)]))
+               hd = 0
+               if (h%tag == GCT_INT) hd = int(h%ival)
+               if (gcv_is(q)) then
+                  if (gcv_count(q) - hd > 0) out = gcv_nth(q, hd)
+               end if
+            end if
          end if
        end block
     case (B_AGENTPOP)
        ! (clotran-agent-pop! a): the next queued action, [f args], or nil
        ! -- and then the agent is not running, in the same swap, so a
        ! send arriving after sees it and starts a new drain
+       ! The queue is a vector and a HEAD index into it ("queue", "head"):
+       ! a pop moves the index, O(1), and copies the rest into a fresh
+       ! vector once more than half is behind the index -- O(remaining)
+       ! once per that many pops, so O(1) a pop. Copying the rest at
+       ! every pop made a long queue quadratic to drain (10^5 sends did
+       ! not finish in ten minutes).
        block
-         type(gc_value) :: ag, m0, q, rest
-         integer :: ab, k
+         type(gc_value) :: ag, m0, q, rest, h
+         integer :: ab, hd
          ag = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          call vs_set(vst, base + 2, ag)
@@ -13877,8 +14200,11 @@ contains
             if (.not. gca_is(m0)) exit
             q = gca_get(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1)]))
             call vs_set(vst, ab + 2, q)
+            h = gca_get(vs_get(vst, ab + 1), gc_key("head", [vs_get(vst, ab + 1)]))
+            hd = 0
+            if (h%tag == GCT_INT) hd = int(h%ival)
             if (gcv_is(q)) then
-               if (gcv_count(q) == 0) call vs_set(vst, ab + 2, gc_nil())
+               if (gcv_count(q) - hd <= 0) call vs_set(vst, ab + 2, gc_nil())
             else
                call vs_set(vst, ab + 2, gc_nil())
             end if
@@ -13887,19 +14213,30 @@ contains
             if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL .or. tag_of(gc_slot(vs_get(vst, base + 2), 5)) /= GCT_NIL) then
                call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 1), gc_key("running", [vs_get(vst, ab + 1)]), &
                     gc_bool(.false.), [vs_get(vst, ab + 1)]))
+               if (tag_of(vs_get(vst, ab + 2)) == GCT_NIL) then
+                  ! drained: the vector let go, the index back to the start
+                  call vs_set(vst, ab + 2, gcv_empty([vs_get(vst, ab + 1), vs_get(vst, ab + 3)]))
+                  call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("queue", [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+                       vs_get(vst, ab + 2), [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+                  call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("head", [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 3)]), &
+                       gc_int(0_gc_ip), [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 3)]))
+               end if
                call vs_set(vst, ab + 4, gc_nil())
                if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
             else
-               call vs_set(vst, ab + 4, gcv_nth(vs_get(vst, ab + 2), 0))
-               rest = gcv_empty([vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 4)])
+               call vs_set(vst, ab + 4, gcv_nth(vs_get(vst, ab + 2), hd))
+               hd = hd + 1
+               if (2 * hd >= gcv_count(vs_get(vst, ab + 2))) then
+                  rest = gcv_subvec_from(vs_get(vst, ab + 2), hd, [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 4)])
+                  hd = 0
+               else
+                  rest = vs_get(vst, ab + 2)
+               end if
                call vs_set(vst, ab + 3, rest)
-               do k = 1, gcv_count(vs_get(vst, ab + 2)) - 1
-                  rest = gcv_conj(vs_get(vst, ab + 3), gcv_nth(vs_get(vst, ab + 2), k), &
-                       [vs_get(vst, ab + 1), vs_get(vst, ab + 2), vs_get(vst, ab + 3), vs_get(vst, ab + 4)])
-                  call vs_set(vst, ab + 3, rest)
-               end do
                call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 1), gc_key("queue", [vs_get(vst, ab + 1), vs_get(vst, ab + 3), vs_get(vst, ab + 4)]), &
                     vs_get(vst, ab + 3), [vs_get(vst, ab + 1), vs_get(vst, ab + 3), vs_get(vst, ab + 4)]))
+               call vs_set(vst, ab + 3, gca_assoc(vs_get(vst, ab + 3), gc_key("head", [vs_get(vst, ab + 1), vs_get(vst, ab + 3), vs_get(vst, ab + 4)]), &
+                    gc_int(int(hd, gc_ip)), [vs_get(vst, ab + 1), vs_get(vst, ab + 3), vs_get(vst, ab + 4)]))
                if (gc_cell_cas(vs_get(vst, base + 2), 4, m0, vs_get(vst, ab + 3))) exit
             end if
          end do

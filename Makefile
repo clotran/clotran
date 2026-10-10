@@ -570,8 +570,8 @@ check-fuzz-read:
 	@echo "--- the reader on malformed text (PLAN 29): generated source, mutated, read by clj and clotran: the value, or the error by class and message ---"
 	scripts/fuzz-read -n 400 -s $(SEED) > $(B)/fuzz-read.out 2>&1; s=$$?; cat $(B)/fuzz-read.out; exit $$s
 check-fuzz-threads:
-	@echo "--- threads (PLAN 29): futures contending on an atom, two refs and an agent; final values and invariants against clj ---"
-	scripts/fuzz-threads -n 20 -s $(SEED) -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s
+	@echo "--- threads (PLAN 29): futures contending on an atom, two refs and agents -- send, send-off, nested sends, 40 agents on a 2-worker pool (PLAN 24); final values and invariants against clj ---"
+	CLOTRAN_AGENT_POOL=2 scripts/fuzz-threads -n 20 -s $(SEED) -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s
 check-fuzz-pure:
 	@echo "--- the tier-A compiler (PLAN 29): generated functions as pure Fortran, gfortran and flang, against the interpreter and clj ---"
 	scripts/fuzz-pure -n 30 -s $(SEED) > $(B)/fuzz-pure.out 2>&1; s=$$?; cat $(B)/fuzz-pure.out; exit $$s
@@ -741,7 +741,7 @@ clean:
 # passes. `make model-full` re-proves every book from nothing.
 ACL2 ?= $(HOME)/jborden/acl2/saved_acl2
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof
+MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof agents agents-drive
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
