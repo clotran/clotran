@@ -1,0 +1,12 @@
+;; Loops of two values or more, each ending whatever its last value holds:
+;; native recur's cases (src/f/vmjit.inc, model/vmj2.lisp). scripts/fuzz -f
+;; runs them through clj and the JIT (make check-fuzz-jit), and they catch
+;; native recur's control, CLOTRAN_JIT_BREAK=3, its last value not copied.
+[
+ (loop [i 0 s 0] (if (< i 10) (recur (inc i) (+ s i)) s))
+ (loop [i 0 acc []] (if (< i 4) (recur (inc i) (conj acc (* i i))) acc))
+ (loop [i 0 a 1 b 1] (if (< i 10) (recur (inc i) b (+ a b)) [a b]))
+ (loop [xs (range 5) out ()] (if (seq xs) (recur (next xs) (cons (first xs) out)) out))
+ (loop [i 3 m {}] (if (pos? i) (recur (dec i) (assoc m i (- i))) m))
+ (let [f (fn [n] (loop [k 0 p 1] (if (< k n) (recur (inc k) (* 2 p)) p)))] (map f (range 6)))
+]

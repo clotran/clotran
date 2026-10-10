@@ -535,10 +535,12 @@
       "tree" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                (outputs (:out (sh {"CLOTRAN_FLAT" "0"} bin core f))))
       "vm" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
-             (outputs (:out (sh {"CLOTRAN_VM" "1"} bin core f))))
+             (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_IMAGE" "0"} bin core f))))
+      ;; the VM and the JIT load core from source (no image), so core's fns
+      ;; are compiled by the VM too, not the flat code the image holds
       ;; the VM's code translated to native code (src/f/vmjit.inc)
       "jit" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
-              (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1"} bin core f))))
+              (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1" "CLOTRAN_IMAGE" "0"} bin core f))))
       ;; its negative control: a jmpf block that branches on the opposite
       ;; test (CLOTRAN_JIT_BREAK), which this mode must catch
       "jit-control" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
@@ -547,6 +549,9 @@
       ;; (CLOTRAN_JIT_BREAK=2, model/vmj2.lisp's prim-fast-ok broken)
       "jit-control-prim" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                            (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1" "CLOTRAN_JIT_BREAK" "2"} bin core f))))
+      ;; native recur's control: of two values or more, the last not copied (CLOTRAN_JIT_BREAK=3)
+      "jit-control-recur" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
+                            (outputs (:out (sh {"CLOTRAN_VM" "1" "CLOTRAN_JIT" "1" "CLOTRAN_JIT_BREAK" "3"} bin core f))))
       "noimage" (let [f (str work "/cases.cljf")] (spit f (case-script forms))
                   (outputs (:out (sh {"CLOTRAN_IMAGE" "0"} bin core f))))
       "compiled"

@@ -4,7 +4,9 @@
   ! jmpf and jmp as native code (vmj-block's ops); a prim of a builtin with
   ! an integer fast case -- flat_int_op's: + - = < > <= >= inc dec zero?
   ! pos? neg? -- as native arithmetic when its arguments are integers and
-  ! the answer fits (vmj2-block's :fast); everything else a call of the step
+  ! the answer fits (vmj2-block's :fast); recur as native moves and a jump,
+  ! every 4096th through the step, which stops for a collection when asked
+  ! (vmj2-block's :poll); everything else a call of the step
   ! the interpreter runs (vm_jit_step -> vmg_xstep). vmj2-run-is: this
   ! machine is the interpreter step for step, given that the builtins
   ! answer so on those cases (prim-fast-ok, which scripts/fuzz -m jit checks).
@@ -14,6 +16,7 @@
   !   x23 the stack's length     x24 the pool's base   x25 pc (set where
   !   it is read: a slow step, an exit)   x26 the pc -> native table
   !   x27 the highest sp seen (what vm_run clears after)
+  !   x28 back edges left before one goes through the step (:poll)
   ! A value is 16 bytes: its tag the first 4, its integer at 8.
   !
   ! The region starts with three stubs: ENTER (saves the callee-saved
@@ -33,6 +36,7 @@
        call get_environment_variable("CLOTRAN_JIT_BREAK", tr)
        vmj_break = trim(tr) == "1"
        vmj_break_prim = trim(tr) == "2"
+       vmj_break_recur = trim(tr) == "3"
        if (trim(e) == "1" .and. vm_enabled()) then
           if (clotran_jit_arch() == 1) then
              if (vmj_init()) vmj_mode = 1
@@ -203,6 +207,7 @@
     end do
     call vmj_put(buf, nw, a_mov(19, 0))
     call vmj_load_regs(buf, nw)
+    call vmj_put(buf, nw, a_movz(28, 4096_gc_ip, 0))
     call vmj_put(buf, nw, a_ldr(22, 19, 32))
     call vmj_put(buf, nw, a_ldr(23, 19, 40))
     call vmj_put(buf, nw, a_ldr(24, 19, 48))
@@ -226,6 +231,7 @@
     call vmj_put(buf, nw, a_ldr(16, 19, 64))
     call vmj_put(buf, nw, a_blr(16))
     call vmj_load_regs(buf, nw)
+    call vmj_put(buf, nw, a_movz(28, 4096_gc_ip, 0))
     call vmj_put(buf, nw, a_cbnzw(0, cbx - (nw + 1)))  ! to EXIT
     call vmj_put(buf, nw, a_ldrx3(9, 26, 25))
     call vmj_put(buf, nw, a_br(9))
@@ -265,9 +271,8 @@
     vst%vm_ctl_top = int(cx%ct0 + st%ctop + 1)
     call vmg_xstep(st)
     cx%steps = cx%steps + 1
-    if (iand(cx%steps, 4095_gc_ip) == 0) then
-       if (gc_stop_pending()) call gc_poll()
-    end if
+    ! every slow step: a loop all native comes here every 4096th back edge
+    if (gc_stop_pending()) call gc_poll()
     cx%pc = st%pc
     cx%fb = st%fb
     cx%sp = st%sp
@@ -513,6 +518,29 @@
           call vmj_patch(buf, int(at) + 4, a_cbnz(11, nw + 1 - (int(at) + 4)))
        case (7)                                        ! jmp
           call vmj_jump(buf, nw, a, p0, pend, nj, jat, jto)
+       case (12)                                       ! recur
+          ! vmj2-block's: (:poll) (:chk-spfb b+k) [(:chk-ix :sp -1)]
+          ! (:copydown b k) (:setsp-fb b+k) (:goto l)
+          inl = .false.
+          if (a >= 0 .and. a <= 16 .and. vmp%code(4 * p + 2) >= 0 .and. vmp%code(4 * p + 2) + a < 4096) then
+             inl = .true.
+             call vmj_put(buf, nw, a_subsi(28, 28, 1))
+             call vmj_fail(buf, nw, 0, nf, fails, fcond)        ! b.eq: the step polls
+             call vmj_put(buf, nw, a_addi(9, 20, int(vmp%code(4 * p + 2) + a)))
+             call vmj_put(buf, nw, a_cmp(21, 9))
+             call vmj_fail(buf, nw, 3, nf, fails, fcond)        ! b.lo: sp < fb+b+k
+             if (a > 0) call vmj_chk_ix(buf, nw, 1, -1, nf, fails, fcond)
+             ! the fuzzer's control (CLOTRAN_JIT_BREAK=3): with two values or
+             ! more, the last not copied (with one, a loop's counter, it would hang)
+             do i = 0, int(a) - 1 - merge(1, 0, vmj_break_recur .and. a >= 2)
+                call vmj_slot(buf, nw, 10, 1, i - int(a))
+                call vmj_put(buf, nw, a_ldp(11, 12, 10, 0))
+                call vmj_slot(buf, nw, 13, 0, int(vmp%code(4 * p + 2)) + i)
+                call vmj_put(buf, nw, a_stp(11, 12, 13, 0))
+             end do
+             call vmj_put(buf, nw, a_addi(21, 20, int(vmp%code(4 * p + 2) + a)))
+             call vmj_jump(buf, nw, vmp%code(4 * p + 3), p0, pend, nj, jat, jto)
+          end if
        case (13)                                       ! prim
           ! a builtin's integer fast case (vmj2-block), else the step
           inl = .false.
@@ -533,12 +561,12 @@
        end if
        vmj_n_inline = vmj_n_inline + 1
        ! on to the next block: falls through when it is next, else jumps
-       if (op /= 7) then
+       if (op /= 7 .and. op /= 12) then
           if (p + 1 >= pend) call vmj_jump(buf, nw, p + 1, p0, pend, nj, jat, jto)
        end if
        ! the slow tail a failed check goes to
        if (nf > 0) then
-          if (p + 1 < pend .and. op /= 7) then
+          if (p + 1 < pend .and. op /= 7 .and. op /= 12) then
              ! over the tail (pc's two words and its branch) to the next block
              call vmj_put(buf, nw, a_b(int(4, c_int64_t)))
           end if

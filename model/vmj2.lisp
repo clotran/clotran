@@ -22,14 +22,27 @@
 ; program it runs, and its control (CLOTRAN_JIT_BREAK=2, an addition one
 ; off) is caught.
 ;
+; AND RECUR, natively: a loop's back edge copies its k new values down to
+; the frame's slots b .. b+k-1, cuts the stack there and jumps, as vmi-recur
+; does -- no runtime, so no hypothesis:
+;
+;   (:chk-spfb m)    on if sp >= fb+m, else the step
+;   (:copydown b k)  slots fb+b .. := slots sp-k .., in order (k moves)
+;   (:setsp-fb m)    sp := fb+m
+;   (:poll)          the step, when the runtime asks (a countdown of back
+;                    edges: a loop all native would otherwise never reach
+;                    the step that stops for a collection); else on
+;
 ; Theorems:
+;   vmj2-recur-is  a recur's block run from its pc is one vmi-step
 ;   vmj2-block-is  under prim-fast-ok, a block run from its pc is one
 ;                  vmi-step
 ;   vmj2-run-is    under prim-fast-ok, the native machine, its blocks
 ;                  translated once, is vmi-run step for step
-;   vmj2-ops       a block is at most 5 native ops: a prim compiled costs a
-;                  constant, where the step it replaces costs the runtime's
-;                  boundary (model/vmx2-time.lisp's wp)
+;   vmj2-ops       a block is at most 6 native ops, each O(1) but a recur's
+;                  copy, k moves: a prim compiled costs a constant, where the
+;                  step it replaces costs the runtime's boundary
+;                  (model/vmx2-time.lisp's wp)
 
 (in-package "ACL2")
 
@@ -89,6 +102,10 @@
              (equal (prim op (if (equal (fast-n (builtin-id op)) 2) (list a b) (list a)))
                     (fast-val (builtin-id op) a b)))))
 
+; whether a back edge goes to the step now: the runtime's, unconstrained
+(encapsulate (((jit-poll-due *) => *))
+  (local (defun jit-poll-due (x) (declare (ignore x)) nil)))
+
 ; ---- THE NATIVE MACHINE, WITH (:fast id n) ------------------------------------------------
 
 (defun vmj2-exec (ops vmi)
@@ -120,6 +137,15 @@
                             (vmi (update-v-sp (1+ (- sp n)) vmi)))
                        (vmj2-exec (cdr ops) vmi))
                    (vmi-step vmi))))
+        (:chk-spfb (if (<= (+ (nfix (v-fb vmi)) (nfix (cadr op))) (nfix (v-sp vmi)))
+                       (vmj2-exec (cdr ops) vmi)
+                     (vmi-step vmi)))
+        (:copydown (let ((vmi (vmi-copy-down (- (nfix (v-sp vmi)) (nfix (caddr op)))
+                                             (+ (nfix (v-fb vmi)) (nfix (cadr op))) (nfix (caddr op)) vmi)))
+                     (vmj2-exec (cdr ops) vmi)))
+        (:setsp-fb (let ((vmi (update-v-sp (+ (nfix (v-fb vmi)) (nfix (cadr op))) vmi)))
+                     (vmj2-exec (cdr ops) vmi)))
+        (:poll (if (jit-poll-due (v-pc vmi)) (vmi-step vmi) (vmj2-exec (cdr ops) vmi)))
         (:goto (update-v-pc (nfix (cadr op)) vmi))
         (:slow (vmi-step vmi))
         (otherwise vmi)))))
@@ -130,9 +156,14 @@
   (declare (xargs :stobjs vmi :verify-guards nil))
   (let* ((op (vmi-w p 0 vmi)) (a (nfix (vmi-w p 1 vmi))) (n (nfix (vmi-w p 2 vmi)))
          (id (builtin-id (vmi-poolv a vmi))))
-    (if (and (equal op 13) (< 0 n) (equal (fast-n id) n))
-        (list (list :chk-sp n) '(:chk-ix :sp -1) (list :fast id n) (list :goto (1+ (nfix p))))
-      (vmj-block p vmi))))
+    (cond ((and (equal op 13) (< 0 n) (equal (fast-n id) n))
+           (list (list :chk-sp n) '(:chk-ix :sp -1) (list :fast id n) (list :goto (1+ (nfix p)))))
+          ((equal op 12)
+           (let ((k (nfix (vmi-w p 1 vmi))) (b (nfix (vmi-w p 2 vmi))) (l (nfix (vmi-w p 3 vmi))))
+             (append (list '(:poll) (list :chk-spfb (+ b k)))
+                     (if (zp k) nil '((:chk-ix :sp -1)))
+                     (list (list :copydown b k) (list :setsp-fb (+ b k)) (list :goto l)))))
+          (t (vmj-block p vmi)))))
 
 (defun vmj2-translate (p n vmi)
   (declare (xargs :stobjs vmi :verify-guards nil :measure (nfix n)))
@@ -147,9 +178,10 @@
 
 ; ---- STAGE 1'S BLOCKS RUN THE SAME ---------------------------------------------------------
 
-; vmj2-exec is vmj-exec on any list without a :fast op, as stage 1's are
+; vmj2-exec is vmj-exec on any list of stage 1's ops, as stage 1's blocks are
 (defun no-fast (ops)
-  (if (atom ops) t (and (not (eq (car (car ops)) :fast)) (no-fast (cdr ops)))))
+  (if (atom ops) t (and (member (car (car ops)) '(:chk-ix :chk-sp :mov :movc :addsp :cbf :goto :slow))
+                        (no-fast (cdr ops)))))
 
 (defthm vmj2-exec-is-vmj-exec
   (implies (no-fast ops) (equal (vmj2-exec ops vmi) (vmj-exec ops vmi)))
@@ -193,6 +225,25 @@
                             (a (vmi-sreg (- (nfix (v-sp vmi)) (nfix (vmi-w (v-pc vmi) 2 vmi))) vmi))
                             (b (vmi-sreg (- (nfix (v-sp vmi)) 1) vmi)))))))
 
+; ---- A RECUR IS THE STEP ------------------------------------------------------------------
+
+(defthm vmj2-step-recur
+  (implies (and (equal (v-status vmi) 0) (equal (vmi-w (v-pc vmi) 0 vmi) 12))
+           (equal (vmi-step vmi) (vmi-recur vmi)))
+  :hints (("Goal" :in-theory (enable vmi-step))))
+
+; the copy writes slots and the status, nothing else the block reads
+(defthm vmi-copy-down-regs
+  (and (equal (nth *v-fb* (vmi-copy-down src dst k vmi)) (nth *v-fb* vmi))
+       (equal (nth *v-sp* (vmi-copy-down src dst k vmi)) (nth *v-sp* vmi))
+       (equal (nth *v-pc* (vmi-copy-down src dst k vmi)) (nth *v-pc* vmi)))
+  :hints (("Goal" :induct (vmi-copy-down src dst k vmi) :in-theory (enable vmi-copy-down vmi-sset))))
+
+(defthm vmj2-recur-is
+  (implies (and (equal (v-status vmi) 0) (equal (vmi-w (v-pc vmi) 0 vmi) 12))
+           (equal (vmj2-exec (vmj2-block (nfix (v-pc vmi)) vmi) vmi) (vmi-step vmi)))
+  :hints (("Goal" :in-theory (e/d (vmi-recur) (vmj-block vmi-copy-down)))))
+
 ; ---- A BLOCK IS ONE STEP --------------------------------------------------------------------
 
 (defthm vmj2-block-is
@@ -202,8 +253,9 @@
            :cases ((and (equal (vmi-w (v-pc vmi) 0 vmi) 13)
                         (< 0 (nfix (vmi-w (v-pc vmi) 2 vmi)))
                         (equal (fast-n (builtin-id (vmi-poolv (nfix (vmi-w (v-pc vmi) 1 vmi)) vmi)))
-                               (nfix (vmi-w (v-pc vmi) 2 vmi)))))
-           :use (vmj2-fast-is vmj-block-is (:instance vmj-block-no-fast (p (nfix (v-pc vmi))))))))
+                               (nfix (vmi-w (v-pc vmi) 2 vmi))))
+                   (equal (vmi-w (v-pc vmi) 0 vmi) 12))
+           :use (vmj2-fast-is vmj2-recur-is vmj-block-is (:instance vmj-block-no-fast (p (nfix (v-pc vmi))))))))
 
 (defthm nth-vmj2-translate
   (implies (and (natp p) (natp i) (< i (nfix n)))
@@ -249,9 +301,9 @@
 
 ; ---- COST -----------------------------------------------------------------------------------
 
-; a block is at most 5 native ops, each a constant number of machine
+; a block is at most 6 native ops, each a constant number of machine
 ; instructions: a compiled prim is O(1) native work, no boundary crossed
 (defthm vmj2-ops
-  (<= (len (vmj2-block p vmi)) 5)
+  (<= (len (vmj2-block p vmi)) 6)
   :hints (("Goal" :in-theory (enable vmj-block)))
   :rule-classes (:rewrite :linear))

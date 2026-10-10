@@ -600,10 +600,12 @@ check-fuzz-spec:
 	@echo "--- spec itself (PLAN 29): generated spec forms and values, valid?/conform/unform/explain-data/form, through clj and every mode, GC torture too ---"
 	scripts/fuzz-spec -n 20 -k 2 -s $(SEED) -o $(B)/fuzz-spec.edn > $(B)/fuzz-spec.out 2>&1; s=$$?; cat $(B)/fuzz-spec.out; exit $$s
 check-fuzz-jit:
-	@echo "--- the VM and its JIT (PLAN 31, model/vmj.lisp), opt-in: generated programs through clj, CLOTRAN_VM=1 and CLOTRAN_VM=1 CLOTRAN_JIT=1; the control's broken jmpf must be caught ---"
+	@echo "--- the VM and its JIT (PLAN 31, model/vmj.lisp, vmj2.lisp), opt-in: generated programs and test/clj/jit-loops.edn through clj, CLOTRAN_VM=1 and CLOTRAN_VM=1 CLOTRAN_JIT=1; the controls' broken jmpf, sum and recur must be caught ---"
 	scripts/fuzz -m vm,jit -n 100 -s $(SEED) > $(B)/fuzz-jit.out 2>&1; s=$$?; cat $(B)/fuzz-jit.out; \
-	  if scripts/fuzz -m jit-control -n 5 -s $(SEED) > $(B)/fuzz-jit-control.out 2>&1; then echo "the JIT's control was not caught"; exit 1; fi; \
-	  if scripts/fuzz -m jit-control-prim -n 20 -s $(SEED) > $(B)/fuzz-jit-control-prim.out 2>&1; then echo "the compiled prims' control was not caught"; exit 1; fi; exit $$s
+	  scripts/fuzz -f test/clj/jit-loops.edn -m vm,jit > $(B)/fuzz-jit-loops.out 2>&1 || s=1; cat $(B)/fuzz-jit-loops.out; \
+	  if scripts/fuzz -m jit-control -n 20 -s $(SEED) > $(B)/fuzz-jit-control.out 2>&1; then echo "the JIT's control was not caught"; exit 1; fi; \
+	  if scripts/fuzz -m jit-control-prim -n 20 -s $(SEED) > $(B)/fuzz-jit-control-prim.out 2>&1; then echo "the compiled prims' control was not caught"; exit 1; fi; \
+	  if scripts/fuzz -f test/clj/jit-loops.edn -m jit-control-recur > $(B)/fuzz-jit-control-recur.out 2>&1; then echo "native recur's control was not caught"; exit 1; fi; exit $$s
 check-frames:
 	@echo "--- frames (PLAN 29): names, locals and lines of breaks and traces, generated, against clj and the generator, through a reload and a recompile; compiled breaks wait for the debug build ---"
 	scripts/fuzz-frames -n 40 -s $(SEED) --modes flat,tree > $(B)/frames.out 2>&1 && scripts/fuzz-frames -n 40 -s $(SEED) --modes compiled --leaves throw >> $(B)/frames.out 2>&1; s=$$?; cat $(B)/frames.out; exit $$s

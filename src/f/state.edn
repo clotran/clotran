@@ -147,6 +147,7 @@
  "Eval.f90/vmj_tab" {:class :shared, :note "each pc's native address: a function's entries written once after its code is in place, aligned 64-bit stores read by any thread's native code"}
  "Eval.f90/vmj_break" {:class :fixed, :note "CLOTRAN_JIT_BREAK (the JIT fuzzer's negative control), read once with CLOTRAN_JIT"}
  "Eval.f90/vmj_break_prim" {:class :fixed, :note "CLOTRAN_JIT_BREAK=2 (the JIT fuzzer's control for compiled prims), read once with CLOTRAN_JIT"}
+ "Eval.f90/vmj_break_recur" {:class :fixed, :note "CLOTRAN_JIT_BREAK=3 (the JIT fuzzer's control for native recur), read once with CLOTRAN_JIT"}
  "Eval.f90/vmj_n_fns" {:class :shared, :note "statistics: a race miscounts, nothing more"}
  "Eval.f90/vmj_n_inline" {:class :shared, :note "statistics: a race miscounts, nothing more"}
  "Eval.f90/vm_mode" {:class :fixed, :note "CLOTRAN_VM, read once from the environment (lazily: the same value from any thread)"}

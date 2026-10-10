@@ -4110,15 +4110,45 @@ tests. scripts/fuzz -m jit checks prim-fast-ok against clj; its new
 control, CLOTRAN_JIT_BREAK=2 (a sum one off), is caught (make
 check-fuzz-jit, 20 cases).
 
-| | flat | VM | VM + JIT stage 2 |
-|---|---|---|---|
-| `(apply + (take 10^6 (range)))` | ~910 ms | ~1420 ms | ~908 ms |
-| a 10^7-iteration loop | 274 ms | 549 ms | 273 ms |
-| the same, summing | 363 ms | 801 ms | 359 ms |
+**Recur natively, and a correction (2026-10-09).** vmj2-block's recur:
+`(:poll)`, `(:chk-spfb b+k)`, `(:copydown b k)` -- the k new values down
+to the frame's slots, in order -- `(:setsp-fb b+k)` and the jump; no
+runtime, so `vmj2-recur-is` needs no hypothesis. A loop all native would
+never reach the step that stops for a collection, so `(:poll)` goes to
+the step every 4096th back edge (x28 counts them down) and the slow
+step now polls whenever a stop is pending; the model's poll is the
+runtime's choice, unconstrained (`jit-poll-due`), and either way the
+block is the step. Its control, CLOTRAN_JIT_BREAK=3 (of two values or more,
+the last not copied), runs on test/clj/jit-loops.edn, loops that end
+whatever their last value holds: the generated programs seldom loop (none
+in 20 cases of one seed), and a broken recur in one of core's loops can
+hang. scripts/fuzz's vm and jit modes now load core from source
+(CLOTRAN_IMAGE=0), so core's own fns run compiled by the VM and the JIT
+-- with the heap image they were flat code, and those modes tested only
+the cases' own fns.
 
-The VM with the JIT is level with flat on all three. What is left in a
-loop's turn: recur (a step), and what the step costs; next, recur as
-native moves.
+THE CORRECTION: the table first written here measured flat three times.
+Its runs were launched as `env $env ...` with `$env` holding
+"CLOTRAN_VM=1 CLOTRAN_JIT=1", which zsh does not split, so CLOTRAN_VM
+was that whole string and the VM was off. The commit that landed stage
+2 carries those numbers ("1420 -> ~908 ms"); they are wrong. Measured
+with the variables set one by one:
+
+| | flat | VM | VM + JIT, prims | VM + JIT, prims and recur |
+|---|---|---|---|---|
+| `(apply + (take 10^6 (range)))` | ~915 ms | ~1430 ms | ~1310 ms | 1300-1600 ms |
+| a 10^7-iteration loop | 273 ms | 550 ms | 148 ms | 59 ms |
+| the same, summing | 360 ms | 800 ms | 172 ms | 71 ms |
+
+The yardstick rows are with core compiled by the VM: loaded from source
+(CLOTRAN_IMAGE=0, or an image from another build, as these runs had). With
+the heap image core's fns come in as flat code and the VM compiles only
+what is defined after, so under CLOTRAN_VM=1 the yardstick is flat's,
+~945 ms in every mode. A loop is now 4.6x faster than flat (~6 ns a turn).
+The yardstick hardly moves: its time is in the runtime's calls -- the seq operations, forcing,
+allocation and the collector -- not in the steps the JIT compiles.
+scripts/fuzz's JIT runs set the variables as a map, so its findings and
+controls were real throughout.
 
 ### 31a. The unified debugger (decided 2026-10-06)
 
