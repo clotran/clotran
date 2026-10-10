@@ -3178,3 +3178,11 @@
 (spec/assert int? 3)
 (do (spec/check-asserts false) (spec/check-asserts?))
 (spec/assert int? "y")
+
+;; a fn is an IObj (DEVIATIONS 23 resolved), carries metadata, and prints
+(instance? clotran.host.i_obj (fn []))
+(instance? clotran.host.i_meta (fn []))
+(meta (with-meta (fn []) {:a 1}))
+(string? (pr-str (fn [])))
+(string? (pr-str (with-meta (fn []) {:a 1})))
+(string? (pr-str (with-meta (fn []) {:type :T})))

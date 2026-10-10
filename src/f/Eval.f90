@@ -19241,8 +19241,13 @@ contains
        ! The real fix is String/format: it lets print-object run, which
        ! lets every type fall back to Object. DEVIATIONS 18 and 21 want
        ! it too.
+       !
+       ! 2026-10-10: String/format and print-object exist (entry 21), so
+       ! print-method Object is the last resort for a fn and :default no
+       ! longer calls itself: a fn answers IObj, as clj's AFunction does
+       ! (DEVIATIONS 23 resolved).
        yes = (t == "symbol" .or. t == "list" .or. t == "vector" .or. &
-              t == "map" .or. t == "set" .or. t == "var")
+              t == "map" .or. t == "set" .or. t == "var" .or. t == "fn")
     case ("clotran.host.string"); yes = (t == "string")
     ! A StringBuilder is a CharSequence but NOT a String, and
     ! clojure.string tells them apart: replace takes the CharSequence

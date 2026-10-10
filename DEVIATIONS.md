@@ -784,7 +784,16 @@ was measuring correct behaviour. Fixing it properly moved Clojure's
 suite from 778 passing assertions to 797, all of it in two namespaces:
 `control` 156 -> 164 and `clojure-set` 99 -> 110.
 
-## 23. `(instance? IObj f)` is false for a function
+## 23. RESOLVED -- a function is an IObj
+
+**RESOLVED 2026-10-10 (PLAN step 35).** `(instance? clotran.host.i_obj
+(fn []))` is true, as clj's AFunction is one. What had kept it false was
+printing: print-method's :default re-dispatches on an IObj, and a fn had
+no print-method it could reach; since entry 21 gave host objects
+`String/format` and an identity, print-method Object is that last resort
+and a fn with metadata prints as `#object[...]`, with or without a
+`:type` in its metadata. Measured against clj in test/clj/oracle.clj.
+The original entry follows.
 
 A function answers `IMeta` but not `IObj`. Clojure says both.
 
