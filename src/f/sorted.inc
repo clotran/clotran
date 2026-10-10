@@ -16,6 +16,7 @@
     type(gc_value), intent(in) :: cmp, a, b
     integer :: c
     logical :: ok
+    type(gc_value) :: fa, fb
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
@@ -32,9 +33,9 @@
           c = huge(0)
           return
        end if
-       c = compare_values(a, b, ok)
+       c = compare_values(a, b, ok, fa, fb)
        if (.not. ok) then
-          call raise_compare_cast(a, b, [a, b])
+          call raise_compare_cast(fa, fb, [a, b])
           c = huge(0)
        end if
     else

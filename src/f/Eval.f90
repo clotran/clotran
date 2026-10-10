@@ -14689,7 +14689,8 @@ contains
        block
          logical :: cok
          integer :: cv
-         cv = compare_values(gcv_nth(args, 0), gcv_nth(args, 1), cok)
+         type(gc_value) :: fa, fb
+         cv = compare_values(gcv_nth(args, 0), gcv_nth(args, 1), cok, fa, fb)
          if (.not. cok .and. gc_kind(strip_meta(gcv_nth(args, 0))) == OBJ_INST) then
             ! a deftype that is Comparable answers by its compareTo
             out = inst_invoke(strip_meta(gcv_nth(args, 0)), "compareTo", rest_args(vs_get(vst, base + 1), 1), cok)
@@ -14701,7 +14702,7 @@ contains
          if (cok) then
             out = gc_int(cv)
          else
-            call raise_compare_cast(gcv_nth(args, 0), gcv_nth(args, 1), [vs_get(vst, base + 1)])
+            call raise_compare_cast(fa, fb, [vs_get(vst, base + 1)])
          end if
        end block
     case (B_DISJ)
@@ -15209,9 +15210,14 @@ contains
   !
   ! Only the sign matters to a caller, but Clojure answers -1/0/1 for
   ! these cases and so does this.
-  recursive function compare_values(a0, b0, ok) result(c)
+  !
+  ! Where there is no answer, fa and fb are the pair that had none -- inside
+  ! a vector, its elements', as the error clj throws names them
+  ! (APersistentVector.compareTo is Util.compare of the elements).
+  recursive function compare_values(a0, b0, ok, fa, fb) result(c)
     type(gc_value), intent(in) :: a0, b0
     logical, intent(out) :: ok
+    type(gc_value), intent(out), optional :: fa, fb
     integer :: c
     type(gc_value) :: a, b
     character(len=:), allocatable :: sa, sb
@@ -15311,7 +15317,7 @@ contains
           return
        end if
        do i = 0, na - 1
-          c = compare_values(gcv_nth(a, i), gcv_nth(b, i), ok)
+          c = compare_values(gcv_nth(a, i), gcv_nth(b, i), ok, fa, fb)
           if (.not. ok) return
           if (c /= 0) return
        end do
@@ -15330,6 +15336,8 @@ contains
        return
     end if
     ok = .false.
+    if (present(fa)) fa = a0
+    if (present(fb)) fb = b0
   end function compare_values
 
   ! An empty map, set or list.

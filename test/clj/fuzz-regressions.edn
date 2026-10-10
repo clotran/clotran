@@ -140,4 +140,10 @@
  (try (read-string "{##Inf 1 ##Inf 2}") (catch clotran.host.exception e (ex-message e)))
  (try (read-string "{##-Inf 1 ##-Inf 2}") (catch clotran.host.exception e (ex-message e)))
  (try (read-string "{1.5 1 1.5 2}") (catch clotran.host.exception e (ex-message e)))
+ ;; compare inside a vector named the vectors, not the elements it could
+ ;; not order, and called a vector no IPersistentVector (scripts/fuzz)
+ (try (compare [[0 5] 1] [14 1]) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
+ (try (compare [14 1] [[0 5] 1]) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
+ (try (sort (frequencies [14 [0 5]])) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
+ (try (into (sorted-set) [[[0 5] 1] [14 1]]) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
 ]
