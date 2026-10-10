@@ -24,7 +24,9 @@
          '[clojure.walk])
 
 (def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
-(def work (fs/file "/tmp/clotran-compiler-check"))
+;; under build/, as every check's output is: the gate runs two copies of
+;; the tree at once, and a directory under /tmp would be shared
+(def work (fs/file repo "build" "compiler-check"))
 (def keep? (some #{"--keep"} *command-line-args*))
 (def bench? (some #{"--bench"} *command-line-args*))
 
