@@ -4574,6 +4574,38 @@ scanned once; allocation is O(1) a slot and O(1) a run, a batch's refill
 amortised over the batch; sweeping is linear in the pool. From here on a
 model book is committed with its cost theorem, or not at all.
 
+**Stage 1c, the young collection's soundness and the barrier (2026-10-10).**
+A young collection marks from the roots and the REMEMBERED SET and stops
+at the old: what the last collection left marked is neither cleared nor
+scanned. model/heapgn-proof.lisp states when that is sound. YOUNG-START,
+at a young collection's start: every marked object and run is black (all
+it references marked) or remembered. From such a state, `young-inv`: the
+roots pushed and the remembered objects and runs scanned (scan-objs,
+scan-vecs) give the drain's invariant, so with heapg-proof's
+hpg-drain-closed, `young-closed`: a drain that empties its stack with no
+overflow leaves every marked object and run black -- what the roots
+reach, through the old or not, is marked, and the sweep of the young frees
+none of it. `barrier-keeps`: a write into an object's slot with its
+barrier -- the object remembered when it is marked and what is written is
+not -- keeps young-start. `young-cost`: the remembered set's scan is 5
+pushes an object, proportional to what is remembered, not to the old.
+model/heapgn.lisp's hpg-young-ref is the barrier's test, generated, and
+proved equal to the proof's (`hpg-young-ref-is`); GC.f90's is_young -- the
+test gc_set_slot and the vectors' writes ask -- is it, and collect_young
+scans the remembered set with the generated hpg_scan_obj and
+hpg_scan_vec. scripts/fuzz-heap-gen scans random remembered sets between
+the roots and the drain and asks the barrier's test of random references,
+ACL2 against the generated code; its control (a text's mark read inverted)
+parts the barrier's answers. The yardstick does not move (A/B from source,
+~900-930 ms both).
+
+What 1c does NOT yet cover: AGING. A young survivor is aged rather than
+promoted, its mark cleared; the old objects that reference it are then
+remembered by collect_young's own pass (any_aged_slot), not the barrier.
+That pass keeps young-start too, and it is the next theorem: clearing a
+mark keeps the invariant when every marked object referencing the
+unmarked one is remembered.
+
 ### 34. Dispatch and the calling convention, timed (decided 2026-10-09)
 
 **Why now, ahead of stage 33's 1c-1e.** The yardstick's account

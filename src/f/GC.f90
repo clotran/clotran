@@ -2572,19 +2572,13 @@ contains
     end if
   end subroutine gc_set_slot
 
-  ! Whether x is a heap object allocated since the last collection.
+  ! Whether x is a heap object allocated since the last collection: the
+  ! write barrier's test, generated (model/heapgn.lisp's hpg-young-ref --
+  ! heapgn-proof's barrier-keeps: with it every old object stays black or
+  ! remembered, which makes the young collection sound, young-closed)
   logical function is_young(x)
     type(gc_value), intent(in) :: x
-    is_young = .false.
-    if (x%ref == 0) return
-    select case (x%tag)
-    case (GCT_OBJ)
-       is_young = .not. obj_mark(x%ref)
-    case (GCT_VEC)
-       is_young = .not. vec_mark(x%ref)
-    case (GCT_STR, GCT_SYM, GCT_KEY, GCT_BIG, GCT_CLASS, GCT_DEC, GCT_BIGRATIO)
-       is_young = .not. str_mark(x%ref)
-    end select
+    is_young = hpg_young_ref(hstate, int(x%tag, int64), int(x%ref, int64))
   end function is_young
 
   ! The flag is checked again under the lock: another thread may have
@@ -2953,16 +2947,14 @@ contains
     obj_marked = 0; vec_marked = 0; str_marked = 0
     call mark_begin()
     call push_roots(roots)
+    ! the remembered set's slots and words pushed (heapgn-proof's
+    ! young-mark: roots, then scan-objs and scan-vecs of the remembered)
     do i = 1, n_rem
        v = rem_set(i)
        if (v%tag == GCT_OBJ) then
-          do j = 1, OBJ_SLOTS
-             call push_mark(obj_pool(v%ref)%slot(j))
-          end do
+          call hpg_scan_obj(hstate, int(v%ref, int64), 0_int64)
        else if (v%tag == GCT_VEC) then
-          do j = 1, vec_pool(v%ref)%len
-             call push_mark(vec_store(vec_pool(v%ref)%off + j - 1))
-          end do
+          call hpg_scan_vec(hstate, int(v%ref, int64))
        end if
     end do
     call drain_mark_stack()
@@ -4293,7 +4285,7 @@ contains
   pure integer(int64) function hp_n_oslot()
     hp_n_oslot = 5_int64 * (size(obj_pool, kind=int64) + 1)
   end function hp_n_oslot
-  integer(int64) function hp_omark(i)
+  pure integer(int64) function hp_omark(i)
     integer(int64), intent(in) :: i
     hp_omark = merge(1_int64, 0_int64, obj_mark(i))
   end function hp_omark
@@ -4309,11 +4301,11 @@ contains
     integer(int64), intent(in) :: i
     hp_voff = vec_pool(i)%off
   end function hp_voff
-  integer(int64) function hp_vlen(i)
+  pure integer(int64) function hp_vlen(i)
     integer(int64), intent(in) :: i
     hp_vlen = vec_pool(i)%len
   end function hp_vlen
-  integer(int64) function hp_vmark(i)
+  pure integer(int64) function hp_vmark(i)
     integer(int64), intent(in) :: i
     hp_vmark = merge(1_int64, 0_int64, vec_mark(i))
   end function hp_vmark
@@ -4321,7 +4313,7 @@ contains
     integer(int64), intent(in) :: i, x
     vec_mark(i) = x /= 0
   end subroutine hp_set_vmark
-  integer(int64) function hp_n_vec()
+  pure integer(int64) function hp_n_vec()
     hp_n_vec = size(vec_pool, kind=int64) + 1
   end function hp_n_vec
   integer(int64) function hp_atag(j)
@@ -4335,7 +4327,7 @@ contains
   integer(int64) function hp_n_arena()
     hp_n_arena = size(vec_store, kind=int64) + 1
   end function hp_n_arena
-  integer(int64) function hp_smark(i)
+  pure integer(int64) function hp_smark(i)
     integer(int64), intent(in) :: i
     hp_smark = merge(1_int64, 0_int64, str_mark(i))
   end function hp_smark
@@ -4343,7 +4335,7 @@ contains
     integer(int64), intent(in) :: i, x
     str_mark(i) = x /= 0
   end subroutine hp_set_smark
-  integer(int64) function hp_n_str()
+  pure integer(int64) function hp_n_str()
     hp_n_str = size(str_pool, kind=int64) + 1
   end function hp_n_str
 

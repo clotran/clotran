@@ -1821,3 +1821,52 @@
       end if
     end if
   end function hpg_seq_op
+
+  pure function hpg_young_ref(hs, tag_, ref_) result(r)
+    type(heap_state), intent(in) :: hs
+    integer(int64), value :: tag_
+    integer(int64), value :: ref_
+    logical :: r
+    if ((0_int64 < ref_)) then
+      if ((tag_ == 8_int64)) then
+        if ((ref_ < hp_n_obj())) then
+          r = (hp_omark(ref_) == 0_int64)
+          return
+        else
+          r = .false.
+          return
+        end if
+      else
+        if ((tag_ == 9_int64)) then
+          if ((ref_ < hp_n_vec())) then
+            if ((ref_ < hp_n_vec())) then
+              r = (hp_vmark(ref_) == 0_int64)
+              return
+            else
+              r = .false.
+              return
+            end if
+          else
+            r = .false.
+            return
+          end if
+        else
+          if (hpg_text_tag(tag_)) then
+            if ((ref_ < hp_n_str())) then
+              r = (hp_smark(ref_) == 0_int64)
+              return
+            else
+              r = .false.
+              return
+            end if
+          else
+            r = .false.
+            return
+          end if
+        end if
+      end if
+    else
+      r = .false.
+      return
+    end if
+  end function hpg_young_ref

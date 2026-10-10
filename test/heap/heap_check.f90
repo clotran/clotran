@@ -35,7 +35,7 @@ contains
   pure integer(int64) function hp_n_oslot()
     hp_n_oslot = size(otag, kind=int64)
   end function hp_n_oslot
-  integer(int64) function hp_omark(i)
+  pure integer(int64) function hp_omark(i)
     integer(int64), intent(in) :: i
     hp_omark = omark(i)
   end function hp_omark
@@ -50,11 +50,11 @@ contains
     integer(int64), intent(in) :: i
     hp_voff = voff(i)
   end function hp_voff
-  integer(int64) function hp_vlen(i)
+  pure integer(int64) function hp_vlen(i)
     integer(int64), intent(in) :: i
     hp_vlen = vlen(i)
   end function hp_vlen
-  integer(int64) function hp_vmark(i)
+  pure integer(int64) function hp_vmark(i)
     integer(int64), intent(in) :: i
     hp_vmark = vmark(i)
   end function hp_vmark
@@ -62,7 +62,7 @@ contains
     integer(int64), intent(in) :: i, x
     vmark(i) = x
   end subroutine hp_set_vmark
-  integer(int64) function hp_n_vec()
+  pure integer(int64) function hp_n_vec()
     hp_n_vec = min(size(voff, kind=int64), size(vlen, kind=int64), size(vmark, kind=int64))
   end function hp_n_vec
   integer(int64) function hp_atag(j)
@@ -76,15 +76,16 @@ contains
   integer(int64) function hp_n_arena()
     hp_n_arena = size(atag, kind=int64)
   end function hp_n_arena
-  integer(int64) function hp_smark(i)
+  pure integer(int64) function hp_smark(i)
     integer(int64), intent(in) :: i
     hp_smark = smark(i)
+    if (broken) hp_smark = 1 - smark(i)
   end function hp_smark
   subroutine hp_set_smark(i, x)
     integer(int64), intent(in) :: i, x
     smark(i) = x
   end subroutine hp_set_smark
-  integer(int64) function hp_n_str()
+  pure integer(int64) function hp_n_str()
     hp_n_str = size(smark, kind=int64)
   end function hp_n_str
 
@@ -356,7 +357,8 @@ program heap_check
   integer :: u, i, nr
   integer(int64) :: no, nv, na, ns, cap, t, r, tk(3), pp(4), k, nt
   integer(int64), allocatable :: tn(:), tb(:), toff(:), sq(:)
-  integer(int64) :: nq, qo, qt, qr
+  integer(int64) :: nq, qo, qt, qr, nro, nrv
+  integer(int64), allocatable :: yq(:), ro(:), rv(:)
   character(len=256) :: path, arg2
   call get_command_argument(1, path)
   call get_command_argument(2, arg2)
@@ -409,12 +411,34 @@ program heap_check
      read(u, *) qo, qt, qr
      sq(k) = hpg_seq_op(hs, qo, qt, qr)
   end do
+  ! the write barrier's test on the heap as it starts (model/heapgn.lisp)
+  read(u, *) nq
+  allocate(yq(nq))
+  do k = 1, nq
+     read(u, *) qt, qr
+     yq(k) = merge(1_int64, 0_int64, hpg_young_ref(hs, qt, qr))
+  end do
+  ! the remembered objects and runs, scanned after the roots
+  read(u, *) nro
+  backspace(u)
+  allocate(ro(nro))
+  read(u, *) nro, ro
+  read(u, *) nrv
+  backspace(u)
+  allocate(rv(nrv))
+  read(u, *) nrv, rv
   read(u, *) nr
   do i = 1, nr
      read(u, *) t, r
      call hpg_push(hs, t, r)
   end do
   close(u)
+  do k = 1, nro
+     call hpg_scan_obj(hs, ro(k), 0_int64)
+  end do
+  do k = 1, nrv
+     call hpg_scan_vec(hs, rv(k))
+  end do
   call hpg_drain(hs, 1000000_int64)
   call hpg_sweep_objs(hs, 1_int64, no - 1)
   call hpg_sweep_vecs(hs, 1_int64, nv - 1)
@@ -490,4 +514,5 @@ program heap_check
   write(*, '(a, *(1x, i0))') 'nrb', nrb
   write(*, '(a, *(1x, i0))') 'rb', rb
   write(*, '(a, *(1x, i0))') 'seq', sq
+  write(*, '(a, *(1x, i0))') 'young', yq
 end program heap_check

@@ -88,7 +88,7 @@
               "! program vmicg_program compiles without an error or an overflow"
               "! answers, run, what it means."]}
     "heapg"
-    {:out "src/f/gen/heap_gen.inc" :include true :book "heapsq"
+    {:out "src/f/gen/heap_gen.inc" :include true :book "heapgn"
      :fns [hpg-add hpg-text-tag hpg-spush hpg-push hpg-scan-obj hpg-scan-run hpg-scan-vec hpg-drain
            ;; the sweep and the frees (model/heapsw.lisp)
            hpg-s64 hpg-n40 hpg-size-class hpg-free-obj hpg-slab-free hpg-free-vec hpg-free-str
@@ -101,7 +101,9 @@
            hpg-class-len hpg-run-new hpg-run-push hpg-runs-fill hpg-run-pop hpg-run-from-batch hpg-run-take-c
            hpg-run-take
            ;; the seq operations (model/heapsq.lisp)
-           hpg-ot hpg-or hpg-okd hpg-oi hpg-obj-at hpg-next-tail hpg-seq-op]
+           hpg-ot hpg-or hpg-okd hpg-oi hpg-obj-at hpg-next-tail hpg-seq-op
+           ;; the write barrier's test (model/heapgn.lisp)
+           hpg-young-ref]
      :stobjs {hpg "hs"} :stobj-types {"hs" "heap_state"}
      :fields {h-err ["hs" "err"] h-msp ["hs" "msp"] h-nobj ["hs" "nobj"] h-nvec ["hs" "nvec"]
               h-nstr ["hs" "nstr"] h-alive ["hs" "alive"]
@@ -144,7 +146,7 @@
                "sb" ["hp_sb" "hp_set_sb" "hp_n_ob"]
                "rb" ["hp_rb" "hp_set_rb" "hp_n_rb"] "nrb" ["hp_nrb" "hp_set_nrb" "hp_n_nrb"]
                "oi1" ["hp_oi1" "-" "hp_n_obj"]}
-     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag hpg-obj-at}
+     :value-formals {} :value-fns #{} :bool-fns #{hpg-text-tag hpg-obj-at hpg-young-ref}
      :header ["  ! GENERATED from model/heapg.lisp by scripts/acl2-fortran -b heapg. Do not edit:"
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"
               "  ! GC.f90's contains part: the collector's marking, guard-verified, on GC's"
