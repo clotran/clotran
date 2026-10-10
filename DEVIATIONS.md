@@ -634,7 +634,8 @@ clj artifact -- `this` is not a parameter there, it is the receiver.
 Here a method is an ordinary closure whose first parameter is `this`, so
 the recur point has the arity the head is written with and `recur` takes
 all of them. A method body ported verbatim from Clojure that recurs will
-get an arity error, which is at least loud.
+get "recur has the wrong number of arguments" when the type is
+defined (measured 2026-10-10), which is at least loud.
 
 It goes away by making the method's recur point exclude its first
 parameter, which is a change to `select_clause`'s partner in
@@ -1136,7 +1137,9 @@ frames for builtins, and a `recur` loop is one frame.
 ## 32. A qualified symbol that does not resolve is a run-time error
 
 Clojure fails to COMPILE a form naming a Var that does not exist:
-`Unable to resolve symbol: jio/reader`. clotran's analyser does the
+`Unable to resolve symbol: jio/reader` (for a namespace that does not
+exist at all, clj's message is its host's ClassNotFoundException,
+measured 2026-10-10). clotran's analyser does the
 same for an unqualified symbol, but a QUALIFIED one that fails to
 resolve is deferred (`N_LATEVAR`): the function containing it is
 defined, and only a call of it fails, with the same message.
@@ -1293,8 +1296,10 @@ them), so it is worth doing after that, not before.
 ## 36. `binding` accepts a Var that was not declared `^:dynamic`
 
 `(def g nil) (binding [g 1] g)` answers `1` here. Clojure refuses it
-at compile time -- `Can't dynamically bind non-dynamic var: user/g`
-(`clj`; Compiler's `BindingInit` checks `Var.isDynamic`) -- and
+at run time -- `Can't dynamically bind non-dynamic var: user/g`, an
+IllegalStateException from `Var.pushThreadBindings` in clj's own
+source (not the compiler, as this entry once said; measured
+2026-10-10) -- and
 ClojureScript warns and refuses too, so the rule is the language's,
 not clj's. `push-thread-bindings` here binds whatever Var it is
 handed, and no Var carries a dynamic flag: `(def ^:dynamic *h* nil)`
@@ -1432,7 +1437,9 @@ checkSpecAsserts) flag)`. The field is here as a host static that reads
 FALSE -- clj's default, `-Dclojure.spec.check-asserts` unset -- so
 `(s/assert spec x)` is `x`, as it is on a stock clj. `set!` of a host
 static has nowhere to write (DEVIATIONS 4), so `(s/check-asserts true)`
-throws instead of enabling the checks.
+answers true and enables nothing (measured 2026-10-10:
+`(s/check-asserts?)` stays false and `(s/assert int? "x")` answers
+"x"): a silent no-op where it once threw, which is worse, and open.
 
 **Removal**: a writable box behind the row, as `Compiler/LINE` has, and
 `set!` on a static that names one.
@@ -1548,9 +1555,17 @@ markers against its opts, as before. `#uuid` reads because
 `clojure.uuid` now runs verbatim (DEVIATIONS 12); `#inst` still wants a
 date type.
 
-## 47. `all-ns` answers a namespace per host class name as well
+## 47. RESOLVED -- `all-ns` answers clotran's own libraries beside clj's, not host class names
 
-`(count (all-ns))` is 64 here against real Clojure's dozen, and the
+**RESOLVED (measured 2026-10-10).** `(count (all-ns))` is 17 here
+against clj's 13, and the extra four are real libraries with publics
+-- clotran.rt, clotran.files, clotran.thread, clotran.uuid,
+clotran.multifn and fortran -- loaded with core; no namespace is made
+for a host class any more: `(find-ns 'Math)` and `(find-ns
+'clotran.host.rt)` are nil after qualified host calls. The cause this
+entry describes is gone. The original entry follows.
+
+`(count (all-ns))` was 64 here against real Clojure's dozen, and the
 extra entries are host class names: `Math`, `String`, `UUID`,
 `RT` and every other class a loaded file mentions.
 
@@ -1870,7 +1885,7 @@ array, whose class is `[LObject;` whatever it was made for.
     [(class (make-array String 1)) (class (into-array ["a"]))
      (instance? (Class/forName "[LString;") (make-array String 1))]
     ;; clj     [String/1 String/1 true]
-    ;; clotran [Object/1 Object/1 false]
+    ;; clotran [clotran.host.value/1 clotran.host.value/1 false]  -- Object, under entry 67's names
 
 Primitive arrays are not affected (`int/1`, `double/2` are right), and
 the array class SYMBOLS resolve: `String/1`, `int/2` and `[I` name

@@ -1673,8 +1673,8 @@ serialized under one lock -- a valid STM schedule, no retries, no
 history (DEVIATIONS 10 resolved for refs). `*agent*` is bound during
 an action; a send made inside an action or a transaction is held until
 it ends, as Agent.nested and LockingTransaction.enqueue hold it, and
-restart-agent resumes a failed agent's kept queue. Not done: a thread
-pool for agents (a drain is a thread per busy agent).
+restart-agent resumes a failed agent's kept queue. The thread pool
+came with step 24 (2026-10-10), designed in ACL2.
 
 **Open: a thread-timing flake in the oracle (2026-09-28).** RESOLVED 2026-09-29, step 20: a missed root in read_regex, not threads. The oracle's
 script, run nine times on one binary, gave identical output eight
@@ -2275,9 +2275,13 @@ c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    `clotran.io/utf8-bytes` / `utf8-string`, what bencode needs.
 d. *nREPL, as a package* (serving 2026-09-29, `~/jborden/clotran-nrepl`:
    the eleven ops below, tested against its own client and the reference
-   client nrepl/nrepl 1.3.0; CIDER itself not yet tried): what CIDER speaks (bencode, eval, load-file,
+   client nrepl/nrepl 1.3.0, and the real CIDER headless in Emacs by its
+   test/cider-test.el): what CIDER speaks (bencode, eval, load-file,
    describe, completions), on the model of babashka's compact server.
-e. *CIDER's debugger, queued (2026-09-29)*: CIDER's debugger UI is its
+e. *The debugger in the editor -- superseded by step 31a (2026-10-06):
+   a DAP server, which CIDER's Emacs reaches through dape as VS Code and
+   Neovim reach it natively; the cider-nrepl protocol is not the target.
+   The original note:* CIDER's debugger UI is its
    Emacs side (`cider-debug.el`); the instrumenting is clj middleware
    cider-nrepl. clotran-nrepl answering that protocol from clotran's own
    break protocol (`clotran-break`, frames with locals) puts CIDER's
@@ -2466,7 +2470,12 @@ after it is accepted and queued and never runs, `await-for` times
 out. The language test checks it, last, after every agent above is
 done with. An idle pool keeps its K threads parked, as clj's pool
 keeps its threads; they are counted among the waiters with no
-deadline, which is what the deadlock verdict needs. Parallel marking
+deadline, which is what the deadlock verdict needs -- and that verdict
+had a gap the pool exposed: a waiter with no deadline slept forever
+once it had decided "not a deadlock", and a worker that re-parked after
+that (woken by a notify, finding nothing) woke nobody, so the language
+test's unsatisfiable wait hung under the gate's load; such a wait
+re-checks every 200 ms now (tasks.inc, block_on). Parallel marking
 in the collector: not taken up -- step 14's measurement put the pause
 in the sweep, which lazy per-thread sweeping fixed, and nothing since
 has shown marking there. The cost of a send, measured: 10^5 `swap!`
@@ -5199,10 +5208,17 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    (a slash inside a namespace), 60 (a deftype's hash asked once), 62
    (an array of references has no element class), 68 (an uncaught
    error reported as a load failure), 74 (the nil key walked by hash).
-   Each is resolved or reclassified with its reason, in its own commit.
-   The table at the top says "host" for 7, 13 and 15 where their prose
-   says resolved; 18, 23, 25, 26 and 15/22 cite entries since resolved;
-   56/61 and 57/63 are duplicates. A v1.0 ledger has no scaffolds and
+   Probed against clj and the binary on 2026-10-10 (every entry, one
+   probe each): 47 no longer deviates and is resolved; the rest still
+   do, and 19, 32, 36, 42 and 62 described their own behaviour wrongly
+   (42 had turned from a throw into a silent no-op) and are corrected.
+   The order to resolve the rest, cheapest by each entry's own removal
+   sentence: 36, 42, 23, 10, 19, 54, 51, 74 (model/hashseq.lisp moves
+   with it), 60, 62, 68, 48, 6, 17, 32, 3, 2 -- each in its own gated
+   commit, or reclassified by design with the reason. The table at the
+   top said "host" for 7, 13 and 15 where their prose says resolved;
+   18, 23, 25, 26 and 15/22 cited entries since resolved; 56/61 and
+   57/63 are duplicates -- fixed. A v1.0 ledger has no scaffolds and
    no stale sentences.
 2. *Mutable deftype fields* (DEVIATIONS 20) -- DONE 2026-10-10: the
    analyser keeps the method's field table and routes a mutable field's
