@@ -23,65 +23,122 @@
 
 ;;; ---- the support module ----------------------------------------------
 
-(def support-module
-  "The few checked operations every pure module shares. Plain Fortran."
-  "module clotran_pure
-  use iso_fortran_env, only: int64, real64
-  implicit none
+(defn- support-text
+  "The few checked operations every pure module shares, plain Fortran,
+  as module `mod`. STANDALONE (lib? false): every procedure pure, and a
+  failure is Clojure's exception as the program's end, error stop with
+  its message -- pure, since Fortran 2018 allows error stop in a pure
+  procedure, so every helper can be called inside do concurrent; each
+  compiler prefixes the message its own way (gfortran ERROR STOP, flang
+  Fortran ERROR STOP:). IN A LIBRARY (lib? true, PLAN step 13): nothing
+  is pure, every procedure that can fail takes a trailing `err`, and a
+  failure raises Clojure's exception in the running clotran
+  (clotran_fail, with the class by code) and sets err, which the
+  generated code checks after every such call and returns on."
+  [lib? mod]
+  (let [P (if lib? "" "pure ")
+        E (if lib? ", err" "")
+        ED (if lib? "    logical, intent(inout) :: err\n" "")
+        fail (fn [msg code] (if lib?
+                              (str "call cl_fail(" msg ", " code ", err)\n       return")
+                              (str "call cl_fail(" msg ")")))]
+    (str "module " mod "\n"
+         "  use iso_fortran_env, only: int64, real64\n"
+         (when lib? "  use iso_c_binding, only: c_int, c_char\n")
+         "  implicit none
   integer, parameter :: k16 = selected_int_kind(38)
-contains
-  ! Clojure's exception, as the program's end: error stop with its message.
-  ! Pure (Fortran 2018 allows error stop in a pure procedure), so every
-  ! helper here can be called from inside do concurrent. Each compiler
-  ! prefixes the message its own way (gfortran ERROR STOP, flang Fortran
-  ! ERROR STOP:).
-  pure subroutine cl_fail(msg)
+"
+         (when lib?
+           "  ! the exception classes clotran_fail raises, by code: 1 arithmetic,
+  ! 2 array index out of bounds, 3 illegal argument, 4 negative array
+  ! size, 5 arity, 6 string index out of bounds
+  interface
+     subroutine clotran_fail(code, msg, n) bind(C, name=\"clotran_fail\")
+       import :: c_int, c_char
+       integer(c_int), value :: code, n
+       character(kind=c_char), intent(in) :: msg(*)
+     end subroutine clotran_fail
+  end interface
+")
+         "contains\n"
+         (if lib?
+           "  subroutine cl_fail(msg, code, err)
+    character(len=*), intent(in) :: msg
+    integer, intent(in) :: code
+    logical, intent(inout) :: err
+    err = .true.
+    call clotran_fail(int(code, c_int), msg, int(len(msg), c_int))
+  end subroutine cl_fail
+"
+           "  pure subroutine cl_fail(msg)
     character(len=*), intent(in) :: msg
     error stop msg
   end subroutine cl_fail
-  ! Clojure's long arithmetic throws on overflow (Numbers.add, multiply)
-  pure function cl_add(a, b) result(r)
+")
+         "  ! Clojure's long arithmetic throws on overflow (Numbers.add, multiply)
+  " P "function cl_add(a, b" E ") result(r)
     integer(int64), intent(in) :: a, b
-    integer(int64) :: r
-    if ((b > 0 .and. a > huge(a) - b) .or. (b < 0 .and. a < -huge(a) - 1_int64 - b)) &
-         call cl_fail('long overflow')
+" ED "    integer(int64) :: r
+    if ((b > 0 .and. a > huge(a) - b) .or. (b < 0 .and. a < -huge(a) - 1_int64 - b)) then
+       " (fail "'long overflow'" 1) "
+    end if
     r = a + b
   end function cl_add
-  pure function cl_sub(a, b) result(r)
+  " P "function cl_sub(a, b" E ") result(r)
     integer(int64), intent(in) :: a, b
-    integer(int64) :: r
-    if ((b < 0 .and. a > huge(a) + b) .or. (b > 0 .and. a < -huge(a) - 1_int64 + b)) &
-         call cl_fail('long overflow')
+" ED "    integer(int64) :: r
+    if ((b < 0 .and. a > huge(a) + b) .or. (b > 0 .and. a < -huge(a) - 1_int64 + b)) then
+       " (fail "'long overflow'" 1) "
+    end if
     r = a - b
   end function cl_sub
-  pure function cl_mul(a, b) result(r)
+  " P "function cl_mul(a, b" E ") result(r)
     integer(int64), intent(in) :: a, b
-    integer(int64) :: r
+" ED "    integer(int64) :: r
     integer(k16) :: p
     p = int(a, k16) * int(b, k16)
-    if (p > int(huge(a), k16) .or. p < -int(huge(a), k16) - 1) call cl_fail('long overflow')
+    if (p > int(huge(a), k16) .or. p < -int(huge(a), k16) - 1) then
+       " (fail "'long overflow'" 1) "
+    end if
     r = int(p, int64)
   end function cl_mul
-  pure function cl_neg(a) result(r)
+  " P "function cl_neg(a" E ") result(r)
     integer(int64), intent(in) :: a
-    integer(int64) :: r
-    if (a == -huge(a) - 1_int64) call cl_fail('long overflow')
+" ED "    integer(int64) :: r
+    if (a == -huge(a) - 1_int64) then
+       " (fail "'long overflow'" 1) "
+    end if
     r = -a
   end function cl_neg
-  pure function cl_quot(a, b) result(r)
-    integer(int64), intent(in) :: a, b
+  ! Math.abs: the least long is its own absolute value (it wraps), which
+  ! Fortran's abs of that constant refuses to compile
+  pure function cl_abs(a) result(r)
+    integer(int64), intent(in) :: a
     integer(int64) :: r
-    if (b == 0) call cl_fail('Divide by zero')
+    if (a == -huge(a) - 1_int64) then
+       r = a
+    else
+       r = abs(a)
+    end if
+  end function cl_abs
+  " P "function cl_quot(a, b" E ") result(r)
+    integer(int64), intent(in) :: a, b
+" ED "    integer(int64) :: r
+    if (b == 0) then
+       " (fail "'Divide by zero'" 1) "
+    end if
     if (a == -huge(a) - 1_int64 .and. b == -1_int64) then
        r = a
     else
        r = a / b
     end if
   end function cl_quot
-  pure function cl_rem(a, b) result(r)
+  " P "function cl_rem(a, b" E ") result(r)
     integer(int64), intent(in) :: a, b
-    integer(int64) :: r
-    if (b == 0) call cl_fail('Divide by zero')
+" ED "    integer(int64) :: r
+    if (b == 0) then
+       " (fail "'Divide by zero'" 1) "
+    end if
     if (b == -1_int64) then
        r = 0
     else
@@ -89,54 +146,54 @@ contains
     end if
   end function cl_rem
   ! clojure.core/mod: the remainder takes the divisor's sign
-  pure function cl_mod(a, b) result(r)
+  " P "function cl_mod(a, b" E ") result(r)
     integer(int64), intent(in) :: a, b
-    integer(int64) :: r
-    r = cl_rem(a, b)
-    if (r /= 0 .and. ((r < 0) .neqv. (b < 0))) r = r + b
+" ED "    integer(int64) :: r
+    r = cl_rem(a, b" E ")
+" (when lib? "    if (err) return\n") "    if (r /= 0 .and. ((r < 0) .neqv. (b < 0))) r = r + b
   end function cl_mod
   ! RT.longCast of a double: in range, truncated toward zero
-  pure function cl_long_of(x) result(r)
+  " P "function cl_long_of(x" E ") result(r)
     real(real64), intent(in) :: x
-    integer(int64) :: r
+" ED "    integer(int64) :: r
     character(len=32) :: buf
     if (.not. (x >= -9.223372036854775808d18 .and. x < 9.223372036854775808d18)) then
        ! Fortran's own ES form, the same text from every compiler; clj
        ! writes 1.0E30 (DEVIATIONS 50)
        write(buf, '(es24.16e3)') x
-       call cl_fail('Value out of range for long: ' // trim(adjustl(buf)))
+       " (fail "'Value out of range for long: ' // trim(adjustl(buf))" 3) "
     end if
     r = int(x, int64)
   end function cl_long_of
-  pure subroutine cl_bounds(i, n)
+  " P "subroutine cl_bounds(i, n" E ")
     integer(int64), intent(in) :: i, n
-    character(len=24) :: bi, bn
+" ED "    character(len=24) :: bi, bn
     if (i < 0 .or. i >= n) then
        write(bi, '(i0)') i
        write(bn, '(i0)') n
-       call cl_fail('Index ' // trim(bi) // ' out of bounds for length ' // trim(bn))
+       " (fail "'Index ' // trim(bi) // ' out of bounds for length ' // trim(bn)" 2) "
     end if
   end subroutine cl_bounds
   ! (double-array n), (long-array n): zeros; a negative size is clj's
   ! NegativeArraySizeException, whose message is the size
-  pure function cl_dzeros(n) result(r)
+  " P "function cl_dzeros(n" E ") result(r)
     integer(int64), intent(in) :: n
-    real(real64), allocatable :: r(:)
+" ED "    real(real64), allocatable :: r(:)
     character(len=24) :: b
     if (n < 0) then
        write(b, '(i0)') n
-       call cl_fail(trim(b))
+       " (fail "trim(b)" 4) "
     end if
     allocate(r(n))
     r = 0.0_real64
   end function cl_dzeros
-  pure function cl_lzeros(n) result(r)
+  " P "function cl_lzeros(n" E ") result(r)
     integer(int64), intent(in) :: n
-    integer(int64), allocatable :: r(:)
+" ED "    integer(int64), allocatable :: r(:)
     character(len=24) :: b
     if (n < 0) then
        write(b, '(i0)') n
-       call cl_fail(trim(b))
+       " (fail "trim(b)" 4) "
     end if
     allocate(r(n))
     r = 0_int64
@@ -168,16 +225,16 @@ contains
     p = len(s) + 1
   end function cl_charpos
   ! (subs s a b): String.substring's bounds check, then the characters
-  pure function cl_subs(s, a, b) result(r)
+  " P "function cl_subs(s, a, b" E ") result(r)
     character(len=*), intent(in) :: s
     integer(int64), intent(in) :: a, b
-    character(len=:), allocatable :: r
+" ED "    character(len=:), allocatable :: r
     character(len=24) :: ba, bb, bn
     integer(int64) :: n
     n = cl_nchars(s)
     if (a < 0 .or. b > n .or. a > b) then
        write(ba, '(i0)') a; write(bb, '(i0)') b; write(bn, '(i0)') n
-       call cl_fail('Range [' // trim(ba) // ', ' // trim(bb) // ') out of bounds for length ' // trim(bn))
+       " (fail "'Range [' // trim(ba) // ', ' // trim(bb) // ') out of bounds for length ' // trim(bn)" 6) "
     end if
     r = s(cl_charpos(s, a):cl_charpos(s, b) - 1)
   end function cl_subs
@@ -203,8 +260,69 @@ contains
     write(b, '(l1)') x
     r = b
   end function cl_bstr
-end module clotran_pure
-")
+end module " mod "
+")))
+
+;; what a library's generated code asks of the running clotran: the
+;; error flag threaded through every procedure that can fail
+(def ^:dynamic *library* false)
+(declare decline)
+
+;; the support procedures that can fail, and so take `err` in a library
+(def ^:private fallible
+  #{"cl_add" "cl_sub" "cl_mul" "cl_neg" "cl_quot" "cl_rem" "cl_mod" "cl_long_of"
+    "cl_bounds" "cl_dzeros" "cl_lzeros" "cl_subs"})
+
+(defn- ident-char? [c] (boolean (re-matches #"[A-Za-z0-9_]" (str c))))
+
+(defn- matching-paren
+  "The index of the ) closing the ( at i, quoted text skipped."
+  [s i]
+  (loop [j (inc i) depth 1 q false]
+    (let [c (nth s j)]
+      (cond q (recur (inc j) depth (not= c \'))
+            (= c \') (recur (inc j) depth true)
+            (= c \() (recur (inc j) (inc depth) false)
+            (= c \)) (if (= depth 1) j (recur (inc j) (dec depth) false))
+            :else (recur (inc j) depth false)))))
+
+(defn- err-calls
+  "`line` with `, err` as the last argument of every call of a name in
+  `names` -- nested calls too, quoted text left alone -- and whether
+  there was one."
+  [line names]
+  (let [n (count line)]
+    (loop [i 0 start 0 out "" any false]
+      (cond
+        (>= i n) [(str out (subs line start)) any]
+        (= (nth line i) \') (let [j (or (str/index-of line "'" (inc i)) (dec n))]
+                              (recur (inc j) start out any))
+        (and (ident-char? (nth line i)) (or (zero? i) (not (ident-char? (nth line (dec i))))))
+        (let [j (loop [j i] (if (and (< j n) (ident-char? (nth line j))) (recur (inc j)) j))
+              nm (subs line i j)]
+          (if (and (< j n) (= (nth line j) \() (contains? names nm))
+            (let [k (matching-paren line j)
+                  [inner _] (err-calls (subs line (inc j) k) names)]
+              (recur (inc k) (inc k)
+                     (str out (subs line start i) nm "(" inner (if (str/blank? inner) "err" ", err") ")")
+                     true))
+            (recur j start out any)))
+        :else (recur (inc i) start out any)))))
+
+(defn- with-err
+  "A library procedure's body: each statement that calls something
+  that can fail passes `err` and is followed by the check. A failed
+  call inside a condition would branch on a garbage value, so a
+  checked operation in an if or a do while declines the version."
+  [lines names]
+  (vec (mapcat (fn [l]
+                 (let [[l2 any] (err-calls l names)]
+                   (if any
+                     (do (when (re-find #"^\s*(else\s*)?(if|do while) \(" l)
+                           (decline "a checked operation inside a condition (library mode)"))
+                         [l2 (str (re-find #"^\s*" l) "if (err) return")])
+                     [l])))
+               lines)))
 
 ;;; ---- types -----------------------------------------------------------
 
@@ -479,7 +597,12 @@ end module clotran_pure
                                     type])
                     ;; only after the loop is it known whether the chain was empty
                     after (when-not zero
-                            [(str "if (.not. STARTED) call cl_fail('Wrong number of args (0) passed to: " fname "')")])
+                            (if *library*
+                              ["if (.not. STARTED) then"
+                               (str "   call cl_fail('Wrong number of args (0) passed to: " fname "', 5, err)")
+                               "   return"
+                               "end if"]
+                              [(str "if (.not. STARTED) call cl_fail('Wrong number of args (0) passed to: " fname "')")]))
                     _ (when (not= zt type)
                         (decline (str "reduce with no init answers (f), a " (name zt) ", for an empty chain of "
                                       (name type) "s: give it an init of the elements' type")))
@@ -543,6 +666,9 @@ end module clotran_pure
 (defn- emit-call** [nd env st]
   (let [[head & args] (:children nd)
         op (op-name head)
+        ;; an array hint's checkcast is (clotran-array-cast x :doubles): the
+        ;; keyword names the type and is no expression to emit
+        args (if (= op 'clotran-array-cast) [(first args)] args)
         [ls es ts] (emit-args args env st)
         n (count args)
         done (fn [e t] [ls e t])]
@@ -636,7 +762,7 @@ end module clotran_pure
         (decline (str op " of something that is not a number")))
 
       (#{'abs 'math/abs} op)
-      (if (num? (first ts)) (done (str "abs(" (first es) ")") (first ts))
+      (if (num? (first ts)) (done (str (if (= :long (first ts)) "cl_abs(" "abs(") (first es) ")") (first ts))
           (decline "abs of something that is not a number"))
 
       (and (= "math" (namespace op)) (math1 (name op)))
@@ -700,10 +826,10 @@ end module clotran_pure
                        :else (str/join " // ' ' // " parts))]
         (case op
           str (done text :string)
-          println (do (swap! st assoc :impure true) [(conj ls (str "write(*, '(a)') " text)) "" :nil])
-          print (do (swap! st assoc :impure true) [(conj ls (str "write(*, '(a)', advance='no') " text)) "" :nil])))
+          println (do (swap! st assoc :impure true :prints true) [(conj ls (str "write(*, '(a)') " text)) "" :nil])
+          print (do (swap! st assoc :impure true :prints true) [(conj ls (str "write(*, '(a)', advance='no') " text)) "" :nil])))
 
-      (= op 'newline) (do (swap! st assoc :impure true) [(conj ls "write(*, '(a)') ''") "" :nil])
+      (= op 'newline) (do (swap! st assoc :impure true :prints true) [(conj ls "write(*, '(a)') ''") "" :nil])
 
       (and (= op 'count) (= 1 n) (= :string (first ts)))
       (done (str "cl_nchars(" (first es) ")") :long)
@@ -734,6 +860,7 @@ end module clotran_pure
         (when-not rt (decline (str "`" op "` has no version for " (pr-str (mapv name ts)))))
         (swap! st update :calls (fnil conj #{}) [op ts])
         (when (contains? (:impure-versions @st) [op ts]) (swap! st assoc :impure true))
+        (when (contains? (:printing-versions @st) [op ts]) (swap! st assoc :prints true))
         (if (= rt :nil)
           ;; a function answering nil is a subroutine: called, not evaluated
           [(conj ls (str "call " (fort-ident (name op)) "(" (str/join ", " es) ")")) "" :nil]
@@ -797,9 +924,15 @@ end module clotran_pure
             impure? (:impure @st)
             et-ok (or (= et (if (= rt :doubles) :double :long)) (and (= rt :doubles) (= et :long)))]
         (swap! st (fn [s] (assoc s :impure was-impure :decls (subvec (:decls s) 0 before))))
+        ;; in a library the loop is a plain do: nothing impure, and no
+        ;; return, is allowed inside do concurrent, and the error check
+        ;; is both
+        (when (and *library* (not impure?) et-ok) (swap! st update :decls conj [k :long]))
         (when (and (not impure?) et-ok)
           [(concat ll
-                   [(str "do concurrent (integer(int64) :: " k " = 0:" le " - 1)")
+                   [(if *library*
+                      (str "do " k " = 0, " le " - 1")
+                      (str "do concurrent (integer(int64) :: " k " = 0:" le " - 1)"))
                     "   block"]
                    (for [[v t] (distinct inner) :when (fort-type t)]
                      (str "      " (if (#{:doubles :longs} t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
@@ -984,10 +1117,11 @@ end module clotran_pure
 (defn- emit-version
   "One version of fname's arity [nargs variadic start body] for
   parameter types ts: {:name :ret :text} or {:declined why}."
-  [fname [nargs variadic start body] ts sigs impure-versions records]
+  [fname [nargs variadic start body] ts sigs impure-versions printing-versions records]
   (try
     (let [_ (when variadic (decline "variadic"))
-          st (atom {:n 0 :decls [] :sigs sigs :written #{} :impure-versions impure-versions :records records})
+          st (atom {:n 0 :decls [] :sigs sigs :written #{} :impure-versions impure-versions
+                    :printing-versions printing-versions :records records})
           pnames (mapv #(str "p" %) (range nargs))
           ;; scalar parameters are copied into locals, so a recur can rebind them
           locals (mapv (fn [t] (when-not (#{:doubles :longs} t) (fresh! st "a" t))) ts)
@@ -1006,6 +1140,12 @@ end module clotran_pure
                                     [(str "r = " e) (str "exit " label)])))
           rt @ret
           _ (when-not rt (decline "no path answers a value"))
+          ;; in a library, the error flag after every call that can fail:
+          ;; the support procedures and this file's own functions
+          body-lines (if *library*
+                       (with-err body-lines (into fallible (map #(fort-ident (name %)) (keys sigs))))
+                       body-lines)
+          params (str/join ", " (if *library* (conj pnames "err") pnames))
           nm (str (fort-ident (name fname)) "__" (str/join "_" (map suffix ts)))
           {:keys [decls written]} @st
           decl-lines (for [[v t] (distinct decls) :when (fort-type t)]
@@ -1016,11 +1156,15 @@ end module clotran_pure
           ;; PURE, so it can be called inside do concurrent: no printing,
           ;; no write to a parameter array, nothing impure called
           pure? (and (not (:impure @st)) (empty? (filter (set pnames) written)))
-          pre (if pure? "pure " "")]
-      {:name nm :ret rt :calls (:calls @st #{}) :pure pure?
+          pre (if (and pure? (not *library*)) "pure " "")]
+      ;; :prints -- it writes to standard output, Fortran's way, which a
+      ;; library must not (the REPL's *out* would not see it): such a
+      ;; version is not dispatched to (clotran.compiler)
+      {:name nm :ret rt :calls (:calls @st #{}) :pure pure? :prints (boolean (:prints @st))
        :text (str (if sub?
-                    (str "  " pre "subroutine " nm "(" (str/join ", " pnames) ")\n")
-                    (str "  " pre "function " nm "(" (str/join ", " pnames) ") result(r)\n"))
+                    (str "  " pre "subroutine " nm "(" params ")\n")
+                    (str "  " pre "function " nm "(" params ") result(r)\n"))
+                  (when *library* "    logical, intent(inout) :: err\n")
                   (apply str (for [[i t] (map-indexed vector ts)]
                                (str "    " (if (= t :string) "character(len=*), intent(in)" (fort-type t))
                                     (cond
@@ -1045,11 +1189,23 @@ end module clotran_pure
 
 ;;; ---- a namespace -------------------------------------------------------
 
+(declare generate*)
+
 (defn generate
   "The tier-A functions of `src` as Fortran: {:text the file, :emitted
   {ns/name [versions]}, :skipped {ns/name why}}. Functions are done in
-  file order, so a call to an earlier one sees its versions."
-  [src]
+  file order, so a call to an earlier one sees its versions.
+
+  With {:library true} the module is for a compiled library (PLAN step
+  13): nothing pure, the error flag threaded through, the support
+  module named after this one, and every specific procedure public so
+  the library's dispatcher can call the one the argument tags pick."
+  ([src] (generate src nil))
+  ([src opts]
+   (binding [*library* (boolean (:library opts))]
+     (generate* src))))
+
+(defn- generate* [src]
   (let [cls (tiers/classify src)
         text (clotran-slurp src)
         [_ ns-name] (read-string text)
@@ -1084,13 +1240,14 @@ end module clotran_pure
                              (update-in acc [:why s] (fnil conj [])
                                         (str (count combos) " type combinations; hint some parameters (^double, ^doubles, ...) to settle them"))
                              :else
-                             (let [vs (for [ts combos] (assoc (emit-version s ar ts (:sigs acc) (:impure acc) records) :ts ts))
+                             (let [vs (for [ts combos] (assoc (emit-version s ar ts (:sigs acc) (:impure acc) (:printing acc) records) :ts ts))
                                    ok (remove :declined vs)]
                                (-> acc
                                    (update-in [:why s] (fnil into []) (when (empty? ok) (distinct (map :declined vs))))
                                    (update-in [:emitted s] (fnil into []) ok)
                                    (update-in [:sigs s] (fnil into {}) (map (fn [v] [(:ts v) (:ret v)]) ok))
                                    (update :impure into (for [v ok :when (not (:pure v))] [s (:ts v)]))
+                                   (update :printing into (for [v ok :when (:prints v)] [s (:ts v)]))
                                    (update-in [:dropped s] (fnil into []) (keep #(when (:declined %) [(:ts %) (:declined %)]) vs)))))))
                    acc (reduce one acc arities)]
                (if (seq (get-in acc [:emitted s]))
@@ -1100,7 +1257,7 @@ end module clotran_pure
                      (update :why dissoc s)
                      (update :emitted dissoc s)
                      (update :sigs dissoc s))))))
-         {:sigs {} :emitted {} :skipped {} :dropped {} :impure #{}}
+         {:sigs {} :emitted {} :skipped {} :dropped {} :impure #{} :printing #{}}
          defns)
         mod-name (str (fort-ident ns-name) "_pure")
         ;; A private function is called only from this file, so only the
@@ -1124,14 +1281,20 @@ end module clotran_pure
            :pruned pruned
            :module mod-name
            :text (str "! GENERATED by clotran.purefort from " src ". Do not edit; regenerate.\n"
-                      "! Pure Fortran: no clotran runtime. The tier-A functions of " ns-name ",\n"
-                      "! one generic name each, one specific procedure per argument type.\n\n"
-                      support-module "\n"
+                      (if *library*
+                        (str "! The tier-A functions of " ns-name " for its compiled library (PLAN step 13):\n"
+                             "! an error raised in the running clotran and returned on, nothing pure.\n\n")
+                        (str "! Pure Fortran: no clotran runtime. The tier-A functions of " ns-name ",\n"
+                             "! one generic name each, one specific procedure per argument type.\n\n"))
+                      (support-text *library* (if *library* (str mod-name "_rt") "clotran_pure")) "\n"
                       "module " mod-name "\n"
                       "  use iso_fortran_env, only: int64, real64\n"
-                      "  use clotran_pure\n"
+                      "  use " (if *library* (str mod-name "_rt") "clotran_pure") "\n"
                       "  implicit none\n"
                       "  private\n"
+                      (when *library*
+                        (apply str (for [[_ vs] (sort-by key emitted) v vs]
+                                     (str "  public :: " (:name v) "\n"))))
                       (apply str (for [[_ r] (sort-by key records)]
                                    (str "  public :: " (type-name (:type r)) "\n"
                                         "  type :: " (type-name (:type r)) "\n"

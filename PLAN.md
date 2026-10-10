@@ -1280,6 +1280,80 @@ machine runs); the emitter generated from it, as vmc_gen was; then wired
 in and measured against the table. Found on the way and not yet fixed:
 `aget` costs ~2.4 us a call interpreted, the generic host call.
 
+**LANDED 2026-10-10: tier A inside the compiled library.** Found first:
+the tier already existed as clotran.purefort (hand-written Clojure
+emitting Fortran, 92 cases agreeing across gfortran, flang and clj since
+09-25), and `clotran compile --pure` lowered all three target loops --
+but `clotran compile`, the road the loader installs, never called it:
+every `aset`, `mod`, `/` and `double` became a boxed value and a generic
+runtime call, so the dot product happened to hit the unboxed array fast
+path (1.8 ms installed) and the stencil and the LCG installed at
+interpreted speed, 2400 and 500 ms, under "compiled: 3 functions". The
+join (src/clj/clotran/compiler.cljf, purefort.cljf):
+
+- purefort has a LIBRARY MODE (`generate src {:library true}`): nothing
+  `pure`, every procedure that can fail takes a trailing `err`, a
+  failure calls the runtime (ClotranABI's new `clotran_fail`, Eval's
+  gce_raise_coded: the class by code -- arithmetic, array index, illegal
+  argument, negative array size, arity, string index -- raised in this
+  thread's context) and sets the flag, and the generated code checks it
+  after every such statement and returns (with-err, a paren-matching
+  pass over the emitted lines; a checked operation inside an `if` or
+  `do while` condition declines the version rather than branch on a
+  garbage value). `do concurrent` is a plain `do` there, since neither
+  an impure call nor a return is allowed inside one. The support module
+  is named after the namespace's, so two libraries in one process do not
+  clash. The standalone module is unchanged but for its failure sites
+  now being `if ... then` blocks.
+- compile-file asks purefort for the versions and, for a function with
+  one over numbers and arrays alone (`:long :double :doubles :longs`)
+  answering a number, a boolean or nil, and not printing, installs a
+  DISPATCHER under the function's symbol: the arguments' tags tested
+  per version, a scalar read from its slot, an array viewed through
+  clotran_array_view (its buffer, no copy; a slice or a boxed array
+  fails the test), the version called, its answer boxed into dst; on
+  the flag set, a return with no answer, as a tier-B procedure after an
+  error. Anything no version takes falls to the tier-B procedure,
+  renamed with _b. Versions that print are not dispatched to -- the
+  pure code writes Fortran's standard output, which *out* never sees;
+  pure-check caught exactly that (show, describe-num, countdown).
+- `clotran compile` prints each function's road: `pure Fortran: dot (4
+  versions)`, then `compiled: 4 functions; 4 pure Fortran`.
+- scripts/pure-check has the library road: the file compiled by
+  `clotran compile`, installed, every case through the installed
+  functions against clj -- and the CONTROL that every function library
+  mode emits a dispatchable version for came out pure, else the road
+  would be testing tier B under the pure road's name. scripts/fuzz-pure
+  rides on it (30 functions, 275 runs, 0 differ). make test's check-pure
+  and check-fuzz-pure cover both.
+- The `^doubles` hint refused lowering ("the constant :doubles is not a
+  number"): the analyser's (clotran-array-cast x :doubles) had its
+  keyword emitted as an expression. Fixed; the hint the report tells
+  users to add now works.
+
+MEASURED, the step-13 rows installed from the REPL (ms, 10^6):
+
+| form | interpreted | clj | compiled |
+|---|---|---|---|
+| dot product | 2400 | 6-15 | 1.0-1.4 |
+| stencil | 3174 | 13-127 | 1.3-1.7 |
+| LCG sum | 525 | 15-26 | 1.3 |
+
+Every row is below clj's, by 5x to 100x. Errors inside the pure loop
+answer the interpreter's exception, class and message: `(dot (double-array
+3) (double-array 2))` is array_index_out_of_bounds_exception "Index 2 out
+of bounds for length 2" both ways, and `(fact 25)` arithmetic_exception
+"long overflow" both ways. scripts/bench's compiled column shows the
+three rows this way (test/clj/bench_loops.cljf, the loops as defns).
+
+NOT DONE, said plainly: strings, records and array RESULTS stay tier B
+(no dispatcher: a result array needs an ABI entry that makes a clotran
+array from Fortran storage); a pure loop polls no safepoint, so another
+thread's collection waits for it to finish; the tier is still the
+hand-written emitter, not a model -- it has an oracle the VM never had,
+and modelling the translation is the candidate for the model's next book,
+not a precondition for this.
+
 **Measured, 2026-09-24.** `clotran-bin` is 36.4 MB, of which the machine
 code is 1.86 MB and 33.1 MB is ICU's complete data, linked whole. Linked
 against ICU's empty stub data instead it is 3.07 MB and language_test

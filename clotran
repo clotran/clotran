@@ -142,11 +142,19 @@ if [ "$1" = "compile" ]; then
   [ $# -eq 3 ] && lib=$3
   work=$(mktemp -d) || exit 1
   trap 'rm -rf "$work"' EXIT
-  printf '(let [r (clotran.compiler/compile-file "%s" "%s/out.f90")]\n  (doseq [[n why] (:declined r)] (println "declined:" n "--" why))\n  (println "compiled:" (count (:compiled r)) "functions"))\n' \
-    "$src" "$work" > "$work/driver.clj"
-  "$bin" "$core" "$root/src/clj/clotran/compiler.cljf" "$work/driver.clj" </dev/null \
-    | grep -v '^note: skipping\|^user=>\|WARNING: ->Eduction' | tee "$work/log"
-  [ -s "$work/out.f90" ] || { echo "clotran compile: no Fortran was written" >&2; exit 1; }
+  # each function's road is printed: declined (interpreted), compiled
+  # (tier B, through the runtime), or pure Fortran (tier A, PLAN step 13).
+  # CLOTRAN_COMPILE_PURE=0 keeps every function on the runtime road; so
+  # does a pure module that does not build (below), with a note.
+  generate() {
+    printf '(let [r (clotran.compiler/compile-file "%s" "%s/out.f90" {:pure %s})]\n  (doseq [[n why] (:declined r)] (println "declined:" n "--" why))\n  (doseq [[n k] (sort (:pure r))] (println "pure Fortran:" n (str "(" k " version" (if (= k 1) "" "s") ")")))\n  (println "compiled:" (count (:compiled r)) "functions;" (count (:pure r)) "pure Fortran"))\n' \
+      "$src" "$work" "$1" > "$work/driver.clj"
+    rm -f "$work/out.f90"
+    "$bin" "$core" "$root/src/clj/clotran/compiler.cljf" "$work/driver.clj" </dev/null \
+      | grep -v '^note: skipping\|^user=>\|WARNING: ->Eduction' | tee "$work/log"
+    [ -s "$work/out.f90" ] || { echo "clotran compile: no Fortran was written" >&2; exit 1; }
+  }
+  if [ "$CLOTRAN_COMPILE_PURE" = 0 ]; then generate false; else generate true; fi
   # A compiled namespace resolves clotran_* against the RUNNING binary
   # at dlopen time, so those symbols are undefined at link time on
   # purpose; macOS has to be told. The compiler runs INSIDE the work
@@ -167,8 +175,23 @@ if [ "$1" = "compile" ]; then
   else fc=gfortran
   fi
   case "$(basename "$fc")" in flang*) long="" ;; *) long="-ffree-line-length-none" ;; esac
-  (cd "$work" && $fc -O2 -ffp-contract=off -shared -fPIC $long $undef \
-    -o "$out.part" out.f90) || exit 1
+  build() {
+    (cd "$work" && $fc -O2 -ffp-contract=off -shared -fPIC $long $undef \
+      -o "$out.part" out.f90 2> "$work/build.err")
+  }
+  if ! build; then
+    # the pure module is generated code too, and a shape it emits that a
+    # compiler refuses must not cost the namespace its library: the
+    # runtime road for every function, and the error line, so the shape
+    # can be reported
+    if grep -q '^pure Fortran:' "$work/log"; then
+      echo "note: the pure Fortran did not build ($(grep -m1 -i 'error' "$work/build.err" | cut -c1-120)); compiled through the runtime instead" >&2
+      generate false
+      build || { cat "$work/build.err" >&2; exit 1; }
+    else
+      cat "$work/build.err" >&2; exit 1
+    fi
+  fi
   mv -f "$out.part" "$out" || exit 1
   echo "wrote $lib"
   exit 0

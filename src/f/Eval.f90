@@ -439,7 +439,7 @@ module Eval
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
   public :: gce_bind_repl_vars, gce_set_command_line_args
-  public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named
+  public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace, gce_set_site
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots, gce_take_rest
@@ -4777,6 +4777,24 @@ contains
     write(buf, '(I0)') got
     call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(buf) // ") passed to: " // who, none)
   end subroutine gce_raise_arity_named
+
+  ! An exception a compiled library's pure Fortran raises (ClotranABI,
+  ! clotran_fail): the class by code, as the generated support module
+  ! numbers them (clotran.purefort, PLAN step 13)
+  subroutine gce_raise_coded(code, msg)
+    integer, intent(in) :: code
+    character(len=*), intent(in) :: msg
+    type(gc_value) :: none(0)
+    select case (code)
+    case (1); call raise_class("clotran.host.arithmetic_exception", msg, none)
+    case (2); call raise_class("clotran.host.array_index_out_of_bounds_exception", msg, none)
+    case (3); call raise_class("clotran.host.illegal_argument_exception", msg, none)
+    case (4); call raise_class("clotran.host.negative_array_size_exception", msg, none)
+    case (5); call raise_class("clotran.host.arity_exception", msg, none)
+    case (6); call raise_class("clotran.host.string_index_out_of_bounds_exception", msg, none)
+    case default; call raise_class("clotran.host.exception", msg, none)
+    end select
+  end subroutine gce_raise_coded
 
   ! Clojure's own wording, from ArityException: "Wrong number of
   ! args (2) passed to: user/f". The count is what a reader of

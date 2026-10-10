@@ -11,7 +11,10 @@
 ;; there, and one whose work is in the form itself runs interpreted. Read
 ;; it as what a mature interpreter does, never as an oracle.
 ;;
-;; The compiled column times compiled core: clotran with CLOTRAN_AUTOCOMPILE=use,
+;; The compiled column, for the three loop rows, is the loop as a defn
+;; compiled by `clotran compile` (test/clj/bench_loops.cljf, pure Fortran
+;; behind a dispatcher, PLAN step 13) and called from the REPL. For the
+;; other rows it times compiled core: clotran with CLOTRAN_AUTOCOMPILE=use,
 ;; core installed from the compile cache (~/.cache/clotran, which
 ;; CLOTRAN_AUTOCOMPILE=1 ./clotran fills). When core is not in the
 ;; cache the column is "-" and says so, rather than timing the
@@ -21,37 +24,75 @@
 (require '[babashka.process :as p] '[babashka.fs :as fs] '[clojure.string :as str])
 (def repo (-> *file* fs/file .getAbsoluteFile .getParentFile .getParentFile str))
 (load-file (str repo "/upstream/names.clj"))
+;; step 13's target: a scientist's loops over a double array, where the
+;; pure-Fortran tier is meant to beat clj, not catch it. Each row is the
+;; form timed inline and, for the compiled column, the same loop as a
+;; defn of test/clj/bench_loops.cljf called through its compiled library.
+(def loop-rows
+  [["(let [n 1000000 a (double-array n 1.5) b (double-array n 2.0)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))"
+    "(bench-loops/dot a b)"]
+   ["(let [n 1000000 a (double-array n 1.0) o (double-array n)] (dotimes [i (- n 2)] (aset o (inc i) (* 0.25 (+ (aget a i) (* 2.0 (aget a (inc i))) (aget a (+ i 2)))))) (aget o 1))"
+    "(bench-loops/stencil! a o)"]
+   ["(loop [i 0 x 12345 acc 0.0] (if (< i 1000000) (let [x (mod (+ (* x 1103515245) 12345) 2147483648)] (recur (inc i) x (+ acc (/ (double x) 2147483648.0)))) acc))"
+    "(bench-loops/lcg-sum 1000000)"]])
+(def loop-calls (into {} loop-rows))
 (def forms
   (or (seq *command-line-args*)
-      [;; the yardstick, in its parts (PLAN step 34, 2026-10-10): the dispatch
-       ;; floor, the native iterate, a force from interpreted code, the
-       ;; take layer, the whole. The ratio of the whole mixes four costs.
-       "(loop [i 0] (when (< i 1000000) (recur (inc i))))"
-       "(nth (iterate inc' 0) 1000000)"
-       "(loop [i 0 s (range)] (when (< i 1000000) (recur (inc i) (next s))))"
-       "(dorun (take 1000000 (range)))"
-       "(apply + (take 1000000 (range)))"
-       ;; step 13's target: a scientist's loops over a double array, where
-       ;; the pure-Fortran tier is meant to beat clj, not catch it
-       "(let [n 1000000 a (double-array n 1.5) b (double-array n 2.0)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))"
-       "(let [n 1000000 a (double-array n 1.0) o (double-array n)] (dotimes [i (- n 2)] (aset o (inc i) (* 0.25 (+ (aget a i) (* 2.0 (aget a (inc i))) (aget a (+ i 2)))))) (aget o 1))"
-       "(loop [i 0 x 12345 acc 0.0] (if (< i 1000000) (let [x (mod (+ (* x 1103515245) 12345) 2147483648)] (recur (inc i) x (+ acc (/ (double x) 2147483648.0)))) acc))"
-       "(reduce + (range 100000))"
+      (vec (concat
+            [;; the yardstick, in its parts (PLAN step 34, 2026-10-10): the dispatch
+             ;; floor, the native iterate, a force from interpreted code, the
+             ;; take layer, the whole. The ratio of the whole mixes four costs.
+             "(loop [i 0] (when (< i 1000000) (recur (inc i))))"
+             "(nth (iterate inc' 0) 1000000)"
+             "(loop [i 0 s (range)] (when (< i 1000000) (recur (inc i) (next s))))"
+             "(dorun (take 1000000 (range)))"
+             "(apply + (take 1000000 (range)))"]
+            (map first loop-rows)
+            ["(reduce + (range 100000))"
        "(loop [i 0 acc 0] (if (< i 200000) (recur (inc i) (+ acc i)) acc))"
        "(count (into [] (map inc (range 100000))))"
        "((fn fib [n] (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))) 20)"
        "((fn f [n] (if (zero? n) 0 (inc (f (dec n))))) 10000)"
        "(count (str (vec (range 20000))))"
        "(count (sort (map #(mod (* % 7919) 10007) (range 50000))))"
-       "(reduce (fn [m i] (assoc m i (* i i))) {} (range 20000))"]))
+       "(reduce (fn [m i] (assoc m i (* i i))) {} (range 20000))"]))))
+(defn timed-line [f]
+  (str "(let [t0 (clotran.host.system/nanoTime) v " f " t1 (clotran.host.system/nanoTime)] (println (/ (- t1 t0) 1e6)))"))
 (defn timed-script [warm?]
   (str "(in-ns 'user)\n"
        (when (= warm? :compiled)
          "(println (str \"@@core \" (some (fn [[k v]] (when (.endsWith k \"/src/clj/clojure/core.clj\") v)) (clotran.loader/compile-status))))\n")
        (str/join "\n" (for [f forms]
                         (str (when warm? (str "(dotimes [_ 3] " f ")\n"))
-                             "(let [t0 (clotran.host.system/nanoTime) v " f " t1 (clotran.host.system/nanoTime)] (println (/ (- t1 t0) 1e6)))")))
+                             (timed-line f))))
        "\n"))
+;; The step-13 rows as compiled functions: test/clj/bench_loops.cljf holds
+;; the same three loops as defns, `clotran compile` builds its library
+;; under build/bench/, and the compiled column for those rows is the
+;; call into it -- the loop as pure Fortran (PLAN step 13).
+(def loops-src "test/clj/bench_loops.cljf")
+(defn loops-compiled
+  "The compiled column's values for the rows in loop-calls, nil elsewhere;
+  nil throughout when none of the forms is one."
+  []
+  (when (some loop-calls forms)
+    (let [lib (str repo "/build/bench/bench_loops" (if (str/includes? (str/lower-case (System/getProperty "os.name")) "linux") ".so" ".dylib"))
+          cl-file (str repo "/test/clj/.bench-loops.clj")]
+      (fs/create-dirs (str repo "/build/bench"))
+      (p/shell {:dir repo :out :string :err :string :continue true :in ""} "./clotran" "compile" loops-src lib)
+      (spit cl-file (str "(load-file \"" loops-src "\")\n"
+                         "(println (clotran.loader/install \"" lib "\" \"" loops-src "\"))\n"
+                         "(in-ns 'user)\n"
+                         "(def a (double-array 1000000 1.5)) (def b (double-array 1000000 2.0)) (def o (double-array 1000000 1.0))\n"
+                         (str/join "\n" (for [f forms] (if-let [c (loop-calls f)] (timed-line c) "(println -1.0)")))
+                         "\n"))
+      (let [r (p/shell {:dir repo :in "" :out :string :err :string :continue true} "./clotran-bin" "src/clj/clojure/core.clj" cl-file)
+            lines (->> (str/split-lines (:out r))
+                       (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %))))]
+        (.delete (fs/file cl-file))
+        (when-not (= "true" (str/trim (str/replace (first lines) "user=> " "")))
+          (println "bench: the loops library did not install:" (:out r) (:err r)))
+        (mapv #(let [v (Double/parseDouble (str/trim (str/replace % "user=> " "")))] (when (>= v 0) v)) (rest lines))))))
 (def core-status (atom nil))
 (defn run-lines [env & cmd]
   (let [r (apply p/shell {:dir repo :in "" :out :string :err :string :continue true :extra-env env} cmd)]
@@ -72,7 +113,10 @@
         cc-file (str repo "/test/clj/.bench-compiled.clj")
         _ (spit cc-file (timed-script :compiled))
         cc (run-lines {"CLOTRAN_AUTOCOMPILE" "use"} "./clotran-bin" "src/clj/clojure/core.clj" cc-file)
-        cc (if (= ":installed" @core-status) cc (vec (repeat (count forms) nil)))]
+        cc (if (= ":installed" @core-status) cc (vec (repeat (count forms) nil)))
+        ;; the loop rows' compiled column is the loop compiled, not core
+        lc (or (loops-compiled) (vec (repeat (count forms) nil)))
+        cc (mapv (fn [k l] (or l k)) cc lc)]
     (.delete (fs/file cc-file))
     (.delete (fs/file clj-file)) (.delete (fs/file cl-file))
     (println (format "%-72s %10s %10s %10s %8s %12s" "form" "clj ms" "bb ms" "clotran ms" "ratio" "compiled ms"))

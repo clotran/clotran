@@ -69,7 +69,7 @@ module ClotranABI
   public :: clotran_frame_new, clotran_frame_get, clotran_frame_put, clotran_frame_stack
   public :: clotran_eval_node, clotran_pool_register, clotran_pool_get
   public :: clotran_load_compiled, clotran_array_view
-  public :: clotran_rest_args, clotran_arity_error
+  public :: clotran_rest_args, clotran_arity_error, clotran_fail
   public :: clotran_native_begin, clotran_reacquire
   public :: clotran_register_proc, clotran_make_closure, clotran_captures, clotran_new, clotran_dot, clotran_arith, clotran_frame_done, clotran_poll
   public :: clotran_frame_clear, clotran_clear_args
@@ -1042,6 +1042,21 @@ contains
        call gce_raise_arity_named(int(nargs), dlt_1)
     end block
   end subroutine clotran_arity_error
+
+  ! A library's pure Fortran failing (clotran.purefort's cl_fail in
+  ! library mode, PLAN step 13): Clojure's exception, its class by the
+  ! support module's code, raised in this thread's context; the generated
+  ! code returns on its flag and the dispatcher answers the error
+  subroutine clotran_fail(code, msg, n) bind(C, name="clotran_fail")
+    integer(c_int), value :: code, n
+    character(kind=c_char), intent(in) :: msg(*)
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    block
+       call c_text(msg, n, s=dlt_1)
+       call gce_raise_coded(int(code), dlt_1)
+    end block
+  end subroutine clotran_fail
 
   ! A CONSTANT POOL, registered for one compiled namespace. The table
   ! is CompiledFn's, so the Clojure builtin and this entry cannot

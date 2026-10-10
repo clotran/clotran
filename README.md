@@ -339,17 +339,28 @@ functions in place of the interpreted ones. No hints needed:
 ```
 
     $ ./clotran compile stats.cljf
-    declined: variadic -- variadic
-    compiled: 4 functions
+    pure Fortran: total (2 versions)
+    compiled: 1 functions; 1 pure Fortran
     wrote stats.dylib
 
-`(stats/total (double-array (range 200000)))` takes 558 ms
-interpreted and 0.199 ms compiled; a warmed clj takes 0.192 ms with a
-`^doubles` hint and 526 ms without one. What the compiler declines --
-here a variadic function -- stays interpreted and says why. Edit the
-source and the library is reported stale and not used until it is
-recompiled. `scripts/compiler-check` runs every case both ways and
-compares the answers.
+`(stats/total (double-array (range 200000)))` takes 134 ms
+interpreted and 0.192 ms compiled; a warmed clj takes 0.202 ms with a
+`^doubles` hint and 515 ms without one. Each function's road is
+printed: a function the tier report calls A (numbers and arrays in,
+a number out) is compiled as PURE Fortran, a plain loop with no
+clotran runtime underneath, behind a dispatcher that unboxes the
+arguments by their tags and boxes the answer; one version per
+combination of argument types, so `total` of a `long-array` is its
+own loop. Any other arguments go to the same function compiled
+through the runtime, and an error inside the pure loop -- an index
+out of bounds, a long overflow -- is the exception the interpreter
+throws, with its class and message, caught by the same `try`. What
+the compiler declines -- a variadic function, say -- stays
+interpreted and says why. Edit the source and the library is
+reported stale and not used until it is recompiled.
+`scripts/compiler-check` runs every case both ways and compares the
+answers, and `scripts/pure-check` runs its cases through the installed
+library against `clj`.
 
 With `CLOTRAN_AUTOCOMPILE=1`, `./clotran` compiles what it loads, in the
 background, into a cache (`~/.cache/clotran`, or `$CLOTRAN_CACHE`), and

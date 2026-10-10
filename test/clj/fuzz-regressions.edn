@@ -146,4 +146,9 @@
  (try (compare [14 1] [[0 5] 1]) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
  (try (sort (frequencies [14 [0 5]])) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
  (try (into (sorted-set) [[[0 5] 1] [14 1]]) (catch clotran.host.class_cast_exception e (first (clojure.string/split (ex-message e) #" \("))))
+ ;; compiled, the pure road (PLAN step 13): abs of the least long emitted
+ ;; as Fortran's abs of a constant, which gfortran refused to compile and
+ ;; took the whole library with it; it is cl_abs now, and wraps as Math.abs
+ (abs -9223372036854775808)
+ (abs -5)
 ]

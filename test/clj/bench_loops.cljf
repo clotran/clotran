@@ -1,0 +1,23 @@
+(ns bench-loops
+  "scripts/bench's step-13 rows as functions (PLAN.md step 13): the
+  same three loops the bench times inline, here as defns `clotran
+  compile` turns into pure Fortran, so the bench's compiled column can
+  show what a scientist's loop costs once compiled.")
+
+(defn dot [a b]
+  (let [n (alength a)]
+    (loop [i 0 s 0.0]
+      (if (< i n) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s))))
+
+(defn stencil! [a o]
+  (let [n (alength a)]
+    (dotimes [i (- n 2)]
+      (aset o (inc i) (* 0.25 (+ (aget a i) (* 2.0 (aget a (inc i))) (aget a (+ i 2))))))
+    (aget o 1)))
+
+(defn lcg-sum [n]
+  (loop [i 0 x 12345 acc 0.0]
+    (if (< i n)
+      (let [x (mod (+ (* x 1103515245) 12345) 2147483648)]
+        (recur (inc i) x (+ acc (/ (double x) 2147483648.0))))
+      acc)))
