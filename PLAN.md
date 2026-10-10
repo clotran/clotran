@@ -5165,6 +5165,75 @@ convention, the moving nursery and JIT stages 2-3 are not next. The speed
 work is step 13, the pure-Fortran tier, where a Fortran host wins
 outright; then step 24's thread pool and step 21's remaining pieces.
 
+### 35. v1.0: the language as the smallest package (decided 2026-10-10)
+
+James, 2026-10-10: "I want the most minimal of package for the root
+language. Something where simply deps can be pulled in to build
+everything else." Other projects use their own `deps.edn` plus
+clotran's, and are themselves a basis for further packages. "We're
+language designers right now": the editor work (step 21's CIDER
+debugger, LSP, DAP, tree-sitter, an MCP server) is not on the v1.0
+menu; nor are the JIT and VM speed work or step 32. "Work towards
+everything keeping the windows port last."
+
+**Where the language stands, measured 2026-10-10:** the derived suite
+(Clojure's own tests over the clojure.core/cljs.core intersection plus
+concurrency) is 39 namespaces, 312 tests, 2719 assertions, 0 fail, 0
+error, every namespace executing; the five portable libraries run
+verbatim at 859 of 859; the oracle agrees on 1184 forms with 24
+expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
+
+**What v1.0 is, in order of work:**
+1. *The ledger.* Every DEVIATIONS entry says RESOLVED, by design, or a
+   host limit. Audited 2026-10-10, entry by entry: 25 resolved, 29 by
+   design, 6 host limits (4, 5, 12, 14, 28, 52), and 20 that still read
+   as temporary or open -- 2 (host.clj before core.clj), 3 (symbols
+   fall back to clojure.core: a refers map), 6 (syntax-quote at
+   analysis time), 10 (`set!` of an unbound Var sets its root), 17
+   (deftype's short name global: a per-namespace import table), 19
+   (recur in a deftype method passes this), 20 (mutable deftype
+   fields), 23 (fns are not IObj), 32 (an unresolved qualified symbol
+   is a run-time error), 36 (`binding` accepts a non-dynamic Var), 42
+   (`s/check-asserts`), 47 (all-ns lists host classes), 48 (the
+   compile-time half of type hints), 51 ("Divide by zero" wording), 54
+   (a slash inside a namespace), 60 (a deftype's hash asked once), 62
+   (an array of references has no element class), 68 (an uncaught
+   error reported as a load failure), 74 (the nil key walked by hash).
+   Each is resolved or reclassified with its reason, in its own commit.
+   The table at the top says "host" for 7, 13 and 15 where their prose
+   says resolved; 18, 23, 25, 26 and 15/22 cite entries since resolved;
+   56/61 and 57/63 are duplicates. A v1.0 ledger has no scaffolds and
+   no stale sentences.
+2. *Mutable deftype fields* (DEVIATIONS 20): a field a method body can
+   `set!`, as the instance's run already allows.
+3. *Step 15's tail*: raw bytes to and from files, each item against
+   clj; bit-set, bit-clear, bit-flip and bit-test checked rather than
+   assumed.
+4. *The install.* `make install PREFIX=`: the binary, the image, the
+   core sources and the launcher. The launcher resolves a project's
+   `deps.edn` by calling `clotran-deps`, shipped beside it as the
+   `clj` script ships tools.deps, so nobody sets `CLOTRAN_PATH` by
+   hand; `clotran new` writes a `deps.edn`. The optional tools
+   (clotran-nrepl, clotran-mode, later the generator's output) are git
+   coordinates in a project's `deps.edn`, pinned by sha, never in the
+   binary. The sibling repositories stay local until James says.
+5. *The version.* VERSION 1.0.0, the pinned Clojure release named, a
+   stated policy for what a minor and a patch may change (DEVIATIONS
+   entries, the ABI, the package format).
+6. *Windows*, last: the mingw build under Wine as the quick check, a
+   real runner as the authority -- or 1.1, named as such.
+
+**Said plainly in the release notes:** the speed as the README states
+it; the debugger as it is (calls, one level); interop as
+`call-package*` and hand-written bindings. The Fortran binding
+generator (step 7) is the first thing in 1.x, so 1.0 waits on nothing
+but the language.
+
+**1.x, noted now (James):** tree shaking, Fortran and Clojure both,
+so an experiment links to a tree-shaken source and its binary and is
+reproducible by construction -- the AOT road of step 12 and the image
+already know what a program reaches.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

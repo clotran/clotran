@@ -26,15 +26,15 @@ Categories:
 | 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/Eval.f90` |
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
 | 6 | Syntax-quote expands at analysis time, not read time | open | `src/f/analyze.inc` |
-| 7 | Recursion depth is ~600 frames, against Clojure's ~11,200 | host | `src/f/Eval.f90` |
+| 7 | RESOLVED -- recursion runs 200,000 frames deep interpreted (compiled ~2,200) | -- | `src/f/Eval.f90` |
 | 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
-| 10 | RESOLVED for refs -- transactions, serialized; `set!` of an unbound Var sets its root | temporary | `src/f/Eval.f90` |
+| 10 | RESOLVED for refs -- transactions, serialized; `set!` of an unbound Var still sets its root | temporary (the `set!` part) | `src/f/Namespace.f90` |
 | 11 | RESOLVED -- transient maps and sets are boxes mutated in place; vectors are real transients | -- | `src/f/Eval.f90` |
 | 12 | Host-bound libs are skipped or replaced by name | host | `src/f/Eval.f90` |
-| 13 | Protocol dispatch is uncached | host | `src/f/GC.f90` |
+| 13 | RESOLVED -- protocol dispatch is cached | -- | `src/f/Eval.f90` |
 | 14 | Regex is ICU under clj's regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
-| 15 | `hash` values are gc_hash's, not clj's murmur3 | host | `src/f/GC.f90` |
+| 15 | RESOLVED -- `gc_hash` is Util.hasheq, bit for bit | -- | `src/f/GC.f90` |
 | 16 | RESOLVED -- names resolve while analysing | -- | `src/f/analyze.inc` |
 
 ---
@@ -525,9 +525,9 @@ trie iterates in hash order the way PersistentHashMap does, and sets and
 `hash-map` are hashed at every size, as PersistentHashSet and
 PersistentHashMap are, so a set or a map past eight entries seqs in the
 order clj's does. `case` is unaffected: its macroexpansion and `case*`
-still share one hash. Left different: a lazy seq, which hashes by identity
-until realised (deviation 35), a class object, and a record. The
-original entry follows.
+still share one hash. Left different: a class object, and a record (a
+lazy seq hashed by identity until entry 35 resolved it). The original
+entry follows.
 
 Clojure specifies `hash` as `Util.hasheq`, a murmur3 mix, and exposes the
 algorithm through `hash-ordered-coll` and `hash-unordered-coll`. clotran
@@ -612,15 +612,16 @@ fully-qualified name is never ambiguous. Measured:
 It goes away when namespaces carry an import table, which is the same
 place `clojure.core/import` would have to write.
 
-## 18. A deftype instance prints without an identity
+## 18. A deftype instance prints with clotran's identity and text
 
 Clojure prints one as `#object[user.Point 0x4a2e1f "user.Point@4a2e1f"]`.
-clotran prints `#object[user.Point]`. There is no address to report --
-the heap is index-based and a slot index is not stable across a
-collection -- and inventing a number would make two runs of the same
-program print differently for no reason. Nothing reads the identity
-back, so the only loss is that two distinct instances of one type print
-identically.
+clotran prints `#object[user.Point 0x3b214 "#object[user.Point]"]`
+(measured 2026-10-10): the identity is there since entry 21 gave host
+objects one (`System/identityHashCode`), and what differs is the text
+inside, which in clj is `Object.toString`'s `class@hash` and here is
+the printer's own form. By design: the text of a host object is the
+host's, and nothing reads it back. Two distinct instances print
+distinctly, which is what this entry once lacked.
 
 ## 19. `recur` in a deftype method must pass `this`
 
@@ -703,9 +704,9 @@ Nothing in the vendored tree prints a namespace this way; the cost is
 that `(pr-str *ns*)` does not round-trip through `read`, which the
 `#object[...]` form does not either.
 
-It goes away with `String/format` and an identity for host objects --
-the same two pieces deviation 18 needs, and worth doing once for both
-rather than twice.
+`String/format` and an identity for host objects both exist since
+(2026-10-10: `(pr-str (P. 1))` is `#object[user.P 0x3b214 ...]`);
+what stays is the text inside the form, the host's, as entry 18 says.
 
 The same holds for every other host object: a function prints as
 `#<fn>`, a namespace as `#<ns user>`, where Clojure prints
@@ -749,11 +750,9 @@ Two details the invariant forced:
 - A list and a vector of the same elements are equal in Clojure, so
   they share one hash scheme rather than mixing their kind in.
 
-**What is left.** A LAZY SEQ as a key still hashes by identity.
-Hashing one means realizing it, and `gc_hash` runs inside map inserts
-and lookups, where an allocation can collect the half-built structure.
-Equality only consults the hook when both sides are structural kinds,
-so the two stay in step rather than disagreeing.
+**What was left**, a lazy seq as a key hashing by identity, is entry
+35, resolved: `(= (hash (map inc [1 2])) (hash '(2 3)))` is true
+(measured 2026-10-10).
 
 **How this was found**, which is the part worth keeping: two
 assertions in Clojure's `control` suite were PASSING under the old
@@ -796,10 +795,10 @@ They are two cases now, and both behaviours are right:
     (pr-str (fn [x] x))                   ;=> "#<fn>"
     (instance? IObj (fn []))  ;=> false, and clj says true
 
-It goes away with `String/format`. That makes `print-object` run, which
-makes `print-method Object` a reachable last resort for every type, at
-which point `fn` can answer IObj truthfully. Deviations 18 and 21 want
-the same thing, which is three reasons to do it once.
+`String/format` exists since, and a fn carries metadata already
+(`with-meta` and `meta` work on one, above); what is left is
+`instance?` answering IObj for a fn, measured false on 2026-10-10 where
+clj says true. Small, and open (PLAN step 35).
 
 ## 24. Arrays are never ragged
 
@@ -835,7 +834,12 @@ purpose, in exchange for one real Clojure cannot offer.
 It goes away only by representing arrays as arrays-of-arrays, which
 would mean giving up the thing the project exists for.
 
-## 25. `aset` on a primitive array accepts any number
+## 25. RESOLVED -- `aset` on a primitive array accepted any number
+
+**RESOLVED with entry 45 (2026-09-27):** `aset` takes what `RT.aset`'s
+overloads take, and anything else is the Reflector's refusal. Measured
+2026-10-10: `(aset (long-array 2) 0 1.5)` is "No matching method aset
+found taking 3 args" here and in clj. The original entry follows.
 
 Real Clojure:
 
@@ -888,9 +892,8 @@ What is NOT closed, and is the rest of this entry:
   answers rather than the error this entry promised (scripts/fuzz
   --fns found them). `rationalize`, missing until then, is
   Numbers.rationalize's.
-- **`1.5M` is still a double** (deviation 30), so there is no
-  BigDecimal and `(bigint 2.5)` fails where Clojure routes it through
-  `BigDecimal/valueOf`.
+- **`1.5M` is a decimal** since entry 30 resolved (measured
+  2026-10-10: `(class 1.5M)` is clotran.host.decimal).
 - **One big integer type, not two.** `biginteger` answers the same
   BigInt, which prints `1N` where Clojure's `BigInteger`
   prints `1`.
@@ -1081,8 +1084,6 @@ What is NOT closed:
   are not host members. The arithmetic is here, the object protocol is
   not.
 
-and, with it, everything `with-precision` is for. A literal past
-2^63 is the same 64-bit ceiling deviation 26 names.
 
 **Removal**: a numeric tower with BigInt and BigDecimal in it. That is
 the same work deviation 26 ends on, and the suffixes are its most
@@ -1818,6 +1819,8 @@ then the method called at each hash.
 
 ## 61. A vector key past 32 bits is out of range, not wrapped
 
+(The same fact as entry 56, seen from the key's side; both stand.)
+
 Clj's vector takes a key's `.intValue()` (APersistentVector
 `valAt`, `containsKey`, `entryAt`, `assoc`, `invoke`), so a Long key
 wraps to its low 32 bits. clotran compares the whole 64-bit value:
@@ -1860,6 +1863,8 @@ or the first element's class as `into-array` infers it), copied by
 `aclone`, and read by `array_class_name`. Not planned yet.
 
 ## 63. `vec` of an array copies it
+
+(Entry 57 covers this, with `sort` and `to-array`; kept for its heading.)
 
 `vec` of an array aliases it in both Clojure (`LazilyPersistentVector
 .createOwning`, up to 32 elements) and ClojureScript (`.fromArray
