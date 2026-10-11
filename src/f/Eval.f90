@@ -463,6 +463,7 @@ module Eval
   public :: gce_program_report
   public :: gce_bind_repl_vars, gce_set_command_line_args
   public :: gce_main_bindings, gce_push_load_frame, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
+  public :: gce_enter_user, gce_refer_core
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace, gce_set_site
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots, gce_take_rest
@@ -1417,6 +1418,11 @@ contains
     call bind_builtin(core, "ns", B_NS, .true.)
     call bind_builtin(core, "in-ns", B_INNS)
     env = vs_get(vst, base + 1)
+    ! user, the namespace gcn_reset made current, sees clojure.core by
+    ! referral and not by a fall-back (DEVIATIONS 3): the builtins now, the
+    ! rest once core.clj has loaded (gce_enter_user)
+    call gce_refer_core(gcn_current([vs_get(vst, base + 1)]))
+
     call vs_leave(vst, base)
   end function gce_base_env
 
@@ -1690,6 +1696,52 @@ contains
     end do
   end subroutine gce_image_read
 
+  ! (refer 'clojure.core) into ns, as RT.doInit gives user and (ns ...)
+  ! gives every namespace: each public Var clojure.core owns, mapped by
+  ! its name. A snapshot, as there; the Vars are the same objects, so a
+  ! later redefinition in core is seen through them.
+  subroutine gce_refer_core(nsv)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: nsv
+    type(gc_value) :: core, m, owner
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i
+    vst => gc_my_stack()
+    if (gc_kind(nsv) /= OBJ_NS) return
+    core = gcn_find("clojure.core")
+    if (gc_kind(core) /= OBJ_NS) return
+    if (gc_identical(core, nsv)) return
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, nsv)
+    call vs_set(vst, base + 2, core)
+    call vs_set(vst, base + 3, gc_cell_get(nsv, 2))
+    if (.not. gca_is(vs_get(vst, base + 3))) call vs_set(vst, base + 3, gca_empty([vs_get(vst, base + 1)]))
+    ! ks and vls are held by core's map, which core holds
+    call gca_entries(gc_cell_get(vs_get(vst, base + 2), 2), ks, vls)
+    do i = 1, size(ks)
+       if (.not. gcn_is_var(vls(i))) cycle
+       owner = gc_slot(vls(i), 3)
+       if (.not. gc_identical(owner, vs_get(vst, base + 2))) cycle
+       if (var_not_public(vls(i))) cycle
+       ! the namespace's own interns and earlier refers win, as refer's
+       ! check for a name already mapped keeps them
+       if (gca_contains(vs_get(vst, base + 3), ks(i))) cycle
+       m = gca_assoc(vs_get(vst, base + 3), ks(i), vls(i), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 3, m)
+    end do
+    call gc_set_slot(vs_get(vst, base + 1), 2, vs_get(vst, base + 3))
+    call vs_leave(vst, base)
+  end subroutine gce_refer_core
+
+  ! user as the current namespace, clojure.core referred into it: what
+  ! RT.doInit does, for the REPL, a script and a program
+  subroutine gce_enter_user()
+    type(gc_value) :: none(0), u
+    u = gcn_find_or_create("user", none)
+    call gce_refer_core(u)
+    call gcn_set_current(u)
+  end subroutine gce_enter_user
+
   ! clojure.main's with-bindings: the Vars the REPL and a script run
   ! under, bound once core.clj has loaded and for the life of the process,
   ! so (set! *warn-on-reflection* true) at the prompt or at a script's top
@@ -1874,7 +1926,13 @@ contains
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     if (len(path) >= 16) then
-       if (path(len(path)-15:) == "clojure/core.clj") core_loaded = .true.
+       if (path(len(path)-15:) == "clojure/core.clj") then
+          core_loaded = .true.
+          ! and user sees all of it, as RT.doInit refers core into user once
+          ! core.clj has loaded (DEVIATIONS 3): for a test or an embedder that
+          ! loads core itself; main's gce_enter_user does the same again
+          call gce_refer_core(gcn_find("user"))
+       end if
     end if
     if (no_install) return
     tctx => ctx_self()
@@ -4607,7 +4665,7 @@ contains
   function host_box_form(roots) result(form)
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: form
-    form = gcl_cons(gc_sym("clotran-host-box", roots), gcl_empty(roots), roots)
+    form = gcl_cons(gc_sym("clojure.core/clotran-host-box", roots), gcl_empty(roots), roots)
   end function host_box_form
 
   ! (set! Class/field v) where the field is a writable box: written.
@@ -4770,7 +4828,14 @@ contains
        return
     end if
 
-    var = gcn_lookup(gcn_find_or_create("clojure.core", [roots]), sym)
+    ! no fall-back to clojure.core: a namespace sees it because (ns ...) or
+    ! RT.doInit's (refer 'clojure.core) copied its mappings in, and an
+    ! exclusion is honoured by their absence (DEVIATIONS 3 resolved) -- but
+    ! for ns and in-ns, which Compiler.resolveIn answers in every namespace
+    ! (RT.NS_VAR, RT.IN_NS_VAR): a library required from a namespace that
+    ! has not referred core yet still begins with (ns ...)
+    var = gc_nil()
+    if (t == "ns" .or. t == "in-ns") var = gcn_lookup(gcn_find_or_create("clojure.core", [roots]), sym)
   end function resolve_var
 
   ! Vectors already did this; maps and sets did not, and the cost was
@@ -13391,13 +13456,13 @@ contains
                if (.not. gcn_is_var(out)) out = gc_nil()
             else
                out = gcn_lookup(vs_get(vst, base + 2), sym2)
-               ! then clojure.core, which every namespace refers -- the
-               ! same fallback a bare symbol takes when it is analysed
-               ! (DEVIATIONS 3). Without it (resolve 'nil?) was nil in
-               ! every namespace but clojure.core, and clojure.spec.alpha
-               ! resolves the symbols of a pred form that way.
-               if (.not. gcn_is_var(out)) &
-                    out = gcn_lookup(gcn_find_or_create("clojure.core", [vs_get(vst, base + 1)]), sym2)
+               ! and no fall-back to clojure.core: what the namespace refers is
+               ! in its mappings (DEVIATIONS 3 resolved) -- but ns and in-ns, as
+               ! Compiler.maybeResolveIn answers them everywhere
+               if (.not. gcn_is_var(out)) then
+                  if (t == "ns" .or. t == "in-ns") &
+                       out = gcn_lookup(gcn_find_or_create("clojure.core", [vs_get(vst, base + 1)]), sym2)
+               end if
                if (.not. gcn_is_var(out)) then
                   out = gc_nil()
                   ! A class that EXISTS -- a row in the host table or a

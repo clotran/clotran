@@ -147,7 +147,7 @@ contains
        ! clojure.main does. Inheriting core.clj's own (ns clojure.core)
        ! put a script's defs INTO clojure.core -- (def map ...) in a
        ! script replaced map for everything.
-       if (i > 1) call gcn_set_current(gcn_find_or_create("user", none))
+       if (i > 1) call gce_enter_user()
        if (imaged .and. i == 1 .and. index(argbuf(1:arglen), "clojure/core.clj") > 0) then
           ! core.clj is in the image, and so is everything the first
           ! file's load switches on; torture is this process's own
@@ -202,7 +202,7 @@ contains
     ! command line, because core.clj's own (ns clojure.core) leaves that
     ! namespace current and anything typed at the prompt would otherwise
     ! be defined into clojure.core.
-    call gcn_set_current(gcn_find_or_create("user", none))
+    call gce_enter_user()
 
     ! The loop itself is Eval's (repl.inc): the same loop runs nested at
     ! a break, where it is the debugger's default handler.
@@ -545,7 +545,7 @@ contains
        call get_command_argument(j, args(j), lens(j))
     end do
     err_unit = 0
-    call gcn_set_current(gcn_find_or_create("user", none))
+    call gce_enter_user()
     call gce_set_command_line_args(args, lens)
     if (first(1:2) == "m ") then
        call load_text("(clojure.core/apply " // first(3:) // "/-main clojure.core/*command-line-args*)", &
@@ -577,7 +577,7 @@ contains
        call get_command_argument(j, args(j - k - 1), lens(j - k - 1))
     end do
     err_unit = 0
-    call gcn_set_current(gcn_find_or_create("user", none))
+    call gce_enter_user()
     call gce_set_command_line_args(args, lens)
     if (marker(1:ml) == "--run") then
        call load_file(target(1:tl), env)

@@ -3251,3 +3251,10 @@ x10
 (try (eval '(instance? Point17 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: Point17 in this context" (.getMessage (or (.getCause e) e)))))
 (do (import 'aa17.Point17) (eval '(.-x (Point17. 7))))
 [(instance? Point17 (aa17.Point17. 1)) (instance? Point17 (bb17.Point17. 1 2))]
+
+;; a namespace sees clojure.core by referral alone (DEVIATIONS 3 resolved): an exclusion, an :only and a
+;; :rename hold, a namespace with nothing referred sees nothing (refer, not refer-clojure, whose filters are unquoted)
+(binding [*ns* (create-ns 'ex3)] (clojure.core/refer 'clojure.core :exclude '[map]) [(try (eval '(map inc [1])) (catch clotran.host.throwable e :unresolved)) (eval '(clojure.core/map inc [1])) (eval '(inc 1))])
+(binding [*ns* (create-ns 'bare3)] (try (eval '(inc 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: inc in this context" (.getMessage (or (.getCause e) e))))))
+(binding [*ns* (create-ns 'only3)] (clojure.core/refer 'clojure.core :only '[inc]) [(eval '(inc 1)) (try (eval '(dec 1)) (catch clotran.host.throwable e :unresolved))])
+(binding [*ns* (create-ns 'ren3)] (clojure.core/refer 'clojure.core :rename '{inc plus1}) [(eval '(plus1 1)) (try (eval '(inc 1)) (catch clotran.host.throwable e :unresolved))])

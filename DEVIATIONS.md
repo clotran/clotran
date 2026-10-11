@@ -70,7 +70,24 @@ Clojure loads nothing before `clojure/core.clj`; its bootstrap is clj
 to type predicates over `clotran-type` plus three scaffolding macros. When
 `defn`/`fn`/`let` come from core.clj itself, the file goes.
 
-## 3. Symbol resolution falls back to `clojure.core`
+## 3. RESOLVED -- a namespace sees clojure.core by referral, not by a fall-back
+
+**RESOLVED 2026-10-10 (PLAN step 35).** `resolve_var` and `ns-resolve`
+no longer fall back to clojure.core: a namespace's mappings are what
+`refer` put there, so `(ns foo (:refer-clojure :exclude [map]))` leaves
+`map` unresolved in foo and `(in-ns 'bare)` sees nothing of core, as in
+clj -- nothing but `ns` and `in-ns`, which Compiler.resolveIn answers in
+every namespace, and which a library's first form needs when it is
+required from a namespace that has not referred core yet (scripts/fuzz-macro
+found that case). `user` is given clojure.core as RT.doInit gives it (Eval.f90,
+gce_refer_core: every public Var core owns, a snapshot of the same Var
+objects), by the REPL, a script and a program; the host's own tests get
+the builtins the same way before core.clj. Measured against clj in
+test/clj/oracle.clj. The original entry follows.
+
+---
+
+Symbol resolution falls back to `clojure.core`
 
 `resolve_var` tries the current namespace, then `clojure.core`. Clojure
 has no such rule: a namespace sees `clojure.core` because `(ns ...)`

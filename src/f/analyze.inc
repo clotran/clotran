@@ -1830,7 +1830,7 @@
             call vs_set(vst, base + 3, gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
             cn = gcl_cons(vs_get(vst, base + 3), gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)]), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
             call vs_set(vst, base + 3, cn)
-            cn = gcl_cons(gc_sym("clotran-import*", [vs_get(vst, base + 3)]), vs_get(vst, base + 3), [vs_get(vst, base + 3)])
+            cn = gcl_cons(gc_sym("clojure.core/clotran-import*", [vs_get(vst, base + 3)]), vs_get(vst, base + 3), [vs_get(vst, base + 3)])
             call vs_set(vst, base + 3, cn)
             nd = analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
          else
