@@ -230,7 +230,7 @@
                    `(seq [this#] (seq (concat [~@(map #(list `clotran.host.map_entry/create (keyword %) %) base-fields)]
                                               ~'__extmap)))
                    `(iterator [~gs]
-                        (clotran.host.record_iterator. ~gs [~@(map keyword base-fields)] (RT/iter ~'__extmap)))
+                        (clotran.host.record_iterator. ~gs [~@(map keyword base-fields)] (clotran.host.rt/iter ~'__extmap)))
                    `(assoc [this# k# ~gs]
                      (condp identical? k#
                        ~@(mapcat (fn [fld]

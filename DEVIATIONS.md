@@ -623,11 +623,9 @@ and a bare class name resolves through that namespace's imports and
 nothing else (canon_class), a host class (`clotran.host.*`) being every
 namespace's, as clj's own base classes are everywhere there; a type is registered under its full
 name only. So `(Point. 1)` in a namespace that did not define or import it
-is clj's "Unable to resolve classname: Point" (when it runs, where clj
-refuses it at compile time -- the same residual as entry 32's, since
-`new` of a class defined later in the same form must still analyse),
+is clj's "Unable to resolve classname: Point" when analysed,
 `(instance? Point x)` there is "Unable to resolve symbol: Point in this
-context" when analysed, two
+context", two
 namespaces' `Point`s are two classes, and `aa.Point` works everywhere.
 `new` and a static call's target are made canonical when analysed, by
 the namespace the form is written in, never the one running; the import
@@ -1223,12 +1221,10 @@ Compiler.resolveIn's refusal when the form is analysed: "No such var:
 s/nope" (the symbol as written) where the namespace or alias exists,
 "var: #'a/p is not public" where it is private, "No such namespace: x"
 where there is none -- a mistyped class name included -- and the
-var-quote's "Unable to resolve var: x/y in this context". What still
-defers everywhere: a static CALL on a class name nothing knows,
-`(Strng/format "x")`, since defrecord's expansion names its own class in
-such a call before its `deftype*` has run and a top-level `do` is analysed
-whole; clj refuses it at compile time with the same "No such namespace",
-here it fails when called. The deferral
+var-quote's "Unable to resolve var: x/y in this context"; a static call
+on a class nothing knows, `(Strng/format "x")`, is "No such namespace:
+Strng" when analysed too, a `deftype*` having declared its class name
+when it was analysed, as clj defines the class then. The deferral
 below (N_LATEVAR, and the var-quote's placeholder namespace) remains for
 the vendored tree, clotran's own files and Clojure's own tests, by their
 file names (analyze.inc, defers_late_vars), since core.clj names
@@ -2417,3 +2413,21 @@ sends from starting work, as clj does, but leaves futures alone: a
 `future` after it runs. Removing it would mean refusing futures after
 shutdown, which nothing we have wants; ClojureScript has neither
 agents nor shutdown-agents, so this is the host's to decide.
+
+## 79. The names clj imports into every namespace are not names here
+
+clj gives every namespace its host's own base classes unimported:
+`(Math/abs -3)` is 3 in a fresh namespace, `(StringBuilder. "ab")` builds
+one, `String` is a class. Those are the host showing through, and
+clotran's host is Fortran: its classes are `clotran.host.math`,
+`clotran.host.string_builder`, `clotran.host.string`, and a program
+writes them so (or imports them). `(Math/abs -3)` here is "No such
+namespace: Math" when analysed, `(StringBuilder. "ab")` "Unable to
+resolve classname: StringBuilder". upstream/class-names.edn's
+`:implicit` lists clj's set, for the derive to rename in the vendored
+sources; the runtime never sees it. Measured 2026-10-11, when seeding
+those names into every namespace was tried and taken out: it was the
+host emulation clotran does not do, and `upstream/check-names` said so.
+
+**Removal**: none intended. A package may import what it likes under
+its own names; the root language names its own host.

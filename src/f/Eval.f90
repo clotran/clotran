@@ -2609,6 +2609,9 @@ contains
           call vs_set(vst, base + 2, strip_meta(gcv_nth(vs_get(vst, base + 1), i + 1)))
        end if
     end do
+    ! the interface's name is a class from here: IFoo as a value, as
+    ! (instance? IFoo x) already had it
+    if (len(iname) > 0) call declare_type_name(iname)
     if (len(iname) == 0 .or. .not. gcv_is(vs_get(vst, base + 2))) then
        call vs_leave(vst, base)
        return

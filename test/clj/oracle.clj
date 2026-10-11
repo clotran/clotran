@@ -3258,3 +3258,9 @@ x10
 (binding [*ns* (create-ns 'bare3)] (try (eval '(inc 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: inc in this context" (.getMessage (or (.getCause e) e))))))
 (binding [*ns* (create-ns 'only3)] (clojure.core/refer 'clojure.core :only '[inc]) [(eval '(inc 1)) (try (eval '(dec 1)) (catch clotran.host.throwable e :unresolved))])
 (binding [*ns* (create-ns 'ren3)] (clojure.core/refer 'clojure.core :rename '{inc plus1}) [(eval '(plus1 1)) (try (eval '(inc 1)) (catch clotran.host.throwable e :unresolved))])
+
+;; a static call on a class nothing knows is refused when analysed (DEVIATIONS 32), and a definterface's name is a value
+(try (eval '(defn f32e [] (Strng32/format "x"))) (catch clotran.host.throwable e (re-find #"^No such namespace: Strng32" (.getMessage (or (.getCause e) e)))))
+(try (eval '(defn f32f [] (Strng32. 1))) (catch clotran.host.throwable e (re-find #"^Unable to resolve classname: Strng32" (.getMessage (or (.getCause e) e)))))
+(definterface IFoo17 (foo []))
+[(.getName IFoo17) (instance? IFoo17 (reify IFoo17 (foo [_] 1))) (.foo (reify IFoo17 (foo [_] 1)))]

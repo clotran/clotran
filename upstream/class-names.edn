@@ -336,6 +336,7 @@
  "SecurityManager" "java.lang.SecurityManager",
  "NullPointerException" "java.lang.NullPointerException",
  "StringBuilder" "java.lang.StringBuilder",
+ "RT" "clojure.lang.RT",
  "IllegalStateException" "java.lang.IllegalStateException",
  "NumberFormatException" "java.lang.NumberFormatException",
  "InstantiationException" "java.lang.InstantiationException",

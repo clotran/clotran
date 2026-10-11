@@ -1584,10 +1584,18 @@
                 call canon_class(dlt_1, c=canonical)
                 if (canonical /= dlt_1) call vs_set(vst, base + 4, gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
              end block
-             ! (a class name nothing knows is NOT refused here: defrecord's
-             ! expansion names its own class in a static call before its
-             ! deftype* has run, and a top-level do is analysed whole -- the
-             ! residual of DEVIATIONS 32)
+             ! a class name nothing knows -- no import, no deftype* analysed so far
+             ! (declare_type_name), no host row -- is Compiler.resolveIn's refusal
+             ! when analysed (DEVIATIONS 32), outside the files that defer
+             block
+                character(len=:), allocatable :: canonical
+                call canon_class(dlt_1, c=canonical)
+                if (.not. known_class_name(canonical) .and. .not. defers_late_vars()) then
+                   call fail("No such namespace: " // dlt_1)
+                   call vs_leave(vst, base)
+                   return
+                end if
+             end block
              kids = analyze_all(vs_get(vst, base + 6), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
              call vs_set(vst, base + 7, kids)
              if (.not. tctx%has_error) then
@@ -1663,10 +1671,14 @@
       call gc_ref_text(cls%ref, s=written)
       call canon_class(written, c=canonical)
       if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-      ! a name no import knows stays bare and fails when run (eval_new):
-      ! a deftype's bare name means it only where imported (DEVIATIONS 17);
-      ! not refused here, since a host class's short name is known to
-      ! eval_new alone
+      ! a name no import, no deftype* analysed so far and no host row knows
+      ! is Compiler's refusal when analysed (DEVIATIONS 17, 32): a deftype's
+      ! bare name means it only where imported
+      if (.not. known_class_name(canonical) .and. .not. defers_late_vars()) then
+         call fail("Unable to resolve classname: " // written)
+         call vs_leave(vst, base)
+         return
+      end if
     end block
     call vs_set(vst, base + 4, cls)
     ! (new clotran.host.lazy_seq (fn* [] body...)) is what the lazy-seq

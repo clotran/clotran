@@ -62,12 +62,12 @@
     ["a lazy seq made and realised" (fn [n] (vec (take n (lazy-seq (cons 1 (lazy-seq (list 2 3))))))) [[0] [2] [5]]]
     ["a lazy seq over an argument" (fn [xs] (doall (lazy-seq (map inc xs)))) [[[1 2 3]] [[]]]]
     ["a recursive lazy seq" (fn [n] (letfn [] (take n ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0)))) [[5] [0]]]
-    ["new of a host class" (fn [s] (str (new StringBuilder s))) [["abc"] [""]]]
+    ["new of a host class" (fn [s] (str (new clotran.host.string_builder s))) [["abc"] [""]]]
     ;; `new`, and so lazy-seq (PLAN.md step 10, b)
     ["a lazy seq made and realised" (fn [n] (vec (take n (lazy-seq (cons 1 (lazy-seq (list 2 3))))))) [[0] [2] [5]]]
     ["a lazy seq over an argument" (fn [xs] (doall (lazy-seq (map inc xs)))) [[[1 2 3]] [[]]]]
     ["a recursive lazy seq" (fn [n] (take n ((fn step [i] (lazy-seq (cons i (step (inc i))))) 0))) [[5] [0]]]
-    ["new of a host class" (fn [s] (str (new StringBuilder s))) [["abc"] [""]]]
+    ["new of a host class" (fn [s] (str (new clotran.host.string_builder s))) [["abc"] [""]]]
     ;; compiled closures (PLAN.md step 10, a)
     ["a closure over an argument" (fn [x] (let [f (fn [y] (+ x y))] (f 10))) [[1] [5]]]
     ["a closure called at once" (fn [x] ((fn [y] (* x y)) 3)) [[2] [-4]]]
@@ -165,9 +165,9 @@
               (doall (take 3 (lazy-seq ((fn step [k] (if (pos? k) (recur (dec k)) (list k n))) n))))])
      [[0] [4]]]
     ;; Math/ members as Fortran intrinsics, typed: a double out
-    ["math intrinsics" (fn [x] [(Math/sqrt x) (Math/sin x) (Math/cos x) (Math/exp x) (Math/log x) (Math/pow x 2.5) (Math/atan2 x 1.0) (Math/tanh x)])
+    ["math intrinsics" (fn [x] [(clotran.host.math/sqrt x) (clotran.host.math/sin x) (clotran.host.math/cos x) (clotran.host.math/exp x) (clotran.host.math/log x) (clotran.host.math/pow x 2.5) (clotran.host.math/atan2 x 1.0) (clotran.host.math/tanh x)])
      [[2.0] [0.0] [-1.5] [100] [1.0E300]]]
-    ["a math loop" (fn [n] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (Math/sqrt (+ (Math/sin (double i)) 2.0)))) s)))
+    ["a math loop" (fn [n] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (clotran.host.math/sqrt (+ (clotran.host.math/sin (double i)) 2.0)))) s)))
      [[0] [10] [1000]]]
     ["two arities" (fn ([x] (+ x 1)) ([x y] (* x y))) [[3] [3 4] [2.5 2]]]
     ["variadic, rest nil or a list" (fn [x & more] [x more (count more) (seq? more)]) [[1] [1 2] [1 2 3 4]]]
