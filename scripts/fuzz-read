@@ -172,6 +172,9 @@
                                               (some #(str/starts-with? (str %) "!error") [w gv]))
                                          ;; DEVIATIONS 6: syntax-quote, from a mutation
                                          (str/includes? (nth texts i) "`")
+                                         ;; DEVIATIONS 33: a reader conditional is read in every
+                                         ;; file here; clj refuses one outside a .cljc file
+                                         (str/includes? (str w) "Conditional read not allowed")
                                          ;; DEVIATIONS 14: ICU's dialect refuses or takes
                                          ;; a pattern clj's host does not
                                          (some #(str/includes? (str %) "pattern_syntax_exception") [w gv])
