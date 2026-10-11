@@ -887,9 +887,8 @@ contains
           who = line1
        end if
     end if
-    ! a site with no file -- the pending builtin call inside a fn's body
-    ! is recorded without one -- is not the frame's line; no line is
-    ! better than a wrong one
+    ! a site with no file (an expansion's, with nothing written to name)
+    ! is not the frame's line; no line is better than a wrong one
     if (len(loc) > 0) then
        if (verify(loc, "0123456789:") == 0) loc = ""
     end if
@@ -5163,14 +5162,19 @@ contains
   subroutine capture_innermost()
     type(eval_ctx), pointer :: tctx
     character(len=:), allocatable :: who, pos
-    integer :: i
+    integer :: i, site
     tctx => ctx_self()
     tctx%last_trace = ""
     i = tctx%fstack_top
     if (i <= 0) return
     call fn_who(tctx%fstack_fn(i), who)
-    if (frame_site(tctx, i) /= 0) then
-       call gcr_position(frame_site(tctx, i), s=pos)
+    site = frame_site(tctx, i)
+    ! a builtin call pushes no frame: the call in progress is the site the
+    ! executor set before dispatching it (pending_site), and that is where
+    ! a host-raised exception came from -- the line clojure.main names
+    if (site == 0) site = tctx%pending_site
+    if (site /= 0) then
+       call gcr_position(site, s=pos)
        tctx%last_trace = "  at " // who // " (" // pos // ")" // achar(10)
     else
        tctx%last_trace = "  at " // who // achar(10)

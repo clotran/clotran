@@ -479,7 +479,7 @@ check-program: $(B)/core.image
 	cd $(B)/program && $(CURDIR)/clotran s.cljf a "b c" </dev/null | grep -qx '("a" "b c")'
 	cd $(B)/program && $(CURDIR)/clotran s.cljf </dev/null | grep -qx 'nil'
 	cd $(B)/program && CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core x </dev/null | grep -qx ':main ("x")'
-	cd $(B)/program && ! CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core boom </dev/null >/dev/null 2>err.txt && grep -qx 'Execution error (arithmetic_exception) at p.core/-main.' err.txt && grep -qx 'Divide by zero' err.txt
+	cd $(B)/program && ! CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core boom </dev/null >/dev/null 2>err.txt && grep -qx 'Execution error (arithmetic_exception) at p.core/-main (core.cljf:2).' err.txt && grep -qx 'Divide by zero' err.txt
 	cd $(B)/program && ! CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null >/dev/null 2>&1
 	@echo "--- clotran build: one executable that runs where there are no sources (PLAN step 22) ---"
 	cd $(B)/program && CLOTRAN_CACHE=$(CURDIR)/$(B)/program/cache CLOTRAN_PATH=src $(CURDIR)/clotran build -m p.core -o prog >/dev/null

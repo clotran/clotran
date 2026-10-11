@@ -2181,20 +2181,18 @@ everything else.
 `clotran app.cljf`, a built executable) ends an uncaught exception with
 clojure.main's two lines, on stderr, status 1:
 
-    Execution error (arithmetic_exception) at app.core/-main.
+    Execution error (arithmetic_exception) at app.core/-main (core.cljf:2).
     Divide by zero
 
 The class is clotran's own simple name, left out for `exception` and
 `runtime_exception` as clj leaves out Exception and RuntimeException;
-the frame is the innermost at the throw (a host-raised exception now
-records it too, raise_class's capture_innermost). What differs: the
-line. The innermost frame's pending call site -- the builtin call that
-threw, inside the fn's body -- is recorded without its file (entry 31's
-elements show the same), so rather than print a line that is not the
-fn's the report names the frame alone, "at p.core/-main.", where clj
-adds "(core.clj:2)"; a throw outside any fn names the file and the line of
-the top-level form, which is right. And no "Full report at" file is
-written.
+the frame is the innermost at the throw (a host-raised exception
+records it too, raise_class's capture_innermost), and the line is the
+call, construction or throw in progress there -- every path that can
+raise notes its site first, and a call through an inlined core fn keeps
+the position of what was written rather than its expansion's. A throw
+outside any fn names the file and the line of its form. What differs:
+no "Full report at" file is written.
 A load's failure (`load-file`, `require`, the REPL) keeps clotran's own
 report, with the form and the trace. check-program asserts the text.
 The original entry follows.

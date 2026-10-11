@@ -344,7 +344,10 @@
           do i = 0, n - 1
              call fc(fb, gcv_nth(kids, i + 1), a + i)
           end do
-          call fb_emit(fb, F_CALLW, d, j1, a, n, f, fb_const(fb, gc_int(-1_gc_ip)))
+          v = gc_slot(nd, 4)
+          site = 0
+          if (v%tag == GCT_INT) site = int(v%ival, kind=4)
+          call fb_emit(fb, F_CALLW, d, j1, a, n, f, fb_const(fb, gc_int(-1_gc_ip)), site)
        else if (gc_kind(v) == OBJ_AST .and. gc_i1(v) == N_VAR .and. gc_i2(v) == 1) then
           call fb_emit(fb, F_DLVAR, f, fb_const(fb, v), 0, 0, 0)
           do i = 0, n - 1
@@ -403,7 +406,10 @@
     case (N_THROW)
        t = fb_temp(fb)
        call fc(fb, gcv_nth(kids, 0), t)
-       call fb_emit(fb, F_THROW, t, 0, 0, 0, 0)
+       v = gc_slot(nd, 4)
+       site = 0
+       if (v%tag == GCT_INT) site = int(v%ival, kind=4)
+       call fb_emit(fb, F_THROW, t, site, 0, 0, 0)
     case (N_NEW, N_NEWTYPE)
        ! the arguments in registers, then new_cached with the node
        n = gcv_count(kids)
@@ -414,7 +420,10 @@
        do i = 0, n - 1
           call fc(fb, gcv_nth(kids, i), a + i)
        end do
-       call fb_emit(fb, F_NEW, d, fb_const(fb, nd), a, n, 0)
+       v = gc_slot(nd, 4)
+       site = 0
+       if (v%tag == GCT_INT) site = int(v%ival, kind=4)
+       call fb_emit(fb, F_NEW, d, fb_const(fb, nd), a, n, site)
     case (N_DEF, N_DEFTYPE, N_LATEVAR, N_LETFN, N_SETBANG, N_FAIL)
        ! what the tree itself runs nested (exec_other), run the same way --
        ! unless a recur of this body is inside it (node_has_recur)
@@ -1053,6 +1062,7 @@
                argv = gc_nil()
                if (n == 2) argv = vst%vstack(rb + w(4) + 1 + 1)
                done = .false.
+               tctx%pending_site = w(8)   ! the call in progress, for a host-raised error's report
                if (bid1 <= 1024) bi_fast_n(bid1 - 1) = bi_fast_n(bid1 - 1) + 1
                if (n == 1) done = flat_seq_op(int(bid1) - 1, vst%vstack(rb + w(4) + 1), newframe)
                if (.not. done) done = flat_int_op(int(bid1) - 1, n, vst%vstack(rb + w(4) + 1), argv, newframe)
@@ -1152,8 +1162,10 @@
           if (tctx%has_error) exit
           vst%vstack(rb + w(2) + 1) = v
        case (F_THROW)
+          ! w: F_THROW t site
           v = vst%vstack(rb + w(2) + 1)
           vst%vstack(rb + w(2) + 1) = gc_nil()
+          if (w(3) /= 0) tctx%pending_site = w(3)   ! the throw's own place, for its trace
           call set_thrown(v)
           tctx%has_error = .true.
           block
@@ -1396,6 +1408,7 @@
           ! machine integers through + < inc and the rest need no call
           n = w(5)
           tctx%kst(ks)%aux2 = w(6)
+          tctx%pending_site = w(6)   ! the call in progress, for a host-raised error's report
           tctx%kst(ks)%pc = pc
           fnv = vec_store(kb + w(3) + 1)
           if (n >= 1 .and. n <= 2) then
@@ -1435,7 +1448,8 @@
           call vs_set(vst, b + 3, fnv)
           if (.not. flat_builtin(w(6))) exit
        case (F_NEW)
-          ! w: F_NEW d k a n
+          ! w: F_NEW d k a n site
+          if (w(6) /= 0) tctx%pending_site = w(6)
           argv = flat_args(fr, w(4), w(5), b)
           call vs_set(vst, b + 6, argv)
           do j = 0, w(5) - 1
@@ -1512,6 +1526,7 @@
           ! while it runs, and both kept there if it parks, to dispatch
           ! again as it was
           tctx%kst(ks)%aux2 = w(7)
+          tctx%pending_site = w(7)   ! the host call in progress, for an error's report
           tctx%kst(ks)%pc = pc
           v = vec_store(kb + w(3) + 1)
           if (tctx%kst(ks)%i == -2) then

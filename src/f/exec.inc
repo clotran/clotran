@@ -1550,7 +1550,10 @@
                 ! are in a vector: on the numeric path the last one is
                 ! still only in `val`, and that slot was its root.
                 call vs_set(vst, vbase + 1, gc_nil())
+                tctx%pending_site = site   ! the call in progress, for a host-raised error's report
                 val = call_builtin(gc_i1(fnv), v)
+                ! the frame is popped below before an error unwinds: its place now
+                if (tctx%has_error) call note_position(vs_get(vst, b + 1))
                 call args_give(vs_get(vst, b + 4), n)
                 call vs_set(vst, b + 4, gc_nil())
                 call k_finish(val, tctx)
@@ -1568,7 +1571,10 @@
                    call gc_vec_set(gc_slot(v, 1), 2, val)
                 end if
                 call vs_set(vst, vbase + 1, gc_nil())
+                tctx%pending_site = site   ! the call in progress, for a host-raised error's report
                 val = call_builtin(gc_i1(fnv), v)
+                ! the frame is popped below before an error unwinds: its place now
+                if (tctx%has_error) call note_position(vs_get(vst, b + 1))
                 call k_finish(val, tctx)
                 cycle
              end if
@@ -1709,6 +1715,8 @@
        case (N_THROW)
           v = exec(gcv_nth(kids, 0), vs_get(vst, b + 2))
           if (.not. tctx%has_error) then
+             ! the throw's own place, for its trace's innermost frame
+             call note_site(vs_get(vst, b + 1))
              call set_thrown(v)
              tctx%has_error = .true.
              block
@@ -1738,6 +1746,7 @@
           if (v%tag == GCT_NIL .or. .not. flat_enabled()) v = gc_slot(vs_get(vst, b + 1), 2)
           call k_tail(v, tctx)
        case (N_DOT)
+          call note_site(vs_get(vst, b + 1))   ! the host call's place, for an error's report
           ! (. target member args...): the target, then the arguments,
           ! into this frame -- slot 3 and slot 4 -- and then the dispatch,
           ! which is re-executable as it stands: a block in it yields
@@ -1960,6 +1969,7 @@
     case (N_DEFTYPE)
        out = exec_deftype(nd, frame)
     case (N_NEW, N_NEWTYPE)
+       call note_site(nd)   ! the construction's place, for an error's report
        v = exec_args(kids, 0, frame)
        if (.not. tctx%has_error) then
           call vs_set(vst, base + 3, v)
@@ -2007,6 +2017,18 @@
     if (tctx%has_error) call note_position(vs_get(vst, base + 1))
     call vs_leave(vst, base)
   end function exec_other
+
+  ! The site of the form about to run, as the call paths set it before
+  ! a call (pending_site): what a host-raised error's report and a
+  ! throw's trace name as the innermost frame's line
+  subroutine note_site(nd)
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: p
+    tctx => ctx_self()
+    p = gc_slot(nd, 4)
+    if (p%tag == GCT_INT) tctx%pending_site = int(p%ival, kind=4)
+  end subroutine note_site
 
   ! Appends "  at file:line:col" to the error once, from the innermost
   ! node that has a position -- the error propagates outward through

@@ -763,8 +763,19 @@
              ! node has none of its own yet (a macro's expansion keeps
              ! the position of the form that was written)
              if (.not. tctx%has_error .and. gc_kind(nd) == OBJ_AST) then
-                if (gc_i2(vs_get(vst, base + 1)) /= 0 .and. tag_of(gc_slot(nd, 4)) == GCT_NIL) &
-                     call gc_set_slot(nd, 4, gc_int(gc_i2(vs_get(vst, base + 1))))
+                if (gc_i2(vs_get(vst, base + 1)) /= 0) then
+                   block
+                      type(gc_value) :: p
+                      logical :: take
+                      p = gc_slot(nd, 4)
+                      take = (tag_of(p) == GCT_NIL)
+                      ! an expansion's position has no file (an inlined core
+                      ! call, (/ x 0) through Numbers/divide): the written
+                      ! form's wins, as a frame's line names what was written
+                      if (.not. take .and. p%tag == GCT_INT) take = (p%ival < POS_SHIFT)
+                      if (take) call gc_set_slot(nd, 4, gc_int(gc_i2(vs_get(vst, base + 1))))
+                   end block
+                end if
              end if
           end if
        case (OBJ_VECTOR)
