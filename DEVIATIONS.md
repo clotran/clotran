@@ -1175,7 +1175,30 @@ trace is `clojure.core/ex-info`, as it is in clj.
 What differs from clj: no `invokeStatic`/`doInvoke` pairs, no
 frames for builtins, and a `recur` loop is one frame.
 
-## 32. A qualified symbol that does not resolve is a run-time error
+## 32. RESOLVED for a user's code -- a qualified symbol that does not resolve is refused when analysed
+
+**RESOLVED 2026-10-10 (PLAN step 35), everywhere but the vendored tree.**
+In a user's file or at the prompt an unresolved qualified symbol is
+Compiler.resolveIn's refusal when the form is analysed: "No such var:
+s/nope" (the symbol as written) where the namespace or alias exists,
+"var: #'a/p is not public" where it is private, "No such namespace: x"
+where there is none -- a mistyped class name included -- and the
+var-quote's "Unable to resolve var: x/y in this context". What still
+defers everywhere: a static CALL on a class name nothing knows,
+`(Strng/format "x")`, since defrecord's expansion names its own class in
+such a call before its `deftype*` has run and a top-level `do` is analysed
+whole; clj refuses it at compile time with the same "No such namespace",
+here it fails when called. The deferral
+below (N_LATEVAR, and the var-quote's placeholder namespace) remains for
+the vendored tree, clotran's own files and Clojure's own tests, by their
+file names (analyze.inc, defers_late_vars), since core.clj names
+libraries before they load and names ones that are skipped (DEVIATIONS
+12). Measured against clj in test/clj/oracle.clj. The original entry
+follows.
+
+---
+
+A qualified symbol that does not resolve is a run-time error
 
 Clojure fails to COMPILE a form naming a Var that does not exist:
 `Unable to resolve symbol: jio/reader` (for a namespace that does not

@@ -3214,3 +3214,10 @@ x10
 *warn-on-reflection*
 (load-string "(set! *unchecked-math* true) *unchecked-math*")
 *unchecked-math*
+
+;; an unresolved qualified symbol is refused when the form is analysed, in Compiler.resolveIn's words (DEVIATIONS 32 resolved)
+(require '[clojure.string :as s32])
+(try (eval '(defn f32a [] (clojure.string/nope))) (catch clotran.host.throwable e (re-find #"^No such var: clojure.string/nope" (.getMessage (or (.getCause e) e)))))
+(try (eval '(defn f32b [] (s32/nope))) (catch clotran.host.throwable e (re-find #"^No such var: s32/nope" (.getMessage (or (.getCause e) e)))))
+(try (eval '(defn f32c [] nosuch32/x)) (catch clotran.host.throwable e (re-find #"^No such namespace: nosuch32" (.getMessage (or (.getCause e) e)))))
+(try (eval '(defn f32d [] #'nosuch32/x)) (catch clotran.host.throwable e (re-find #"^Unable to resolve var: nosuch32/x in this context" (.getMessage (or (.getCause e) e)))))

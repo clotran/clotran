@@ -458,6 +458,17 @@
 
   ! --- nodes ---------------------------------------------------------
 
+  ! Whether the file being analysed may name a Var before its library
+  ! loads (N_LATEVAR, DEVIATIONS 12): the vendored tree and clotran's own
+  ! files, by their classpath names, and Clojure's own tests, derived or
+  ! verbatim. A user's file gets clj's refusal when the form is analysed.
+  logical function defers_late_vars()
+    character(len=:), allocatable :: nm
+    call gcr_current_file(s=nm)
+    defers_late_vars = index(nm, "clojure/") == 1 .or. index(nm, "clotran/") == 1 .or. &
+         index(nm, "test_clojure/") > 0 .or. index(nm, "test/clj/derived/") > 0
+  end function defers_late_vars
+
   ! 1 when a call through this Var from the namespace being analysed
   ! may bind to the callee at its first call (DEVIATIONS 55), else 0.
   integer function direct_link_flag(var) result(flag)
@@ -1021,11 +1032,33 @@
     block
        call gc_ref_text(sym%ref, s=dlt_1)
     if (index(dlt_1, "/") > 1) then
-       ! A QUALIFIED symbol that does not resolve -- clotran.io/text-reader
-       ! before clotran.io is loaded, which loads it (N_LATEVAR). Clojure
-       ! would fail to compile; clotran defers to run time, so the
-       ! function is defined and only a CALL of it fails. Unqualified
-       ! symbols are not deferred -- that is a real compile error.
+       ! A QUALIFIED symbol that does not resolve. In the vendored tree,
+       ! clotran's own files and Clojure's own tests it is deferred to run
+       ! time (N_LATEVAR): core.clj names clotran.io/text-reader before
+       ! clotran.io is loaded, which loads it, and names libraries that are
+       ! skipped (DEVIATIONS 12). Everywhere else it is Compiler.resolveIn's
+       ! refusal when the form is analysed (DEVIATIONS 32 resolved).
+       if (.not. defers_late_vars()) then
+          block
+             integer :: slash
+             type(gc_value) :: nsv
+             slash = index(dlt_1, "/")
+             nsv = alias_target(dlt_1(1:slash - 1), [vs_get(vst, base + 1)])
+             if (gc_kind(nsv) /= OBJ_NS) nsv = gcn_find(dlt_1(1:slash - 1))
+             if (gc_kind(nsv) == OBJ_NS) then
+                if (gca_is(gc_slot(nsv, 4))) then
+                   if (truthy(gca_get(gc_slot(nsv, 4), gc_key("clotran/placeholder", [nsv])))) nsv = gc_nil()
+                end if
+             end if
+             if (gc_kind(nsv) == OBJ_NS) then
+                call fail("No such var: " // dlt_1)
+             else
+                call fail("No such namespace: " // dlt_1(1:slash - 1))
+             end if
+          end block
+          call vs_leave(vst, base)
+          return
+       end if
        nd = mk_node(N_LATEVAR, gc_nil(), vs_get(vst, base + 1), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_leave(vst, base)
        return
@@ -1544,6 +1577,10 @@
           block
              call gc_ref_text(target%ref, s=dlt_1)
           if (gc_kind(find_type(dlt_1)) == OBJ_TYPE .or. is_class_name(target)) then
+             ! (a class name nothing knows is NOT refused here: defrecord's
+             ! expansion names its own class in a static call before its
+             ! deftype* has run, and a top-level do is analysed whole -- the
+             ! residual of DEVIATIONS 32)
              kids = analyze_all(vs_get(vst, base + 6), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
              call vs_set(vst, base + 7, kids)
              if (.not. tctx%has_error) then
@@ -2751,6 +2788,13 @@
        ! #'clojure.uuid/default-uuid-reader, and clojure.uuid is a
        ! skipped library: the map loads, and only reading a #uuid
        ! literal fails.
+       ! ... and only there: a user's #'nosuch/x is clj's refusal (DEVIATIONS 32)
+       if (.not. gcn_is_var(var) .and. .not. defers_late_vars()) then
+          call gc_ref_text(sym%ref, s=dlt_1)
+          call fail("Unable to resolve var: " // dlt_1 // " in this context")
+          call vs_leave(vst, base)
+          return
+       end if
        if (.not. gcn_is_var(var)) var = intern_unbound(sym, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        if (.not. gcn_is_var(var)) then
           block
