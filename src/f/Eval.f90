@@ -7238,26 +7238,55 @@ contains
   ! -- every array of objects is a `value` array -- so the type is read
   ! and discarded, which is DEVIATIONS.md 24's territory rather than a
   ! new one.
-  function value_array(items, roots) result(out)
+  recursive function value_array(items, roots, cls, infer) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: items
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, vec, run
-    character(len=:), allocatable :: err
+    character(len=*), intent(in), optional :: cls   ! the element class, "" for Object
+    logical, intent(in), optional :: infer          ! the first element's class instead
+    type(gc_value) :: out, vec, run, e
+    character(len=:), allocatable :: err, ecls
     integer :: base, h, k, cnt
 
     vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 4)
     vec = coll_to_vector(items, roots)
     call vs_set(vst, base + 1, vec)
     cnt = gcv_count(vs_get(vst, base + 1))
+    ! the element class (DEVIATIONS 62): given, or the first element's;
+    ! Object -- nothing recorded -- for nil, nothing, or Object itself
+    ecls = ""
+    if (present(cls)) ecls = cls
+    if (present(infer) .and. cnt > 0) then
+       if (infer) then
+          e = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
+          if (e%tag /= GCT_NIL) call class_name_of(e, s=ecls)
+          if (ecls == "clotran.host.value") ecls = ""
+       end if
+    end if
+    ! every element an instance of the class, as the store into a typed
+    ! array checks; nil is stored into any
+    if (len(ecls) > 0) then
+       call vs_set(vst, base + 4, gc_class(ecls, [roots, vs_get(vst, base + 1)]))
+       do k = 0, cnt - 1
+          e = strip_meta(gcv_nth(vs_get(vst, base + 1), k))
+          if (e%tag == GCT_NIL) cycle
+          if (.not. is_instance(vs_get(vst, base + 4), e)) then
+             call raise_class("clotran.host.illegal_argument_exception", "array element type mismatch", &
+                  [roots, vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
+             return
+          end if
+       end do
+    end if
     h = gcna_new("value", [cnt], [0], err)
     if (h == 0) then
        call fail(err)
        call vs_leave(vst, base)
        return
     end if
+    if (len(ecls) > 0) call gcna_set_class(h, ecls)
     run = gc_vec(max(1, cnt), [roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, run)
     out = gc_obj(OBJ_ARRAY, [vs_get(vst, base + 2)], [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
@@ -10548,6 +10577,10 @@ contains
             call vs_leave(vst, base)
             return
          end if
+         block
+            call gcna_class(h, s=dlt_1)
+            if (len(dlt_1) > 0) call gcna_set_class(h2, dlt_1)
+         end block
          n2 = gcna_total(h2)
          run = gc_nil()
          if (kn == "value") run = gc_vec(max(1, n2), [vs_get(vst, base + 2)])
@@ -14719,7 +14752,26 @@ contains
           end select
        end if
     case (B_INTOARRAY)
-       out = value_array(gcv_nth(args, n - 1), [vs_get(vst, base + 1)])
+       ! RT.seqToTypedArray: (into-array type seq) keeps the class given;
+       ! (into-array seq) takes the first element's class, Object for nil or
+       ! nothing; an element that is not an instance of it is clj's
+       ! IllegalArgumentException (DEVIATIONS 62 resolved)
+       block
+         character(len=:), allocatable :: ecls, kk
+         type(gc_value) :: tv
+         ecls = ""
+         if (n >= 2) then
+            tv = strip_meta(gcv_nth(args, 0))
+            if (tv%tag == GCT_CLASS) then
+               call gc_ref_text(tv%ref, s=dlt_1)
+               call class_key(dlt_1, k=kk)
+               if (kk /= "clotran.host.value") ecls = kk
+            end if
+            out = value_array(gcv_nth(args, n - 1), [vs_get(vst, base + 1)], cls=ecls)
+         else
+            out = value_array(gcv_nth(args, n - 1), [vs_get(vst, base + 1)], infer=.true.)
+         end if
+       end block
     case (B_RE_START, B_RE_END)
        ! (.start t) on a THREAD is the task starting; the member name
        ! is shared with a Matcher's group start, and the target says
@@ -17766,6 +17818,21 @@ contains
   ! rank-N Fortran array. DEVIATIONS 24 is what that costs (no ragged
   ! rows) and PLAN item 9 is what it buys (one contiguous column-major
   ! block, which is what a BLAS routine takes).
+  ! the element class of a value array from the class it was made for:
+  ! nothing for Object (clotran.host.value), the class's key otherwise
+  subroutine set_elem_class(h, tv)
+    integer, intent(in) :: h
+    type(gc_value), intent(in) :: tv
+    type(gc_value) :: v
+    character(len=:), allocatable :: t, k
+    v = strip_meta(tv)
+    if (v%tag /= GCT_CLASS) return
+    call gc_ref_text(v%ref, s=t)
+    call class_key(t, k=k)
+    if (k == "clotran.host.value" .or. len(k) == 0) return
+    call gcna_set_class(h, k)
+  end subroutine set_elem_class
+
   recursive function array_new_instance(args, roots) result(out)
     type(gc_value), intent(in) :: args
     type(gc_value), intent(in) :: roots(:)
@@ -17803,6 +17870,8 @@ contains
        call fail(err)
        return
     end if
+    ! a reference array remembers the class it was made for (DEVIATIONS 62)
+    if (kind == "value") call set_elem_class(h, gcv_nth(args, 0))
     run = gc_nil()
     if (kind == "value") run = gc_vec(max(1, gcna_total(h)), roots)
     out = gc_obj(OBJ_ARRAY, [run], [roots, [run]])
@@ -17890,7 +17959,11 @@ contains
     case ("char2");   comp = "C"
     case ("real4");   comp = "F"
     case ("logical"); comp = "Z"
-    case default;     comp = "Lclotran.host.value;"
+    case default
+       ! a reference array: the class it was made for, else Object
+       call gcna_class(gc_i1(v), s=dlt_1)
+       if (len(dlt_1) == 0) dlt_1 = "clotran.host.value"
+       comp = "L" // dlt_1 // ";"
     end select
     s = repeat("[", max(1, array_own_rank(v))) // comp
   end subroutine array_class_name
@@ -19166,10 +19239,21 @@ contains
              block
                 call array_class_name(strip_meta(v), s=dlt_1)
                 yes = (dlt_1 == c)
+                ! Object[] takes every reference array of its rank, as String[]
+                ! is an Object[] there
+                if (.not. yes .and. index(c, "Lclotran.host.value;") > 0) &
+                     yes = (verify(c, "[") == verify(dlt_1, "[") .and. index(dlt_1, "L") == verify(dlt_1, "["))
              end block
           end if
           return
        end if
+    end if
+    ! a stack trace element is a frame map here, {:class :method :file
+    ! :line} as .getStackTrace answers them; core.clj's elide-top-frames
+    ! builds (into-array clotran.host.stack_trace_element ...) of them
+    if (c == "clotran.host.stack_trace_element") then
+       yes = gca_is(strip_meta(v))
+       return
     end if
     block
        call type_name(v, s=dlt_1)

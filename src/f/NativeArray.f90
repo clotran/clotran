@@ -50,6 +50,9 @@ module NativeArray
   type :: na_node
      logical :: used = .false.
      character(len=:), allocatable :: elem_kind
+     ! a `value` array's element CLASS, by its clotran name -- what
+     ! make-array and into-array were given or inferred; unset is Object
+     character(len=:), allocatable :: elem_class
      integer, allocatable :: extents(:)
      integer, allocatable :: lows(:)
      class(*), allocatable :: buf(:)
@@ -62,7 +65,7 @@ module NativeArray
   type(na_node), allocatable, save, target :: reg(:)
   integer, save :: reg_used = 0
 
-  public :: gcna_new, gcna_release, gcna_reset, gcna_is, gcna_kind, gcna_rank, &
+  public :: gcna_new, gcna_release, gcna_reset, gcna_is, gcna_kind, gcna_rank, gcna_class, gcna_set_class, &
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
        gcna_get_real, gcna_get_int, gcna_get_logical, &
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
@@ -215,6 +218,7 @@ contains
     if (allocated(reg(handle)%extents)) deallocate(reg(handle)%extents)
     if (allocated(reg(handle)%lows)) deallocate(reg(handle)%lows)
     if (allocated(reg(handle)%elem_kind)) deallocate(reg(handle)%elem_kind)
+    if (allocated(reg(handle)%elem_class)) deallocate(reg(handle)%elem_class)
     reg(handle)%used = .false.
   end subroutine gcna_release
 
@@ -260,6 +264,24 @@ contains
     s = ""
     if (gcna_is(handle)) s = reg(handle)%elem_kind
   end subroutine gcna_kind
+
+  ! the element class of a value array, "" when none was given (Object)
+  subroutine gcna_class(handle, s)
+    integer, intent(in) :: handle
+    character(len=:), allocatable, intent(out) :: s
+    s = ""
+    if (gcna_is(handle)) then
+       if (allocated(reg(handle)%elem_class)) s = reg(handle)%elem_class
+    end if
+  end subroutine gcna_class
+
+  subroutine gcna_set_class(handle, cls)
+    integer, intent(in) :: handle
+    character(len=*), intent(in) :: cls
+    if (.not. gcna_is(handle)) return
+    if (allocated(reg(handle)%elem_class)) deallocate(reg(handle)%elem_class)
+    if (len(cls) > 0) reg(handle)%elem_class = cls
+  end subroutine gcna_set_class
 
   integer function gcna_rank(handle)
     integer, intent(in) :: handle
@@ -495,6 +517,12 @@ contains
        if (.not. reg(i)%used) cycle
        write(u) len(reg(i)%elem_kind)
        write(u) reg(i)%elem_kind
+       if (allocated(reg(i)%elem_class)) then
+          write(u) len(reg(i)%elem_class)
+          write(u) reg(i)%elem_class
+       else
+          write(u) 0
+       end if
        write(u) size(reg(i)%extents)
        write(u) reg(i)%extents, reg(i)%lows
        if (allocated(reg(i)%buf)) then
@@ -529,6 +557,11 @@ contains
        read(u) k
        allocate(character(len=k) :: reg(i)%elem_kind)
        read(u) reg(i)%elem_kind
+       read(u) k
+       if (k > 0) then
+          allocate(character(len=k) :: reg(i)%elem_class)
+          read(u) reg(i)%elem_class
+       end if
        read(u) k
        allocate(reg(i)%extents(k), reg(i)%lows(k))
        read(u) reg(i)%extents, reg(i)%lows
@@ -600,6 +633,7 @@ contains
           do i = 1, reg_used
              bigger(i)%used = reg(i)%used
              if (allocated(reg(i)%elem_kind)) call move_alloc(reg(i)%elem_kind, bigger(i)%elem_kind)
+             if (allocated(reg(i)%elem_class)) call move_alloc(reg(i)%elem_class, bigger(i)%elem_class)
              if (allocated(reg(i)%extents)) call move_alloc(reg(i)%extents, bigger(i)%extents)
              if (allocated(reg(i)%lows)) call move_alloc(reg(i)%lows, bigger(i)%lows)
              if (allocated(reg(i)%buf)) call move_alloc(reg(i)%buf, bigger(i)%buf)

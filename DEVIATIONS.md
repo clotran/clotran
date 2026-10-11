@@ -1968,7 +1968,21 @@ as failures in its scorecard.
 **Removal**: one helper taking a key to its signed low 32 bits, called
 from each of the vector key paths above. Not planned.
 
-## 62. An array of references does not know its element class
+## 62. RESOLVED -- an array of references knows its element class
+
+**RESOLVED 2026-10-10 (PLAN step 35).** A `value` array carries the
+class it was made for beside its kind (NativeArray, `elem_class`): what
+`make-array` was given, what `into-array` was given or inferred from the
+first element (Object for nil or nothing), copied by `aclone`, kept in
+the image. `(class (make-array String 1))` is `String/1`, `instance?`
+of `String/1` is true of it and of `Object/1` too, as a String[] is an
+Object[]; `into-array` refuses an element that is not an instance of
+the class, "array element type mismatch", as the typed store does.
+Measured against clj in test/clj/oracle.clj. The original entry follows.
+
+---
+
+An array of references does not know its element class
 
 Every array of references is an `Object[]` here: a `value`-kind native
 array, whose class is `[LObject;` whatever it was made for.

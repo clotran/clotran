@@ -77,8 +77,24 @@
          [c# (count c#) (seq c#) (hash c#) (= c# (into (empty c#) c#))
           (if (map? c#) (into {} c#) (vec c#))]))))
 
+;; a reference array: the element class into-array infers from the first
+;; element or is given, kept by aclone, Object[] taking every reference
+;; array; an element that is not an instance is clj's refusal (DEVIATIONS 62)
+(def g-elem (g/elements [1 2 -3 "s" "t" :k :j [1] [2] nil 1.5 2N 'x]))
+(def g-array-case
+  (g/let [es (g/vector g-elem 0 5) typed? g/boolean]
+    `(try (let [a# ~(if typed?
+                     `(into-array (.getComponentType (class (object-array 0))) (quote ~es))
+                     `(into-array (quote ~es)))]
+            ;; booleans, not class names: the two hosts print a class differently
+            [(= (class a#) (class (into-array (quote ~(vec (take 1 es)))))) (alength a#)
+             (= (class (aclone a#)) (class a#)) (instance? (class (object-array 0)) a#) (vec a#)])
+          (catch clotran.host.illegal_argument_exception e# :mismatch))))
+
+(def g-all (g/frequency [[6 g-case] [1 g-array-case]]))
+
 (let [{:keys [n seed]} opts
-      forms (for [i (range n)] (g/generate g-case 20 (+ seed i)))
+      forms (for [i (range n)] (g/generate g-all 20 (+ seed i)))
       out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-coll" :suffix ".edn"})))]
   (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
   (println (str "fuzz-coll: " n " cases -> " out))
