@@ -1446,6 +1446,9 @@ contains
     integer :: start
 
     v = gc_nil()
+    ! SymbolicValueReader reads a FORM: whitespace, commas and comments
+    ! before it are skipped, as read skips them -- ##,NaN is ##NaN
+    call skip_ignorables(text, pos, roots)
     start = pos
     do while (pos <= len(text))
        if (is_space(text(pos:pos)) .or. is_delim(text(pos:pos))) exit

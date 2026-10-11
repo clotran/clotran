@@ -8,6 +8,11 @@
  (try (rationalize ##-Inf) (catch clotran.host.number_format_exception e :nan))
  (try (rationalize ##Inf) (catch clotran.host.number_format_exception e :nan))
  (try (rationalize ##NaN) (catch clotran.host.number_format_exception e :nan))
+ ;; ## reads a FORM, skipping whitespace, commas and comments before it
+ ;; (scripts/fuzz-read, seed 2921485854)
+ (read-string "(##,NaN true)")
+ (read-string "(## Inf)")
+ (read-string "(##\n;c\n-Inf)")
  ;; the ## reader's complaint inside #(...) names the form with its %-args
  ;; already rewritten, as ArgReader leaves them (scripts/fuzz-read); the
  ;; gensym numbers and clotran's location suffix taken off the message
