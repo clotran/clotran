@@ -279,8 +279,9 @@ contains
     if (gcv_is(fr)) box = gca_get(gcv_nth(fr, 0), v)
   end function gcn_binding_box
 
-  ! Var.set, behind set! and var-set: this thread's binding. A Var not
-  ! bound here has its ROOT set, where Clojure throws -- DEVIATIONS.md 10.
+  ! This thread's binding of the Var, else its root: the host's own writes
+  ! (in-ns setting *ns*). set! and var-set go through var_set_checked
+  ! (Eval.f90), which refuses a Var with no binding as clj does.
   subroutine gcn_var_set(v, val)
     type(gc_value), intent(in) :: v, val
     type(gc_value) :: box

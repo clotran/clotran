@@ -459,7 +459,7 @@ module Eval
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
   public :: gce_bind_repl_vars, gce_set_command_line_args
-  public :: gce_main_bindings, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
+  public :: gce_main_bindings, gce_push_load_frame, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
   public :: gce_native_begin, gce_native_end
   public :: gce_analyze, gce_trace, gce_set_site
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots, gce_take_rest
@@ -1614,11 +1614,74 @@ contains
     end do
   end subroutine gce_image_read
 
+  ! clojure.main's with-bindings: the Vars the REPL and a script run
+  ! under, bound once core.clj has loaded and for the life of the process,
+  ! so (set! *warn-on-reflection* true) at the prompt or at a script's top
+  ! sets a binding, as it does there, and nothing sets a root with set!
+  ! (DEVIATIONS 10 resolved)
   subroutine gce_main_bindings()
     type(gc_value) :: var, none(0)
     var = gcn_lookup(gcn_find_or_create("clojure.core", none), gc_sym("*print-namespace-maps*", none))
     if (gcn_is_var(var)) call gc_set_slot(var, 1, gc_bool(.true.))
+    call gce_push_frame([character(len=26) :: "*ns*", "*warn-on-reflection*", "*math-context*", "*print-meta*", &
+         "*print-length*", "*print-level*", "*print-namespace-maps*", "*data-readers*", "*default-data-reader-fn*", &
+         "*compile-path*", "*command-line-args*", "*unchecked-math*", "*assert*", "*1", "*2", "*3", "*e"])
   end subroutine gce_main_bindings
+
+  ! Compiler.load's frame around a file: *ns*, *warn-on-reflection*,
+  ! *unchecked-math* and *data-readers*, each bound to its current value, so
+  ! a file's set! of one ends with the file
+  subroutine gce_push_load_frame()
+    call gce_push_frame([character(len=26) :: "*ns*", "*warn-on-reflection*", "*unchecked-math*", "*data-readers*"])
+  end subroutine gce_push_load_frame
+
+  ! A binding frame of the named clojure.core Vars, each at its current
+  ! value, pushed on this thread (push-thread-bindings); a name not yet
+  ! interned is skipped
+  subroutine gce_push_frame(names)
+    type(gc_stack), pointer :: vst
+    character(len=*), intent(in) :: names(:)
+    type(gc_value) :: core, var, m, out, none(0)
+    integer :: base, i
+    vst => gc_my_stack()
+    core = gcn_find("clojure.core")
+    if (gc_kind(core) /= OBJ_NS) return
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, core)
+    m = gca_empty([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, m)
+    do i = 1, size(names)
+       var = gcn_lookup(vs_get(vst, base + 1), gc_sym(trim(names(i)), none))
+       if (.not. gcn_is_var(var)) cycle
+       call vs_set(vst, base + 3, var)
+       m = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), gcn_var_value(vs_get(vst, base + 3)), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 2, m)
+    end do
+    m = gcv_empty([vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, m)
+    m = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 2), [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 3, m)
+    out = call_builtin(B_PUSHTB, vs_get(vst, base + 3))
+    call vs_leave(vst, base)
+  end subroutine gce_push_frame
+
+  ! Var.set behind set! and var-set: this thread's binding, or clj's
+  ! refusal where there is none (DEVIATIONS 10 resolved) -- never the root
+  subroutine var_set_checked(v, val, roots)
+    type(gc_value), intent(in) :: v, val
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: box
+    character(len=:), allocatable :: nm
+    box = gcn_binding_box(v)
+    if (gc_kind(box) == OBJ_ATOM) then
+       call gc_cell_set(box, 1, val)
+    else
+       call gcp_str(gc_slot(v, 4), .false., s=nm)
+       call raise_class("clotran.host.illegal_state_exception", &
+            "Can't change/establish root binding of: " // nm // " with set", roots)
+    end if
+  end subroutine var_set_checked
 
   recursive subroutine ensure_specs()
     type(gc_stack), pointer :: vst
@@ -2022,7 +2085,7 @@ contains
     type(gc_stack), pointer :: vst
     character(len=*), intent(in) :: args(:)
     integer, intent(in) :: lens(:)
-    type(gc_value) :: core, lst, s
+    type(gc_value) :: core, lst, s, var
     integer :: base, i
     vst => gc_my_stack()
     core = gcn_find("clojure.core")
@@ -2041,7 +2104,10 @@ contains
           call vs_set(vst, base + 2, lst)
        end do
     end if
-    call bind_var(vs_get(vst, base + 1), "*command-line-args*", vs_get(vst, base + 2))
+    call bind_var(vs_get(vst, base + 1), "*command-line-args*", vs_get(vst, base + 2), var_out=var)
+    ! and this thread's binding of it: the program runs under clojure.main's
+    ! frame (gce_main_bindings), which binds it over the root
+    call gcn_var_set(var, vs_get(vst, base + 2))
     call vs_leave(vst, base)
   end subroutine gce_set_command_line_args
 
@@ -13362,6 +13428,14 @@ contains
              return
           end if
        end if
+       ! a Var with no binding on this thread: clj's refusal (DEVIATIONS 10)
+       if (gcn_is_var(a)) then
+          if (gc_kind(gcn_binding_box(a)) /= OBJ_ATOM) then
+             call var_set_checked(a, out, [vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        block
          type(gc_value) :: prev
          ! THE VALIDATOR RUNS BEFORE THE WRITE, and a refusal
@@ -17220,7 +17294,7 @@ contains
     tctx => ctx_self()
     vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, gcn_current([gc_value ::]))
     if (gc_root_live(global_env_root)) then
        genv = gc_root_get(global_env_root)
@@ -17228,6 +17302,10 @@ contains
        genv = gc_nil()
     end if
     call vs_set(vst, base + 2, genv)
+    ! Compiler.load's bindings around the file, back to this frame however
+    ! the load ends
+    call vs_set(vst, base + 4, gc_bindings_get())
+    call gce_push_load_frame()
     fid = gcr_begin_file(text, path)
     saved_top = tctx%top_pos
     j = 1
@@ -17245,6 +17323,7 @@ contains
        out = gce_eval(f, vs_get(vst, base + 2), [vs_get(vst, base + 2), vs_get(vst, base + 3)])
        if (tctx%has_error) exit
     end do
+    call gc_bindings_set(vs_get(vst, base + 4))
     call gcn_set_current(vs_get(vst, base + 1))
     tctx%top_pos = saved_top
     call vs_leave(vst, base)

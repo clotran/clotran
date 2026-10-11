@@ -5224,7 +5224,7 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    do, and 19, 32, 36, 42 and 62 described their own behaviour wrongly
    (42 had turned from a throw into a silent no-op) and are corrected.
    The order to resolve the rest, cheapest by each entry's own removal
-   sentence: 36 (DONE 2026-10-10), 42 (DONE), 23 (DONE), 10, 19 (DONE), 54, 51, 74 (model/hashseq.lisp moves
+   sentence: 36 (DONE 2026-10-10), 42 (DONE), 23 (DONE), 10 (DONE), 19 (DONE), 54, 51, 74 (model/hashseq.lisp moves
    with it), 60, 62, 68, 48, 6, 17, 32, 3, 2 -- each in its own gated
    commit, or reclassified by design with the reason. The table at the
    top said "host" for 7, 13 and 15 where their prose says resolved;

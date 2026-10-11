@@ -155,6 +155,8 @@ contains
           gc_torture = (trim(tortbuf) == "1")
           call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
           if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
+          ! the image holds the heap, not this thread's binding frame
+          call gce_main_bindings()
           cycle
        end if
        call load_file(argbuf(1:arglen), vs_get(base + 1))
@@ -302,8 +304,12 @@ contains
     character(len=8) :: envbuf
     logical :: trace
     character(len=:), allocatable :: dlt_1, dlt_2
-    lb = vs_enter(3)
+    lb = vs_enter(4)
     call vs_set(lb + 1, env)
+    ! Compiler.load's bindings around the file (gce_push_load_frame), back
+    ! to this frame however the load ends
+    call vs_set(lb + 4, gc_bindings_get())
+    call gce_push_load_frame()
     ! CLOTRAN_LOAD_TRACE=1 names each form before evaluating it. An
     ! error names its own form; a HANG does not, and this is the only
     ! way to see which form never came back.
@@ -360,10 +366,12 @@ contains
           end block
           write(err_unit, '(A,A,A,I0)') "load ", path, ": stopped at form ", i
           load_failed = .true.
+          call gc_bindings_set(vs_get(lb + 4))
           call vs_leave(lb)
           return
        end if
     end do
+    call gc_bindings_set(vs_get(lb + 4))
     call vs_leave(lb)
   end subroutine load_text
 

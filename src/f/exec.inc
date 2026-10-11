@@ -2459,9 +2459,10 @@
     case (0)
        val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
        if (.not. tctx%has_error) then
-          ! Var.set: this thread's binding
-          call gcn_var_set(gc_slot(vs_get(vst, base + 1), 2), val)
-          out = val
+          ! Var.set: this thread's binding, or clj's refusal (DEVIATIONS 10)
+          call vs_set(vst, base + 3, val)
+          call var_set_checked(gc_slot(vs_get(vst, base + 1), 2), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+          if (.not. tctx%has_error) out = vs_get(vst, base + 3)
        end if
     case (2)
        ! (set! (.__methodImplCache f) cache) -- the one host field with

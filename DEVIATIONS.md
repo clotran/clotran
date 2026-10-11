@@ -282,7 +282,21 @@ comparator is called through a hook Eval supplies, since ordering
 may run a Clojure fn; with none it is Clojure's `compare`, and keys
 it cannot order throw ClassCastException as in clj.
 
-## 10. RESOLVED -- refs are transactional; `set!` of an unbound Var still sets its root
+## 10. RESOLVED -- refs are transactional; `set!` of an unbound Var is refused
+
+**RESOLVED for `set!` 2026-10-10 (PLAN step 35).** `set!` and `var-set`
+of a Var with no binding on this thread are clj's refusal, "Can't
+change/establish root binding of: x with set", and never write the root.
+What made the root write look necessary is now bound the way clj binds
+it: a file load pushes `Compiler.load`'s frame (`*ns*`,
+`*warn-on-reflection*`, `*unchecked-math*`, `*data-readers*`, each at its
+current value, popped however the load ends), and once core.clj has
+loaded the process runs under clojure.main's `with-bindings` frame
+(`*ns*`, `*warn-on-reflection*`, the print Vars, `*1` to `*e` and the
+rest), as its REPL and its scripts do. So `(set! *warn-on-reflection*
+true)` at a file's top ends with the file, and at the prompt holds for the
+session. Measured against clj in test/clj/oracle.clj. The transactional
+part is unchanged below.
 
 **RESOLVED for refs 2026-09-28** (feat/threads). `dosync` is a
 transaction: `alter`, `commute` and `ref-set` write a per-transaction

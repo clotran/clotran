@@ -3198,3 +3198,19 @@
 (go19 (reify P19 (go19 [this k] (if (pos? k) (recur (dec k)) [:reified k]))) 3)
 (deftype L19 [^:volatile-mutable c] P19 (go19 [this k] (loop [i 0] (when (< i k) (set! c (+ c 1)) (recur (inc i)))) (if (pos? k) (recur 0) c)))
 (go19 (L19. 0) 4)
+
+;; set! and var-set of a Var with no binding on this thread are refused (DEVIATIONS 10 resolved);
+;; a binding is set; a load's set! of *warn-on-reflection* ends with the load, as Compiler.load binds it
+(def x10 1)
+(try (set! x10 2) (catch clotran.host.illegal_state_exception e (.getMessage e)))
+x10
+(def ^:dynamic *y10* 1)
+(try (set! *y10* 2) (catch clotran.host.illegal_state_exception e (.getMessage e)))
+(try (var-set #'*y10* 5) (catch clotran.host.illegal_state_exception e (.getMessage e)))
+(binding [*y10* 3] (set! *y10* 4) *y10*)
+(binding [*y10* 3] (var-set #'*y10* 6) *y10*)
+*y10*
+(load-string "(set! *warn-on-reflection* true) *warn-on-reflection*")
+*warn-on-reflection*
+(load-string "(set! *unchecked-math* true) *unchecked-math*")
+*unchecked-math*
