@@ -3,6 +3,11 @@
 ;; modes (make test, check-fuzz), and the VM's (CLOTRAN_VM=1). Add a
 ;; shrunk form here with each fix.
 [
+ ;; (rationalize ##-Inf) answered a bigint -InfinityN: the sign passed a
+ ;; first-character check (scripts/fuzz-num, seed 2277406879)
+ (try (rationalize ##-Inf) (catch clotran.host.number_format_exception e :nan))
+ (try (rationalize ##Inf) (catch clotran.host.number_format_exception e :nan))
+ (try (rationalize ##NaN) (catch clotran.host.number_format_exception e :nan))
  ;; the ## reader's complaint inside #(...) names the form with its %-args
  ;; already rewritten, as ArgReader leaves them (scripts/fuzz-read); the
  ;; gensym numbers and clotran's location suffix taken off the message

@@ -10694,7 +10694,8 @@ contains
                call gc_dec_text(a, s=dlt_1)
                call dec_to_text(dlt_1, s=t)
             end if
-            if (verify(t(1:1), "+-0123456789.") /= 0) then
+            ! the whole text: -Infinity begins with a sign (scripts/fuzz-num)
+            if (verify(t, "+-0123456789.Ee") /= 0) then
                call raise_class("clotran.host.number_format_exception", "Infinite or NaN", [vs_get(vst, base + 1)])
             else
                e = 0
