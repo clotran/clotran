@@ -1670,15 +1670,17 @@
       character(len=:), allocatable :: written, canonical
       call gc_ref_text(cls%ref, s=written)
       call canon_class(written, c=canonical)
-      if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
       ! a name no import, no deftype* analysed so far and no host row knows
       ! is Compiler's refusal when analysed (DEVIATIONS 17, 32): a deftype's
-      ! bare name means it only where imported
+      ! bare name means it only where imported. Asked BEFORE the canonical
+      ! symbol is made: known_class_name allocates, and a fresh symbol held
+      ! only in a local is collected under it (GC torture found it)
       if (.not. known_class_name(canonical) .and. .not. defers_late_vars()) then
          call fail("Unable to resolve classname: " // written)
          call vs_leave(vst, base)
          return
       end if
+      if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     end block
     call vs_set(vst, base + 4, cls)
     ! (new clotran.host.lazy_seq (fn* [] body...)) is what the lazy-seq

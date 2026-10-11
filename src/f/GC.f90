@@ -901,6 +901,7 @@ contains
        s = str_pool(ref)%text
     else if (ref > 0) then
        write(0, '(A,I0)') "TRAP: read of a freed string, ref ", ref
+       flush(0)   ! abort() does not flush: the message was lost without this
        call abort()
     end if
   end subroutine gc_ref_text
