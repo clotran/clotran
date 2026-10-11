@@ -70,7 +70,7 @@
          (+ (if (rec-err rec) 0 (len (rec-q rec))) (work-al (del a agents))))
   :hints (("Goal" :in-theory (enable set-al))))
 
-(defthm rec-nil (and (equal (rec-err nil) nil) (equal (rec-q nil) nil))
+(defthm rec-nil (and (equal (rec-err nil) nil) (equal (rec-q nil) nil) (equal (rec-dead nil) nil))
   :hints (("Goal" :in-theory (enable rec-err rec-q))))
 
 ; an unfailed agent with work makes the work positive
@@ -223,3 +223,11 @@
            (null (pick (drive st k b n (* 2 (total-work st))))))
   :hints (("Goal" :use ((:instance drive-finishes (fuel (* 2 (total-work st)))))
                   :in-theory (disable drive-finishes drive pick))))
+
+; AND COSTS NOTHING TO DRIVE: a send after shutdown-agents adds no work, so
+; drive-cost's bound of 2n events is the work queued before it
+(defthm total-work-enqueue-after-shutdown
+  (implies (and (st-ok st) (shut st)) (equal (total-work (enqueue from a act st)) (total-work st)))
+  :hints (("Goal" :in-theory (enable enqueue st-ok)
+                  :cases ((agent-known a st))
+                  :use ((:instance work-al-del (agents (st-agents st)))))))

@@ -87,7 +87,11 @@
 (defun rec-q (r) (car r))
 (defun rec-err (r) (cadr r))
 (defun rec-mode (r) (caddr r))
-(defun mk-rec (q err mode) (list q err mode))
+; the actions a send accepted after shutdown-agents: queued, never run,
+; after everything live (clj's executor rejects the hand-off and the
+; action stays in the agent's queue; Eval.f90 files it :dead)
+(defun rec-dead (r) (cadddr r))
+(defun mk-rec (q err mode dead) (list q err mode dead))
 
 (defun run-agent (e) (car e))
 (defun run-kind (e) (cadr e))
@@ -107,6 +111,7 @@
 (defun agent-rec (a st) (get-al a (st-agents st)))
 (defun agent-q (a st) (rec-q (agent-rec a st)))
 (defun agent-err (a st) (rec-err (agent-rec a st)))
+(defun agent-dead (a st) (rec-dead (agent-rec a st)))
 (defun agent-known (a st) (consp (assoc-equal a (st-agents st))))
 (defun runq-of (key st) (get-al key (st-runq st)))
 (defun sent-of (a st) (get-al a (st-sent st)))
@@ -135,9 +140,10 @@
 (defthm st-log-mk (equal (st-log (mk-st a q r h l s tk)) l))
 (defthm st-sent-mk (equal (st-sent (mk-st a q r h l s tk)) s))
 (defthm st-ticks-mk (equal (st-ticks (mk-st a q r h l s tk)) tk))
-(defthm rec-q-mk (equal (rec-q (mk-rec q e m)) q))
-(defthm rec-err-mk (equal (rec-err (mk-rec q e m)) e))
-(defthm rec-mode-mk (equal (rec-mode (mk-rec q e m)) m))
+(defthm rec-q-mk (equal (rec-q (mk-rec q e m d)) q))
+(defthm rec-err-mk (equal (rec-err (mk-rec q e m d)) e))
+(defthm rec-mode-mk (equal (rec-mode (mk-rec q e m d)) m))
+(defthm rec-dead-mk (equal (rec-dead (mk-rec q e m d)) d))
 (defthm run-agent-list (equal (run-agent (list a k l)) a))
 (defthm run-kind-list (equal (run-kind (list a k l)) k))
 (defthm run-left-list (equal (run-left (list a k l)) l))
@@ -150,7 +156,7 @@
   (equal (count-kind kind (put w e r)) (+ (if (equal (run-kind e) kind) 1 0) (count-kind kind r))))
 (defthm del-put-self (equal (del w (put w e r)) (del w r)))
 (in-theory (disable st-agents st-runq st-running st-holds st-log st-sent st-ticks mk-st
-                    rec-q rec-err rec-mode mk-rec run-agent run-kind run-left put))
+                    rec-q rec-err rec-mode rec-dead mk-rec run-agent run-kind run-left put))
 
 ; ---- the machine ------------------------------------------------------------
 
@@ -169,15 +175,28 @@
 ; Agent.enqueue: the action behind the queue; if the queue was empty the
 ; agent goes to a run queue. A failed or unknown agent refuses
 ; (Agent.dispatch throws; nothing is sent).
+; shutdown-agents happened: kept in the ticks table under :shutdown, a
+; key no worker has; set once, never cleared
+(defun shut (st) (get-al :shutdown (st-ticks st)))
+(defun shutdown-ev (st)
+  (mk-st (st-agents st) (st-runq st) (st-running st) (st-holds st) (st-log st) (st-sent st)
+         (put :shutdown t (st-ticks st))))
 (defun enqueue (from a act st)
   (let ((r (agent-rec a st)))
-    (if (or (not (agent-known a st)) (rec-err r))
-        st
-      (mk-st (set-al a (mk-rec (append (rec-q r) (list act)) nil (rec-mode r)) (st-agents st))
-             (if (atom (rec-q r)) (runq-push (home from act st) a (st-runq st)) (st-runq st))
-             (st-running st) (st-holds st) (st-log st)
-             (put a (append (sent-of a st) (list act)) (st-sent st))
-             (st-ticks st)))))
+    (cond ((or (not (agent-known a st)) (rec-err r)) st)
+          ((or (shut st) (consp (rec-dead r)))
+           ; after shutdown-agents: sent, and dead (an agent with dead actions
+           ; has them only after shutdown, so the second test is the first) -- on no run queue, ever
+           (mk-st (set-al a (mk-rec (rec-q r) nil (rec-mode r) (append (rec-dead r) (list act))) (st-agents st))
+                  (st-runq st) (st-running st) (st-holds st) (st-log st)
+                  (put a (append (sent-of a st) (list act)) (st-sent st))
+                  (st-ticks st)))
+          (t
+           (mk-st (set-al a (mk-rec (append (rec-q r) (list act)) nil (rec-mode r) (rec-dead r)) (st-agents st))
+                  (if (atom (rec-q r)) (runq-push (home from act st) a (st-runq st)) (st-runq st))
+                  (st-running st) (st-holds st) (st-log st)
+                  (put a (append (sent-of a st) (list act)) (st-sent st))
+                  (st-ticks st))))))
 
 ; Agent.releasePendingSends: each held send queued, in order, from the
 ; releasing worker (or transaction)
@@ -261,7 +280,7 @@
                ; agent only for its own kind, within its batch
                (nk (and more (act-kind (car rest))))
                (stay (and more (equal nk kind) (or (null left) (> left 1)))))
-          (mk-st (set-al a (mk-rec rest err (rec-mode r)) (st-agents st))
+          (mk-st (set-al a (mk-rec rest err (rec-mode r) (rec-dead r)) (st-agents st))
                  (if (and more (not stay))
                      (runq-push (cond ((equal nk :solo) :solo) ((equal kind :solo) :global) (t w)) a (st-runq st))
                    (st-runq st))
@@ -285,18 +304,18 @@
     (if (or (not (agent-known a st)) (not (rec-err r)))
         st
       (if clear
-          (mk-st (set-al a (mk-rec nil nil (rec-mode r)) (st-agents st))
+          (mk-st (set-al a (mk-rec nil nil (rec-mode r) nil) (st-agents st))
                  (st-runq st) (st-running st) (st-holds st) (st-log st)
-                 (put a (take (- (len (sent-of a st)) (len (rec-q r))) (sent-of a st)) (st-sent st))
+                 (put a (take (- (len (sent-of a st)) (+ (len (rec-q r)) (len (rec-dead r)))) (sent-of a st)) (st-sent st))
                  (st-ticks st))
-        (mk-st (set-al a (mk-rec (rec-q r) nil (rec-mode r)) (st-agents st))
+        (mk-st (set-al a (mk-rec (rec-q r) nil (rec-mode r) (rec-dead r)) (st-agents st))
                (if (consp (rec-q r)) (runq-push (home nil (car (rec-q r)) st) a (st-runq st)) (st-runq st))
                (st-running st) (st-holds st) (st-log st) (st-sent st) (st-ticks st))))))
 
 (defun new-ev (a mode st)
   (if (agent-known a st)
       st
-    (mk-st (set-al a (mk-rec nil nil mode) (st-agents st))
+    (mk-st (set-al a (mk-rec nil nil mode nil) (st-agents st))
            (st-runq st) (st-running st) (st-holds st) (st-log st)
            (put a nil (st-sent st)) (st-ticks st))))
 
@@ -328,6 +347,7 @@
     (:tx (tx-ev (cadr ev) st))
     (:commit (commit-ev (cadr ev) st))
     (:abort (abort-ev (cadr ev) st))
+    (:shutdown (shutdown-ev st))
     (otherwise st)))
 
 (defun agents-run (evs k b n st)
@@ -362,7 +382,8 @@
   (and (<= (places a st) 1)
        (iff (equal (places a st) 1) (and (not (agent-err a st)) (consp (agent-q a st))))
        (true-listp (agent-q a st))
-       (equal (sent-of a st) (append (done-of a (st-log st)) (agent-q a st)))))
+       (true-listp (agent-dead a st))
+       (equal (sent-of a st) (append (done-of a (st-log st)) (agent-q a st) (agent-dead a st)))))
 
 (defun agents-ok (as st)
   (if (atom as) t (and (agent-ok (car as) st) (agents-ok (cdr as) st))))
@@ -640,11 +661,15 @@
 (defthm st-agents-enqueue
   (implies (and (agent-known a st) (not (agent-err a st)))
            (equal (st-agents (enqueue from a act st))
-                  (set-al a (mk-rec (append (agent-q a st) (list act)) nil (rec-mode (agent-rec a st))) (st-agents st)))))
+                  (if (or (shut st) (consp (agent-dead a st)))
+                      (set-al a (mk-rec (agent-q a st) nil (rec-mode (agent-rec a st)) (append (agent-dead a st) (list act))) (st-agents st))
+                    (set-al a (mk-rec (append (agent-q a st) (list act)) nil (rec-mode (agent-rec a st)) (agent-dead a st)) (st-agents st))))))
 (defthm st-runq-enqueue
   (implies (and (agent-known a st) (not (agent-err a st)))
            (equal (st-runq (enqueue from a act st))
-                  (if (atom (agent-q a st)) (runq-push (home from act st) a (st-runq st)) (st-runq st)))))
+                  (if (or (shut st) (consp (agent-dead a st)) (consp (agent-q a st)))
+                      (st-runq st)
+                    (runq-push (home from act st) a (st-runq st))))))
 (defthm st-log-enqueue (equal (st-log (enqueue from a act st)) (st-log st)))
 (defthm st-running-enqueue (equal (st-running (enqueue from a act st)) (st-running st)))
 (defthm st-holds-enqueue (equal (st-holds (enqueue from a act st)) (st-holds st)))
@@ -798,7 +823,8 @@
                   (not (agent-err a st))
                   (consp (agent-q a st))
                   (true-listp (agent-q a st))
-                  (equal (sent-of a st) (append (done-of a (st-log st)) (agent-q a st))))))
+                  (true-listp (agent-dead a st))
+                  (equal (sent-of a st) (append (done-of a (st-log st)) (agent-q a st) (agent-dead a st))))))
   :rule-classes nil
   :hints (("Goal" :in-theory (disable agents-ok-member all-known-member)
                   :use ((:instance all-known-member (as (running-agents (st-running st)))
@@ -973,7 +999,8 @@
   (implies (agent-known a (agents-run evs k b n (agents-start)))
            (equal (sent-of a (agents-run evs k b n (agents-start)))
                   (append (done-of a (st-log (agents-run evs k b n (agents-start))))
-                          (agent-q a (agents-run evs k b n (agents-start))))))
+                          (agent-q a (agents-run evs k b n (agents-start)))
+                          (agent-dead a (agents-run evs k b n (agents-start))))))
   :hints (("Goal" :use ((:instance agents-ok-member (as (strip-cars (st-agents (agents-run evs k b n (agents-start)))))
                                    (st (agents-run evs k b n (agents-start))))
                         (:instance st-ok-run (st (agents-start))))
@@ -985,7 +1012,8 @@
            (and (<= (places a st) 1)
                 (iff (equal (places a st) 1) (and (not (agent-err a st)) (consp (agent-q a st))))
                 (true-listp (agent-q a st))
-                (equal (sent-of a st) (append (done-of a (st-log st)) (agent-q a st)))))
+                (true-listp (agent-dead a st))
+                (equal (sent-of a st) (append (done-of a (st-log st)) (agent-q a st) (agent-dead a st)))))
   :rule-classes nil)
 
 (defthm known-agent-ok
@@ -1126,3 +1154,28 @@
                   :use ((:instance queue-no-dup (k v))
                         (:instance not-in-take-when-in-rest (xs (runq-of v st)) (n (half-len (runq-of v st))))
                         (:instance occ-take-nthcdr-sum (xs (runq-of v st)) (n (half-len (runq-of v st))))))))
+
+; ---- shutdown-agents --------------------------------------------------------
+;
+; clj's (shutdown-agents) leaves sends accepted and their actions queued,
+; never run. Here an action sent after it is DEAD: recorded as sent, kept
+; after everything live (agents-order: sent = done ++ queue ++ dead), and
+; on no run queue -- so no worker can take it, and the live queue is not
+; touched. What was queued before shutdown still runs. Eval.f90 files such
+; an action with kind :dead and B_AGENTPOP ends a drain at it.
+
+; shutdown is permanent: no event clears it
+(defthm st-ticks-finish-core (equal (st-ticks (finish-core w ok st)) (st-ticks st))
+  :hints (("Goal" :in-theory (enable finish-core))))
+(defthm shut-persists
+  (implies (shut st) (shut (agents-step ev k b n st)))
+  :hints (("Goal" :in-theory (enable shut)
+                  :expand ((agents-step ev k b n st)))))
+
+; A SEND AFTER SHUTDOWN STARTS NOTHING: the run queues and every agent's
+; live queue are as they were
+(defthm enqueue-after-shutdown
+  (implies (shut st)
+           (and (equal (st-runq (enqueue from a act st)) (st-runq st))
+                (equal (agent-q c (enqueue from a act st)) (agent-q c st))))
+  :hints (("Goal" :in-theory (enable enqueue))))

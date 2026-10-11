@@ -2494,9 +2494,13 @@ was still inside that action's batch, peeked the new action and ran it.
 An action dispatched after shutdown is now filed with kind `:dead`
 (Eval.f90, agent_enqueue); a pop ends the drain at a dead head and leaves
 it queued (B_AGENTPOP), so it never runs, while actions queued before
-shutdown still run, as clj's executor runs what it already holds. NOT in
-the model: `model/agents.lisp` has no shutdown; the dead kind and the
-theorem that no dead action is ever run are owed there.
+shutdown still run, as clj's executor runs what it already holds. In the
+model since 2026-10-11 (`model/agents.lisp`): a record's fourth field
+holds the dead actions, `agents-order` is sent = done ++ queue ++ dead,
+`shut-persists` says no event clears shutdown, `enqueue-after-shutdown`
+that a send after it touches no run queue and no live queue -- so no
+worker can take a dead action -- and `total-work-enqueue-after-shutdown`
+(`model/agents-drive.lisp`) that it adds no work to drive-cost's 2n.
 
 Sources read 2026-10-10: the BEAM scheduler
 (blog.appsignal.com/2024/04/23/deep-diving-into-the-erlang-scheduler),
