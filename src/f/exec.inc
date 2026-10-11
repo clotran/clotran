@@ -1907,7 +1907,7 @@
     if (gc_i1(nd) == N_NEWTYPE) then
        ty = find_type_loading(dlt_1)
        if (gc_kind(ty) /= OBJ_TYPE) then
-          call fail("no such class: " // dlt_1)
+          call fail("Unable to resolve classname: " // dlt_1)
           call vs_leave(vst, base)
           return
        end if

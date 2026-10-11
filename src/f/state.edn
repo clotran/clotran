@@ -64,6 +64,7 @@
  "Eval.f90/handler_var_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/import_full" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/import_short" {:class :shared, :note "a registry: additions under a lock"}
+ "Eval.f90/import_ns" {:class :shared, :note "a registry: additions under a lock"}
  "Eval.f90/in_handler" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/k_limit" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/keep_locals_mode" {:class :fixed, :note "read once from the environment"}

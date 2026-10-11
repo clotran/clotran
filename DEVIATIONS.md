@@ -598,7 +598,30 @@ constant. `__defining-ns__` is gone. What remains of this entry is
 deviation 3 (the `clojure.core` fallback inside `resolve_var`) and the
 new deviation 32.
 
-## 17. A deftype's short name is global, not imported per namespace
+## 17. RESOLVED -- a deftype's short name is imported per namespace
+
+**RESOLVED 2026-10-10 (PLAN step 35).** `import*` records a short name
+in the namespace being analysed (Eval.f90, record_import, `import_ns`),
+and a bare class name resolves through that namespace's imports and
+nothing else (canon_class), a host class (`clotran.host.*`) being every
+namespace's, as clj's own base classes are everywhere there; a type is registered under its full
+name only. So `(Point. 1)` in a namespace that did not define or import it
+is clj's "Unable to resolve classname: Point" (when it runs, where clj
+refuses it at compile time -- the same residual as entry 32's, since
+`new` of a class defined later in the same form must still analyse),
+`(instance? Point x)` there is "Unable to resolve symbol: Point in this
+context" when analysed, two
+namespaces' `Point`s are two classes, and `aa.Point` works everywhere.
+`new` and a static call's target are made canonical when analysed, by
+the namespace the form is written in, never the one running; the import
+itself is recorded when `import*` RUNS, as ImportExpr.eval records it,
+so one inside a fn body takes effect when the fn runs. Measured
+against clj in test/clj/oracle.clj; scripts/fuzz-deftype makes types in
+random namespaces. The original entry follows.
+
+---
+
+A deftype's short name is global, not imported per namespace
 
 `(deftype Point [x y])` expands to `(deftype* clojure.core/Point
 clojure.core.Point ...)` followed by `(import clojure.core.Point)`, and

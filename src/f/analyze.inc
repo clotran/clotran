@@ -1577,6 +1577,13 @@
           block
              call gc_ref_text(target%ref, s=dlt_1)
           if (gc_kind(find_type(dlt_1)) == OBJ_TYPE .or. is_class_name(target)) then
+             ! the class in full, once, here, as analyze_new does: a bare name
+             ! is resolved by the namespace being analysed, not the one running
+             block
+                character(len=:), allocatable :: canonical
+                call canon_class(dlt_1, c=canonical)
+                if (canonical /= dlt_1) call vs_set(vst, base + 4, gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+             end block
              ! (a class name nothing knows is NOT refused here: defrecord's
              ! expansion names its own class in a static call before its
              ! deftype* has run, and a top-level do is analysed whole -- the
@@ -1656,6 +1663,10 @@
       call gc_ref_text(cls%ref, s=written)
       call canon_class(written, c=canonical)
       if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+      ! a name no import knows stays bare and fails when run (eval_new):
+      ! a deftype's bare name means it only where imported (DEVIATIONS 17);
+      ! not refused here, since a host class's short name is known to
+      ! eval_new alone
     end block
     call vs_set(vst, base + 4, cls)
     ! (new clotran.host.lazy_seq (fn* [] body...)) is what the lazy-seq
@@ -1808,22 +1819,23 @@
          call vs_leave(vst, lb)
        end block
     else if (gc_ref_is(head%ref, "clojure.core/import*")) then
-       ! Records the short name, at analysis like a def; see record_import.
-       ! Answers the class, as ImportExpr does, so (import ...) and
-       ! definterface are the last class named.
+       ! (clotran-import* "a.B"), a call: the import is recorded when it RUNS,
+       ! as ImportExpr.eval records it (B_IMPORT, DEVIATIONS 17), and answers
+       ! the class, so (import ...) and definterface are the last class named
        block
          type(gc_value) :: cn
-         character(len=:), allocatable :: ck
          cn = strip_meta(gcl_first(vs_get(vst, base + 3)))
          if (cn%tag == GCT_STR .or. cn%tag == GCT_SYM) then
             call gc_ref_text(cn%ref, s=dlt_1)
-            call record_import(dlt_1)
-            call class_key(dlt_1, k=ck)
-            cn = gc_class(ck, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 3, gc_str(dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+            cn = gcl_cons(vs_get(vst, base + 3), gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)]), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, cn)
+            cn = gcl_cons(gc_sym("clotran-import*", [vs_get(vst, base + 3)]), vs_get(vst, base + 3), [vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, cn)
+            nd = analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
          else
-            cn = gc_nil()
+            nd = const_node(gc_nil(), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
          end if
-         nd = const_node(cn, [vs_get(vst, base + 1), vs_get(vst, base + 2), cn])
        end block
     else if (gc_ref_is(head%ref, "set!")) then
        nd = analyze_setbang(vs_get(vst, base + 3), vs_get(vst, base + 2))

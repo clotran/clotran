@@ -122,7 +122,18 @@
                (~'invoke [~'this ~'k] ~body))
              ((new ~tname ~init) ~k))))))
 
-(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur]]))
+;; a type defined in another namespace: its bare name is refused here until
+;; imported, its full name works throughout (DEVIATIONS 17 resolved)
+(def g-import
+  (g/fmap (fn [[k v]]
+            (let [nsn (symbol (str "fz" k)) tname (symbol (str "I" k)) full (symbol (str nsn "." tname))]
+              `(do (binding [*ns* (create-ns (quote ~nsn))] (clojure.core/refer-clojure) (eval (quote (deftype ~tname [~'a]))))
+                   [(try (eval (quote (.-a (new ~tname ~v)))) (catch clotran.host.throwable e# :refused))
+                    (eval (quote (.-a (new ~full ~v))))
+                    (do (import (quote ~full)) (eval (quote (.-a (new ~tname ~v)))))])))
+          (g/tuple (g/choose 0 9999) (g/choose -9 9))))
+
+(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur] [1 g-import]]))
 
 (let [{:keys [n seed]} opts
       forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))

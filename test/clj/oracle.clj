@@ -3242,3 +3242,12 @@ x10
 (try (into-array ["a" 1]) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
 (try (into-array [1 2.0]) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
 (try (into-array clotran.host.string [1]) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
+
+;; a deftype's short name means its class where it was imported and nowhere else (DEVIATIONS 17 resolved)
+(binding [*ns* (create-ns 'aa17)] (clojure.core/refer-clojure) (eval '(deftype Point17 [x])))
+(binding [*ns* (create-ns 'bb17)] (clojure.core/refer-clojure) (eval '(do (deftype Point17 [x y]) (.-y (Point17. 1 2)))))
+(.-x (aa17.Point17. 1))
+(try (eval '(Point17. 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve classname: Point17" (.getMessage (or (.getCause e) e)))))
+(try (eval '(instance? Point17 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: Point17 in this context" (.getMessage (or (.getCause e) e)))))
+(do (import 'aa17.Point17) (eval '(.-x (Point17. 7))))
+[(instance? Point17 (aa17.Point17. 1)) (instance? Point17 (bb17.Point17. 1 2))]

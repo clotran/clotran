@@ -254,7 +254,7 @@ module Eval
   integer, parameter :: B_RATIONALIZE = 431
   ! the agent scheduler (PLAN step 24, model/agents.lisp)
   integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434, B_AGENTSHUTDOWN = 435
-  integer, parameter :: B_HOSTBOX = 436
+  integer, parameter :: B_HOSTBOX = 436, B_IMPORT = 437
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -335,8 +335,10 @@ module Eval
   ! the whole point of a dynamic Var -- and this one is global. With one
   ! thread the two are indistinguishable; with more they are not.
   ! DEVIATIONS.md 10.
-  ! import* records these; see record_import.
-  character(len=64), allocatable, save :: import_full(:), import_short(:)
+  ! import* records these; see record_import. import_ns is the namespace
+  ! each import was made in: a short name means its class THERE only, as
+  ! Namespace.importClass gives it (DEVIATIONS 17 resolved).
+  character(len=64), allocatable, save :: import_full(:), import_short(:), import_ns(:)
   integer, save :: n_imports = 0
   type(gc_root), save :: global_env_root
   integer, save :: ev_limit = 0
@@ -1279,6 +1281,8 @@ contains
     ! the writable host static's value, read at RUN time (analyze_symbol
     ! folds every other static, whose value cannot change)
     call bind_builtin(core, "clotran-host-box", B_HOSTBOX)
+    ! import* as it runs (analyze_list rewrites the special form to this)
+    call bind_builtin(core, "clotran-import*", B_IMPORT)
     call bind_builtin(core, "rest", B_REST)
     call bind_builtin(core, "next", B_NEXT)
     call bind_builtin(core, "cons", B_CONS)
@@ -1632,7 +1636,7 @@ contains
     write(u) gensym_id, reify_id, proxy_id, link_epoch
     write(u) rt_loaded, mf_loaded, uuid_loaded, rdr_loaded, spec_loaded, pk_loaded, ld_loaded, spec_check
     write(u) n_imports
-    if (n_imports > 0) write(u) import_full(1:n_imports), import_short(1:n_imports)
+    if (n_imports > 0) write(u) import_full(1:n_imports), import_short(1:n_imports), import_ns(1:n_imports)
   end subroutine gce_image_write
 
   subroutine gce_image_read(u)
@@ -1648,9 +1652,9 @@ contains
     read(u) gensym_id, reify_id, proxy_id, link_epoch
     read(u) rt_loaded, mf_loaded, uuid_loaded, rdr_loaded, spec_loaded, pk_loaded, ld_loaded, spec_check
     read(u) n_imports
-    if (allocated(import_full)) deallocate(import_full, import_short)
-    allocate(import_full(max(32, n_imports)), import_short(max(32, n_imports)))
-    if (n_imports > 0) read(u) import_full(1:n_imports), import_short(1:n_imports)
+    if (allocated(import_full)) deallocate(import_full, import_short, import_ns)
+    allocate(import_full(max(32, n_imports)), import_short(max(32, n_imports)), import_ns(max(32, n_imports)))
+    if (n_imports > 0) read(u) import_full(1:n_imports), import_short(1:n_imports), import_ns(1:n_imports)
     ! core.clj is loaded, which is what the autocompile loader waits
     ! for before it runs clotran.loader (gce_install_compiled)
     auto_ready = .true.
@@ -2899,29 +2903,10 @@ contains
     tbl = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 1), &
          [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
     call vs_set(vst, base + 2, tbl)
-    ! Under the BARE name too, which is the (import clojure.core.Point)
-    ! that deftype emits and that clotran has nowhere to record. It is
-    ! what makes (Point. 3 4) and (new Point 3 4) find the type; see
-    ! class_matches for what it costs.
-    block
-      character(len=:), allocatable :: full
-      integer :: i, last_dot
-      block
-         call class_text(vs_get(vst, base + 1), s=dlt_1)
-         full = dlt_1
-      end block
-      last_dot = 0
-      do i = 1, len(full)
-         if (full(i:i) == ".") last_dot = i
-      end do
-      if (last_dot > 0 .and. last_dot < len(full)) then
-         k = gc_class(full(last_dot+1:), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-         call vs_set(vst, base + 3, k)
-         tbl = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 1), &
-              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-         call vs_set(vst, base + 2, tbl)
-      end if
-    end block
+    ! Under its full name only: the bare name is the (import clojure.core.Point)
+    ! deftype emits, recorded per namespace (record_import) and resolved
+    ! through canon_class, so Point means this type where it was imported
+    ! and nowhere else (DEVIATIONS 17 resolved)
     if (.not. gc_root_cas(types_root, vs_get(vst, base + 4), vs_get(vst, base + 2))) then
        call register_type(vs_get(vst, base + 1))   ! overtaken: again, from what is there
     end if
@@ -4189,7 +4174,7 @@ contains
           call vs_set(vst, base + 3, thunk)
           out = construct_type_vals(vs_get(vst, base + 3), vs_get(vst, base + 1))
        else if (.not. gce_has_error()) then
-          call fail("no such class: " // cname)
+          call fail("Unable to resolve classname: " // cname)
        end if
     end if
     call vs_leave(vst, base)
@@ -4335,46 +4320,61 @@ contains
 
   subroutine record_import(full)
     character(len=*), intent(in) :: full
-    character(len=64), allocatable :: nf(:), ns(:)
+    character(len=64), allocatable :: nf(:), ns(:), nn(:)
+    character(len=:), allocatable :: here
+    type(gc_value) :: none(0)
     integer :: i, last_dot
     last_dot = 0
     do i = 1, len(full)
        if (full(i:i) == ".") last_dot = i
     end do
     if (last_dot == 0) return
+    call gcn_name(gcn_current(none), s=here)
+    ! a host class is every namespace's, as clj's base classes are there
+    ! (RT's DEFAULT_IMPORTS): recorded under "*"; a deftype's is its namespace's
+    if (index(full, "clotran.host.") == 1) here = "*"
     do i = 1, n_imports
-       if (import_short(i) == full(last_dot + 1:)) then
+       if (import_short(i) == full(last_dot + 1:) .and. import_ns(i) == here) then
           import_full(i) = full
           return
        end if
     end do
     call gc_state_lock()
     if (.not. allocated(import_full)) then
-       allocate(import_full(32), import_short(32))
+       allocate(import_full(32), import_short(32), import_ns(32))
     else if (n_imports == size(import_full)) then
-       allocate(nf(2 * n_imports), ns(2 * n_imports))
+       allocate(nf(2 * n_imports), ns(2 * n_imports), nn(2 * n_imports))
        nf(1:n_imports) = import_full
        ns(1:n_imports) = import_short
+       nn(1:n_imports) = import_ns
        call move_alloc(nf, import_full)
        call move_alloc(ns, import_short)
+       call move_alloc(nn, import_ns)
     end if
     n_imports = n_imports + 1
     import_full(n_imports) = full
     import_short(n_imports) = full(last_dot + 1:)
+    import_ns(n_imports) = here
     call gc_state_unlock()
   end subroutine record_import
 
   ! A class name in full: a dotted name is already one; a bare name is
-  ! the import it names, or, imported by nothing, a deftype's own name.
+  ! the import it names IN THE CURRENT NAMESPACE, else it stays bare and
+  ! names nothing (DEVIATIONS 17 resolved). Called when a form is
+  ! analysed, so the namespace is the one the form is written in.
   subroutine canon_class(name, c)
     character(len=*), intent(in) :: name
     character(len=:), allocatable, intent(out) :: c
+    character(len=:), allocatable :: here
+    type(gc_value) :: none(0)
     integer :: i
     c = name
     if (index(name, ".") > 0) return
+    if (n_imports == 0) return
+    call gcn_name(gcn_current(none), s=here)
     call gc_state_lock()
     do i = 1, n_imports
-       if (import_short(i) == name) then
+       if (import_short(i) == name .and. (import_ns(i) == here .or. import_ns(i) == "*")) then
           c = trim(import_full(i))
           exit
        end if
@@ -14555,6 +14555,19 @@ contains
             call agent_dispatch(vs_get(vst, base + 2), vs_get(vst, base + 3))
             out = vs_get(vst, base + 2)
          end if
+       end block
+    case (B_IMPORT)
+       ! (clotran-import* "a.B"): import* when it RUNS, as ImportExpr.eval
+       ! records an import -- in the namespace current then, so an import
+       ! inside a fn body takes effect when the fn runs, not when it is
+       ! analysed, and a compiled fn's import happens in the process that
+       ! runs it (DEVIATIONS 17); answers the class, as import does
+       block
+         character(len=:), allocatable :: ck
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         call record_import(dlt_1)
+         call class_key(dlt_1, k=ck)
+         out = gc_class(ck, [vs_get(vst, base + 1)])
        end block
     case (B_HOSTBOX)
        out = gc_cell_get(host_box(), 1)
