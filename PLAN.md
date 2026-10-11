@@ -5224,9 +5224,21 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    do, and 19, 32, 36, 42 and 62 described their own behaviour wrongly
    (42 had turned from a throw into a silent no-op) and are corrected.
    The order to resolve the rest, cheapest by each entry's own removal
-   sentence: 36 (DONE 2026-10-10), 42 (DONE), 23 (DONE), 10 (DONE), 19 (DONE), 54, 51, 74 (model/hashseq.lisp moves
-   with it), 60, 62, 68, 48, 6, 17, 32, 3, 2 -- each in its own gated
-   commit, or reclassified by design with the reason. The table at the
+   sentence: 36 (DONE 2026-10-10), 42 (DONE), 23 (DONE), 10 (DONE), 19
+   (DONE), then 32, 62, 68, 17, 60, 3, 48, 6, 2 -- each in its own gated
+   commit, or reclassified by design with the reason. Three are
+   reclassified on 2026-10-10 as staying through 1.0, each entry saying
+   so: 54 (a namespace with a slash in it needs a boundary stored beside
+   every symbol's and keyword's interned text, for names clojuredocs
+   calls non-conformant), 51 (an error string clj picks by its static
+   types -- "/ by zero" for primitive operands, "Divide by zero" for
+   boxed -- which needs the compiler's type inference in the analyser to
+   choose a message), and 74 (the nil key's place in a hash map's walk,
+   a change to the trie and to model/hashseq.lisp's theorem for the
+   order of one key). Also found and fixed by the gate's fuzzers while
+   working this list, each in its own commit: the compiled long cast at
+   exactly 2^63, the ## reader's message inside #(...), rationalize of
+   ##-Inf, and a shutdown-agents race (step 24). The table at the
    top said "host" for 7, 13 and 15 where their prose says resolved;
    18, 23, 25, 26 and 15/22 cited entries since resolved; 56/61 and
    57/63 are duplicates -- fixed. A v1.0 ledger has no scaffolds and

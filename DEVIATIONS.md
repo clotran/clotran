@@ -1728,6 +1728,10 @@ to the Fortran programs that use it. **Removal** is not planned.
 
 ## 51. Division by zero says "Divide by zero" where clj's primitive path says "/ by zero"
 
+**Stays through 1.0 (decided 2026-10-10, PLAN step 35):** choosing the
+string needs clj's static type inference in the analyser; the exception
+class is the same on both.
+
 In clj the message depends on static types: `Numbers.quotient` of
 two boxed values throws "Divide by zero", but `(quot 7 0)` with literal
 longs compiles to clj's primitive `x / y`, whose message is clj's own
@@ -1771,6 +1775,10 @@ Removal would mean boxing numbers, which is the cost this representation
 exists to avoid (PLAN.md, the calling convention's step 3). Not planned.
 
 ## 54. A name built with a slash in its namespace splits at the first slash
+
+**Stays through 1.0 (decided 2026-10-10, PLAN step 35):** the removal is a
+namespace boundary stored beside every interned symbol and keyword text,
+for names clojuredocs itself calls non-conformant.
 
 A symbol or keyword is kept as one text, and its namespace is the part
 before the FIRST slash -- which is what the reader does: `:a/b/c` is
@@ -2219,6 +2227,10 @@ compares.
 **Removal**: none intended -- the frame is not the program's.
 
 ## 74. A hash map's nil key is walked where its hash puts it
+
+**Stays through 1.0 (decided 2026-10-10, PLAN step 35):** the removal
+changes the trie and model/hashseq.lisp's theorem for the order of one
+key; equality, hashing and lookup already agree.
 
 clj keeps a hash map's nil key out of the trie (`PersistentHashMap`'s
 `hasNull`), and its seq puts that entry first:
