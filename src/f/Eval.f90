@@ -458,6 +458,7 @@ module Eval
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
+  public :: gce_program_report
   public :: gce_bind_repl_vars, gce_set_command_line_args
   public :: gce_main_bindings, gce_push_load_frame, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
   public :: gce_native_begin, gce_native_end
@@ -844,6 +845,77 @@ contains
     tctx => ctx_self()
     v = gc_root_get(tctx%thrown_root)
   end function thrown_value
+
+  ! clojure.main's report of an uncaught error in a program (ex-str's
+  ! execution phase, DEVIATIONS 68 resolved): "Execution error (class) at
+  ! ns/fn (file:line)." and the message on the next line -- the class
+  ! left out for exception and runtime_exception, as it is there for
+  ! Exception and RuntimeException; the frame is the trace's innermost,
+  ! the file its basename; a throw outside any fn names the file alone.
+  ! Empty when nothing was thrown (an analysis failure keeps the load's
+  ! own report). No report file is written.
+  subroutine gce_program_report(path, s)
+    character(len=*), intent(in) :: path
+    character(len=:), allocatable, intent(out) :: s
+    type(gc_value) :: v, m
+    character(len=:), allocatable :: cls, msg, tr, who, loc, line1
+    integer :: p, q, r
+    s = ""
+    v = thrown_value()
+    if (gc_kind(v) /= OBJ_ERR) return
+    call class_name_of(v, s=cls)
+    if (index(cls, "clotran.host.") == 1) cls = cls(14:)
+    m = gc_slot(v, 2)
+    msg = ""
+    if (m%tag == GCT_STR) call text_of(m, s=msg)
+    who = ""
+    loc = ""
+    call gce_trace(s=tr)
+    if (len(tr) > 5) then
+       ! the innermost frame: the trace's first line, "  at WHO (FILE:LINE:COL)"
+       p = index(tr, achar(10))
+       if (p == 0) p = len(tr) + 1
+       line1 = tr(6:p - 1)
+       q = index(line1, " (")
+       if (q > 0 .and. line1(len(line1):len(line1)) == ")") then
+          who = line1(1:q - 1)
+          loc = line1(q + 2:len(line1) - 1)
+       else
+          who = line1
+       end if
+    end if
+    ! a site with no file -- the pending builtin call inside a fn's body
+    ! is recorded without one -- is not the frame's line; no line is
+    ! better than a wrong one
+    if (len(loc) > 0) then
+       if (verify(loc, "0123456789:") == 0) loc = ""
+    end if
+    if (len(loc) == 0 .and. len(who) == 0) then
+       ! no frame at all: the top-level form's own place, from the
+       ! message's suffix (note_position), which is the line that threw
+       call gce_error(s=line1)
+       p = index(line1, "  at ", back=.true.)
+       if (p > 0) loc = line1(p + 5:)
+       ! a bare line:column is in the file being loaded
+       if (len(loc) > 0) then
+          if (verify(loc, "0123456789:") == 0) loc = path // ":" // loc
+       end if
+    end if
+    if (len(loc) > 0) then
+       ! the file's basename and the line, without the column
+       r = index(loc, "/", back=.true.)
+       if (r > 0) loc = loc(r + 1:)
+       r = index(loc, ":", back=.true.)
+       if (r > 0) then
+          if (index(loc(1:r - 1), ":") > 0) loc = loc(1:r - 1)
+       end if
+    end if
+    s = "Execution error"
+    if (cls /= "exception" .and. cls /= "runtime_exception") s = s // " (" // cls // ")"
+    if (len(who) > 0) s = s // " at " // who
+    if (len(loc) > 0) s = s // " (" // loc // ")"
+    s = s // "." // achar(10) // msg // achar(10)
+  end subroutine gce_program_report
 
   function gce_has_error() result(yes)
     type(eval_ctx), pointer :: tctx
@@ -5013,8 +5085,29 @@ contains
     call set_thrown(e)
     tctx%has_error = .true.
     tctx%last_error = msg
+    ! the innermost frame and the call it is in, for a program's report
+    ! (gce_program_report): not the whole trace, which fail builds, since
+    ! a host-raised exception may be caught in a loop
+    call capture_innermost()
     call vs_leave(vst, base)
   end subroutine raise_class
+
+  subroutine capture_innermost()
+    type(eval_ctx), pointer :: tctx
+    character(len=:), allocatable :: who, pos
+    integer :: i
+    tctx => ctx_self()
+    tctx%last_trace = ""
+    i = tctx%fstack_top
+    if (i <= 0) return
+    call fn_who(tctx%fstack_fn(i), who)
+    if (frame_site(tctx, i) /= 0) then
+       call gcr_position(frame_site(tctx, i), s=pos)
+       tctx%last_trace = "  at " // who // " (" // pos // ")" // achar(10)
+    else
+       tctx%last_trace = "  at " // who // achar(10)
+    end if
+  end subroutine capture_innermost
 
   ! identical?: the same slot for a reference, the same value for an
   ! immediate.

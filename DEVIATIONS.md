@@ -2139,7 +2139,33 @@ everything else.
 
 **Removal**: not planned; it is the design.
 
-## 68. An uncaught error in a program is reported as a load failure
+## 68. RESOLVED -- an uncaught error in a program is reported as clojure.main reports one
+
+**RESOLVED 2026-10-10 (PLAN step 35).** A program (`clotran -m app.core`,
+`clotran app.cljf`, a built executable) ends an uncaught exception with
+clojure.main's two lines, on stderr, status 1:
+
+    Execution error (arithmetic_exception) at app.core/-main.
+    Divide by zero
+
+The class is clotran's own simple name, left out for `exception` and
+`runtime_exception` as clj leaves out Exception and RuntimeException;
+the frame is the innermost at the throw (a host-raised exception now
+records it too, raise_class's capture_innermost). What differs: the
+line. The innermost frame's pending call site -- the builtin call that
+threw, inside the fn's body -- is recorded without its file (entry 31's
+elements show the same), so rather than print a line that is not the
+fn's the report names the frame alone, "at p.core/-main.", where clj
+adds "(core.clj:2)"; a throw outside any fn names the file and the line of
+the top-level form, which is right. And no "Full report at" file is
+written.
+A load's failure (`load-file`, `require`, the REPL) keeps clotran's own
+report, with the form and the trace. check-program asserts the text.
+The original entry follows.
+
+---
+
+An uncaught error in a program is reported as a load failure
 
 `clj -M -m app.core` ends an uncaught exception with its own report:
 

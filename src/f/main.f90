@@ -348,6 +348,18 @@ contains
        if (.not. gce_has_error()) r = gce_eval(r, vs_get(lb + 1), no_roots())
        call vs_set(lb + 3, r)
        if (gce_has_error()) then
+          ! a program's uncaught error is reported as clojure.main reports
+          ! one (DEVIATIONS 68); a load keeps its own report below
+          if (err_unit == 0) then
+             call gce_program_report(path, s=dlt_2)
+             if (len(dlt_2) > 0) then
+                write(err_unit, '(A)', advance='no') dlt_2
+                load_failed = .true.
+                call gc_bindings_set(vs_get(lb + 4))
+                call vs_leave(lb)
+                return
+             end if
+          end if
           block
              call gce_error(s=dlt_1)
              write(err_unit, '(A,A)') "  ", dlt_1
