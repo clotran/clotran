@@ -441,10 +441,15 @@
     integer :: base
     tctx => ctx_self()
     vst => tctx%stk
-    base = vs_enter(vst, 2)
+    base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
-    call gc_set_slot(scope_info(vs_get(vst, base + 2)), 5, gcl_first(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)])))
+    ! the table, with the method's `this` under :this -- what a recur in
+    ! the method passes for it (analyze_recur)
+    call vs_set(vst, base + 3, gc_key("this", [vs_get(vst, base + 1)]))
+    body = gca_assoc(gcl_first(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)])), vs_get(vst, base + 3), &
+         gcl_first(vs_get(vst, base + 1)), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call gc_set_slot(scope_info(vs_get(vst, base + 2)), 5, body)
     body = gcl_rest(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
     call vs_set(vst, base + 1, body)
     nd = analyze_body(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
@@ -2588,12 +2593,14 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
-    type(gc_value) :: nd, kids, rinfo
-    integer :: base, n
+    type(gc_value) :: nd, kids, rinfo, m, tmp
+    integer :: base, n, want, i
+    logical :: method
+    character(len=16) :: wb, gb
     tctx => ctx_self()
     vst => tctx%stk
     nd = gc_nil()
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
     rinfo = gc_slot(sc, 4)
@@ -2603,13 +2610,44 @@
        return
     end if
     n = int_of(gcv_nth(rinfo, 2))
-    if (gcl_count(rest) /= n) then
-       call fail("recur has the wrong number of arguments")
+    ! a recur to a deftype or reify METHOD leaves out `this`, which is
+    ! supplied as clj supplies it (DEVIATIONS 19 resolved): the method is
+    ! the fn whose info carries a field table (clotran-fields*), and its
+    ! first parameter is passed through unchanged
+    method = .false.
+    want = n
+    if (int_of(gcv_nth(rinfo, 0)) /= 0) then
+       m = gc_slot(scope_info(sc), 5)
+       if (gca_is(m)) then
+          method = .true.
+          want = n - 1
+       end if
+    end if
+    if (gcl_count(rest) /= want) then
+       write(wb, '(I0)') want
+       write(gb, '(I0)') gcl_count(rest)
+       call fail("Mismatched argument count to recur, expected: " // trim(wb) // " args, got: " // trim(gb))
        call vs_leave(vst, base)
        return
     end if
     kids = analyze_all(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, kids)
+    if (method .and. .not. tctx%has_error) then
+       ! [this args...]: the local in the method's first parameter slot
+       m = gc_slot(scope_info(vs_get(vst, base + 2)), 5)
+       tmp = mk_node(N_LOCAL, gc_nil(), gca_get(m, gc_key("this", [vs_get(vst, base + 1)])), gc_nil(), &
+            int_of(gcv_nth(gc_slot(vs_get(vst, base + 2), 4), 1)), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 4, tmp)
+       tmp = gcv_empty([vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 5, tmp)
+       tmp = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 4), [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+       call vs_set(vst, base + 5, tmp)
+       do i = 0, gcv_count(vs_get(vst, base + 3)) - 1
+          tmp = gcv_conj(vs_get(vst, base + 5), gcv_nth(vs_get(vst, base + 3), i), [vs_get(vst, base + 3), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 5, tmp)
+       end do
+       call vs_set(vst, base + 3, vs_get(vst, base + 5))
+    end if
     if (.not. tctx%has_error) nd = mk_node(N_RECUR, vs_get(vst, base + 3), gc_slot(vs_get(vst, base + 2), 4), gc_nil(), n, &
          [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)

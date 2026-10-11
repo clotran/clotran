@@ -101,7 +101,28 @@
                     (catch clotran.host.exception e# :refused))))
           (g/tuple (g/choose 0 99) g/boolean)))
 
-(def g-case (g/frequency [[5 g-type] [1 g-refusal]]))
+;; a method whose tail recurs to ITSELF, leaving out `this` as clj's recur
+;; does (DEVIATIONS 19 resolved): invoke counts k down, touching a mutable
+;; field or a loop on the way, and answers the fields and k at the end
+(def g-recur
+  (g/let [k (g/choose 0 5)
+          init (g/choose -5 5)
+          shape (g/elements [:plain :set :loop :reify])]
+    (let [tname (symbol (str "Q" k init (name shape)))
+          body (case shape
+                 :plain `(if (pos? ~'k) (recur (dec ~'k)) [~'fa ~'k])
+                 :set `(do (set! ~'fa (+ ~'fa 1)) (if (pos? ~'k) (recur (dec ~'k)) [~'fa ~'k]))
+                 :loop `(do (loop [i# 0] (when (< i# 2) (set! ~'fa (+ ~'fa 1)) (recur (inc i#))))
+                           (if (pos? ~'k) (recur (dec ~'k)) [~'fa ~'k]))
+                 :reify `(if (pos? ~'k) (recur (dec ~'k)) [~'fa ~'k]))]
+      (if (= shape :reify)
+        `(let [~'fa ~init] ((reify clotran.host.i_fn (~'invoke [~'this ~'k] ~body)) ~k))
+        `(do (deftype ~tname [~(with-meta 'fa {:volatile-mutable true})]
+               clotran.host.i_fn
+               (~'invoke [~'this ~'k] ~body))
+             ((new ~tname ~init) ~k))))))
+
+(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur]]))
 
 (let [{:keys [n seed]} opts
       forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))

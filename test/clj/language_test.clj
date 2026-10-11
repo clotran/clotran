@@ -1527,6 +1527,19 @@
        (try @(->NoSet 1) (catch clotran.host.throwable e (re-find #"^Cannot assign to non-mutable: w" (.getMessage e))))
        "Cannot assign to non-mutable: w")
 
+;;; ---- recur's arity refusal, clj's words (DEVIATIONS 19 resolved): a
+;;; method's recur must leave out `this`; a fn's counts every parameter.
+;;; Both when the form is analysed, as clj's, so each is defined inside
+;;; the try through eval.
+(defprotocol RecurP (recur-go [this k]))
+(check "recur in a method passing this is refused as clj refuses it"
+       (try (eval '(deftype RecurThis [] RecurP (recur-go [this k] (if (pos? k) (recur this (dec k)) :done))))
+            (catch clotran.host.throwable e (re-find #"^Mismatched argument count to recur, expected: 1 args, got: 2" (.getMessage e))))
+       "Mismatched argument count to recur, expected: 1 args, got: 2")
+(check "recur in a fn with the wrong count is refused in clj's words"
+       (try (eval '(fn [x] (recur 1 2))) (catch clotran.host.throwable e (re-find #"^Mismatched argument count to recur, expected: 1 args, got: 2" (.getMessage e))))
+       "Mismatched argument count to recur, expected: 1 args, got: 2")
+
 ;;; ---- shutdown-agents, after every agent above is done with: a send
 ;;; is still accepted, and queued, and never runs; await-for times out
 ;;; (clj: the executor rejects the action quietly). The pool's workers end.

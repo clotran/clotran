@@ -2562,7 +2562,6 @@ contains
     vst => gc_my_stack()
     out = clause
     if (.not. gcv_is(fields)) return
-    if (gcv_count(fields) == 0) return
     params = strip_meta(gcl_first(clause))
     if (.not. gcv_is(params)) return
     if (gcv_count(params) == 0) return

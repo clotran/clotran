@@ -623,7 +623,25 @@ the printer's own form. By design: the text of a host object is the
 host's, and nothing reads it back. Two distinct instances print
 distinctly, which is what this entry once lacked.
 
-## 19. `recur` in a deftype method must pass `this`
+## 19. RESOLVED -- `recur` in a deftype method leaves out `this`
+
+**RESOLVED 2026-10-10 (PLAN step 35).** A `recur` in a deftype, defrecord
+or reify method takes one argument fewer than the head declares and
+passes `this` through unchanged, as clj does; passing it is clj's
+refusal, "Mismatched argument count to recur, expected: 1 args, got:
+2", which is now the wording of every recur arity error. The method is
+still an ordinary closure whose first parameter is `this`: the analyser
+knows it for a method (every method body is wrapped in `clotran-fields*`,
+fields or not) and supplies that parameter's local as the first recur
+argument, so the three executors see a full-arity recur and need no
+change. A `loop` inside a method, and a `fn` made in one, recur as they
+always did. Measured against clj in test/clj/oracle.clj; the refusal's
+wording in test/clj/language_test.clj, raised when the form is analysed,
+as clj raises it. The original entry follows.
+
+---
+
+`recur` in a deftype method must pass `this`
 
 Clojure supplies the target object automatically, so a `recur` in a
 method body passes one fewer argument than the method head declares:
