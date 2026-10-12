@@ -80,25 +80,29 @@ from `~/jborden/clotran-nrepl` and connects the stock CIDER to it.
 
 ## What works
 
-**All 724 of core.clj's top-level forms load.** That includes
+**All 719 of core.clj's top-level forms load.** That includes
 destructuring, the macro system, protocols, multimethods, lazy seqs,
 transducers, metadata, `case`, regex literals, `deftype`, `reify`,
 `defrecord`, `letfn`, `delay` and the whole seq library -- because
 clotran does not implement those, core.clj does.
 
-**17 of the 27 Clojure library namespaces probed load** (measured
-2026-09-19): `set`, `data`, `edn`, `datafy`, `walk`, `string`,
-`template`, `zip`, `stacktrace`, `test`, `inspector`, `reflect`,
-`parallel`, `pprint`, `math`, `core.protocols` and `core.reducers`.
-Loaded means a var of theirs RESOLVES afterwards, not merely that
-`require` returned without complaint: `clotran.files` is clotran's
-own (DEVIATIONS 40), and `clojure.uuid` was once skipped by name so that
-requiring it succeeded and defined nothing -- counting that as a load
-is how this number was once too high. (`uuid` runs verbatim now, on a
-`UUID` clotran.rt defines under that name.) The eight that fail -- `repl`, `main`, `instant`,
-`xml`, `clj's shell`, `clj's browse`, `core.server`, `process` -- each
-want a clj class (`Thread`, `Socket`, `SimpleDateFormat`, a SAX
-parser).
+**25 of the 30 library namespaces Clojure ships load** (measured
+2026-10-12): `core.protocols`, `core.reducers`, `core.specs.alpha`,
+`data`, `datafy`, `edn`, `inspector`, `main`, `math`, `pprint`,
+`reflect`, `repl`, `set`, `spec.alpha`, `spec.gen.alpha`,
+`spec.test.alpha`, `stacktrace`, `string`, `template`, `test`,
+`test.junit`, `test.tap`, `uuid`, `walk` and `zip`. Loaded means every
+public var a namespace defines is bound afterwards, as clj binds it --
+protocol methods included -- not merely that `require` returned:
+`clojure.uuid` was once skipped by name so that requiring it succeeded
+and defined nothing, and counting that as a load is how this number was
+once too high. The five that fail want clj's host: `core.server` a
+`ReentrantLock` and its sockets (clotran's own server is
+`clotran.server`), `parallel` jsr166y's `ParallelArray`, which clj
+cannot load without either, `xml` a SAX parser, `repl.deps` and
+`tools.deps.interop` tools.deps and a process. `reflect` loads, and its
+`reflect` asks the host's reflection, which clotran does not have
+(DEVIATIONS 4).
 
 `clojure.test` running means Clojure's own tests run. The suite
 clotran is measured by is DERIVED from them: `upstream/derive-tests`
