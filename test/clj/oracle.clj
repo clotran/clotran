@@ -3386,3 +3386,7 @@ x10
      (try (eval '(fn [y] (set! y 2))) :defined (catch clotran.host.throwable e :refused))])
 ;; stacked metadata merges, the outer ^'s entries over the inner's
 [(meta '^int ^:foo x) (meta '^:foo ^int x) (meta '^{:a 1} ^:b ^clotran.host.string y) (meta (read-string "^{:a 1} ^{:a 2 :c 3} z"))]
+;; a Var given a root by bindRoot or alter-var-root is bound: a protocol's
+;; method Vars, declared and then bound so, answered false
+(do (defprotocol OPB (opb [x])) (declare ozz) (alter-var-root (var ozz) (constantly 5))
+    [(bound? (var opb)) (bound? (var clojure.core.protocols/coll-reduce)) (bound? (var ozz)) ozz])

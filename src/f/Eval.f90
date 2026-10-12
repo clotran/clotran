@@ -14301,7 +14301,11 @@ contains
               [vs_get(vst, base + 1), vs_get(vst, base + 3)]), vs_get(vst, base + 3), &
               [vs_get(vst, base + 1), vs_get(vst, base + 3)])) exit
          out = vs_get(vst, base + 3)
-         if (gc_cell_cas(vs_get(vst, base + 2), 1, vs_get(vst, base + 4), out)) exit
+         if (gc_cell_cas(vs_get(vst, base + 2), 1, vs_get(vst, base + 4), out)) then
+            ! a Var with a root is bound (Var.hasRoot), however it got one
+            if (gcn_is_var(strip_meta(vs_get(vst, base + 2)))) call gc_set_i1(strip_meta(vs_get(vst, base + 2)), 1)
+            exit
+         end if
          end do
        end block
     case (B_BINDROOT)
@@ -14314,6 +14318,9 @@ contains
           return
        end if
        call gc_cell_set(a, 1, out)
+       ! bound from here, as Var.bindRoot makes it: defprotocol declares its
+       ! methods' Vars and binds them so, and bound? said false
+       if (gcn_is_var(strip_meta(a))) call gc_set_i1(strip_meta(a), 1)
        out = gc_nil()
     case (B_RAWROOT)
        a = gcv_nth(args, 0)
