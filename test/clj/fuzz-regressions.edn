@@ -201,4 +201,9 @@
  ;; and #() inside numbers its parameters in first use
  (-> (read-string "`(~#_true ~y #uuid \"6a2f41a3-c54c-fce8-32d2-0324e1c32e22\")") second (nth 2))
  (let [c (-> (read-string "`#(a!+=/_+ %1 %&)") second (nth 2) second (nth 2) second)] (mapv #(re-find #"^(p\d+|rest|&)" (str (second (second %)))) (rest c)))
+ ;; a deftype method called inside a try, which compiled code hands to the interpreter: its flat body once entered
+ ;; with its frame on the heap and stopped the process; and a host interface's void method answers nil
+ (do (deftype TQ84 [] clotran.host.closeable (close [_] :closed)) (try (.close (->TQ84)) (catch clotran.host.throwable e :err)))
+ (do (deftype TQ85 [x] clotran.host.i_deref (deref [_] (* 2 x))) (try @(->TQ85 4) (finally nil)))
+ (do (deftype TQ86 [] clotran.host.flushable (flush [_] :flushed) clotran.host.closeable (close [_] :closed)) (with-open [o (->TQ86)] (.flush o)))
 ]

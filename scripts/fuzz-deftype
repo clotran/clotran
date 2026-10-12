@@ -165,7 +165,23 @@
                     ~(vec (cons nil moves)))
               @~n]))))))
 
-(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur] [1 g-import] [2 g-hash]]))
+;; a method called inside a try -- which compiled code hands to the
+;; interpreter, where a flat method body once found its frame on the heap
+;; and stopped the process -- and a host interface's void method, which
+;; answers nil whatever its body does, as clj's does
+(def g-try
+  (g/let [k (g/choose 0 99999) v (g/choose -9 9) throws? g/boolean]
+    (let [tname (symbol (str "W" k))]
+      `(do (deftype ~tname [~'x]
+             clotran.host.closeable
+             (~'close [~'_] ~(if throws? `(throw (ex-info "closing" {:x ~'x})) 'x))
+             clotran.host.i_deref
+             (~'deref [~'_] (* 2 ~'x)))
+           [(try (.close (~(symbol (str "->" tname)) ~v)) (catch clotran.host.throwable e# [:caught (ex-data e#)]))
+            (try @(~(symbol (str "->" tname)) ~v) (finally nil))
+            (with-open [o# (~(symbol (str "->" tname)) ~v)] @o#)]))))
+
+(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur] [1 g-import] [2 g-hash] [2 g-try]]))
 
 (let [{:keys [n seed]} opts
       forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))

@@ -1861,6 +1861,27 @@
        call pop_frame(tctx)
        return
     end if
+    ! A FLAT BODY's registers live on the stack right above its record,
+    ! as k_push puts them (PLAN 26.2); this record is the top one, made
+    ! by k_push for a tree node with none, so they go there now. A tree
+    ! node runs here with flat bodies about when compiled code hands
+    ! one to the interpreter (clotran_eval_node): a method called from
+    ! the try it could not compile entered with its frame on the heap.
+    if (gc_kind(body) == OBJ_AST .and. frame%tag == GCT_VEC) then
+       if (gc_i1(body) == N_FLAT) then
+          if (vst%vs_top /= b + K_SLOTS) error stop "clotran: a flat callee's record is not the top of the stack"
+          block
+            integer :: nr, j, r
+            nr = gc_vec_len(frame)
+            r = vs_enter(vst, nr)
+            do j = 1, nr
+               vst%vstack(r + j) = gc_vec_get(frame, j)
+               vec_store(vec_pool(frame%ref)%off + j - 1) = gc_nil()
+            end do
+            frame = gc_value(GCT_SFRAME, r, int(nr, gc_ip))
+          end block
+       end if
+    end if
     call vs_set(vst, b + 1, body)
     call vs_set(vst, b + 2, frame)
     call vs_set(vst, b + 4, gc_nil())

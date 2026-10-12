@@ -2661,11 +2661,39 @@ contains
 
   ! Is the method keyed mkey declared ^void by any of the interface
   ! class keys ikeys (record_void_methods)?
+  ! Or by one of the host's interfaces, whose void methods are the ones
+  ! their originals declare void (a Closeable's close, a Writer's
+  ! write): a deftype implementing one answers nil from it, as clj's
+  ! does.
   logical function method_is_void(ikeys, mkey)
     type(gc_value), intent(in) :: ikeys, mkey
     type(gc_value) :: v
     integer :: i, j
+    character(len=:), allocatable :: cn, mn
     method_is_void = .false.
+    if (mkey%tag == GCT_KEY) then
+       call gc_ref_text(mkey%ref, s=mn)
+       do i = 0, gcv_count(ikeys) - 1
+          call gc_class_text(gcv_nth(ikeys, i), s=cn)
+          select case (cn)
+          case ("clotran.host.closeable")
+             method_is_void = mn == "close"
+          case ("clotran.host.flushable")
+             method_is_void = mn == "flush"
+          case ("clotran.host.writer", "clotran.host.output_stream")
+             method_is_void = mn == "write" .or. mn == "flush" .or. mn == "close"
+          case ("clotran.host.input_stream", "clotran.host.reader")
+             method_is_void = mn == "close" .or. mn == "mark" .or. mn == "reset"
+          case ("clotran.host.iterator")
+             method_is_void = mn == "remove" .or. mn == "forEachRemaining"
+          case ("clotran.host.collection", "clotran.host.list", "clotran.host.set")
+             method_is_void = mn == "clear" .or. mn == "forEach"
+          case ("clotran.host.map")
+             method_is_void = mn == "clear" .or. mn == "forEach" .or. mn == "putAll"
+          end select
+          if (method_is_void) return
+       end do
+    end if
     if (.not. gc_root_live(declared_root)) return
     do i = 0, gcv_count(ikeys) - 1
        v = gca_get(gc_root_get(declared_root), gcv_nth(ikeys, i))
