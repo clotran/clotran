@@ -96,6 +96,8 @@
   "clojure.lang.LineNumberingPushbackReader"
   "clotran.io.LineNumberingReader",
   "clojure.lang.LispReader" "clotran.host.lisp_reader",
+  "clojure.lang.LispReader$ReaderException"
+  "clotran.host.lisp_reader_reader_exception",
   "clojure.lang.LockingTransaction" "clotran.host.locking_transaction",
   "clojure.lang.LongRange" "clotran.host.long_range",
   "clojure.lang.MapEntry" "clotran.host.map_entry",

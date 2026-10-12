@@ -430,7 +430,7 @@ by default when a new command-line REPL is started."} repl-requires
             (let [read-eval *read-eval*
                   input (try
                           (with-read-known (read request-prompt request-exit))
-                          (catch LispReader$ReaderException e
+                          (catch clotran.host.lisp_reader_reader_exception e
                             (throw (ex-info nil {:clojure.error/phase :read-source} e))))]
              (or (#{request-prompt request-exit} input)
                  (let [value (binding [*read-eval* read-eval] (eval input))]

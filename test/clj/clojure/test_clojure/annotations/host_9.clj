@@ -53,7 +53,7 @@
     {:annotationType clotran.host.web_service_refs,
      :value [{:annotationType clotran.host.web_service_ref, :name "fred", :mappedName "", :type clotran.host.string, :wsdlLocation "", :value clotran.host.service, :lookup ""}
              {:annotationType clotran.host.web_service_ref, :name "ethel", :mappedName "lucy", :type clotran.host.value, :wsdlLocation "", :value clotran.host.service, :lookup ""}]}
-    {:annotationType clotran.host.addressing, :enabled false, :required true, :responses AddressingFeature$Responses/ALL}
+    {:annotationType clotran.host.addressing, :enabled false, :required true, :responses clotran.host.addressing_feature_responses/ALL}
     {:annotationType clotran.host.supported_options, :value ["foo" "bar" "baz"]}
     {:annotationType clotran.host.deprecated, :forRemoval false, :since ""}})
 

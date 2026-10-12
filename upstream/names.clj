@@ -173,7 +173,9 @@
                 o (cond (defined outer) nil
                         (imports outer) (imports outer)
                         (implicit outer) (implicit outer))]
-            (when o (str o "$" inner)))
+            ;; or the inner class imported by its own name, as main.clj's
+            ;; (clojure.lang LispReader$ReaderException) does
+            (if o (str o "$" inner) (imports nm)))
           (str/includes? nm ".") nil
           (defined nm) nil
           (imports nm) (imports nm)
