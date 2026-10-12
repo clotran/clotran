@@ -166,6 +166,11 @@ $(B)/osconst.inc: Makefile | $(B)
 	rm -f $@.new
 $(B)/Threads.o: $(B)/osconst.inc
 
+# the IEEE names the host uses (src/f/clotran_ieee.f90): the intrinsic
+# module, or ieee_lite where a compiler has none -- gfortran with musl on
+# aarch64 -- so for every musl build, where it costs nothing
+IEEE ?= $(if $(shell ldd --version 2>&1 | grep -i musl),lite,intrinsic)
+
 CC ?= cc
 ICU_SRC = src/c/icu/source
 ICU_STAMP = $(ICU_SRC)/.built
@@ -210,7 +215,7 @@ S = src/f
 T = test/f
 BT = $(B)/test
 
-unit-tests = gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
+unit-tests = $(if $(filter intrinsic,$(IEEE)),ieee_lite_test) gc_test persistent_vector_test persistent_list_test persistent_array_map_test \
 	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test \
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
@@ -250,6 +255,11 @@ $(B)/%.o: $(S)/%.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(B)/BigDec.o: $(B)/BigInt.o
+# clotran_ieee is one of two sources, by IEEE; ieee_lite is built either way
+ieee-objects = $(B)/ieee_lite.o $(B)/clotran_ieee.o
+$(B)/clotran_ieee.o: $(S)/clotran_ieee$(if $(filter lite,$(IEEE)),_lite).f90 $(B)/ieee_lite.o | $(B) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $< -o $@
+$(B)/Printer.o $(B)/LispReader.o $(B)/Eval.o: $(B)/clotran_ieee.o
 $(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o $(S)/gen/heap_gen.inc
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
 $(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
@@ -307,7 +317,7 @@ packages/chemsol/libchemsol.$(SOEXT): $(S)/chemsol/push_array.f90 $(S)/chemsol/c
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
 packages: packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 
-data-objects = $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
+data-objects = $(ieee-objects) $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o $(B)/Assoc.o \
 	$(B)/PersistentList.o $(B)/PersistentVector.o $(B)/NativeArray.o $(B)/Printer.o
 reader-objects = $(B)/LispReader.o $(B)/Regex.o $(B)/regex_shim.o
 $(B)/Regex.o: $(B)/Threads.o
@@ -338,6 +348,8 @@ clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS) VERSION test/clj/derived/
 
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.
+$(BT)/ieee_lite_test: $(B)/ieee_lite.o $(T)/ieee_lite_test.f90 | $(BT) $(FCSTAMP)
+	$(FC) $(FCFLAGS) -c $(T)/ieee_lite_test.f90 -o $(BT)/ieee_lite_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/ieee_lite.o $(BT)/ieee_lite_test.o
 $(BT)/bigint_test: $(B)/BigInt.o $(T)/bigint_test.f90 | $(BT) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $(T)/bigint_test.f90 -o $(BT)/bigint_test.o && $(FC) $(TESTLDFLAGS) -o $@ $(B)/BigInt.o $(BT)/bigint_test.o
 $(BT)/bigdec_test: $(B)/BigInt.o $(B)/BigDec.o $(T)/bigdec_test.f90 | $(BT) $(FCSTAMP)

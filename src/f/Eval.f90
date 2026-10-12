@@ -43,7 +43,7 @@
 ! torture tests are what prove it: with a collection at every single
 ! allocation, the evaluator still computes the right answers.
 module Eval
-  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_copy_sign, &
+  use clotran_ieee, only: ieee_value, ieee_copy_sign, &
        ieee_positive_inf, ieee_negative_inf, ieee_quiet_nan, ieee_is_nan
   use GC
   use BigInt

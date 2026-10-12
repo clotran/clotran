@@ -30,7 +30,7 @@ module LispReader
   use Assoc
   use Regex
   use Printer, only: gcp_str
-  use, intrinsic :: ieee_arithmetic
+  use clotran_ieee
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get
   use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated
   implicit none

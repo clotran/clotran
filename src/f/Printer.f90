@@ -22,7 +22,7 @@ module Printer
   use PersistentVector
   use Assoc
   use NativeArray
-  use, intrinsic :: ieee_arithmetic
+  use clotran_ieee
   implicit none
   private
 
