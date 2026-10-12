@@ -3312,5 +3312,32 @@ x10
 (try (eval '(quasiquote 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: quasiquote" (.getMessage (or (.getCause e) e)))))
 (let [[_ ps] (read-string "#(+ %3 %)")] (mapv #(re-find #"^p\d" (name %)) ps))
 
+;; bit-set, bit-clear, bit-flip and bit-test, checked rather than assumed (PLAN 15): every index 0..63, signs, the
+;; long extremes; a nil operand is clj's NullPointerException, anything not a fixed-width integer its refusal
+(for [x [0 1 -1 5 clotran.host.int8/MAX_VALUE clotran.host.int8/MIN_VALUE 1234567890123] n [0 1 31 32 62 63]]
+  [(bit-set x n) (bit-clear x n) (bit-flip x n) (bit-test x n)])
+(mapv #(try (% nil 1) (catch clotran.host.throwable e (class e))) [bit-and bit-set bit-test bit-shift-left])
+(mapv #(try (% 1 nil) (catch clotran.host.throwable e (class e))) [bit-or bit-clear bit-flip unsigned-bit-shift-right])
+(mapv #(try (% 1.5 1) (catch clotran.host.throwable e (class e))) [bit-xor bit-set bit-test])
+[(bit-set (int 1) 3) (bit-test (byte 3) 1) (bit-flip (short 2) 1)]
+
+;; raw bytes to and from files (PLAN 15): clotran.files, clj's io library by its name here; a stream over a file's bytes or
+;; a byte array's, read by byte (0..255, -1 at the end), array and slice; written by int, array and slice, appended
+(let [p "build/oracle-bytes.bin"]
+  [(with-open [o (clotran.files/output-stream p)] (.write o (byte-array [1 2 -1 127 -128])) (.write o 300) (.write o (byte-array [9 8 7 6]) 1 2))
+   (with-open [o (clotran.files/output-stream p :append true)] (.write o (byte-array [66])))
+   (with-open [i (clotran.files/input-stream p)] [(.read i) (.read i) (.read i) (.available i)
+                                                  (let [b (byte-array 6)] [(.read i b 1 4) (vec b)]) (.read i (byte-array 3)) (.read i)])
+   (with-open [i (clotran.files/input-stream (byte-array [5 -6]))] [(.read i) (.read i) (.read i) (.read i (byte-array 0))])
+   (do (clotran.files/copy (byte-array [72 105 33]) (clotran.files/file p)) (slurp p))
+   (do (clotran.files/copy "ab" (clotran.files/file p)) (with-open [i (clotran.files/input-stream p)] [(.read i) (.read i) (.read i)]))
+   (with-open [o (clotran.files/output-stream p)] nil)
+   (count (slurp p))])
+(let [p "build/oracle-bytes2.bin"]
+  [(try (with-open [o (clotran.files/output-stream p)] (.write o (byte-array [1]) 0 2)) (catch clotran.host.throwable e (class e)))
+   (try (with-open [i (clotran.files/input-stream (byte-array [1]))] (.read i (byte-array 2) 2 1)) (catch clotran.host.throwable e (class e)))
+   (try (clotran.files/input-stream "build/no-such-file.bin") (catch clotran.host.throwable e (class e)))
+   (slurp (clotran.files/reader (clotran.files/input-stream (byte-array [104 195 169]))))])
+
 ;; ``x#: the inner syntax-quote makes x# a fresh name, the outer resolves that name as any other (syntaxQuote's branches)
 (namespace (-> (read-string "``x#") second (nth 2) second second))

@@ -433,7 +433,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           make fuzz-all, every fuzzer at full size, for a release
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
 	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
-TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-read check-fuzz-print
+TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
@@ -572,6 +572,9 @@ check-fuzz-deftype:
 check-fuzz-hints:
 	@echo "--- type hints, the static half (DEVIATIONS 48): recur to a ^long or ^double parameter, a hinted local with a primitive init, a primitive return, against clj ---"
 	scripts/fuzz-hints -n 60 -s $(SEED) -o $(B)/fuzz-hints.edn > $(B)/fuzz-hints.out 2>&1; s=$$?; cat $(B)/fuzz-hints.out; exit $$s
+check-fuzz-bytes:
+	@echo "--- raw bytes to and from files (PLAN 15): output streams written by int, array and slice, appended, read back by byte, array and slice, copied, against clj ---"
+	scripts/fuzz-bytes -n 30 -s $(SEED) -o $(B)/fuzz-bytes.edn > $(B)/fuzz-bytes.out 2>&1; s=$$?; cat $(B)/fuzz-bytes.out; exit $$s
 check-fuzz-read:
 	@echo "--- the reader on malformed text (PLAN 29): generated source, mutated, read by clj and clotran: the value, or the error by class and message ---"
 	scripts/fuzz-read -n 400 -s $(SEED) > $(B)/fuzz-read.out 2>&1; s=$$?; cat $(B)/fuzz-read.out; exit $$s

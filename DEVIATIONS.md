@@ -22,14 +22,14 @@ Categories:
 |---|------|------|-------|
 | 1 | RESOLVED -- load reads one form, evaluates it, reads the next | -- | `src/f/main.f90` |
 | 2 | RESOLVED -- nothing preloaded before `core.clj` | -- | `src/f/main.f90` |
-| 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/Eval.f90` |
+| 3 | RESOLVED -- a namespace sees clojure.core by referral | -- | `src/f/Eval.f90` |
 | 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/Eval.f90` |
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
-| 6 | Syntax-quote expands at analysis time, not read time | open | `src/f/analyze.inc` |
+| 6 | RESOLVED -- syntax-quote is the reader's | -- | `src/f/Eval.f90` |
 | 7 | RESOLVED -- recursion runs 200,000 frames deep interpreted (compiled ~2,200) | -- | `src/f/Eval.f90` |
 | 8 | RESOLVED -- multimethods dispatch with `isa?` and preferences | -- | `src/clj/clotran/multifn.cljf` |
 | 9 | RESOLVED -- sorted collections | -- | `src/f/Assoc.f90` |
-| 10 | RESOLVED for refs -- transactions, serialized; `set!` of an unbound Var still sets its root | temporary (the `set!` part) | `src/f/Namespace.f90` |
+| 10 | RESOLVED -- refs are transactional; `set!` of an unbound Var is refused | -- | `src/f/Namespace.f90` |
 | 11 | RESOLVED -- transient maps and sets are boxes mutated in place; vectors are real transients | -- | `src/f/Eval.f90` |
 | 12 | Host-bound libs are skipped or replaced by name | host | `src/f/Eval.f90` |
 | 13 | RESOLVED -- protocol dispatch is cached | -- | `src/f/Eval.f90` |
@@ -2255,7 +2255,10 @@ arithmetic right shift of a negative number). James, 2026-10-01: keep
 Fortran's conventions, do not replace them with clj's host's.
 
 Counts from 0 to 63 agree. A negative count is outside Fortran's range
-for these intrinsics, and is not relied on.
+for these intrinsics, and is not relied on. `bit-set`, `bit-clear`,
+`bit-flip` and `bit-test` follow, being a shifted mask in clj too
+(`Numbers.setBit` is `x | (1L << n)`): an index of 64 or more touches
+no bit here, where clj's takes it modulo 64.
 
 **Removal**: none intended. Masking the count (`iand(n, 63)`) would
 match clj's host at one line per shift, and was written and reverted.
@@ -2448,3 +2451,20 @@ host emulation clotran does not do, and `upstream/check-names` said so.
 
 **Removal**: none intended. A package may import what it likes under
 its own names; the root language names its own host.
+
+## 80. An input stream's `skip` stops at the end, a file's as an array's
+
+clj's `(io/input-stream f)` over a file is a `BufferedInputStream` around
+a `FileInputStream`, and its `skip` answers what that layering does:
+before the first read, or once the buffer is empty, the file's own
+`skip`, which may go past the end and answers the whole count -- `(.skip
+i 5)` on a 4-byte file is 5, and `(.skip i 1)` at the end is 1; after a
+read has filled the buffer, at most what is buffered. Over a byte array
+it is at most what is left. clotran's input stream is one thing whatever
+it reads: `skip` answers at most what is left, 0 at the end, as clj's
+does over an array. Reading and `available` agree throughout; only the
+count `skip` answers past the end differs.
+
+**Removal**: none intended: it is clj's host's buffering, not the
+language (no-clj-emulation). `scripts/fuzz-bytes` exercises `skip` over
+an array's stream, where the two agree.

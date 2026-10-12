@@ -164,6 +164,7 @@
   "java.io.Flushable" "clotran.host.flushable",
   "java.io.IOException" "clotran.host.io_exception",
   "java.io.InputStream" "clotran.host.input_stream",
+  "java.io.OutputStream" "clotran.host.output_stream",
   "java.io.InputStreamReader" "clotran.host.input_stream_reader",
   "java.io.PrintWriter" "clotran.host.print_writer",
   "java.io.PushbackReader" "clotran.io.PushbackReader",

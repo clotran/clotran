@@ -1767,9 +1767,20 @@ clj in `test/clj/oracle.clj`. The arrays and types LANDED 2026-09-27
 **Bit operations on longs (64-bit).**
 - `bit-and`, `bit-or`, `bit-xor`, `bit-not`, `bit-and-not`;
 - `bit-shift-left`, `bit-shift-right`, `unsigned-bit-shift-right`;
-- (the rest of the list as James extends it: bit-set, bit-clear,
-  bit-flip, bit-test, and reading/writing raw bytes from files belong
-  here too, each against clj).
+- `bit-set`, `bit-clear`, `bit-flip`, `bit-test` -- checked against clj
+  2026-10-12 (index 0..63, signs, the long extremes; a nil operand is
+  clj's NullPointerException); an index of 64 or more follows the
+  shifts' Fortran convention (DEVIATIONS 69).
+
+**Raw bytes, LANDED 2026-10-12.** clotran.files (what clj's io library
+is renamed to) answers `input-stream` with bytes -- a file's, a path's
+or a byte array's -- and `output-stream` with a file's, `:append` too;
+`.read` gives 0..255 or -1, into an array or a slice, `.write` takes an
+int's low byte, an array or a slice; `copy` moves bytes as they are and
+text as UTF-8; `reader` reads an input stream's bytes as UTF-8. Over
+`clotran-file-size`, `clotran-read-bytes!` and `clotran-write-bytes`
+(Fortran stream I/O). `scripts/fuzz-bytes` against clj; `skip` past a
+file's end is DEVIATIONS 80.
 
 Order: after threads (14e/f) and parallel marking, unless moved up.
 
@@ -5247,7 +5258,10 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    boxed -- which needs the compiler's type inference in the analyser to
    choose a message), and 74 (the nil key's place in a hash map's walk,
    a change to the trie and to model/hashseq.lisp's theorem for the
-   order of one key). Also found and fixed by the gate's fuzzers while
+   order of one key). 48 stays too, for what its inference does not
+   type (a host instance member or field, a deftype's primitive field,
+   an array typed by its constructor): it lets those through, so it
+   accepts some programs clj refuses and never refuses one clj accepts. Also found and fixed by the gate's fuzzers while
    working this list, each in its own commit: the compiled long cast at
    exactly 2^63, the ## reader's message inside #(...), rationalize of
    ##-Inf, and a shutdown-agents race (step 24). The table at the
@@ -5264,9 +5278,9 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    scripts/fuzz-deftype in the gate, 30 of 30 with clj. The residual:
    the refusal comes at the method's first run, where clj's comes
    when the type is defined, since a body is analysed when first run.
-3. *Step 15's tail*: raw bytes to and from files, each item against
-   clj; bit-set, bit-clear, bit-flip and bit-test checked rather than
-   assumed.
+3. *Step 15's tail* -- DONE 2026-10-12: raw bytes to and from files
+   (clotran.files' byte streams, scripts/fuzz-bytes), and bit-set,
+   bit-clear, bit-flip and bit-test checked against clj.
 4. *The install.* `make install PREFIX=`: the binary, the image, the
    core sources and the launcher. The launcher resolves a project's
    `deps.edn` by calling `clotran-deps`, shipped beside it as the

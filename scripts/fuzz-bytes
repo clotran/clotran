@@ -1,0 +1,84 @@
+#!/usr/bin/env bb
+;; fuzz-bytes: raw bytes to and from files, generated (PLAN 15).
+;;
+;;   scripts/fuzz-bytes [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; Each case writes a file of its own under build/ through an output
+;; stream -- ints (their low byte), arrays and slices of arrays, a slice
+;; now and then out of range -- appends to it or not, then reads it back
+;; through an input stream -- a byte at a time, into arrays and slices of
+;; them, skipping, asking what is available -- and copies bytes in each
+;; direction, answering everything it read. Through clj (as
+;; its io library, by the class-name table) and every mode by
+;; scripts/fuzz -f: the bytes and the errors must agree.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 60 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-bytes [-n N] [-s SEED] [-m modes] [-o cases.edn]") (System/exit 2))))))
+
+(def g-bytes (g/vector (g/choose -128 127) 0 6))
+
+;; one write: an int, an array, or a slice -- in range mostly
+(def g-write
+  (g/one-of [(g/fmap (fn [x] (list '.write 'o x)) (g/choose -300 300))
+             (g/fmap (fn [bs] (list '.write 'o (list 'byte-array bs))) g-bytes)
+             (g/fmap (fn [[bs off len]] (list '.write 'o (list 'byte-array bs) off len))
+                     (g/tuple g-bytes (g/choose -1 4) (g/choose -1 4)))]))
+
+;; one read, answering what it gives
+(def g-read
+  (g/one-of [(g/return '(.read i))
+             (g/fmap (fn [n] (list 'let ['b (list 'byte-array n)] [(list '.read 'i 'b) '(vec b)])) (g/choose 0 5))
+             (g/fmap (fn [[n off len]] (list 'let ['b (list 'byte-array n)] [(list '.read 'i 'b off len) '(vec b)]))
+                     (g/tuple (g/choose 0 5) (g/choose -1 4) (g/choose -1 4)))
+             (g/return '(.available i))]))
+
+(defn guard [form] `(try ~form (catch clotran.host.throwable e# (symbol (str (class e#))))))
+
+(def g-case
+  (g/let [k (g/choose 0 999999)
+          ws (g/vector g-write 0 4)
+          append? g/boolean
+          ws2 (g/vector g-write 0 3)
+          rs (g/vector g-read 1 6)
+          ;; an array's stream, skip too: a file's skip past its end is
+          ;; clj's buffering's (DEVIATIONS 80)
+          ab g-bytes
+          as (g/vector (g/one-of [g-read (g/fmap (fn [k] (list '.skip 'i k)) (g/choose -1 4))]) 1 5)
+          copy (g/elements [:none :bytes-to-file :file-to-out :in-to-out])]
+    (let [p (str "build/fzb" k ".bin")
+          q (str "build/fzb" k "-copy.bin")]
+      `(let [~'p ~p ~'q ~q]
+         [(with-open [~'o (clotran.files/output-stream ~'p)] [~@(map guard ws)])
+          ~(if append?
+             `(with-open [~'o (clotran.files/output-stream ~'p :append true)] [~@(map guard ws2)])
+             nil)
+          (with-open [~'i (clotran.files/input-stream ~'p)] [~@(map guard rs)])
+          (with-open [~'i (clotran.files/input-stream (byte-array ~ab))] [~@(map guard as)])
+          ~(case copy
+             :none nil
+             :bytes-to-file `(do (clotran.files/copy (byte-array [1 2 3]) (clotran.files/file ~'q))
+                                 (with-open [~'i (clotran.files/input-stream ~'q)] [(.read ~'i) (.read ~'i) (.read ~'i) (.read ~'i)]))
+             :file-to-out `(do (with-open [~'o (clotran.files/output-stream ~'q)] (clotran.files/copy (clotran.files/file ~'p) ~'o))
+                               (with-open [~'i (clotran.files/input-stream ~'q)] (let [~'b (byte-array 16)] [(.read ~'i ~'b) (vec ~'b)])))
+             :in-to-out `(do (with-open [~'i (clotran.files/input-stream ~'p) ~'o (clotran.files/output-stream ~'q)] (clotran.files/copy ~'i ~'o))
+                             (with-open [~'i (clotran.files/input-stream ~'q)] (let [~'b (byte-array 16)] [(.read ~'i ~'b) (vec ~'b)]))))]))))
+
+(let [{:keys [n seed]} opts
+      forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-bytes" :suffix ".edn"})))]
+  (fs/create-dirs "build")
+  (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
+  (println (str "fuzz-bytes: " n " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
+    (doseq [f (fs/glob "build" "fzb*.bin")] (fs/delete-if-exists f))
+    (System/exit (:exit r))))

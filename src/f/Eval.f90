@@ -255,6 +255,7 @@ module Eval
   ! the agent scheduler (PLAN step 24, model/agents.lisp)
   integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434, B_AGENTSHUTDOWN = 435
   integer, parameter :: B_HOSTBOX = 436, B_IMPORT = 437, B_ARRAYGET = 438
+  integer, parameter :: B_FILESIZE = 439, B_READBYTES = 440, B_WRITEBYTES = 441
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1267,6 +1268,9 @@ contains
     call bind_builtin(core, "clotran-socket-write-bytes", B_SOCKWRITEB)
     call bind_builtin(core, "clotran-utf8-bytes", B_UTF8BYTES)
     call bind_builtin(core, "clotran-utf8-string", B_UTF8STRING)
+    call bind_builtin(core, "clotran-file-size", B_FILESIZE)
+    call bind_builtin(core, "clotran-read-bytes!", B_READBYTES)
+    call bind_builtin(core, "clotran-write-bytes", B_WRITEBYTES)
     call bind_builtin(core, "clotran-real-path", B_REALPATH)
     call bind_builtin(core, "clotran-file-kind", B_FSKIND)
     call bind_builtin(core, "clotran-list-dir", B_FSLIST)
@@ -10503,6 +10507,14 @@ contains
        ! supported for: class clotran.host.bigint". Without the check
        ! a BigInt read as its (empty) integer field and answered 0.
        a = strip_meta(gcv_nth(args, 0)); b = strip_meta(gcv_nth(args, 1))
+       ! each operand in turn, as Numbers.bitOpsCast casts them: nil is
+       ! a NullPointerException there (asked its class), before the
+       ! refusal of anything not a fixed-width integer
+       if (a%tag == GCT_NIL .or. (a%tag == GCT_INT .and. n >= 2 .and. b%tag == GCT_NIL)) then
+          call raise_class("clotran.host.null_pointer_exception", "bit operation on nil", [vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
+          return
+       end if
        if (a%tag /= GCT_INT .or. (n >= 2 .and. b%tag /= GCT_INT)) then
           block
              call class_name_of(merge(b, a, a%tag == GCT_INT), s=dlt_1)
@@ -11330,6 +11342,76 @@ contains
                text(k:k) = transfer(p(off + k), 'a')
             end do
             out = gc_str(text, [vs_get(vst, base + 1)])
+         end if
+       end block
+    ! A file's raw bytes (clotran.files' byte streams, PLAN 15): its size;
+    ! (clotran-read-bytes! path bytes), the file from its start into the
+    ! array, answering how many; (clotran-write-bytes path bytes off len
+    ! append?), len bytes from off, replacing the file or added to it.
+    ! A file that cannot be opened is clj's FileNotFoundException.
+    case (B_FILESIZE, B_READBYTES, B_WRITEBYTES)
+       block
+         character(len=:), allocatable :: path, kn
+         integer(1), pointer, contiguous :: p(:)
+         type(gc_value) :: arr
+         integer :: u, st, fsize, off, ln
+         logical :: ok, there, app
+         call text_of(gcv_nth(args, 0), s=dlt_1)
+         path = dlt_1
+         if (id == B_FILESIZE) then
+            inquire(file=path, exist=there, size=fsize)
+            if (.not. there .or. fsize < 0) then
+               call fail_as("clotran.host.file_not_found_exception", path // " (No such file or directory)", [vs_get(vst, base + 1)])
+            else
+               out = gc_int(int(fsize, gc_ip))
+            end if
+         else
+            arr = strip_meta(gcv_nth(args, 1))
+            ok = gc_kind(arr) == OBJ_ARRAY
+            if (ok) then
+               call gcna_kind(gc_i1(arr), kn)
+               ok = kn == "int1" .and. gc_i2(arr) == -1
+            end if
+            if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
+            if (.not. ok) then
+               call raise_class("clotran.host.illegal_argument_exception", "not a byte array", [vs_get(vst, base + 1)])
+            else if (id == B_READBYTES) then
+               open(newunit=u, file=path, access="stream", form="unformatted", status="old", action="read", iostat=st)
+               if (st /= 0) then
+                  call fail_as("clotran.host.file_not_found_exception", path // " (No such file or directory)", [vs_get(vst, base + 1)])
+               else
+                  inquire(unit=u, size=fsize)
+                  ln = int(min(int(fsize, 8), int(size(p), 8)))
+                  if (ln > 0) read(u, iostat=st) p(1:ln)
+                  close(u)
+                  out = gc_int(int(ln, gc_ip))
+               end if
+            else
+               off = int(int_of_number(gcv_nth(args, 2)))
+               ln = int(int_of_number(gcv_nth(args, 3)))
+               app = truthy(gcv_nth(args, 4))
+               if (off < 0 .or. ln < 0 .or. off + ln > size(p)) then
+                  call raise_class("clotran.host.index_out_of_bounds_exception", "offset and length outside the array", &
+                       [vs_get(vst, base + 1)])
+               else
+                  inquire(file=path, exist=there)
+                  if (app .and. there) then
+                     open(newunit=u, file=path, access="stream", form="unformatted", status="old", &
+                          position="append", action="write", iostat=st)
+                  else
+                     open(newunit=u, file=path, access="stream", form="unformatted", status="replace", &
+                          action="write", iostat=st)
+                  end if
+                  if (st /= 0) then
+                     call fail_as("clotran.host.file_not_found_exception", path // " (cannot open for writing)", &
+                          [vs_get(vst, base + 1)])
+                  else
+                     if (ln > 0) write(u) p(off + 1:off + ln)
+                     close(u)
+                     out = gc_nil()
+                  end if
+               end if
+            end if
          end if
        end block
     case (B_SOCKREADB, B_SOCKWRITEB)

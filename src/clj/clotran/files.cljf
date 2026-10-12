@@ -7,8 +7,9 @@
   and skipping it as host-bound left both unable to resolve jio/reader, so
   neither worked at all. What is here is TEXT files: a reader reads the
   whole file once and hands it out a line or all at once; a writer
-  gathers what is written and writes the file when it is closed.
-  Streams of bytes, URLs and classpath resources are not here.")
+  gathers what is written and writes the file when it is closed. An
+  input or output stream is BYTES (PLAN 15): a file's or a byte array's.
+  URLs and classpath resources are not here.")
 
 ;; clotran.io loads on first use: core.clj requires this namespace at its
 ;; form 640, before the macros clotran.io is written with exist
@@ -36,14 +37,103 @@
       (throw (clotran.host.illegal_argument_exception. (str p " is not a relative path")))
       p)))
 
-(defn reader
-  "A reader over a file, a path, or text already a reader."
-  [x & opts]
-  (if ((io "reader?") x)
-    x
-    ((io "text-reader") (clotran-slurp (path-of x)))))
+;; ---- bytes (PLAN 15) ------------------------------------------------------
+;;
+;; An input stream over a file's bytes or a byte array, and an output
+;; stream to a file, as clj's io/input-stream and io/output-stream answer
+;; them: read gives an unsigned byte, 0..255, or -1 at the end; read into
+;; an array gives how many, or -1 at the end and 0 for no room; write takes
+;; an int (its low byte) or bytes. The file is read whole when the stream is
+;; made, and written when the output is flushed or closed -- made empty
+;; when it is opened, as FileOutputStream makes it, unless appending.
 
-(defn input-stream [x & opts] (apply reader x opts))
+;; a slice outside the array: an IndexOutOfBoundsException reading, and
+;; writing the ArrayIndexOutOfBoundsException clj's buffered stream's copy
+;; throws
+(defn- check-range
+  ([b off len] (check-range b off len false))
+  ([b off len writing?]
+   (when (or (neg? off) (neg? len) (> (+ off len) (alength ^bytes b)))
+     (let [m (str "Range [" off ", " off " + " len ") out of bounds for length " (alength ^bytes b))]
+       (throw (if writing?
+                (clotran.host.array_index_out_of_bounds_exception. m)
+                (clotran.host.index_out_of_bounds_exception. m)))))))
+
+(deftype ByteInput [^bytes bs ^:volatile-mutable pos]
+  clotran.host.input_stream
+  (read [_]
+    (if (< pos (alength bs))
+      (let [b (aget bs pos)] (set! pos (inc pos)) (bit-and b 0xff))
+      -1))
+  (read [this b] (.read this b 0 (alength ^bytes b)))
+  (read [_ b off len]
+    (check-range b off len)
+    (cond (zero? len) 0
+          (>= pos (alength bs)) -1
+          :else (let [n (min len (- (alength bs) pos))]
+                  (dotimes [i n] (aset ^bytes b (+ off i) (aget bs (+ pos i))))
+                  (set! pos (+ pos n))
+                  n)))
+  (available [_] (- (alength bs) pos))
+  ;; at most what is left, a file's as an array's (DEVIATIONS 80)
+  (skip [_ n]
+    (let [k (max 0 (min n (- (alength bs) pos)))] (set! pos (+ pos k)) k))
+  clotran.host.closeable
+  (close [_] nil))
+
+(defn- byte-input? [x] (instance? ByteInput x))
+
+(defn- file-bytes [p]
+  (let [a (byte-array (clotran-file-size p))]
+    (clotran-read-bytes! p a)
+    a))
+
+(deftype ByteOutput [path ^:volatile-mutable append chunks]
+  clotran.host.output_stream
+  (write [this x]
+    (if (bytes? x)
+      (.write this x 0 (alength ^bytes x))
+      (do (swap! chunks conj (byte-array [(unchecked-byte x)])) nil)))
+  (write [_ b off len]
+    (check-range b off len true)
+    (let [a (byte-array len)]
+      (dotimes [i len] (aset a i (aget ^bytes b (+ off i))))
+      (swap! chunks conj a)
+      nil))
+  clotran.host.flushable
+  (flush [_]
+    (let [cs @chunks
+          a (byte-array (reduce + 0 (map alength cs)))]
+      (reset! chunks [])
+      (loop [cs cs at 0]
+        (when-let [c (first cs)]
+          (dotimes [i (alength ^bytes c)] (aset a (+ at i) (aget ^bytes c i)))
+          (recur (rest cs) (+ at (alength ^bytes c)))))
+      (when (pos? (alength a)) (clotran-write-bytes path a 0 (alength a) append))
+      ;; later flushes add to what this one wrote
+      (set! append true)
+      nil))
+  clotran.host.closeable
+  (close [this] (.flush this)))
+
+(defn- byte-output? [x] (instance? ByteOutput x))
+
+(defn reader
+  "A reader over a file, a path, text already a reader, or an input
+  stream's bytes, as UTF-8."
+  [x & opts]
+  (cond ((io "reader?") x) x
+        (byte-input? x) (let [bs (.-bs ^ByteInput x) n (.available ^ByteInput x)]
+                          ((io "text-reader") ((io "utf8-string") bs (- (alength ^bytes bs) n) n)))
+        :else ((io "text-reader") (clotran-slurp (path-of x)))))
+
+(defn input-stream
+  "Bytes to read: a file's, a path's, or a byte array's; an input stream
+  as it is."
+  [x & opts]
+  (cond (byte-input? x) x
+        (bytes? x) (ByteInput. x 0)
+        :else (ByteInput. (file-bytes (path-of x)) 0)))
 
 (deftype TextWriter [path append buf]
   clotran.host.value
@@ -68,19 +158,43 @@
   (let [{:keys [append]} (apply hash-map opts)]
     (TextWriter. (path-of x) (atom (boolean append)) (atom []))))
 
-(defn output-stream [x & opts] (apply writer x opts))
+(defn output-stream
+  "Bytes to write to a file; :append true adds to what is there."
+  [x & opts]
+  (if (byte-output? x)
+    x
+    (let [{:keys [append]} (apply hash-map opts)
+          p (path-of x)]
+      (when-not append (clotran-write-bytes p (byte-array 0) 0 0 false))
+      (ByteOutput. p (boolean append) (atom [])))))
+
+(defn- all-bytes [x]
+  (cond (bytes? x) x
+        (byte-input? x) (let [n (max 0 (.available ^ByteInput x)) a (byte-array n)]
+                          (.read ^ByteInput x a 0 n)
+                          a)
+        (string? x) ((io "utf8-bytes") x)
+        :else (file-bytes (path-of x))))
 
 (defn copy
-  "Everything from input -- text, a file, a path or a reader -- written to
-  output, a writer or a file."
+  "Everything from input -- bytes, an input stream, text, a file, a path
+  or a reader -- written to output, an output stream, a writer or a file.
+  Bytes go as they are, text as UTF-8."
   [input output & opts]
-  (let [text (cond (string? input) input
-                   ((io "reader?") input) ((io "read-all") input)
-                   :else (clotran-slurp (path-of input)))]
-    (if (or (string? output) ((io "file?") output))
-      (with-open [w (writer output)] (.write w text))
-      (.write output text))
-    nil))
+  (cond (or (bytes? input) (byte-input? input)
+            (and (byte-output? output) (not ((io "reader?") input))))
+        (let [a (all-bytes input)]
+          (if (byte-output? output)
+            (.write ^ByteOutput output a)
+            (with-open [o (output-stream output)] (.write ^ByteOutput o a))))
+        :else
+        (let [text (cond (string? input) input
+                         ((io "reader?") input) ((io "read-all") input)
+                         :else (clotran-slurp (path-of input)))]
+          (cond (byte-output? output) (.write ^ByteOutput output ((io "utf8-bytes") text))
+                (or (string? output) ((io "file?") output)) (with-open [w (writer output)] (.write w text))
+                :else (.write output text))))
+  nil)
 
 (defn make-parents
   "Makes the directories a file's path needs."
