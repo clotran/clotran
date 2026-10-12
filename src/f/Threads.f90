@@ -226,9 +226,13 @@ contains
 
   ! Start a thread running fn(arg). fn must be a bind(C) function taking
   ! one c_ptr by value and answering a c_ptr.
+  ! fn by VALUE in each of these: by reference, gfortran made a call's
+  ! c_funloc(...) a constant in .rodata, holding an address the loader
+  ! must relocate -- a text relocation, which musl's loader does not do
+  ! (it crashed before main on Alpine) and hardened systems refuse.
   logical function th_start(t, fn, arg)
     type(th_thread), intent(inout) :: t
-    type(c_funptr), intent(in) :: fn
+    type(c_funptr), value :: fn
     type(c_ptr), intent(in) :: arg
     tls_multi = .true.
     th_start = pthread_create(t%handle, c_null_ptr, fn, arg) == 0
@@ -239,7 +243,7 @@ contains
   ! thread's 8 MB.
   logical function th_start_sized(t, fn, arg, bytes)
     type(th_thread), intent(inout) :: t
-    type(c_funptr), intent(in) :: fn
+    type(c_funptr), value :: fn
     type(c_ptr), intent(in) :: arg
     integer(c_size_t), intent(in) :: bytes
     integer(c_int64_t), target :: attr(OPAQUE_WORDS)
@@ -257,7 +261,7 @@ contains
   ! on macOS). Detached by pthread_detach rather than an attribute, whose
   ! constant differs between macOS and Linux.
   logical function th_spawn(fn, arg, bytes)
-    type(c_funptr), intent(in) :: fn
+    type(c_funptr), value :: fn
     type(c_ptr), intent(in) :: arg
     integer(c_size_t), intent(in) :: bytes
     integer(c_int64_t), target :: attr(OPAQUE_WORDS)

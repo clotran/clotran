@@ -29,6 +29,11 @@
 (def system-lib? #(re-find #"^(libc|libm|libpthread|libdl|librt|libresolv|libutil|ld-linux.*|linux-vdso)\.so" %))
 
 (defn linux []
+  ;; a text relocation is a write into code at load: musl's loader does not
+  ;; do it, and hardened systems refuse it (src/f/Threads.f90, th_start)
+  (when (re-find #"TEXTREL" (sh "readelf" "-d" bin))
+    (println "dist-bundle: clotran-bin has text relocations (readelf -d); it would not load on musl")
+    (System/exit 1))
   (doseq [[_ name path] (re-seq #"(?m)^\s*(\S+) => (/\S+)" (sh "ldd" bin))
           :when (not (system-lib? name))]
     (fs/copy path (str libdir "/" name) {:replace-existing true})

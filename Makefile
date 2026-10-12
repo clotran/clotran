@@ -665,6 +665,8 @@ check-static:
 	scripts/root-check
 	@echo "--- no static string lengths (gfortran slen: shared by every thread, step 14f) ---"
 	scripts/no-static-slen clotran-bin packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
+	@echo "--- no text relocations: musl's loader cannot apply them (src/f/Threads.f90, th_start); ELF only ---"
+	@if [ "$(UNAME_S)" != Darwin ] && command -v readelf >/dev/null; then for b in clotran-bin $(test-bins); do if readelf -d $$b | grep -q TEXTREL; then echo "$$b has text relocations"; exit 1; fi; done; echo none; else echo "not ELF here"; fi
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.

@@ -383,7 +383,7 @@ contains
 
   function deffn(ns, nm, fp, arity) result(st)
     character(len=*), intent(in) :: ns, nm
-    type(c_funptr), intent(in) :: fp
+    type(c_funptr), value :: fp   ! by value: see Threads.f90, th_start
     integer(c_int), intent(in) :: arity
     integer(c_int) :: st
     st = clotran_def_fn(cbuf(ns), int(len(ns), c_int), cbuf(nm), &

@@ -294,7 +294,7 @@ contains
   end function dl_replay
 
   subroutine dl_call_shim(fp, argv)
-    type(c_funptr), intent(in) :: fp
+    type(c_funptr), value :: fp   ! by value: see Threads.f90, th_start
     type(c_ptr), intent(in) :: argv(:)
     procedure(shim_i), pointer :: f
     call c_f_procpointer(fp, f)

@@ -94,7 +94,7 @@ contains
   ! Adds a procedure and answers its handle, 1-based. The name is for
   ! printing and for a stack trace; nothing dispatches on it.
   function cf_register(fp, name) result(h)
-    type(c_funptr), intent(in) :: fp
+    type(c_funptr), value :: fp   ! by value: see Threads.f90, th_start
     character(len=*), intent(in) :: name
     integer :: h
     type(cf_entry), allocatable :: bigger(:)
