@@ -7320,6 +7320,50 @@ contains
        if (a1%tag == GCT_INT) ib = a1%ival
     end if
 
+    ! An overloaded Math member takes only what one of its overloads
+    ! does, as Reflector.paramArgTypeMatch has it: a long param a Long or
+    ! an Integer, a double or float param a Double or a Float -- never a
+    ! ratio, a big number, or a long for a double ((Math/signum 2) is
+    ! clj's "No matching method"). A one-signature member converts any
+    ! number, as boxArg does, and is not checked here.
+    block
+      character(len=16) :: mname
+      integer :: w0, w1
+      w0 = 0; w1 = 0      ! 1 integral, 2 floating, 3 either
+      mname = ""
+      select case (k)
+      case (26); mname = "abs"; w0 = 3
+      case (17); mname = "signum"; w0 = 2
+      case (23); mname = "ulp"; w0 = 2
+      case (24); mname = "nextUp"; w0 = 2
+      case (25); mname = "nextDown"; w0 = 2
+      case (33); mname = "round"; w0 = 2
+      case (34); mname = "getExponent"; w0 = 2
+      case (31); mname = "copySign"; w0 = 2; w1 = 2
+      case (32); mname = "nextAfter"; w0 = 2; w1 = 2
+      case (35); mname = "scalb"; w0 = 2; w1 = 1
+      case (37); mname = "addExact"; w0 = 1; w1 = 1
+      case (38); mname = "subtractExact"; w0 = 1; w1 = 1
+      case (39); mname = "multiplyExact"; w0 = 1; w1 = 1
+      case (40); mname = "incrementExact"; w0 = 1
+      case (41); mname = "decrementExact"; w0 = 1
+      case (42); mname = "negateExact"; w0 = 1
+      case (43); mname = "floorDiv"; w0 = 1; w1 = 1
+      case (44); mname = "floorMod"; w0 = 1; w1 = 1
+      end select
+      if (w0 /= 0) then
+         if (.not. overload_takes(a0, w0) .or. (w1 /= 0 .and. n >= 2 .and. .not. overload_takes(a1, w1))) then
+            block
+              character(len=8) :: nb
+              write (nb, '(i0)') n
+              call raise_class("clotran.host.illegal_argument_exception", &
+                   "No matching method " // trim(mname) // " found taking " // trim(nb) // " args", [gc_nil()])
+            end block
+            return
+         end if
+      end if
+    end block
+
     select case (k)
     case (1);  out = gc_real(sin(x))
     case (2);  out = gc_real(cos(x))
@@ -20566,6 +20610,18 @@ contains
   end function is_ratio
 
   ! Whether a value is any of clotran's numbers.
+  ! Whether a boxed number fits an overloaded host method's parameter:
+  ! want 1 a long or int one (a Long or an Integer), 2 a double or float
+  ! one (a Double or a Float), 3 either (Reflector.paramArgTypeMatch).
+  logical function overload_takes(v, want)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: want
+    overload_takes = .false.
+    if (iand(want, 1) /= 0 .and. v%tag == GCT_INT) &
+         overload_takes = value_width(v) == W_LONG .or. value_width(v) == W_INT
+    if (iand(want, 2) /= 0 .and. v%tag == GCT_REAL) overload_takes = .true.
+  end function overload_takes
+
   logical function is_number(v)
     type(gc_value), intent(in) :: v
     is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO .or. v%tag == GCT_BIGRATIO &

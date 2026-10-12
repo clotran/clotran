@@ -3354,3 +3354,12 @@ x10
  (try (read-string "#=(nope 1)") (catch clotran.host.throwable e (.getMessage e)))
  (try (read-string "#=1") (catch clotran.host.throwable e (class e)))]
 [(read-string "`a/b.c") (try (read-string "`x15/5") (catch clotran.host.throwable e (class e)))]
+;; an overloaded Math member takes only what an overload does
+;; (Reflector.paramArgTypeMatch); a one-signature one converts any number
+(let [t (fn [f] (try (f) (catch clotran.host.throwable e (.getMessage e))))]
+  (mapv t [#(clotran.host.math/abs (identity 1/3)) #(clotran.host.math/abs (identity 1N)) #(clotran.host.math/abs (identity -2.5))
+           #(clotran.host.math/signum (identity 2)) #(clotran.host.math/round (identity 2)) #(clotran.host.math/ulp (identity 2))
+           #(clotran.host.math/copySign (identity 2.0) (identity -1)) #(clotran.host.math/scalb (identity 2.0) (identity 3))
+           #(clotran.host.math/scalb (identity 2) (identity 3)) #(clotran.host.math/addExact (identity 2.0) (identity 3.0))
+           #(clotran.host.math/floorDiv (identity 1/2) (identity 3)) #(clotran.host.math/sqrt (identity 1/4))
+           #(clotran.host.math/pow (identity 1/4) (identity 2N))]))
