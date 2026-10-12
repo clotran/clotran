@@ -589,7 +589,7 @@
         (spit drv (str "(in-ns 'user)\n(require " requires ")\n" prelude
                        "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
                        "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"
-                       "(println \"FZCOMPILED\" (count (filter #(clojure.string/starts-with? (str (deref %)) \"#<compiled\") (vals (ns-interns 'fz.cases)))))\n"
+                       "(println \"FZCOMPILED\" (count (filter #(clojure.string/starts-with? (str (deref %)) \"#<compiled\") (map val (filter #(re-matches #\"c[0-9]+\" (name (key %))) (ns-interns 'fz.cases))))))\n"
                        (apply str (for [i (range (count forms))] (str "(fz-out " i " fz.cases/c" i ")\n")))))
         (let [r (sh {"CLOTRAN_IMAGE" "0"} bin core drv)]
           (when-let [[_ k] (re-find #"FZCOMPILED (\d+)" (:out r))]
