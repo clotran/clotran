@@ -5310,22 +5310,32 @@ finding them turned up stacked reader metadata (a record's mutable
 hash fields read as immutable) and item 2's residual, both fixed. What
 remains before 1.0.0, in order:
 
-- the ledger's table names every entry's kind (done 2026-10-12: host,
-  design, 1.x, or resolved); 33 is open for James.
-- **Linux**: built and gated in a container, and shipped as a
-  relocatable tarball -- built against an old glibc (manylinux_2_28)
-  with libgfortran, libquadmath and libstdc++ carried beside the
-  binary, glibc the one system library. Not a static binary: packages
-  and `clotran compile`'s libraries are `dlopen`ed into it and resolve
-  its symbols (`-rdynamic`), which a static glibc or musl binary cannot
-  do. A clone had never built on a fresh checkout: ICU's build stamp was
-  committed.
-- release notes, saying plainly what the step lists above.
-- README's examples run by a check, so "verified output" stays true.
-- the scorecards re-measured, and `make fuzz-all` clean at full size on
-  a frozen tree.
-- then James tags, and decides the branch: feat/threads is 392 commits
-  ahead of main.
+- the ledger's table names every entry's kind -- DONE 2026-10-12:
+  host, design, 1.x, or resolved; 33 is open for James.
+- **Linux** -- DONE 2026-10-12 for aarch64: `scripts/gate-linux` runs the
+  gate in Debian 13 (EXIT 0, both compilers), and `scripts/dist-linux`
+  builds a relocatable tarball on glibc 2.28 (manylinux_2_28) with
+  libgfortran, libquadmath, libstdc++ and libgcc_s beside the binary,
+  run on Debian 10, Ubuntu 20.04 and 24.04, Fedora and Rocky 9 (Alpine,
+  musl, cannot). Not a static binary: packages and `clotran compile`'s
+  libraries are `dlopen`ed into it and resolve its symbols
+  (`-rdynamic`). Found on the way: ICU's build stamp was committed, so a
+  fresh clone never built ICU; gfortran before 14 wants
+  -ffree-line-length-none; pure Fortran's do concurrent had a type in
+  its header gfortran 14 refused; the newest Clojure CLI reads a -Sdeps
+  value as a path. x86_64 builds the same way and is gated nowhere yet.
+- release notes -- DONE 2026-10-12, RELEASE-NOTES.md.
+- README's examples run by a check -- DONE 2026-10-12,
+  `scripts/readme-check` in the gate; its numbers re-measured.
+- the scorecards re-measured -- DONE 2026-10-12: derived suite 2719 of
+  2719, libraries 1001 and 8 expected (test/clj/library-expected.edn),
+  oracle 1328 forms, 25 of 30 library namespaces loading. Re-measuring
+  them found and fixed: bound? false for protocol Vars, a lower-case
+  deftype name unresolved, a reify's class with no supers, clojure.main
+  not loading, and PersistentQueue missing altogether.
+- `make fuzz-all` clean at full size on a frozen tree -- the last check.
+- then James tags, and decides the branch: feat/threads is ahead of main
+  by every commit since 2026-09.
 
 **Said plainly in the release notes:** the speed as the README states
 it; the debugger as it is (calls, one level); interop as
