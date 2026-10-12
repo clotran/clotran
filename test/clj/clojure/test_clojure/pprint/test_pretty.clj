@@ -250,7 +250,7 @@ It is implemented with a number of custom enlive templates.\"
 
  ;; basic host arrays: fails owing to assembla ticket #346
  ;;(tst-pprint 10 (int-array (range 7))) "[0,\n 1,\n 2,\n 3,\n 4,\n 5,\n 6]"
- (tst-pprint 15 (reduce conj clotran.host.persistent_queue/EMPTY (range 10)))
+ (tst-pprint 15 (reduce conj clotran.queue.PersistentQueue/EMPTY (range 10)))
  "<-(0\n   1\n   2\n   3\n   4\n   5\n   6\n   7\n   8\n   9)-<"
  )
 

@@ -413,7 +413,7 @@
       (to-array [1 2 3]) ))
 
 (defn queue [& contents]
-  (apply conj clotran.host.persistent_queue/EMPTY contents))
+  (apply conj clotran.queue.PersistentQueue/EMPTY contents))
 
 (defn array-typed-equals [expected actual]
   (and (= (class expected) (class actual))

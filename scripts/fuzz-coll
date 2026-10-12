@@ -5,7 +5,7 @@
 ;;   scripts/fuzz-coll [-n N] [-s SEED] [-m modes] [-o cases.edn]
 ;;
 ;; Each case starts from an empty collection of one kind -- vector,
-;; list, hash or sorted map, hash or sorted set, or a transient of one --
+;; list, hash or sorted map, hash or sorted set, a queue, or a transient of one --
 ;; and threads 3 to 25 operations through it: single ones (conj, assoc,
 ;; dissoc, disj, pop, update) and bulk ones (into, reduce dissoc, subvec)
 ;; that cross the boundaries -- an array map's eight, a trie's 32, a
@@ -45,7 +45,9 @@
    :sorted-set {:empty '(sorted-set) :key g-num-key :ops [:conj :disj :into :disj-all]}
    :tvector {:empty '(transient []) :key g-num-key :ops [:conj! :pop! :assoc-idx!] :end 'persistent!}
    :tmap {:empty '(transient {}) :key g-any-key :ops [:assoc! :dissoc!] :end 'persistent!}
-   :tset {:empty '(transient #{}) :key g-any-key :ops [:conj! :disj!] :end 'persistent!}})
+   :tset {:empty '(transient #{}) :key g-any-key :ops [:conj! :disj!] :end 'persistent!}
+   ;; clj's PersistentQueue, clotran.queue's: conj at the rear, pop at the front
+   :queue {:empty 'clotran.queue.PersistentQueue/EMPTY :key g-any-key :ops [:conj :pop :into]}})
 
 (defn g-op [kind]
   (let [{:keys [key ops]} (kinds kind)]
@@ -73,9 +75,15 @@
           ops (g/vector (g-op kind) 3 25)]
     (let [{:keys [empty end]} (kinds kind)
           built `(-> ~empty ~@ops ~@(when end [end]))]
-      `(let [c# ~built]
-         [c# (count c#) (seq c#) (hash c#) (= c# (into (empty c#) c#))
-          (if (map? c#) (into {} c#) (vec c#))]))))
+      (if (= kind :queue)
+        ;; a queue prints as an #object with its identity in it
+        ;; (DEVIATIONS 18): everything but itself
+        `(let [c# ~built]
+           [(vec c#) (count c#) (seq c#) (hash c#) (= c# (into (empty c#) c#)) (peek c#)
+            (= c# (vec c#)) (= (vec c#) c#) (contains? #{c#} (vec c#)) (seq (pop c#))])
+        `(let [c# ~built]
+           [c# (count c#) (seq c#) (hash c#) (= c# (into (empty c#) c#))
+            (if (map? c#) (into {} c#) (vec c#))])))))
 
 ;; a reference array: the element class into-array infers from the first
 ;; element or is given, kept by aclone, Object[] taking every reference

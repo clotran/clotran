@@ -219,7 +219,7 @@
 ;; *** Collections ***
 
 (deftest test-count
-  (let [EMPTY clotran.host.persistent_queue/EMPTY]
+  (let [EMPTY clotran.queue.PersistentQueue/EMPTY]
     (are [x y] (= (count x) y)
          EMPTY 0 
          (into EMPTY [:a :b]) 2
@@ -997,7 +997,7 @@
 ;; *** Queues ***
 
 (deftest test-queues
-  (let [EMPTY clotran.host.persistent_queue/EMPTY]
+  (let [EMPTY clotran.queue.PersistentQueue/EMPTY]
     (are [x y] (= x y)
       EMPTY EMPTY
       (into EMPTY (range 50)) (into EMPTY (range 50))
@@ -1124,7 +1124,7 @@
   (let [empty-colls [ []
                       '()
                       (lazy-seq)
-                      clotran.host.persistent_queue/EMPTY
+                      clotran.queue.PersistentQueue/EMPTY
                       (vector-of :long) ]]
     (doseq [c1 empty-colls, c2 empty-colls]
       (is-same-collection c1 c2)))
@@ -1133,7 +1133,7 @@
                  (lazy-seq (cons -3
                    (lazy-seq (cons :a
                      (lazy-seq (cons "7th" nil))))))
-                 (into clotran.host.persistent_queue/EMPTY
+                 (into clotran.queue.PersistentQueue/EMPTY
                        [-3 :a "7th"])
                  (sequence (map identity) [-3 :a "7th"]) ]]
     (doseq [c1 colls1, c2 colls1]
@@ -1274,7 +1274,7 @@
 
 (defn gen-queue
   []
-  (into clotran.host.persistent_queue/EMPTY
+  (into clotran.queue.PersistentQueue/EMPTY
         (gen/vec (rand-nth cgen/ednable-scalars))))
 
 (defspec seq-and-iter-match-for-queues

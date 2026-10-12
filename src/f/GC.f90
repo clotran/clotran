@@ -3279,7 +3279,11 @@ contains
        if (associated(obj_coll_equal) .and. &
             (((is_structural_kind(gc_kind(a)) .or. gc_kind(a) == OBJ_LAZY) .and. &
               (is_structural_kind(gc_kind(b)) .or. gc_kind(b) == OBJ_LAZY)) .or. &
-             (gc_kind(a) == OBJ_INST .and. gc_kind(b) == OBJ_INST))) then
+             (gc_kind(a) == OBJ_INST .and. gc_kind(b) == OBJ_INST) .or. &
+             ! a type of its own beside a collection: its equiv decides, as
+             ! Util.equiv asks the collection side (a queue is a vector's =)
+             (gc_kind(a) == OBJ_INST .and. (is_structural_kind(gc_kind(b)) .or. gc_kind(b) == OBJ_LAZY)) .or. &
+             (gc_kind(b) == OBJ_INST .and. (is_structural_kind(gc_kind(a)) .or. gc_kind(a) == OBJ_LAZY)))) then
           call gc_hold_begin()
           eq = obj_coll_equal(a, b)
           call gc_hold_end()

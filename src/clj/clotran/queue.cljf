@@ -1,0 +1,49 @@
+(ns clotran.queue
+  "clotran.queue.PersistentQueue, clj's PersistentQueue: written in
+  Clojure as ClojureScript writes its own (cljs.core, deftype
+  PersistentQueue) -- a front seq, a rear vector and a count. conj adds at
+  the rear, peek and pop work at the front, and it is a sequential, counted
+  list, equal to and hashed as a vector or list of the same elements.
+  clotran.queue.PersistentQueue/EMPTY is a row in hosttable.inc that reads
+  EMPTY here, and this file loads the first time the class or that row is
+  reached (load_clotran_ns).")
+
+(declare EMPTY)
+
+(deftype PersistentQueue [meta cnt front rear ^:unsynchronized-mutable hash]
+  clotran.host.i_persistent_list
+  clotran.host.i_persistent_stack
+  (peek [_] (first front))
+  (pop [this]
+    (if front
+      (if-let [f1 (next front)]
+        (PersistentQueue. meta (dec cnt) f1 rear 0)
+        (PersistentQueue. meta (dec cnt) (seq rear) [] 0))
+      this))
+  clotran.host.i_persistent_collection
+  (count [_] cnt)
+  (cons [_ o]
+    (if front
+      (PersistentQueue. meta (inc cnt) front (conj (or rear []) o) 0)
+      (PersistentQueue. meta (inc cnt) (list o) [] 0)))
+  (empty [_] (with-meta EMPTY meta))
+  (equiv [this o]
+    (and (sequential? o) (= (seq this) (seq o))))
+  clotran.host.counted
+  clotran.host.sequential
+  clotran.host.seqable
+  (seq [_] (let [r (seq rear)] (when (or front r) (concat front r))))
+  clotran.host.i_meta
+  (meta [_] meta)
+  clotran.host.i_obj
+  (withMeta [_ m] (PersistentQueue. m cnt front rear hash))
+  clotran.host.i_hash_eq
+  (hasheq [this]
+    (if (zero? hash)
+      (let [h (hash-ordered-coll this)] (set! hash h) h)
+      hash))
+  clotran.host.value
+  (equals [this o] (.equiv this o))
+  (hashCode [this] (.hasheq this)))
+
+(def EMPTY (PersistentQueue. nil 0 nil [] 0))

@@ -4721,6 +4721,23 @@ contains
     case (HK_FALSE);    out = gc_bool(.false.)
     case (HK_LINEBOX);  out = gc_obj(OBJ_ATOM, [gc_int(0_gc_ip), gc_nil()], [roots])
     case (HK_BOXVAR);   out = gc_cell_get(host_box(), 1)
+    case (HK_CLJVAR)
+       ! ns/name's value, the namespace loaded the first time
+       block
+         character(len=:), allocatable :: q
+         type(gc_value) :: none(0)
+         integer :: sl
+         q = trim(row%name)
+         sl = index(q, "/")
+         if (load_clotran_ns(q(1:sl-1)) .or. gc_kind(gcn_find(q(1:sl-1))) == OBJ_NS) then
+            out = gcn_lookup(gcn_find(q(1:sl-1)), gc_sym(q(sl+1:), none))
+            if (gcn_is_var(out)) then
+               out = gcn_var_value(out)
+            else
+               out = gc_nil()
+            end if
+         end if
+       end block
     case (HK_NIL);      out = gc_nil()
     case (HK_EMPTYMAP); out = gca_empty([roots])
     case (HK_MATHCTX)
@@ -14056,6 +14073,22 @@ contains
                call vs_set(vst, base + 2, acc)
                out = keep_meta(gcv_nth(args, 0), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
             end if
+         else if (gc_kind(coll) == OBJ_INST) then
+            ! a type of its own that is an IPersistentStack: its peek and
+            ! pop (clotran.queue.PersistentQueue); any other, clj's refusal
+            block
+              logical :: hit
+              if (id == B_PEEK) then
+                 out = inst_invoke0(coll, "peek", hit)
+              else
+                 out = inst_invoke0(coll, "pop", hit)
+              end if
+              if (.not. hit) then
+                 call class_name_of(coll, s=dlt_1)
+                 call raise_class("clotran.host.class_cast_exception", dlt_1 //  " cannot be cast to clotran.host.i_persistent_stack", &
+                      [vs_get(vst, base + 1)])
+              end if
+            end block
          else if (.not. gcl_is(coll) .and. coll%tag /= GCT_NIL) then
             ! not a stack: IPersistentStack is a vector or a list, and a
             ! seq, a set or a map is refused as in clj
@@ -16469,6 +16502,21 @@ contains
             if (.not. deep_equal(gcv_nth(gc_slot(a, 2), i), gcv_nth(gc_slot(b, 2), i), [a, b])) return
          end do
          eq = deep_equal(gcv_nth(gc_slot(a, 2), m + 1), gcv_nth(gc_slot(b, 2), m + 1), [a, b])
+       end block
+    else if (ka == OBJ_INST .or. kb == OBJ_INST) then
+       ! one side a type of its own, the other a collection: the type's
+       ! equiv, or equals, decides; one that declares neither is unequal
+       block
+         type(gc_value) :: r
+         logical :: hit
+         if (ka == OBJ_INST) then
+            r = inst_equiv(a, b, hit)
+            if (.not. hit) r = inst_equiv(a, b, hit, "equals")
+         else
+            r = inst_equiv(b, a, hit)
+            if (.not. hit) r = inst_equiv(b, a, hit, "equals")
+         end if
+         if (hit) eq = truthy(r)
        end block
     else if (ka == OBJ_SET .and. kb == OBJ_SET) then
        eq = deep_equal(a, b, [a, b])

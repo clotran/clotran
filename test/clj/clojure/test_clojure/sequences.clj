@@ -1512,7 +1512,7 @@
                 (sorted-map :a 1 :b 2 :c 3)
                 #{1 2 3}
                 (sorted-set 1 2 3)
-                (into clotran.host.persistent_queue/EMPTY [1 2 3])]]
+                (into clotran.queue.PersistentQueue/EMPTY [1 2 3])]]
     (is (= true (instance? clotran.host.i_meta coll)))
     (is (= {:a true} (meta (with-meta coll {:a true}))))
     (is (= true (instance? clotran.host.i_meta (seq coll))))

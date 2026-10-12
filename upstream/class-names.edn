@@ -123,7 +123,7 @@
   "clojure.lang.PersistentList" "clotran.host.persistent_list",
   "clojure.lang.PersistentList$EmptyList"
   "clotran.host.persistent_list_empty_list",
-  "clojure.lang.PersistentQueue" "clotran.host.persistent_queue",
+  "clojure.lang.PersistentQueue" "clotran.queue.PersistentQueue",
   "clojure.lang.PersistentStructMap"
   "clotran.host.persistent_struct_map",
   "clojure.lang.PersistentTreeMap" "clotran.host.persistent_tree_map",

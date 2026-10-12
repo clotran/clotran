@@ -98,6 +98,6 @@
                           (.stream [1 2 3])))))
     (is (= {:a 1}
            (meta
-            (stream-into! (with-meta clotran.host.persistent_queue/EMPTY {:a 1})
+            (stream-into! (with-meta clotran.queue.PersistentQueue/EMPTY {:a 1})
                           (.stream [1 2 3])))))
     (is (= [-1 -2 3 5 7 9 11] (stream-into! [-1 -2] xf par2)))))

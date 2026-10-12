@@ -3393,3 +3393,11 @@ x10
 ;; a deftype's name is a class whatever its case, as clojure.reflect's
 ;; hostReflector is
 (do (deftype oracleLower [x]) [(.-x (oracleLower. 1)) (.-x (->oracleLower 2)) (str (class (->oracleLower 3)))])
+;; PersistentQueue, clotran.queue's: conj at the rear, peek and pop at the
+;; front, a sequential counted list equal to and hashed as a vector
+(let [q (conj clotran.queue.PersistentQueue/EMPTY 1 2 3) E clotran.queue.PersistentQueue/EMPTY]
+  [(peek q) (seq (pop q)) (count q) (= q [1 2 3]) (= q (list 1 2 3)) (= [1 2 3] q) (= (hash q) (hash [1 2 3])) (seq E)
+   (seq (into E [4 5])) (meta (with-meta q {:a 1})) (vec q) (map inc q) (sequential? q) (coll? q) (counted? q) (seq? q) (list? q)
+   (reversible? q) (peek E) (count (pop E)) (seq (conj q nil)) (contains? #{q} [1 2 3]) (reduce + q) (first q) (rest q)
+   (= (pop (pop (pop q))) E) (instance? clotran.queue.PersistentQueue q) (empty? q) (empty? E)
+   (with-out-str (clojure.pprint/pprint q))])

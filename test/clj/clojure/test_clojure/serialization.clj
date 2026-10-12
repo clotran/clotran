@@ -85,8 +85,8 @@
     (apply sorted-set (reverse (range 1000)))
 
     ; queues
-    clotran.host.persistent_queue/EMPTY
-    (into clotran.host.persistent_queue/EMPTY (range 50))
+    clotran.queue.PersistentQueue/EMPTY
+    (into clotran.queue.PersistentQueue/EMPTY (range 50))
 
     ; lazy seqs
     (lazy-seq nil)
