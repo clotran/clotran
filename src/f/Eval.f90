@@ -4418,6 +4418,28 @@ contains
     call gc_state_unlock()
   end subroutine record_import
 
+  ! Undoes a record_import of `full` in the current namespace: a
+  ! deftype's short name is its methods' (the compile stub), and the
+  ! forms after it see it only once its (import ...) has run.
+  subroutine forget_import(full)
+    character(len=*), intent(in) :: full
+    character(len=:), allocatable :: here
+    type(gc_value) :: none(0)
+    integer :: i
+    call gcn_name(gcn_current(none), s=here)
+    call gc_state_lock()
+    do i = 1, n_imports
+       if (trim(import_full(i)) == full .and. import_ns(i) == here) then
+          import_full(i:n_imports - 1) = import_full(i + 1:n_imports)
+          import_short(i:n_imports - 1) = import_short(i + 1:n_imports)
+          import_ns(i:n_imports - 1) = import_ns(i + 1:n_imports)
+          n_imports = n_imports - 1
+          exit
+       end if
+    end do
+    call gc_state_unlock()
+  end subroutine forget_import
+
   ! A class name in full: a dotted name is already one; a bare name is
   ! the import it names IN THE CURRENT NAMESPACE, else it stays bare and
   ! names nothing (DEVIATIONS 17 resolved). Called when a form is

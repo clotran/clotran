@@ -462,6 +462,28 @@
   ! loads (N_LATEVAR, DEVIATIONS 12): the vendored tree and clotran's own
   ! files, by their classpath names, and Clojure's own tests, derived or
   ! verbatim. A user's file gets clj's refusal when the form is analysed.
+  ! Every interface a deftype* or reify* names is a class, as
+  ! NewInstanceExpr resolves each and throws ClassNotFoundException for
+  ! one that is not; a vendored or test file defers it (defers_late_vars).
+  logical function ifaces_known(ifaces) result(ok)
+    type(gc_value), intent(in) :: ifaces
+    type(gc_value) :: s
+    character(len=:), allocatable :: nm, c
+    integer :: i
+    ok = .true.
+    if (.not. gcv_is(ifaces) .or. defers_late_vars()) return
+    do i = 0, gcv_count(ifaces) - 1
+       s = strip_meta(gcv_nth(ifaces, i))
+       if (s%tag /= GCT_SYM) cycle
+       call gc_ref_text(s%ref, s=nm)
+       call canon_class(nm, c=c)
+       if (known_class_name(c)) cycle
+       call raise_class("clotran.host.class_not_found_exception", nm, [ifaces])
+       ok = .false.
+       return
+    end do
+  end function ifaces_known
+
   logical function defers_late_vars()
     character(len=:), allocatable :: nm
     call gcr_current_file(s=nm)
@@ -3054,6 +3076,8 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, w, cname, k, fields, ifaces, spec
     integer :: base
+    character(len=:), allocatable :: cn
+    logical :: stub
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -3073,19 +3097,21 @@
     end if
     call vs_set(vst, base + 4, cname)
     ! the class name is KNOWN from here (known_class_name): the forms
-    ! after this deftype* in the same expansion name it
+    ! after this deftype* in the same expansion name it in full
     block
-       character(len=:), allocatable :: cn, nsn
+       character(len=:), allocatable :: nsn, sn
        call gc_ref_text(cname%ref, s=cn)
        if (index(cn, ".") == 0) then
           call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=nsn)
           cn = nsn // "." // cn
        end if
        call declare_type_name(cn)
-       ! and by its short name inside its own methods, as clj's compile
-       ! stub is (Compiler.COMPILE_STUB_SYM, HostExpr.maybeClass); the
-       ! (import ...) deftype expands to after this records the same
-       call record_import(cn)
+       ! and by its short name inside its own methods only, as clj's
+       ! compile stub is (Compiler.COMPILE_STUB_SYM, HostExpr.maybeClass):
+       ! the (import ...) deftype expands to records it for what follows
+       call canon_class(cn(index(cn, ".", back=.true.) + 1:), c=sn)
+       stub = sn /= cn
+       if (stub) call record_import(cn)
     end block
     w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 3, w)
@@ -3104,10 +3130,18 @@
        w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 6)])
        call vs_set(vst, base + 3, w)
     end do
+    if (.not. ifaces_known(vs_get(vst, base + 6))) then
+       if (stub) call forget_import(cn)
+       call vs_leave(vst, base)
+       return
+    end if
     block
        call class_of_text(vs_get(vst, base + 4), s=dlt_1)
-       spec = type_spec(dlt_1, vs_get(vst, base + 5), vs_get(vst, base + 6),  vs_get(vst, base + 3), vs_get(vst, base + 2))
+       ! no enclosing local: a deftype is a class, not a closure, as
+       ! NewInstanceExpr compiles its methods (reify is, below)
+       spec = type_spec(dlt_1, vs_get(vst, base + 5), vs_get(vst, base + 6),  vs_get(vst, base + 3), gc_nil())
     end block
+    if (stub) call forget_import(cn)
     if (tctx%has_error) then
        call vs_leave(vst, base)
        return
@@ -3156,6 +3190,10 @@
        write(buf, '(I0)') gc_next(proxy_id)
        buf = "clotran.proxy__" // trim(buf)
     else
+       if (.not. ifaces_known(vs_get(vst, base + 3))) then
+          call vs_leave(vst, base)
+          return
+       end if
        write(buf, '(I0)') gc_next(reify_id)
        buf = "clotran.reify__" // trim(buf)
        ! reify always implements IObj: the reify macro does not say so,

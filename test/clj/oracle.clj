@@ -3264,3 +3264,12 @@ x10
 (try (eval '(defn f32f [] (Strng32. 1))) (catch clotran.host.throwable e (re-find #"^Unable to resolve classname: Strng32" (.getMessage (or (.getCause e) e)))))
 (definterface IFoo17 (foo []))
 [(.getName IFoo17) (instance? IFoo17 (reify IFoo17 (foo [_] 1))) (.foo (reify IFoo17 (foo [_] 1)))]
+
+;; an interface nothing knows is refused, as NewInstanceExpr's ClassNotFoundException
+(try (eval '(deftype Q60 [] foo.Bar60 (x [_]))) (catch clotran.host.throwable e (.getMessage (or (.getCause e) e))))
+(try (eval '(reify foo.Baz60 (x [_]))) (catch clotran.host.throwable e (.getMessage (or (.getCause e) e))))
+(str (reify clotran.host.value (toString [_] "ok60")))
+;; a deftype's methods see no enclosing local (a reify's do), and its short name is its methods' until its import has run
+(try (eval '(let [n 1] (deftype ZL61 [] clotran.host.value (toString [_] (str n))))) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: n" (.getMessage (or (.getCause e) e)))))
+(let [n 1] (str (reify clotran.host.value (toString [_] (str n)))))
+(try (eval '(fn [] (deftype ZS61 []) (ZS61.))) (catch clotran.host.throwable e (re-find #"^Unable to resolve classname: ZS61" (.getMessage (or (.getCause e) e)))))

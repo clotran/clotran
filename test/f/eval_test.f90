@@ -625,10 +625,12 @@ contains
     ! the fields in declaration order.
     call ev('24a. ', &
          '(do (deftype* t/P t.P [x y] :implements []) (.-y (new t.P 1 2)))', '2')
-    ! The bare name works too, because deftype emits (import pkg.Name)
-    ! and clotran has nowhere to record that.
+    ! The bare name once the type is imported, as deftype's (import
+    ! pkg.Name) does; not before, as in clj (the methods' own excepted)
     call ev('24b. ', &
-         '(do (deftype* t/Q t.Q [x] :implements []) (.-x (new Q 7)))', '7')
+         '(do (deftype* t/Q t.Q [x] :implements []) (clojure.core/import* "t.Q") (.-x (new Q 7)))', '7')
+    call ev_err('24b2. ', &
+         '(do (deftype* t/Q2 t.Q2 [x] :implements []) (.-x (new Q2 7)))')
     ! A method body sees the fields as PLAIN NAMES, which is the whole
     ! reason bind_fields exists.
     call ev('24c. ', &
@@ -645,11 +647,13 @@ contains
          ' (go [this] n) (go [this k] (+ n k)))' // &
          ' (+ (. (new t.T 5) (go)) (. (new t.T 5) (go 1))))', '11')
     ! instance? answers for the type's own name and for everything
-    ! :implements lists, which is the whole hierarchy there is.
+    ! :implements lists, which is the whole hierarchy there is; an
+    ! interface nothing knows is refused (24f2), as NewInstanceExpr does
     call ev('24f. ', &
-         '(do (deftype* t/U t.U [] :implements [some.IFace])' // &
-         ' [(instance? t.U (new t.U)) (instance? some.IFace (new t.U))' // &
+         '(do (deftype* t/U t.U [] :implements [clotran.host.i_deref])' // &
+         ' [(instance? t.U (new t.U)) (instance? clotran.host.i_deref (new t.U))' // &
          '  (instance? clotran.host.date (new t.U))])', '[true true false]')
+    call ev_err('24f2. ', '(deftype* t/U2 t.U2 [] :implements [some.IFace])')
     ! type/class answer with the full class name, which is the key a
     ! protocol's :impls map is keyed by.
     call ev('24g. ', &

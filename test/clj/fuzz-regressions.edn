@@ -185,4 +185,9 @@
  (do (def gq2 (fn [] 2)) (gq2))
  (do (deftype TQ3 [a]) (.-a (->TQ3 3)))
  (let [x 4] (defn gq4 [] x) (gq4))
+ ;; a deftype method sees no enclosing local; its short name is its methods' until imported; an unknown interface is refused
+ (try (eval '(let [n 1] (deftype ZL60 [] clotran.host.value (toString [_] (str n))) (str (ZL60.)))) (catch clotran.host.throwable e :refused))
+ (let [n 1] (str (reify clotran.host.value (toString [_] (str n)))))
+ (try (eval '(fn [] (deftype ZS60 []) (ZS60.))) (catch clotran.host.throwable e :refused))
+ (try (eval '(deftype ZI60 [] no.such.I60 (x [_]))) (catch clotran.host.throwable e :refused))
 ]
