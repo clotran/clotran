@@ -446,7 +446,7 @@ design.
 | threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's `send` actions run in order on a pool of worker threads with a run queue each, work stealing and a batch cap, designed in ACL2 (`model/agents.lisp`, PLAN.md 24) and `send-off` actions on a thread of the agent's own, a send inside an action or a transaction held until it ends and a failed agent's queue kept for `restart-agent` (DEVIATIONS 29); `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
 | the five host-bound sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where clj's are ASCII |
-| `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` cannot be turned on (DEVIATIONS 42) |
+| `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` turns `s/assert` on, as in clj (DEVIATIONS 42, resolved) |
 | calling a Fortran library | one routine, `dgemm`, hand-bound; the generator that would do it for any routine is PLAN.md step 7 |
 
 `DEVIATIONS.md` is the full ledger: every place clotran does something
