@@ -74,8 +74,13 @@ change.
   symbols, which a static glibc or musl binary cannot do. `clotran
   compile` needs a gfortran on the machine. The aarch64 tarball was run
   on Debian 10, Ubuntu 20.04 and 24.04, Fedora (glibc 2.43) and Rocky 9:
-  a program, a `deps.edn` project, a future, a Unicode regex. Alpine,
-  musl, does not run it. x86_64 is built the same way (`scripts/dist-linux
+  a program, a `deps.edn` project, a future, a Unicode regex
+  (`scripts/dist-check`). Alpine has a tarball of its own, `-musl`,
+  built on Alpine 3.20 and run the same way on 3.20, 3.22 and edge --
+  dynamically linked, so packages open as on glibc; musl's gfortran on
+  aarch64 has no `ieee_arithmetic`, and clotran's own bit-level version
+  stands in (`src/f/ieee_lite.f90`, checked against the intrinsic one on
+  every gate). x86_64 is built the same way (`scripts/dist-linux
   x86_64`, emulated on an arm64 machine) and is gated nowhere yet.
 - **Windows** is not in 1.0: the build needs a mingw gfortran toolchain
   and a runner to gate on (PLAN step 35, item 6).

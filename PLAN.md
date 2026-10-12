@@ -5316,8 +5316,14 @@ remains before 1.0.0, in order:
   gate in Debian 13 (EXIT 0, both compilers), and `scripts/dist-linux`
   builds a relocatable tarball on glibc 2.28 (manylinux_2_28) with
   libgfortran, libquadmath, libstdc++ and libgcc_s beside the binary,
-  run on Debian 10, Ubuntu 20.04 and 24.04, Fedora and Rocky 9 (Alpine,
-  musl, cannot). Not a static binary: packages and `clotran compile`'s
+  run on Debian 10, Ubuntu 20.04 and 24.04, Fedora and Rocky 9; and
+  for Alpine, a `-musl` tarball built on Alpine 3.20 and run on 3.20,
+  3.22 and edge (2026-10-12, `scripts/dist-check`: James, "alpine should
+  support it" -- a dynamic musl binary dlopens as glibc's does; on the
+  way, musl's aarch64 gfortran has no ieee_arithmetic, so ieee_lite
+  stands in, and gfortran's c_funloc constants were text relocations
+  musl's loader will not apply, now passed by value and refused by
+  check-static). Not a static binary: packages and `clotran compile`'s
   libraries are `dlopen`ed into it and resolve its symbols
   (`-rdynamic`). Found on the way: ICU's build stamp was committed, so a
   fresh clone never built ICU; gfortran before 14 wants
