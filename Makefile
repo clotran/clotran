@@ -770,7 +770,7 @@ install: clotran-bin $(B)/fc
 # beside it, the commands finding their homes from where they are
 # (scripts/dist-bundle) -- as build/dist/NAME.tar.gz. A Linux one is
 # built on an old glibc (scripts/dist-linux) so it runs on any newer one.
-DIST_NAME = clotran-$(shell cat VERSION)-$(shell uname -s | tr A-Z a-z)-$(shell uname -m)
+DIST_NAME = clotran-$(shell cat VERSION)-$(shell uname -s | tr A-Z a-z)-$(shell uname -m)$(shell ldd 2>&1 | grep -qi musl && echo -musl)
 dist: clotran-bin $(B)/fc
 	rm -rf $(B)/dist
 	$(MAKE) install PREFIX=$(CURDIR)/$(B)/dist/$(DIST_NAME)

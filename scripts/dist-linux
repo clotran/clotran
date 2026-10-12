@@ -2,9 +2,12 @@
 ;; dist-linux: the Linux release tarball, built in a container (make dist
 ;; inside packaging/linux/Dockerfile: glibc 2.28, so it runs on any newer).
 ;;
-;;   scripts/dist-linux [aarch64|x86_64]    default: this machine's
+;;   scripts/dist-linux [aarch64|x86_64] [glibc|musl]    default: this machine's, glibc
 ;;
-;; The committed tree (git archive HEAD) is built, with the clotran-deps
+;; musl builds in packaging/linux/Dockerfile.musl (Alpine) instead.
+;;
+;; The committed tree (git archive HEAD) is built, or with --tree the
+;; working tree's files, with the clotran-deps
 ;; checkout beside this one (CLOTRAN_DEPS), and the tarball lands in
 ;; build/dist. x86_64 on an arm64 machine runs under emulation: slow.
 (require '[babashka.fs :as fs]
@@ -12,17 +15,22 @@
          '[clojure.string :as str])
 
 (def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
-(def arch (or (first *command-line-args*)
+(def tree? (some #{"--tree"} *command-line-args*))
+(def args (remove #{"--tree"} *command-line-args*))
+(def arch (or (first args)
               (let [m (str/trim (:out (p/shell {:out :string} "uname" "-m")))] (if (= m "arm64") "aarch64" m))))
+(def libc (or (second args) "glibc"))
 (def deps (or (System/getenv "CLOTRAN_DEPS") (str (fs/parent repo) "/clotran-deps")))
 (def work (str (fs/create-temp-dir {:prefix "dist-linux"})))
 (def platform ({"aarch64" "linux/arm64" "x86_64" "linux/amd64"} arch))
-(def image (str "clotran-dist-" arch))
+(def image (str "clotran-dist-" arch (when (= libc "musl") "-musl")))
 
 (p/shell "docker" "build" "-q" "--platform" platform "-t" image
          "--build-arg" (str "BASE=quay.io/pypa/manylinux_2_28_" arch)
-         "-f" (str repo "/packaging/linux/Dockerfile") (str repo "/packaging/linux"))
-(p/shell {:dir repo} "sh" "-c" (str "git archive --format=tar HEAD > " work "/src.tar"))
+         "-f" (str repo "/packaging/linux/Dockerfile" (when (= libc "musl") ".musl")) (str repo "/packaging/linux"))
+(if tree?
+  (p/shell {:dir repo} "sh" "-c" (str "git ls-files -z --cached --others --exclude-standard | tar --no-mac-metadata --null -T - -cf " work "/src.tar"))
+  (p/shell {:dir repo} "sh" "-c" (str "git archive --format=tar HEAD > " work "/src.tar")))
 (p/shell {:dir deps} "sh" "-c" (str "git archive --format=tar --prefix=clotran-deps/ HEAD > " work "/deps.tar"))
 (p/shell "docker" "run" "--rm" "--platform" platform "-v" (str work ":/w") image "bash" "-c"
          (str "cd / && tar xf /w/deps.tar && cd /src && tar xf /w/src.tar "

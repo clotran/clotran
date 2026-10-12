@@ -26,7 +26,7 @@
 (fs/create-dirs libdir)
 
 ;; what the C library and the loader are, and so stays the system's
-(def system-lib? #(re-find #"^(libc|libm|libpthread|libdl|librt|libresolv|libutil|ld-linux.*|linux-vdso)\.so" %))
+(def system-lib? #(re-find #"^(libc|libm|libpthread|libdl|librt|libresolv|libutil|ld-linux.*|linux-vdso)\.so|^(libc\.musl|ld-musl)" %))
 
 (defn linux []
   ;; a text relocation is a write into code at load: musl's loader does not
