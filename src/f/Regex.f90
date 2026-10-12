@@ -140,15 +140,27 @@ module Regex
   ! lives in this module's own registry, addressed from gc_value by a
   ! plain integer index in i1, exactly like every other native resource
   ! this project keeps outside the heap.
-  integer, parameter, public :: REGEX_MAX_HANDLES = 4096
-  integer, parameter :: MAX_HANDLES = REGEX_MAX_HANDLES
-  type(c_ptr), save :: registry(MAX_HANDLES) = c_null_ptr
-  ! The subject-text buffer each handle was given, if any. OURS to free
-  ! -- ICU keeps only a shallow reference and never copies it -- and
-  ! kept here rather than asked back from ICU, because a handle that
-  ! never had text set answers that question with a pointer we must not
-  ! free. A Matcher has one; a compiled Pattern has none.
-  type(c_ptr), save :: subject(MAX_HANDLES) = c_null_ptr
+  ! The registry grows a CHUNK at a time as patterns stay live -- a
+  ! program holding more than one chunk's worth (a file of 5000 cases,
+  ! each with a regex literal, read at once) is no reason to fail. A
+  ! chunk once made never moves or goes, so a handle's slot can be read
+  ! by any thread without the lock; only claiming a slot and adding a
+  ! chunk take it.
+  integer, parameter :: CHUNK = 4096, MAX_CHUNKS = 1024
+  type rx_slot
+     type(c_ptr) :: h = c_null_ptr
+     ! The subject-text buffer the handle was given, if any. OURS to
+     ! free -- ICU keeps only a shallow reference and never copies it --
+     ! and kept here rather than asked back from ICU, because a handle
+     ! that never had text set answers that question with a pointer we
+     ! must not free. A Matcher has one; a compiled Pattern has none.
+     type(c_ptr) :: t = c_null_ptr
+  end type rx_slot
+  type rx_chunk
+     type(rx_slot), pointer :: s(:) => null()
+  end type rx_chunk
+  type(rx_chunk), save :: chunks(MAX_CHUNKS)
+  integer, save :: nchunks = 0
   integer, save :: next_slot = 1
   ! handles are claimed by any thread compiling a regex
   type(th_lock), save :: reg_lk
@@ -176,8 +188,9 @@ contains
   ! Handles ARE freed now: regex_release, driven by the collector's
   ! finalizer hook. So this scans for an empty slot and only fails
   ! when the table is genuinely full.
-  function alloc_slot(h) result(idx)
+  function alloc_slot(h, grow) result(idx)
     type(c_ptr), intent(in) :: h
+    logical, intent(in) :: grow
     integer :: idx, i
     logical :: ok
     idx = 0
@@ -187,20 +200,44 @@ contains
        reg_lk_up = .true.
     end if
     ok = th_lock_acquire(reg_lk)
-    do i = 1, MAX_HANDLES
-       if (.not. c_associated(registry(i))) then
-          registry(i) = h
+    ! ponytail: a scan from the first slot, O(live handles) a claim
+    do i = 1, nchunks * CHUNK
+       if (.not. c_associated(chunks(ck(i))%s(sl(i))%h)) then
           idx = i
-          ok = th_lock_release(reg_lk)
-          return
+          exit
        end if
     end do
+    ! Full: a chunk more when the caller asks for one (it has collected
+    ! and the handles are still live), or when there is none yet
+    if (idx == 0 .and. (grow .or. nchunks == 0) .and. nchunks < MAX_CHUNKS) then
+       allocate(chunks(nchunks + 1)%s(CHUNK))
+       nchunks = nchunks + 1
+       idx = (nchunks - 1) * CHUNK + 1
+    end if
+    if (idx /= 0) chunks(ck(idx))%s(sl(idx))%h = h
     ok = th_lock_release(reg_lk)
     ! Full. Close the handle rather than dropping it on the floor: the
     ! caller reads 0 as failure and will never see it again, so this is
     ! the last place that can.
-    call cre_close_c(h)
+    if (idx == 0) call cre_close_c(h)
   end function alloc_slot
+
+  ! where handle i lives: its chunk, and its slot there
+  elemental integer function ck(i)
+    integer, intent(in) :: i
+    ck = (i - 1) / CHUNK + 1
+  end function ck
+
+  elemental integer function sl(i)
+    integer, intent(in) :: i
+    sl = mod(i - 1, CHUNK) + 1
+  end function sl
+
+  ! a handle some claim made, of a chunk that exists
+  logical function live_idx(i)
+    integer, intent(in) :: i
+    live_idx = i >= 1 .and. i <= nchunks * CHUNK
+  end function live_idx
 
   ! Closes one handle and empties its slot. Called by the sweep, via
   ! the finalizer hook, when the Pattern or Matcher holding it is
@@ -217,21 +254,21 @@ contains
   integer function regex_live_count()
     integer :: i
     regex_live_count = 0
-    do i = 1, MAX_HANDLES
-       if (c_associated(registry(i))) regex_live_count = regex_live_count + 1
+    do i = 1, nchunks * CHUNK
+       if (c_associated(chunks(ck(i))%s(sl(i))%h)) regex_live_count = regex_live_count + 1
     end do
   end function regex_live_count
 
   subroutine regex_release(idx)
     integer, intent(in) :: idx
-    if (idx < 1 .or. idx > MAX_HANDLES) return
-    if (.not. c_associated(registry(idx))) return
-    if (c_associated(subject(idx))) then
-       call cre_free_text_c(subject(idx))
-       subject(idx) = c_null_ptr
+    if (.not. live_idx(idx)) return
+    if (.not. c_associated(chunks(ck(idx))%s(sl(idx))%h)) return
+    if (c_associated(chunks(ck(idx))%s(sl(idx))%t)) then
+       call cre_free_text_c(chunks(ck(idx))%s(sl(idx))%t)
+       chunks(ck(idx))%s(sl(idx))%t = c_null_ptr
     end if
-    call cre_close_c(registry(idx))
-    registry(idx) = c_null_ptr
+    call cre_close_c(chunks(ck(idx))%s(sl(idx))%h)
+    chunks(ck(idx))%s(sl(idx))%h = c_null_ptr
   end subroutine regex_release
 
   ! What a clone or set_text failure says: ICU refused and gave no
@@ -244,8 +281,9 @@ contains
   ! Compiles a pattern, returning a POSITIVE handle index, or 0 on
   ! failure with ICU's message in err -- answered, not kept, so two
   ! threads compiling at once each see their own.
-  function regex_compile(pattern, err) result(idx)
+  function regex_compile(pattern, err, grow) result(idx)
     character(len=*), intent(in) :: pattern
+    logical, intent(in), optional :: grow
     character(len=:), allocatable, intent(out) :: err
     integer :: idx
     type(c_ptr) :: h
@@ -275,20 +313,29 @@ contains
        end do
        return
     end if
-    idx = alloc_slot(h)
+    if (present(grow)) then
+       idx = alloc_slot(h, grow)
+    else
+       idx = alloc_slot(h, .false.)
+    end if
   end function regex_compile
 
   ! An independent handle over the same compiled pattern, for one
   ! Matcher -- see regex_shim.h on why cloning rather than sharing.
-  function regex_clone(pattern_idx) result(idx)
+  function regex_clone(pattern_idx, grow) result(idx)
     integer, intent(in) :: pattern_idx
+    logical, intent(in), optional :: grow
     integer :: idx
     type(c_ptr) :: h
     idx = 0
-    if (pattern_idx < 1 .or. pattern_idx > MAX_HANDLES) return
-    h = cre_clone_c(registry(pattern_idx))
+    if (.not. live_idx(pattern_idx)) return
+    h = cre_clone_c(chunks(ck(pattern_idx))%s(sl(pattern_idx))%h)
     if (.not. c_associated(h)) return
-    idx = alloc_slot(h)
+    if (present(grow)) then
+       idx = alloc_slot(h, grow)
+    else
+       idx = alloc_slot(h, .false.)
+    end if
   end function regex_clone
 
   function regex_set_text(idx, text) result(ok)
@@ -298,40 +345,40 @@ contains
     integer(c_int32_t) :: r
     type(c_ptr) :: buf
     ok = .false.
-    if (idx < 1 .or. idx > MAX_HANDLES) return
+    if (.not. live_idx(idx)) return
     ! Free whatever this handle was holding before: setting text twice
     ! would otherwise strand the first buffer.
-    if (c_associated(subject(idx))) then
-       call cre_free_text_c(subject(idx))
-       subject(idx) = c_null_ptr
+    if (c_associated(chunks(ck(idx))%s(sl(idx))%t)) then
+       call cre_free_text_c(chunks(ck(idx))%s(sl(idx))%t)
+       chunks(ck(idx))%s(sl(idx))%t = c_null_ptr
     end if
-    r = cre_set_text_c(registry(idx), text // c_null_char, len(text), buf)
+    r = cre_set_text_c(chunks(ck(idx))%s(sl(idx))%h, text // c_null_char, len(text), buf)
     ok = (r == 0)
-    if (ok) subject(idx) = buf
+    if (ok) chunks(ck(idx))%s(sl(idx))%t = buf
   end function regex_set_text
 
   function regex_matches(idx) result(r)
     integer, intent(in) :: idx
     integer :: r
     r = -1
-    if (idx < 1 .or. idx > MAX_HANDLES) return
-    r = cre_matches_c(registry(idx))
+    if (.not. live_idx(idx)) return
+    r = cre_matches_c(chunks(ck(idx))%s(sl(idx))%h)
   end function regex_matches
 
   function regex_find_next(idx) result(r)
     integer, intent(in) :: idx
     integer :: r
     r = -1
-    if (idx < 1 .or. idx > MAX_HANDLES) return
-    r = cre_find_next_c(registry(idx))
+    if (.not. live_idx(idx)) return
+    r = cre_find_next_c(chunks(ck(idx))%s(sl(idx))%h)
   end function regex_find_next
 
   function regex_group_count(idx) result(n)
     integer, intent(in) :: idx
     integer :: n
     n = -1
-    if (idx < 1 .or. idx > MAX_HANDLES) return
-    n = cre_group_count_c(registry(idx))
+    if (.not. live_idx(idx)) return
+    n = cre_group_count_c(chunks(ck(idx))%s(sl(idx))%h)
   end function regex_group_count
 
   ! Returns .true. and sets start/endp (0-based, endp exclusive -- ready
@@ -349,12 +396,12 @@ contains
     participated = .false.
     start = 0
     endp = 0
-    if (idx < 1 .or. idx > MAX_HANDLES) return
+    if (.not. live_idx(idx)) return
     r = -1
     if (present(ascii)) then
-       if (ascii) r = cre_group_span_units_c(registry(idx), gnum, s, e)
+       if (ascii) r = cre_group_span_units_c(chunks(ck(idx))%s(sl(idx))%h, gnum, s, e)
     end if
-    if (r == -1) r = cre_group_span_c(registry(idx), gnum, s, e)
+    if (r == -1) r = cre_group_span_c(chunks(ck(idx))%s(sl(idx))%h, gnum, s, e)
     if (r /= 1) return
     start = s
     endp = e

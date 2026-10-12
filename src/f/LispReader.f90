@@ -745,7 +745,7 @@ contains
        if (text(pos:pos) == achar(92)) pos = pos + 1
        pos = pos + 1
     end do
-    handle = regex_compile(text(start:pos - 1), rerr)
+    handle = regex_compile(text(start:pos - 1), rerr, grow=.true.)
     if (handle == 0) then
        call fail("regex: " // rerr, "clotran.host.pattern_syntax_exception")
        return

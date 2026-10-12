@@ -1697,7 +1697,7 @@ contains
           block
              t = gc_slot(v, 1)
              call gc_ref_text(t%ref, s=dlt_1)
-             h = regex_compile(dlt_1, err)
+             h = regex_compile(dlt_1, err, grow=.true.)
           end block
           call gc_set_i1(v, h)
        case (OBJ_MATCHER)
@@ -16761,11 +16761,13 @@ contains
     type(gc_value) :: none(0)
     h = regex_compile(text, err)
     do k = 1, 2
-       if (h /= 0 .or. regex_live_count() < REGEX_MAX_HANDLES) return
+       if (h /= 0 .or. len(err) > 0) return
        call gc_collect(none)
        h = regex_compile(text, err)
     end do
-    if (h == 0 .and. len(err) == 0) err = "more than 4096 live Patterns and Matchers"
+    ! collected, and still full: the patterns are live, so the table grows
+    if (h == 0 .and. len(err) == 0) h = regex_compile(text, err, grow=.true.)
+    if (h == 0 .and. len(err) == 0) err = "too many live Patterns and Matchers"
   end function rx_compile
 
   recursive function rx_clone(p) result(h)
@@ -16774,10 +16776,11 @@ contains
     type(gc_value) :: none(0)
     h = regex_clone(p)
     do k = 1, 2
-       if (h /= 0 .or. regex_live_count() < REGEX_MAX_HANDLES) return
+       if (h /= 0) return
        call gc_collect(none)
        h = regex_clone(p)
     end do
+    if (h == 0) h = regex_clone(p, grow=.true.)
   end function rx_clone
 
   ! RT.contains answers for these; anything else is an

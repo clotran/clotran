@@ -3372,3 +3372,5 @@ x10
              (rest #{1}) (rest (sorted-map 1 2)) (rest (sorted-set 1)) (rest (cons 1 nil)) (rest (seq (int-array [1])))
              (rest (keys {:a 1})) (rest (rseq [1])) (rest nil) (rest []) (range 0)])
  (map class [(rest (range 2 3)) (rest (range 3 0 -1)) (rest [1 2]) (rest (map inc [1])) (rest (iterate inc 1))])]
+;; more live regex literals than the first 4096 handles
+(let [ps (read-string (str "[" (apply str (repeat 5000 "#\"a+\" ")) "]"))] [(count ps) (re-find (peek ps) "baa")])

@@ -260,6 +260,6 @@
  "PersistentList.f90/empty_val" {:class :fixed, :note "the empty list read lock-free: filled at its first use, during core's load before a second thread exists, and again only after gc_init or an image, both single-threaded"}
  "PersistentList.f90/empty_for" {:class :fixed, :note "the root handle empty_val was read through, which a new heap or an image no longer matches"}
  "Regex.f90/next_slot" {:class :shared, :note "a registry: additions under a lock"}
- "Regex.f90/registry" {:class :shared, :note "a registry: additions under a lock"}
- "Regex.f90/subject" {:class :shared, :note "per handle; a handle is one Matcher, so the slot table is what is shared: additions under a lock"}
+ "Regex.f90/chunks" {:class :shared, :note "the handle registry, a chunk at a time: slots claimed and chunks added under a lock; a chunk never moves, and a handle's slot (its Matcher's subject text too) is one Matcher's"}
+ "Regex.f90/nchunks" {:class :shared, :note "how many chunks: raised under the lock, after the chunk it counts is made"}
 }
