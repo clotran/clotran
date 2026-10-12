@@ -16,7 +16,14 @@ Categories:
 
 - **temporary** -- a scaffold. Bootstrapping is incomplete; it goes away.
 - **host** -- forced by Fortran. Cannot go away, but must be invisible.
+- **design** -- a choice, made on purpose and kept: Fortran's
+  conventions where the host decides (James, 2026-10-01), clotran's own
+  types and names where clj's are its host showing through
+  (no-clj-emulation), or a capability traded for a better one.
+- **1.x** -- known, and staying through 1.0 by decision (PLAN step 35),
+  each entry saying what removing it takes.
 - **open** -- we do not yet know which of the above it is.
+- **--** -- resolved; the entry stays as the record.
 
 | # | What | Kind | Where |
 |---|------|------|-------|
@@ -36,10 +43,75 @@ Categories:
 | 14 | Regex is ICU under clj's regex's names; `\w` and `(?i)` are Unicode | host | `src/f/Regex.f90` |
 | 15 | RESOLVED -- `gc_hash` is Util.hasheq, bit for bit | -- | `src/f/GC.f90` |
 | 16 | RESOLVED -- names resolve while analysing | -- | `src/f/analyze.inc` |
+| 17 | RESOLVED -- a deftype's short name is imported per namespace | -- | -- |
+| 18 | A deftype instance prints with clotran's identity and text | design | -- |
+| 19 | RESOLVED -- `recur` in a deftype method leaves out `this` | -- | -- |
+| 20 | RESOLVED -- mutable deftype fields are honoured | -- | -- |
+| 21 | RESOLVED -- `pr` of a namespace shows its name, not an `#object[...]` form | -- | -- |
+| 22 | RESOLVED -- collections as keys hash and compare structurally | -- | -- |
+| 23 | RESOLVED -- a function is an IObj | -- | -- |
+| 24 | Arrays are never ragged | design | -- |
+| 25 | RESOLVED -- `aset` on a primitive array accepted any number | -- | -- |
+| 26 | RESOLVED -- BigInt, and what a Ratio still cannot hold | -- | -- |
+| 27 | RESOLVED -- the two smallest subnormal doubles printed with one digit too few | -- | -- |
+| 28 | `proxy` is a special form, and accepts methods no superclass declares | host | -- |
+| 29 | RESOLVED -- an agent's actions run on a thread of the agent's own | -- | -- |
+| 30 | RESOLVED -- BigDecimal, except for rounding | -- | -- |
+| 31 | RESOLVED -- stack traces | -- | -- |
+| 32 | RESOLVED for a user's code -- a qualified symbol that does not resolve is refused when analysed | -- | -- |
+| 33 | Reader conditionals are read in every file, and `.cljf` is a source extension | open (James) | -- |
+| 34 | RESOLVED -- a class is a value of its own kind | -- | -- |
+| 35 | RESOLVED -- an unrealised seq hashed by identity, so it was not found as a map key | -- | -- |
+| 36 | RESOLVED -- `binding` refuses a Var not declared `^:dynamic` | -- | -- |
+| 37 | RESOLVED -- `apply` hands a variadic fn its rest unrealised | -- | -- |
+| 38 | RESOLVED -- a future runs on a thread of its own | -- | -- |
+| 39 | A map entry's class is clotran.host.persistent_vector | design | -- |
+| 40 | `core_print.clj`, `data.clj` and `clotran.files` are clotran's own | design | -- |
+| 41 | A string is indexed by code point, not by UTF-16 unit | design | -- |
+| 42 | RESOLVED -- `s/check-asserts` turns the checks on | -- | -- |
+| 43 | `*math-context*` has a working precision, so a decimal division answers | design | -- |
+| 44 | RESOLVED -- `tap>` delivers on the calling thread, before it returns | -- | -- |
+| 45 | RESOLVED -- a short, byte or char array had its storage kind's class | -- | -- |
+| 46 | RESOLVED -- data readers work in `clojure.edn` and nowhere else | -- | -- |
+| 47 | RESOLVED -- `all-ns` answers clotran's own libraries beside clj's, not host class names | -- | -- |
+| 48 | Type hints: clj's static types, inferred here for what they refuse, narrower | 1.x | -- |
+| 49 | RESOLVED -- A task blocked below compiled code was pinned | -- | -- |
+| 50 | Pure Fortran writes a double as Fortran does | design | -- |
+| 51 | Division by zero says "Divide by zero" where clj's primitive path says "/ by zero" | 1.x | -- |
+| 52 | A parallel loop reports whichever failing iteration stops first | host | -- |
+| 53 | `identical?` on equal numbers is true | design | -- |
+| 54 | A name built with a slash in its namespace splits at the first slash | 1.x | -- |
+| 55 | RESOLVED -- clojure.core is direct-linked, as Clojure compiles it | -- | -- |
+| 56 | An index is 64-bit; clj truncates a vector's to 32 | design | -- |
+| 57 | `vec`, `sort` and `to-array` copy an array; clj aliases it | design | -- |
+| 58 | RESOLVED -- core's one-line wrappers are on the call stack | -- | -- |
+| 59 | A lazy seq's thunk keeps its closed-over locals after it runs | design | -- |
+| 60 | RESOLVED -- a deftype's hash is asked at each hash | -- | -- |
+| 61 | A vector key past 32 bits is out of range, not wrapped | design | -- |
+| 62 | RESOLVED -- an array of references knows its element class | -- | -- |
+| 63 | `vec` of an array copies it | design | -- |
+| 64 | A transient used in place keeps what was added to it | design | -- |
+| 65 | Character streams are clotran's own types | design | -- |
+| 66 | `(String. array)` is refused | design | -- |
+| 67 | Classes have clotran's names | design | -- |
+| 68 | RESOLVED -- an uncaught error in a program is reported as clojure.main reports one | -- | -- |
+| 69 | A shift by 64 or more follows clotran's host, Fortran | design | -- |
+| 70 | A Ratio becomes a double by Fortran's quotient | design | -- |
+| 71 | `count`, `compare` and `hash` answer clotran's one integer | design | -- |
+| 72 | A ratio less the smallest long is exact | design | -- |
+| 73 | A loop or try in an expression adds no frame | design | -- |
+| 74 | A hash map's nil key is walked where its hash puts it | 1.x | -- |
+| 75 | A UUID's text is the canonical one | design | -- |
+| 76 | min and max order 0.0 and -0.0 by position, always | design | -- |
+| 77 | The host's abs of a long is the long's, reflection or not | design | -- |
+| 78 | A future after shutdown-agents still runs | design | -- |
+| 79 | The names clj imports into every namespace are not names here | design | -- |
+| 80 | An input stream's `skip` stops at the end, a file's as an array's | design | -- |
+| 81 | `.hashCode` of a core value is not a member | design | -- |
 
 ---
 
-## 1. Load reads the whole file before evaluating any of it
+## 1. RESOLVED -- load reads one form, evaluates it, reads the next
 
 `Compiler.load` interleaves: it reads one form, evaluates it, and only
 then reads the next (upstream's `Compiler`, in the clone at
@@ -579,7 +651,7 @@ wire.
 
 ---
 
-## 16. Names resolve at call time, not while analysing
+## 16. RESOLVED -- names resolve while analysing
 
 Clojure resolves every symbol in `Compiler.analyze`, lexically, in the
 namespace being compiled, before any bytecode exists. ClojureScript does
@@ -611,9 +683,9 @@ per top-level form and today only macroexpands.
 **RESOLVED 2026-09-19.** `analyze.inc` resolves every symbol once, with
 the writing namespace and the lexical scope known: a local becomes a
 frame slot, a Var reference holds the Var, a class literal is a
-constant. `__defining-ns__` is gone. What remains of this entry is
-deviation 3 (the `clojure.core` fallback inside `resolve_var`) and the
-new deviation 32.
+constant. `__defining-ns__` is gone. What remained of this entry was
+deviation 3 (the `clojure.core` fallback inside `resolve_var`) and
+deviation 32, both since resolved.
 
 ## 17. RESOLVED -- a deftype's short name is imported per namespace
 
@@ -1287,6 +1359,14 @@ loading, so it wins.
 **Removal**: tie the allowance to the extension as Clojure does, so
 `#?` in a `.clj` errors. Nothing depends on the leniency; it exists so
 a `.clj` being ported can be edited in place before it is renamed.
+
+**Open, for James (2026-10-12):** keep the leniency by design, or
+remove it for 1.0. Removing it touches three readers -- the Fortran
+reader's every entry (`read-string` and `read` honouring `:read-cond`,
+a file's by its extension, the REPL allowing), and `clotran.io`'s
+stream reader, which reads `#?` in Clojure -- and `:read-cond
+:preserve` (ReaderConditional values) would be its own piece. It only
+ever accepts text clj refuses; no program clj runs reads differently.
 
 ## 34. RESOLVED -- a class is a value of its own kind
 

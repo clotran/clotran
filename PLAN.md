@@ -5302,6 +5302,31 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
 6. *Windows*, last: the mingw build under Wine as the quick check, a
    real runner as the authority -- or 1.1, named as such.
 
+**Audited 2026-10-12 (James: "are you sure we are this close?"):** no.
+The first complete `make fuzz-all` failed 7 of 22, so `1.0.0-rc.1` was
+set before its own check; those seven are fixed (Math overloads, the
+empty list's class, the regex table, IDrop, two harness limits), and
+finding them turned up stacked reader metadata (a record's mutable
+hash fields read as immutable) and item 2's residual, both fixed. What
+remains before 1.0.0, in order:
+
+- the ledger's table names every entry's kind (done 2026-10-12: host,
+  design, 1.x, or resolved); 33 is open for James.
+- **Linux**: built and gated in a container, and shipped as a
+  relocatable tarball -- built against an old glibc (manylinux_2_28)
+  with libgfortran, libquadmath and libstdc++ carried beside the
+  binary, glibc the one system library. Not a static binary: packages
+  and `clotran compile`'s libraries are `dlopen`ed into it and resolve
+  its symbols (`-rdynamic`), which a static glibc or musl binary cannot
+  do. A clone had never built on a fresh checkout: ICU's build stamp was
+  committed.
+- release notes, saying plainly what the step lists above.
+- README's examples run by a check, so "verified output" stays true.
+- the scorecards re-measured, and `make fuzz-all` clean at full size on
+  a frozen tree.
+- then James tags, and decides the branch: feat/threads is 392 commits
+  ahead of main.
+
 **Said plainly in the release notes:** the speed as the README states
 it; the debugger as it is (calls, one level); interop as
 `call-package*` and hand-written bindings. The Fortran binding
