@@ -6325,8 +6325,18 @@ contains
        if (is_special(v)) then
           out = sq_list2("quote", v, [vs_get(vst, base + 1)])
        else
-          call vs_set(vst, base + 2, auto_gensym(vs_get(vst, base + 2)))
-          call vs_set(vst, base + 2, qq_alias(vs_get(vst, base + 2), gc_nil()))
+          ! x# is made a fresh name INSTEAD of resolved, as syntaxQuote's
+          ! branches go; anything else is resolved -- a name an inner
+          ! syntax-quote made, x__1__auto__, included: ``x# qualifies it
+          block
+            character(len=:), allocatable :: sn
+            call gc_ref_text(v%ref, s=sn)
+            if (len(sn) > 1 .and. sn(len(sn):len(sn)) == "#" .and. index(sn, "/") == 0) then
+               call vs_set(vst, base + 2, auto_gensym(vs_get(vst, base + 2)))
+            else
+               call vs_set(vst, base + 2, qq_alias(vs_get(vst, base + 2), gc_nil()))
+            end if
+          end block
           out = sq_list2("quote", vs_get(vst, base + 2), [vs_get(vst, base + 1)])
        end if
     else if (is_unquote(v, "clojure.core/unquote")) then
@@ -6667,9 +6677,6 @@ contains
     ! this-ns/clojure.core, which is what (use 'clojure.core) inside a
     ! syntax-quote was asking to load
     if (index(t, ".") > 0) return
-    if (n > 8) then
-       if (t(n-7:n) == "__auto__") return
-    end if
     if (is_special(sym)) return
     if (gc_ref_is(sym%ref, "catch") .or. gc_ref_is(sym%ref, "finally") .or. &
          gc_ref_is(sym%ref, "unquote") .or. gc_ref_is(sym%ref, "splice-unquote") .or. &

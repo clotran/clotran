@@ -3311,3 +3311,6 @@ x10
 (try (read-string "`~@a") (catch clotran.host.throwable e (.getMessage e)))
 (try (eval '(quasiquote 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: quasiquote" (.getMessage (or (.getCause e) e)))))
 (let [[_ ps] (read-string "#(+ %3 %)")] (mapv #(re-find #"^p\d" (name %)) ps))
+
+;; ``x#: the inner syntax-quote makes x# a fresh name, the outer resolves that name as any other (syntaxQuote's branches)
+(namespace (-> (read-string "``x#") second (nth 2) second second))
