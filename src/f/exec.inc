@@ -1069,7 +1069,7 @@
        call move_alloc(bigger, tctx%kst)
     end if
     if (k_limit == 0) call read_frame_limit()
-    if (tctx%ksp >= k_limit) then
+    if (tctx%ksp >= k_limit .or. stack_low(tctx)) then
        call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        return
     end if
@@ -1146,7 +1146,7 @@
        bigger(1:n) = tctx%kst(1:n)
        call move_alloc(bigger, tctx%kst)
     end if
-    if (tctx%ksp >= k_limit) then
+    if (tctx%ksp >= k_limit .or. stack_low(tctx)) then
        call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        return
     end if
@@ -1334,7 +1334,7 @@
     if (tctx%has_error) return
     if (ev_limit == 0) call read_depth_limit()
     tctx%ev_depth = tctx%ev_depth + 1
-    if (tctx%ev_depth > ev_limit) then
+    if (tctx%ev_depth > ev_limit .or. stack_low(tctx)) then
        call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        tctx%ev_depth = tctx%ev_depth - 1
        return

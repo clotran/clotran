@@ -291,9 +291,13 @@ per thread (64 MB of address space, calloc'd, so real only where
 touched), `CLOTRAN_STACK_SLOTS` to change it. The frame limit trips
 first -- its deepest case, a one-line fn at 200,000 frames, used
 1,400,000 slots -- but a deep recursion through frames with many
-temporaries could fill the stack before it, and that stops the process
-("the value stack is full") where clj throws a catchable
-StackOverflowError. The original entry follows.
+temporaries could fill the stack before it. Until 2026-10-12 that
+stopped the process ("the value stack is full"); a call made with
+less than the stack's last 65,536 slots free now raises
+`stack_overflow_error`, catchable as clj's StackOverflowError is
+(Eval's stack_low, in every executor; scripts/fuzz-spec found it, a
+nested `s/*` conforming). The fuzzers compare no case clj itself overflows on:
+the depth is each host's. The original entry follows.
 
 Both runtimes stop somewhere; clj raises `StackOverflowError` and we
 report `stack overflow near (f ...)`. What differs is how soon.

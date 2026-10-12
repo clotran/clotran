@@ -209,4 +209,8 @@
  ;; (Math/abs 1/3) answered 0.333 where clj has no overload taking a ratio
  ;; (scripts/fuzz-hints at full size, case 1978)
  (try (clotran.host.math/abs (/ (identity -1) 3)) (catch clotran.host.illegal_argument_exception e :no-match))
+ ;; a nested s/* recursing without end filled the value stack in compiled
+ ;; mode and stopped the process, where clj throws StackOverflowError
+ ;; (scripts/fuzz-spec, make fuzz-all 2026-10-12)
+ (try (clojure.spec.alpha/conform (clojure.spec.alpha/* (clojure.spec.alpha/* pos?)) [5 nil "s"]) (catch clotran.host.stack_overflow_error e :so))
 ]

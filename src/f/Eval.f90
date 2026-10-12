@@ -1110,6 +1110,19 @@ contains
     if (p%tag == GCT_INT) tctx%pending_site = int(p%ival, kind=4)
   end subroutine gce_set_site
 
+  ! The value stack never moves (compiled code holds a view of it), so it
+  ! cannot grow: a call made with less than its last 65,536 slots free is
+  ! a stack overflow, raised as clj raises StackOverflowError, and the
+  ! frames already running finish on the slots left. Without it a deep
+  ! recursion through frames of many temporaries filled the stack before
+  ! the frame limit tripped and stopped the process (scripts/fuzz-spec, a
+  ! nested s/* conforming; DEVIATIONS 7).
+  logical function stack_low(tctx)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    integer, parameter :: VS_RESERVE = 65536
+    stack_low = tctx%stk%vs_top > size(tctx%stk%vstack) - VS_RESERVE
+  end function stack_low
+
   ! tctx passed, not fetched: a thread-key lookup per call, and every
   ! call makes one of these and a pop_frame
   subroutine push_frame(tctx, fn, site)
@@ -1132,7 +1145,7 @@ contains
        call move_alloc(bs, tctx%fstack_site)
     end if
     if (k_limit == 0) call read_frame_limit()
-    if (tctx%fstack_top >= k_limit) then
+    if (tctx%fstack_top >= k_limit .or. stack_low(tctx)) then
        call raise_class("clotran.host.stack_overflow_error", "stack overflow", [gc_value ::])
        return
     end if
@@ -5338,6 +5351,7 @@ contains
     case (4); call raise_class("clotran.host.negative_array_size_exception", msg, none)
     case (5); call raise_class("clotran.host.arity_exception", msg, none)
     case (6); call raise_class("clotran.host.string_index_out_of_bounds_exception", msg, none)
+    case (7); call raise_class("clotran.host.stack_overflow_error", msg, none)
     case default; call raise_class("clotran.host.exception", msg, none)
     end select
   end subroutine gce_raise_coded
