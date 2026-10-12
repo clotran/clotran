@@ -3341,3 +3341,16 @@ x10
 
 ;; ``x#: the inner syntax-quote makes x# a fresh name, the outer resolves that name as any other (syntaxQuote's branches)
 (namespace (-> (read-string "``x#") second (nth 2) second second))
+
+;; the reader, as fuzz-read found it once backquotes were generated: `/ resolves to clojure.core//; #() reads each % arg
+;; as its name at once (ArgReader, argPat matched whole); a tag symbol keeps its own metadata; #= is EvalReader; a
+;; Sym/N in a syntax-quote is an array class, ClassNotFoundException when its component is none
+(read-string "`(/ 1 2)")
+(let [[_ ps body] (read-string "#(`%1 %&)")] [(count ps) (namespace (second (second (second body))))])
+(mapv #(try (read-string %) :ok (catch clotran.host.throwable e (.getMessage e))) ["#(%1%&)" "#(%0)" "#(%x)" "#(%1/!)" "#(%&)"])
+(meta (:tag (meta (read-string "^^{:a 1}n il"))))
+[(read-string "#=(+ 1 2)") (read-string "#=(vector 1 x)") (read-string "#=(var clojure.core/inc)")
+ (binding [*read-eval* false] (try (read-string "#=(+ 1 2)") (catch clotran.host.throwable e (.getMessage e))))
+ (try (read-string "#=(nope 1)") (catch clotran.host.throwable e (.getMessage e)))
+ (try (read-string "#=1") (catch clotran.host.throwable e (class e)))]
+[(read-string "`a/b.c") (try (read-string "`x15/5") (catch clotran.host.throwable e (class e)))]

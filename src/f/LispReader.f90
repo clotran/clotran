@@ -38,7 +38,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error, gcr_error_class
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
-  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file, gcr_set_sq_expander
+  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file, gcr_set_sq_expander, gcr_set_eval_reader
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 
   ! ::x is resolved at READ time against the current namespace, and
@@ -67,6 +67,21 @@ module LispReader
      end subroutine sq_expander_i
   end interface
   procedure(sq_expander_i), pointer, save :: sq_expander => null()
+
+  ! #=form, EvalReader: the evaluator's too. Asked first with `check`
+  ! true, before the form is read -- refused while *read-eval* is false
+  ! -- then with the form read, to answer its value.
+  abstract interface
+     subroutine eval_reader_i(check, form, roots, out, err, cls)
+       import :: gc_value
+       logical, intent(in) :: check
+       type(gc_value), intent(in) :: form
+       type(gc_value), intent(in) :: roots(:)
+       type(gc_value), intent(out) :: out
+       character(len=:), allocatable, intent(out) :: err, cls
+     end subroutine eval_reader_i
+  end interface
+  procedure(eval_reader_i), pointer, save :: eval_reader => null()
 
   ! SOURCE POSITIONS. A list form records where it was read from:
   ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
@@ -123,12 +138,10 @@ module LispReader
      ! on resolves the markers afterwards. Off for ordinary source, so
      ! an unknown tag in a file is still a reader error there.
      logical :: tag_markers = .true.   ! #tag form is a marker, resolved before analysis (clotran.reader)
-     ! the #(...) being read: its suffix, from the shared anon_seq
-     integer :: anon_cur = 0
      ! and each parameter's own number, given when the body first uses
      ! it, as FnReader's garg does (0 until then; anon_rest for %&)
      integer, allocatable :: anon_ids(:)
-     integer :: anon_rest = 0
+     integer :: anon_rest = 0, anon_max = 0
      ! inside a #(...)'s body: another is refused (FnReader)
      logical :: in_anon = .false.
      ! the map read next is a #:ns map's: its odd count says so
@@ -139,20 +152,6 @@ module LispReader
 
 contains
 
-  ! The suffix of the #(...) this thread is reading: numbers come from
-  ! the shared anon_seq, the one in use is the thread's own.
-  integer function anon_cur()
-    type(rd_state), pointer :: r
-    r => rd_self()
-    anon_cur = r%anon_cur
-  end function anon_cur
-
-  subroutine set_anon_cur(k)
-    integer, intent(in) :: k
-    type(rd_state), pointer :: r
-    r => rd_self()
-    r%anon_cur = k
-  end subroutine set_anon_cur
 
   ! This thread's reader state, made on its first read.
   ! ponytail: one per thread that ever reads, never freed -- a few dozen
@@ -709,7 +708,9 @@ contains
        end if
        v = wrap("clojure.core/unquote", text, pos, roots)
     case default
-       if (c == achar(92)) then
+       if (c == "%" .and. rdx%in_anon) then
+          v = read_arg(text, pos, roots)
+       else if (c == achar(92)) then
           v = read_char(text, pos, roots)
        else
           v = read_atom(text, pos, roots)
@@ -792,6 +793,13 @@ contains
        return
     end if
     base = vs_enter(4)
+    ! ARG_ENV: each %n read in the body is its parameter's name at once
+    ! (read_arg), numbered at its first use, as FnReader's ArgReader does
+    if (allocated(rdx%anon_ids)) deallocate(rdx%anon_ids)
+    allocate(rdx%anon_ids(8))
+    rdx%anon_ids = 0
+    rdx%anon_rest = 0
+    rdx%anon_max = 0
     rdx%in_anon = .true.
     body = read_seq(text, pos, ")", .false., roots)
     rdx%in_anon = .false.
@@ -799,13 +807,8 @@ contains
        call vs_leave(base); return
     end if
     call vs_set(base + 1, body)
-
-    maxn = 0
-    has_rest = .false.
-    call scan_percent(vs_get(base + 1), maxn, has_rest)
-    if (gcr_has_error()) then
-       call vs_leave(base); return
-    end if
+    maxn = rdx%anon_max
+    has_rest = rdx%anon_rest /= 0
 
     ! `roots` in every allocation -- the caller's values are plain
     ! locals reachable only through it, and reading #(...) inside a
@@ -816,12 +819,6 @@ contains
     ! order, and one the body skips after the body -- so it cannot shadow
     ! a `p1` of the program's own (every-pred's #() once read the
     ! predicate as its own argument).
-    if (allocated(rdx%anon_ids)) deallocate(rdx%anon_ids)
-    allocate(rdx%anon_ids(max(maxn, 1)))
-    rdx%anon_ids = 0
-    rdx%anon_rest = 0
-    body = rewrite_percent(vs_get(base + 1), roots)
-    call vs_set(base + 1, body)
     params = gcv_empty(roots)
     call vs_set(base + 2, params)
     do i = 1, maxn
@@ -854,184 +851,72 @@ contains
     call vs_leave(base)
   end function read_anon_fn
 
-  ! The number of #()'s parameter n (-1 for %&), given at its first use.
+  ! The number of #()'s parameter n (-1 for %&), given at its first use;
+  ! the highest n used is the arity (FnReader's registerArg).
   integer function anon_id(n) result(id)
     integer, intent(in) :: n
     type(rd_state), pointer :: rdx
+    integer, allocatable :: bigger(:)
     rdx => rd_self()
     if (n < 0) then
        if (rdx%anon_rest == 0) rdx%anon_rest = gc_next(anon_seq)
        id = rdx%anon_rest
     else
-       if (rdx%anon_ids(n) == 0) rdx%anon_ids(n) = gc_next(anon_seq)
-       id = rdx%anon_ids(n)
+       if (n + 1 > size(rdx%anon_ids)) then
+          allocate(bigger(2 * (n + 1)))
+          bigger = 0
+          bigger(1:size(rdx%anon_ids)) = rdx%anon_ids
+          call move_alloc(bigger, rdx%anon_ids)
+       end if
+       ! slot n + 1: %0 is a name of its own too
+       if (rdx%anon_ids(n + 1) == 0) rdx%anon_ids(n + 1) = gc_next(anon_seq)
+       id = rdx%anon_ids(n + 1)
+       rdx%anon_max = max(rdx%anon_max, n)
     end if
   end function anon_id
 
-  ! Highest %n used anywhere in the form, and whether %& appears.
-  recursive subroutine scan_percent(form, maxn, has_rest)
-    type(gc_value), intent(in) :: form
-    integer, intent(inout) :: maxn
-    logical, intent(inout) :: has_rest
-    type(gc_value) :: walk
-    character(len=:), allocatable :: t
-    integer :: i, num, ios
-
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
-    if (form%tag == GCT_SYM) then
-       block
-          call gc_ref_text(form%ref, s=dlt_1)
-          t = dlt_1
-       end block
-       if (len(t) >= 1) then
-          if (t(1:1) == "%") then
-             if (t == "%") then
-                maxn = max(maxn, 1)
-             else if (t == "%&") then
-                has_rest = .true.
-             else if (verify(t(2:), "0123456789") == 0 .and. t(2:2) /= "0") then
-                read(t(2:), *, iostat=ios) num
-                if (ios == 0) maxn = max(maxn, num)
-             else
-                ! ArgReader: what follows % must be & or an integer, its
-                ! first digit not 0 (argPat's [1-9][0-9]*)
-                call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
-             end if
-          end if
-       end if
-       return
-    end if
-    ! A hinted symbol -- (.getClassName ^StackTraceElement %1) -- is
-    ! wrapped in metadata; the walk looks through the wrapper.
-    if (gc_kind(form) == OBJ_META) then
-       call scan_percent(gc_slot(form, 1), maxn, has_rest)
-       ! and in the metadata: ^% x registers %, as ArgReader does
-       ! wherever it reads one
-       call scan_percent(gc_slot(form, 2), maxn, has_rest)
-       return
-    end if
-    if (gcl_is(form)) then
-       walk = form
-       do while (gcl_count(walk) > 0)
-          call scan_percent(gcl_first(walk), maxn, has_rest)
-          walk = gcl_rest(walk, [form])
-       end do
-    else if (gcv_is(form)) then
-       do i = 0, gcv_count(form) - 1
-          call scan_percent(gcv_nth(form, i), maxn, has_rest)
-       end do
-    else if (gca_is(form)) then
-       ! a map literal in the body: #(identity {:pred % :val x})
-       block
-         type(gc_value), allocatable :: ks(:), vls(:)
-         call gca_entries(form, ks, vls)
-         do i = 1, size(ks)
-            call scan_percent(ks(i), maxn, has_rest)
-            call scan_percent(vls(i), maxn, has_rest)
-         end do
-       end block
-    else if (gc_kind(form) == OBJ_SET) then
-       call scan_percent(gc_slot(form, 1), maxn, has_rest)
-    end if
-  end subroutine scan_percent
-
-  ! Replaces %, %n and %& with the parameter names chosen above.
-  recursive function rewrite_percent(form, roots) result(out)
-    type(gc_value), intent(in) :: form
+  ! ArgReader: inside #(...), the token a % begins -- up to whitespace or
+  ! a terminating macro character -- is % (the first parameter), %& (the
+  ! rest) or %n for n from 1, matched whole (argPat); anything else is
+  ! refused. It is read as the parameter's name at once, so a
+  ! syntax-quote or a quote around it sees the name, as in clj. pos is
+  ! at the %.
+  recursive function read_arg(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, acc, walk, item
-    character(len=:), allocatable :: t
-    character(len=16) :: nm
-    integer :: base, i, num, ios
-
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
-    out = form
-    if (form%tag == GCT_SYM) then
-       block
-          call gc_ref_text(form%ref, s=dlt_1)
-          t = dlt_1
-       end block
-       if (len(t) < 1) return
-       if (t(1:1) /= "%") return
-       if (t == "%") then
-          write(nm, '(A,I0,A)') "p1__", anon_id(1), "#"
-          out = gc_sym(trim(nm), roots)
-       else if (t == "%&") then
-          write(nm, '(A,I0,A)') "rest__", anon_id(-1), "#"
-          out = gc_sym(trim(nm), roots)
-       else
-          read(t(2:), *, iostat=ios) num
-          if (ios == 0) then
-             write(nm, '(A,I0,A,I0,A)') "p", num, "__", anon_id(num), "#"
-             out = gc_sym(trim(nm), roots)
-          end if
-       end if
+    type(gc_value) :: v
+    integer :: n, e, ios
+    character(len=:), allocatable :: tok
+    character(len=24) :: nm
+    rdx => rd_self()
+    v = gc_nil()
+    pos = pos + 1
+    e = pos
+    do while (e <= len(text))
+       if (is_space(text(e:e)) .or. is_delim(text(e:e))) exit
+       e = e + 1
+    end do
+    tok = text(pos:e - 1)
+    pos = e
+    if (len(tok) == 0) then
+       n = 1
+    else if (tok == "&") then
+       n = -1
+    else if (verify(tok, "0123456789") == 0 .and. tok(1:1) /= "0" .and. len(tok) <= 9) then
+       read(tok, *, iostat=ios) n
+    else
+       call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
        return
     end if
-
-    base = vs_enter(3)
-    call vs_set(base + 1, form)
-    if (gc_kind(form) == OBJ_META) then
-       ! rewrite the value inside the wrapper, keep the metadata
-       item = rewrite_percent(gc_slot(vs_get(base + 1), 1), roots)
-       call vs_set(base + 2, item)
-       out = gc_obj(OBJ_META, [vs_get(base + 2), gc_slot(vs_get(base + 1), 2)], &
-            [roots, vs_get(base + 1), vs_get(base + 2)])
-    else if (gcl_is(form)) then
-       acc = gcv_empty(roots)
-       call vs_set(base + 2, acc)
-       walk = vs_get(base + 1)
-       call vs_set(base + 3, walk)
-       do while (gcl_count(vs_get(base + 3)) > 0)
-          item = rewrite_percent(gcl_first(vs_get(base + 3)), roots)
-          acc = gcv_conj(vs_get(base + 2), item, roots)
-          call vs_set(base + 2, acc)
-          walk = gcl_rest(vs_get(base + 3), roots)
-          call vs_set(base + 3, walk)
-       end do
-       out = gcl_empty(roots)
-       do i = gcv_count(vs_get(base + 2)) - 1, 0, -1
-          ! `out` is a plain local, so it has to stay in the root set
-          ! by name -- the value stack cannot see it.
-          out = gcl_cons(gcv_nth(vs_get(base + 2), i), out, with(roots, out))
-       end do
-    else if (gcv_is(form)) then
-       acc = gcv_empty(roots)
-       call vs_set(base + 2, acc)
-       do i = 0, gcv_count(vs_get(base + 1)) - 1
-          item = rewrite_percent(gcv_nth(vs_get(base + 1), i), roots)
-          acc = gcv_conj(vs_get(base + 2), item, roots)
-          call vs_set(base + 2, acc)
-       end do
-       out = vs_get(base + 2)
-    else if (gca_is(form)) then
-       ! a map literal: each key and value rewritten, the map rebuilt
-       block
-         type(gc_value), allocatable :: ks(:), vls(:)
-         type(gc_value) :: v2
-         call gca_entries(vs_get(base + 1), ks, vls)
-         acc = gca_empty(roots)
-         call vs_set(base + 2, acc)
-         do i = 1, size(ks)
-            item = rewrite_percent(ks(i), roots)
-            call vs_set(base + 3, item)
-            v2 = rewrite_percent(vls(i), [roots, vs_get(base + 3)])
-            acc = gca_assoc(vs_get(base + 2), vs_get(base + 3), v2, [roots, v2])
-            call vs_set(base + 2, acc)
-         end do
-         out = vs_get(base + 2)
-       end block
-    else if (gc_kind(form) == OBJ_SET) then
-       item = rewrite_percent(gc_slot(vs_get(base + 1), 1), roots)
-       call vs_set(base + 2, item)
-       item = gca_hashed(vs_get(base + 2), [roots, vs_get(base + 2)])
-       call vs_set(base + 2, item)
-       out = gc_obj(OBJ_SET, [vs_get(base + 2)], [roots, vs_get(base + 2)])
+    if (n < 0) then
+       write(nm, '(A,I0,A)') "rest__", anon_id(-1), "#"
+    else
+       write(nm, '(A,I0,A,I0,A)') "p", n, "__", anon_id(n), "#"
     end if
-    call vs_leave(base)
-  end function rewrite_percent
+    v = gc_sym(trim(nm), roots)
+  end function read_arg
 
   ! A key as clj's "Duplicate key" message names it (toString): a
   ! keyword resolved, a string's text, a symbol or integer as itself,
@@ -1169,6 +1054,9 @@ contains
     case ("(")
        pos = pos + 2
        v = read_anon_fn(text, pos, roots)
+    case ("=")
+       pos = pos + 2
+       v = read_eval_form(text, pos, roots)
     case ("#")
        pos = pos + 2
        v = read_symbolic(text, pos, roots)
@@ -1518,9 +1406,8 @@ contains
          character(len=:), allocatable :: ot
          o = read_form(text, pos, roots)
          if (gcr_has_error()) return
-         ! inside #(...) the message shows the form as ArgReader left it, each
-         ! %-arg already its p1__N# or rest__N# (scripts/fuzz-read found it)
-         if (rd_self_in_anon()) o = rewrite_percent(o, [roots, o])
+         ! inside #(...) each %-arg is already its p1__N# or rest__N#, as
+         ! ArgReader leaves it, so the message shows that (read_arg)
          if (o%tag == GCT_SYM) then
             call gc_ref_text(o%ref, s=ot)
             call fail("Unknown symbolic value: ##" // ot)
@@ -1569,7 +1456,7 @@ contains
     rdx => rd_self()
     v = gc_nil()
     caret = pos - 1   ! the ^, whichever spelling reached here
-    base = vs_enter(3)
+    base = vs_enter(4)
     m = read_form(text, pos, roots)
     if (rdx%has_error) then
        call vs_leave(base); return
@@ -1578,7 +1465,9 @@ contains
        call vs_leave(base); return
     end if
     ! metadata on the metadata (^^:a x y) is the inner form's own: x is
-    ! still a symbol, so a :tag
+    ! still a symbol, so a :tag -- whose value is x as read, its own
+    ! metadata kept, as MetaReader keeps it
+    call vs_set(base + 4, m)
     do while (gc_kind(m) == OBJ_META)
        m = gc_slot(m, 1)
     end do
@@ -1601,14 +1490,14 @@ contains
        call vs_set(base + 2, v)
        key = gc_key("param-tags", roots)
        call vs_set(base + 3, key)
-       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), roots)
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 4), roots)
        call vs_set(base + 1, m)
     else if (m%tag == GCT_SYM .or. m%tag == GCT_STR) then
        v = gca_empty(roots)
        call vs_set(base + 2, v)
        key = gc_key("tag", roots)
        call vs_set(base + 3, key)
-       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 1), roots)
+       m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 4), roots)
        call vs_set(base + 1, m)
     else
        call fail("Metadata must be Symbol,Keyword,String,Vector or Map", "clotran.host.illegal_argument_exception")
@@ -1658,6 +1547,39 @@ contains
   end function read_meta
 
   ! (sym form) -- what ', `, @ and ~ expand to.
+  ! #=form, read and evaluated by the evaluator (EvalReader); a branch a
+  ! reader conditional did not select is read past.
+  recursive function read_eval_form(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, inner
+    character(len=:), allocatable :: err, cls
+    rdx => rd_self()
+    v = gc_nil()
+    if (.not. associated(eval_reader)) then
+       call fail("#= needs an evaluator")
+       return
+    end if
+    if (.not. rdx%suppress_read) then
+       call eval_reader(.true., gc_nil(), roots, v, err, cls)
+       if (len(err) > 0) then
+          call fail(err, cls)
+          return
+       end if
+    end if
+    inner = read_form(text, pos, roots)
+    if (rdx%has_error) return
+    if (cond_leaked()) return
+    if (rdx%suppress_read) return
+    call eval_reader(.false., inner, with(roots, inner), v, err, cls)
+    if (len(err) > 0) then
+       call fail(err, cls)
+       v = gc_nil()
+    end if
+  end function read_eval_form
+
   ! `form: the next form, expanded by the evaluator's expander
   recursive function read_syntax_quote(text, pos, roots) result(v)
     type(rd_state), pointer :: rdx
@@ -2360,6 +2282,11 @@ contains
       end if
     end function checks
   end function symbol_token_ok
+
+  subroutine gcr_set_eval_reader(f)
+    procedure(eval_reader_i) :: f
+    eval_reader => f
+  end subroutine gcr_set_eval_reader
 
   subroutine gcr_set_sq_expander(f)
     procedure(sq_expander_i) :: f

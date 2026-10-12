@@ -1154,6 +1154,7 @@ contains
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
     call gcr_set_sq_expander(sq_reader_hook)
+    call gcr_set_eval_reader(eval_reader_hook)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     ! The sweep tells us when an object owning out-of-heap storage
@@ -1679,6 +1680,7 @@ contains
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
     call gcr_set_sq_expander(sq_reader_hook)
+    call gcr_set_eval_reader(eval_reader_hook)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])
@@ -6541,6 +6543,132 @@ contains
     call vs_leave(vst, base)
   end function sq_concat
 
+  ! #=form, as LispReader's EvalReader (installed with gcr_set_eval_reader):
+  ! refused while *read-eval* is false; a symbol is the class it names; a
+  ! (var ns/x) the Var, interned; a (Ctor. args), a (Class/member args)
+  ! or a list headed by a Var called with the arguments as read,
+  ! unevaluated; anything else refused as EvalReader refuses it.
+  subroutine eval_reader_hook(check, form, roots, out, err, cls)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    logical, intent(in) :: check
+    type(gc_value), intent(in) :: form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), intent(out) :: out
+    character(len=:), allocatable, intent(out) :: err, cls
+    type(gc_value) :: f, fs, nsv, v, tmp
+    character(len=:), allocatable :: t
+    integer :: base, i, n
+    tctx => ctx_self()
+    vst => tctx%stk
+    err = ""
+    cls = ""
+    out = gc_nil()
+    if (check) then
+       nsv = gcn_find("clojure.core")
+       v = gc_nil()
+       if (gc_kind(nsv) == OBJ_NS) v = gcn_var_value(gcn_lookup(nsv, gc_sym("*read-eval*", [roots, nsv])))
+       if (.not. truthy(v)) then
+          err = "EvalReader not allowed when *read-eval* is false."
+          cls = "clotran.host.runtime_exception"
+       end if
+       return
+    end if
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, form)
+    f = strip_meta(form)
+    if (f%tag == GCT_SYM) then
+       ! RT.classForName: a class this runtime knows, by its name
+       call gc_ref_text(f%ref, s=t)
+       call canon_class(t, c=t)
+       if (known_class_name(t)) then
+          out = gc_class(t, [roots, vs_get(vst, base + 1)])
+       else
+          err = t
+          cls = "clotran.host.class_not_found_exception"
+       end if
+    else if (gcl_is(f)) then
+       fs = strip_meta(gcl_first(f))
+       if (fs%tag /= GCT_SYM) then
+          err = "Unsupported #= form"
+          cls = "clotran.host.class_cast_exception"
+       else
+          call gc_ref_text(fs%ref, s=t)
+          n = len(t)
+          if (t == "var") then
+             ! RT.var(ns, name): the Var, made if need be
+             v = strip_meta(gcl_first(gcl_rest(f, [roots, vs_get(vst, base + 1)])))
+             call gc_ref_text(v%ref, s=t)
+             i = index(t, "/")
+             if (i > 1) then
+                ! the Var, made unbound if there was none -- never re-rooted
+                out = intern_unbound(v, [roots, vs_get(vst, base + 1)])
+             else
+                err = "Can't resolve " // t
+                cls = "clotran.host.runtime_exception"
+             end if
+          else if ((n > 1 .and. t(n:n) == ".") .or. index(t, "/") > 1) then
+             ! (Ctor. args) or (Class/member args): evaluated with each
+             ! argument quoted, so they arrive as read
+             if (index(t, "/") > 1 .and. .not. known_class_name(t(1:index(t, "/") - 1))) then
+                v = resolve_var(fs, gc_nil())
+                if (gcn_is_var(v)) then
+                   out = apply(v, args_vector(gcl_rest(f, [roots, vs_get(vst, base + 1)]), [roots, vs_get(vst, base + 1)]))
+                else
+                   err = "Can't resolve " // t
+                   cls = "clotran.host.runtime_exception"
+                end if
+             else
+                tmp = quoted_args_call(vs_get(vst, base + 1), [roots])
+                call vs_set(vst, base + 2, tmp)
+                out = gce_eval(gce_analyze(vs_get(vst, base + 2), gc_nil()), gc_nil(), [roots, vs_get(vst, base + 2)])
+             end if
+          else
+             v = resolve_var(fs, gc_nil())
+             if (gcn_is_var(v)) then
+                out = apply(v, args_vector(gcl_rest(f, [roots, vs_get(vst, base + 1)]), [roots, vs_get(vst, base + 1)]))
+             else
+                err = "Can't resolve " // t
+                cls = "clotran.host.runtime_exception"
+             end if
+          end if
+       end if
+    else
+       err = "Unsupported #= form"
+       cls = "clotran.host.illegal_argument_exception"
+    end if
+    if (len(err) == 0 .and. tctx%has_error) then
+       call gce_error(s=err)
+       cls = "clotran.host.runtime_exception"
+       call gce_clear_error()
+       out = gc_nil()
+    end if
+    call vs_leave(vst, base)
+  end subroutine eval_reader_hook
+
+  ! (f a b) as (f (quote a) (quote b)): a call whose arguments arrive as
+  ! they were read
+  function quoted_args_call(form, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, items
+    integer :: base, i
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    items = coll_to_vector(strip_meta(form), [roots, form])
+    call vs_set(vst, base + 1, items)
+    call vs_set(vst, base + 2, gcl_empty([roots, vs_get(vst, base + 1)]))
+    do i = gcv_count(vs_get(vst, base + 1)) - 1, 1, -1
+       call vs_set(vst, base + 3, sq_list2("quote", gcv_nth(vs_get(vst, base + 1), i), [roots, vs_get(vst, base + 1), &
+            vs_get(vst, base + 2)]))
+       call vs_set(vst, base + 2, gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 2), &
+            [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+    end do
+    out = gcl_cons(gcv_nth(vs_get(vst, base + 1), 0), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
+  end function quoted_args_call
+
   ! The reader's expander: a fresh gensym map for this syntax-quote and
   ! the outer one back after (SyntaxQuoteReader binds GENSYM_ENV), and
   ! an error handed to the reader to raise as its own. The reader's
@@ -6571,7 +6699,14 @@ contains
     call gc_global_keep(gensym_root, vs_get(vst, base + 2))
     if (tctx%has_error) then
        call gce_error(s=err)
-       cls = "clotran.host.illegal_state_exception"
+       ! the class of what was raised -- "splice not in list" an
+       ! IllegalStateException, an array class not found its own
+       block
+         type(gc_value) :: th
+         th = thrown_value()
+         cls = "clotran.host.illegal_state_exception"
+         if (th%tag /= GCT_NIL) call class_name_of(th, s=cls)
+       end block
        call gce_clear_error()
        out = gc_nil()
     end if
@@ -6658,15 +6793,36 @@ contains
 
     slash = index(t, "/")
     if (slash > 1 .and. slash < n) then
+       ! a name with a dot in it stays as written (resolveSymbol's first test)
+       if (index(t(slash+1:), ".") > 1) return
        tgt = alias_in(nsv, t(1:slash-1), [sym])
-       if (gc_kind(tgt) /= OBJ_NS) return
+       if (gc_kind(tgt) /= OBJ_NS) then
+          ! Sym/N, N a digit from 1: an array class, its component class
+          ! named in full, or the ClassNotFoundException clj's lookup throws
+          ! (HostExpr.maybeArrayClass)
+          if (n - slash == 1 .and. index("123456789", t(n:n)) > 0) then
+             block
+               character(len=:), allocatable :: k, c
+               logical :: ok
+               call array_class_key(t, k, ok)
+               if (ok) then
+                  call canon_class(t(1:slash-1), c=c)
+                  out = gc_sym(c // t(slash:), [sym])
+               else
+                  call raise_class("clotran.host.class_not_found_exception", k, [sym])
+               end if
+             end block
+          end if
+          return
+       end if
        block
           call gcn_name(tgt, s=dlt_1)
           out = gc_sym(dlt_1 // "/" // t(slash+1:), [sym])
        end block
        return
     end if
-    if (t == "&" .or. t == "/") return
+    ! & stays as written; / is a name like any other, clojure.core//
+    if (t == "&") return
     if (t(1:1) == ".") return
     ! Ctor. -- the class part resolved, as syntaxQuote does
     if (t(n:n) == ".") then
