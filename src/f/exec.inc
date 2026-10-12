@@ -2439,6 +2439,25 @@
        out = vs_get(vst, base + 5)
     else
        out = gc_obj(OBJ_INST, [vs_get(vst, base + 5), gcv_empty([vs_get(vst, base + 5)]), gc_nil()], [vs_get(vst, base + 5)])
+       call vs_set(vst, base + 4, out)
+       ! a reify's class is a class too: its interfaces are its supers, as a
+       ! deftype's are (host_super), so isa? and a multimethod on an
+       ! interface see them -- pprint's on IDeref printed a future as an
+       ! #object. Registered once per reify form, and without the methods,
+       ! which close over this instance's locals and would be kept forever
+       block
+         character(len=:), allocatable :: rn
+         type(gc_value) :: nm
+         nm = gcv_nth(vs_get(vst, base + 3), 0)
+         call gc_ref_text(nm%ref, s=rn)
+         if (gc_kind(find_type(rn)) /= OBJ_TYPE) then
+            ty = gc_obj(OBJ_TYPE, [gcv_nth(vs_get(vst, base + 3), 0), gcv_nth(vs_get(vst, base + 3), 1), &
+                 gc_nil(), gcv_nth(vs_get(vst, base + 3), 2)], [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+            call vs_set(vst, base + 2, ty)
+            call register_type(vs_get(vst, base + 2))
+         end if
+       end block
+       out = vs_get(vst, base + 4)
     end if
     call vs_leave(vst, base)
   end function exec_deftype

@@ -959,14 +959,23 @@ contains
   subroutine fn_class_name(fn, s)
     type(gc_value), intent(in) :: fn
     character(len=:), allocatable, intent(out) :: s
-    character(len=:), allocatable :: who, rest, seg, m
-    integer :: sl
+    character(len=:), allocatable :: who
     if (gc_kind(fn) == OBJ_BUILTIN) then
        call text_of(gc_slot(fn, 1), s=who)
        who = "clojure.core/" // who
     else
        call fn_who(fn, who)
     end if
+    call who_class_name(who, s)
+  end subroutine fn_class_name
+
+  ! The class of ns/outer/inner: ns$outer$inner, each part munged, as
+  ! clj's compiler names a fn's (and a reify's) class
+  subroutine who_class_name(who, s)
+    character(len=*), intent(in) :: who
+    character(len=:), allocatable, intent(out) :: s
+    character(len=:), allocatable :: rest, seg, m
+    integer :: sl
     sl = index(who, "/")
     if (sl <= 1 .or. sl == len(who)) then
        s = "clotran.host.a_function"
@@ -992,7 +1001,7 @@ contains
        s = s // "$" // m
        if (len(rest) == 0) exit
     end do
-  end subroutine fn_class_name
+  end subroutine who_class_name
 
   ! The call stack as text, innermost first, taken when an error is
   ! raised. Each line names a function and where in it execution is
@@ -10375,7 +10384,7 @@ contains
           if (.not. hit) then
              ! a reify implements IObj; a deftype instance does not
              call gcp_str(gc_slot(gc_slot(a, 1), 1), .false., s=dlt_1)
-             if (index(dlt_1, "clotran.reify__") /= 1) then
+             if (index(dlt_1, "$reify__") == 0 .and. index(dlt_1, "clotran.reify__") /= 1) then
                 call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // " cannot be cast to class clotran.host.i_obj", &
                      [vs_get(vst, base + 1)])
                 call vs_leave(vst, base)
@@ -19309,7 +19318,7 @@ contains
     if (index(t, "/") > 0) return
     if (gc_kind(find_type(t)) == OBJ_TYPE) then
        names_a_class = .true.
-    else if (index(t, "clotran.reify__") == 1 .or. index(t, "clotran.proxy__") == 1) then
+    else if (index(t, "$reify__") > 0 .or. index(t, "clotran.proxy__") == 1) then
        ! a reify's class is never registered (analyze_reify), but it
        ! is a class: isa? Object, so print-method reaches Object
        names_a_class = .true.

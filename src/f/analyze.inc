@@ -4055,6 +4055,7 @@
     logical, intent(in) :: is_proxy
     type(gc_value) :: nd, ifaces, methods, spec
     character(len=24) :: buf
+    character(len=:), allocatable :: cname, who
     integer :: base
 
     tctx => ctx_self()
@@ -4083,13 +4084,20 @@
        call vs_set(vst, base + 4, methods)
        write(buf, '(I0)') gc_next(proxy_id)
        buf = "clotran.proxy__" // trim(buf)
+       cname = trim(buf)
     else
        if (.not. ifaces_known(vs_get(vst, base + 3))) then
           call vs_leave(vst, base)
           return
        end if
+       ! named as clj's compiler names it, after the fn it is written in:
+       ! clojure.core$future_call$reify__3, so pprint's map-ref-type calls
+       ! a future a Future (a top-level one is user$reify__3)
        write(buf, '(I0)') gc_next(reify_id)
-       buf = "clotran.reify__" // trim(buf)
+       who = ""
+       if (allocated(tctx%fn_path)) who = tctx%fn_path
+       if (len(who) == 0) call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=who)
+       call who_class_name(who // "/reify__" // trim(buf), cname)
        ! reify always implements IObj: the reify macro does not say so,
        ! NewInstanceExpr adds it, and its meta/withMeta are the
        ! instance's own slot (B_META, B_WITHMETA)
@@ -4101,7 +4109,7 @@
        end if
     end if
     call vs_set(vst, base + 5, gcv_empty([vs_get(vst, base + 3), vs_get(vst, base + 4)]))
-    spec = type_spec(trim(buf), vs_get(vst, base + 5), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 2))
+    spec = type_spec(cname, vs_get(vst, base + 5), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 2))
     if (tctx%has_error) then
        call vs_leave(vst, base)
        return
