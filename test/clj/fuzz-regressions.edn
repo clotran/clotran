@@ -180,4 +180,9 @@
  (try (nth {} [0]) (catch clotran.host.class_cast_exception e :cast))
  (try (nth (transient [1 2]) :k) (catch clotran.host.class_cast_exception e :cast))
  (nth [1 2] 1.5)
+ ;; a Var defined in a compiled fn's body is read where it is called, not at entry
+ (do (defn gq1 [] 1) (gq1))
+ (do (def gq2 (fn [] 2)) (gq2))
+ (do (deftype TQ3 [a]) (.-a (->TQ3 3)))
+ (let [x 4] (defn gq4 [] x) (gq4))
 ]

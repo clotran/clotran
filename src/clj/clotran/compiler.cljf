@@ -700,6 +700,29 @@ end module clotran_rt_decl
   (when-let [i (get (:pidx st) {:kind :site :value (:node nd)})]
     [(str "call clotran_site(cf_pool, " (+ (:offset st) i) "_c_int)")]))
 
+(defn- linked?
+  "Whether a Var read by the fn `who` (ns/name) is DIRECT-LINKED, so
+  dereffed once at entry: a clojure.* fn reading a clojure.* Var that is
+  not dynamic, redef, a protocol fn or a macro, as DEVIATIONS 55 links
+  core's calls."
+  [who v]
+  (let [m (meta v)]
+    (and (str/starts-with? (str who) "clojure.")
+         (str/starts-with? (str (:ns m)) "clojure.")
+         (not (or (:dynamic m) (:redef m) (:protocol m) (:macro m))))))
+
+(defn- pooled-read
+  "A pooled node's value: [code slot state]. A Var is dereffed HERE, at
+  each use, as clj's compiled code reads a Var outside clojure.* and as
+  the interpreter does: fetched once at entry, a Var the body defines or
+  redefines -- (defn g ...) then (g) -- was still its value at entry. A
+  direct-linked one (linked?) was dereffed at entry."
+  [nd st]
+  (let [p (pooled nd) s (get (:pool st) (pkey p))]
+    (if (and (= :var (:kind p)) (not (linked? (:who st) (:value p))))
+      (let [[t st] (fresh st)] [[(str "call clotran_deref(b + " t ", b + " s ")")] t st])
+      [[] s st])))
+
 (defn- slow-call
   "The GENERIC call, for when the fast path cannot answer: an overflow
   about to happen, or an operand whose tag is not a number. It is the
@@ -711,7 +734,7 @@ end module clotran_rt_decl
   expression is already a slot holding a value."
   [nd operands r rt st]
   (let [head (first (:children nd))
-        hs (get (:pool st) (pkey (pooled head)))
+        [hc hs st] (pooled-read head st)
         n (count operands)
         [blk st] (reduce (fn [[bl st] _] (let [[s st'] (fresh st)] [(conj bl s) st']))
                          [[] st] (range n))
@@ -721,6 +744,7 @@ end module clotran_rt_decl
                       (str "call clotran_copy(b + " s ", b + " e ")")
                       (box s t e)))
                   blk operands)
+             hc
              (site nd st)
              [(str "st = clotran_call_slots(b + " res ", b + " hs ", b + "
                    (dec (first blk)) ", " n "_c_int)")]
@@ -1013,6 +1037,9 @@ end module clotran_rt_decl
     (cond
       ;; a :var or :const entry IS the value; a :node entry is a subtree
       ;; and has to be run
+      (and (= :var (:kind (pooled nd))) (not (linked? (:who st) (:value (pooled nd)))))
+      [[(str "call clotran_deref(b + " dst ", b + " (get (:pool st) (pkey (pooled nd))) ")")] st]
+
       (#{:var :const} (:kind (pooled nd)))
       [[(str "call clotran_copy(b + " dst ", b + " (get (:pool st) (pkey (pooled nd))) ")")] st]
 
@@ -1142,9 +1169,9 @@ end module clotran_rt_decl
   [nd st]
   (if (not (compiled-ops (:op nd)))
     (fallback nd st)
-    (if-let [p (pooled nd)]
-      ;; already in its slot from the top of the procedure
-      [[] (get (:pool st) (pkey p)) st]
+    (if (pooled nd)
+      ;; in its slot from the top of the procedure; a Var dereffed here
+      (pooled-read nd st)
       (let [t (infer nd (:env st))]
         (case (:op nd)
           :const (let [[s st] (fresh st)]
@@ -1680,7 +1707,7 @@ end module clotran_rt_decl
                            :when (some #(re-find (re-pattern (str "b \\+ " s "\\b")) %) body)]
                        (str "    call clotran_pool_get(b + " s ", cf_pool, "
                             (+ offset (pidx p)) "_c_int)\n"
-                            (when (= :var (:kind p))
+                            (when (and (= :var (:kind p)) (linked? who (:value p)))
                               (str "    call clotran_deref(b + " s ", b + " s ")\n")))))
           (apply str (map #(str "    " % "\n") body))
           "    call clotran_frame_done(b)\n"
