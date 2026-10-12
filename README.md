@@ -110,15 +110,17 @@ keeps every `deftest` whose symbols lie in the intersection of
 `clojure.core` and `cljs.core` -- the language, as two implementations
 agree on it -- and leaves out the ones that name a clj class, a
 member call or a `clojure.core` function ClojureScript never had.
-That keeps 314 of 578 tests, in 39 files that all load. **2170
-passing assertions** against 235 failures and 370 errors, so **78% of
-the assertions that executed** (measured 2026-09-19).
+That keeps 312 tests, in 39 files that all load and run: **2719
+passing assertions, none failing and none erroring** (measured
+2026-10-12).
 
 That denominator is assertions that executed, not assertions that
-exist: a test that errors part-way contributes only what ran. The 67
-vendored namespaces also run verbatim, for reference, at 53% of
-executed assertions; clj-shaped half of them is why that number is
-not the one to watch.
+exist: a test that errors part-way contributes only what ran. The 66
+vendored test namespaces also run verbatim, for reference: 2297 of the 2567
+assertions that executed pass (89%), and two namespaces, `param-tags`
+and `rt`, which test clj's host's method values and its RT class, stop
+before they report. clj-shaped as half of them are, that is not the
+number to watch.
 
 **Real Fortran arrays**, which is the one thing this host has that the
 clj does not:
@@ -448,9 +450,9 @@ design.
 
 | | |
 |---|---|
-| speed | measured by `scripts/bench`, the same forms on a warmed clj and on clotran: a function call ~1.3 µs, a loop/recur iteration ~1.7 µs, a reduce step over a range ~1.3 µs. Against clj that is 23x on plain recursion, 39x on a reduce building a map, 40x on fib, 120x on loop/recur, 454x on `(reduce + (range n))` and 514x on `into` over a mapped range. Between one and a half and two and a half orders of magnitude, an AST interpreter's honest number; PLAN.md step 8 has the JIT decision |
-| startup | 0.2 s from the image, and on a terminal the REPL opens by naming the build -- clotran's `VERSION`, the Clojure and ClojureScript commits the language is pinned to (`test/clj/derived/PROVENANCE.md`, written by the deriver), the compiler, the machine and the image's hash; a pipe gets no banner: `build/core.image` is the heap as it stood once core.clj and spec had loaded (`make image`, built with the binary), read back in place of loading them; from source, 1.4 s. An image belongs to one build of the binary and to the sources it holds, and is left alone with a note when either has changed; `CLOTRAN_IMAGE=0` loads from source |
-| memory | 125 MB after starting from the image (196 MB after loading core.clj from source), and a walk over a lazy seq stays there: `last`, `nth`, `count` and `dorun` over 10^6 elements of a range, an `iterate` or a mapped seq run at the baseline (PLAN.md step 16: the collector ages survivors before promoting them, and a builtin lets go of its arguments before it walks); the baseline is the heap core.clj and spec leave behind |
+| speed | measured by `scripts/bench` 2026-10-12, the same forms on a warmed clj and on clotran, interpreted: 2x to 17x slower on general code -- plain recursion 2x, fib 3x, a reduce building a map 6x, `(dorun (take 1e6 (range)))` 9x, `(apply + (take 1e6 (range)))` 16x, `into` over a mapped range 17x -- and 35x to 209x on numeric loops over arrays written inline. The same loops compiled by `clotran compile` (pure Fortran, below) take 1.0 to 3.7 ms where clj takes 13 to 17. An AST interpreter's honest number; compiling core is the work that closes the first gap (PLAN.md) |
+| startup | 0.17 s from the image, and on a terminal the REPL opens by naming the build -- clotran's `VERSION`, the Clojure and ClojureScript commits the language is pinned to (`test/clj/derived/PROVENANCE.md`, written by the deriver), the compiler, the machine and the image's hash; a pipe gets no banner: `build/core.image` is the heap as it stood once core.clj and spec had loaded (`make image`, built with the binary), read back in place of loading them; from source, about 0.9 s. An image belongs to one build of the binary and to the sources it holds, and is left alone with a note when either has changed; `CLOTRAN_IMAGE=0` loads from source |
+| memory | 140 MB after starting from the image (165 MB after loading core.clj from source; measured 2026-10-12), and a walk over a lazy seq stays there: `last`, `nth`, `count` and `dorun` over 10^6 elements of a range, an `iterate` or a mapped seq run at the baseline (PLAN.md step 16: the collector ages survivors before promoting them, and a builtin lets go of its arguments before it walks); the baseline is the heap core.clj and spec leave behind |
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's `send` actions run in order on a pool of worker threads with a run queue each, work stealing and a batch cap, designed in ACL2 (`model/agents.lisp`, PLAN.md 24) and `send-off` actions on a thread of the agent's own, a send inside an action or a transaction held until it ends and a failed agent's queue kept for `restart-agent` (DEVIATIONS 29); `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
