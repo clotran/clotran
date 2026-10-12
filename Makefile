@@ -79,14 +79,17 @@ TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
 # large-function-insns, and the executor is one very large function.
 # Measured 2026-10-01: the lazy sum 1272 -> 1167 ms, a call 146 -> 139
 # ns; a full build 12 s longer.
-FCFLAGS_gfortran = -frecursive -flto=auto -ffat-lto-objects -O3 -fstack-arrays \
+# -ffree-line-length-none: gfortran before 14 holds a free-form line to
+# 132 columns, as Fortran 2018 did (Debian 12's gfortran 12 refused 115 of
+# ours); flang has no limit
+FCFLAGS_gfortran = -frecursive -ffree-line-length-none -flto=auto -ffat-lto-objects -O3 -fstack-arrays \
 	--param large-function-insns=200000 --param large-function-growth=2000 --param inline-unit-growth=400
 # flang is the correctness oracle, and optimised it checks the same code
 # in half the time (measured 2026-10-03: the oracle 71 s unoptimised)
 FCFLAGS_flang = -O2
 # -fno-lto, not merely no -flto: gfortran sees the optimiser's code in a
 # fat object and runs it anyway -- 12 s an abi_test link, 0.1 s without
-TESTLDFLAGS_gfortran = -frecursive -fno-lto
+TESTLDFLAGS_gfortran = -frecursive -ffree-line-length-none -fno-lto
 TESTLDFLAGS_flang =
 
 # Pinned, not just "whatever's on PATH": subtle compiler-specific

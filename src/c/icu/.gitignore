@@ -24,3 +24,7 @@ test/testdata/rules.mk
 # tools/ctestfw/libicutest.a and similar) -- *.a anywhere in this tree
 # is always a build product, never vendored source.
 *.a
+
+# The Makefile's stamp that ICU is built: committed once, it told every
+# fresh checkout ICU was built when its libraries were not there
+source/.built
