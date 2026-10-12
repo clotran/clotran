@@ -3914,7 +3914,30 @@ contains
     end if
     is_class_name = (t(last_dot+1:last_dot+1) >= "A" .and. &
          t(last_dot+1:last_dot+1) <= "Z")
+    ! a deftype's name is a class whatever its case: (deftype fooBar ...)
+    ! is user.fooBar in clj, and clojure.reflect's is hostReflector
+    if (.not. is_class_name .and. last_dot > 0) is_class_name = declared_type_text(t)
   end function is_class_name
+
+  ! Whether a deftype* has declared this class name, read by its text:
+  ! nothing allocated, as is_class_name's callers may hold values the
+  ! collector cannot see
+  logical function declared_type_text(t) result(yes)
+    character(len=*), intent(in) :: t
+    type(gc_value), allocatable :: ks(:), vals(:)
+    character(len=:), allocatable :: kt
+    integer :: i
+    yes = .false.
+    if (.not. gc_root_live(declared_root)) return
+    call gca_entries(gc_root_get(declared_root), ks, vals)
+    do i = 1, size(ks)
+       call gc_class_text(ks(i), kt)
+       if (kt == t) then
+          yes = .true.
+          return
+       end if
+    end do
+  end function declared_type_text
 
   ! (Classname/member args) -- namesStaticMember, which Clojure decides
   ! by the qualifier not being a known namespace. Same rule here.

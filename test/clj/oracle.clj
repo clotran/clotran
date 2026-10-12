@@ -3390,3 +3390,6 @@ x10
 ;; method Vars, declared and then bound so, answered false
 (do (defprotocol OPB (opb [x])) (declare ozz) (alter-var-root (var ozz) (constantly 5))
     [(bound? (var opb)) (bound? (var clojure.core.protocols/coll-reduce)) (bound? (var ozz)) ozz])
+;; a deftype's name is a class whatever its case, as clojure.reflect's
+;; hostReflector is
+(do (deftype oracleLower [x]) [(.-x (oracleLower. 1)) (.-x (->oracleLower 2)) (str (class (->oracleLower 3)))])
