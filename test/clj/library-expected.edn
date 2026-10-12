@@ -1,0 +1,16 @@
+;; The assertions of Clojure's own library tests (scripts/run-library-tests)
+;; that fail here because they test clj's host, not the language: each is a
+;; DEVIATIONS entry. A failure in :test whose report holds :text is expected;
+;; any other failure fails the gate, and an entry nothing matches is stale and
+;; fails it too.
+[{:deviation 28 :test "test-flush-underlying-prn" :text "proxy-super flush"}
+ {:deviation 28 :test "test-flush-underlying-pprint" :text "proxy-super flush"}
+ ;; a semaphore and a Gregorian calendar: the host's classes, not modelled here
+ {:deviation 4 :test "pprint-datastructures-tests" :text "clotran.host.semaphore"}
+ {:deviation 4 :test "test-pprint-calendar" :text "clotran.host.gregorian_calendar"}
+ ;; pprint names a reference by its class's simple name: clj's Agent, Atom,
+ ;; Ref and Delay are clotran.host.agent, atom, ref and delay here
+ {:deviation 67 :test "pprint-datastructures-tests" :text "#<Agent@"}
+ {:deviation 67 :test "pprint-datastructures-tests" :text "#<Atom@"}
+ {:deviation 67 :test "pprint-datastructures-tests" :text "#<Ref@"}
+ {:deviation 67 :test "pprint-datastructures-tests" :text "#<Delay@"}]

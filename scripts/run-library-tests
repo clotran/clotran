@@ -18,7 +18,10 @@
 # clojure.zip, clojure.data, clojure.edn, clojure.template and
 # clojure.datafy are covered by test/clj/oracle.clj instead.
 #
-# A GATE: any failure or error is a non-zero exit.
+# A GATE: any failure or error is a non-zero exit -- except the ones
+# test/clj/library-expected.edn lists, each an assertion about clj's host
+# and a DEVIATIONS entry (scripts/library-expected checks the reports
+# against it, and an expectation nothing matches fails as well).
 #
 # The five run AT ONCE, each in a process of its own writing its own
 # files under build/libtests -- not /tmp, which two checkouts testing
@@ -54,12 +57,9 @@ for f in $NSS; do
   printf "%-44s tests=%-5s pass=%-6s fail=%-5s error=%-5s\n" "$ns" "$t" "$p" "$fl" "$e"
   total_test=$((total_test + t)); total_pass=$((total_pass + p))
   total_fail=$((total_fail + fl)); total_err=$((total_err + e))
-  if [ "$fl" != "0" ] || [ "$e" != "0" ]; then
-    grep -A3 -E '^(FAIL|ERROR)' $W/$f.out | head -20
-    bad=1
-  fi
 done
 echo "---"
 printf "%-44s tests=%-5s pass=%-6s fail=%-5s error=%-5s\n" "TOTAL" "$total_test" "$total_pass" "$total_fail" "$total_err"
+scripts/library-expected $W/*.out || bad=1
 [ "$bad" = "0" ] || { echo "LIBRARY TESTS FAILED"; exit 1; }
 echo "LIBRARY TESTS PASSED"

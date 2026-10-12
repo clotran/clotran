@@ -1,0 +1,23 @@
+#!/usr/bin/env bb
+;; library-expected OUT...: the FAIL and ERROR reports in run-library-tests'
+;; outputs, against test/clj/library-expected.edn. Prints each unexpected one
+;; and each stale expectation; exits 1 if there is either.
+(require '[clojure.edn :as edn] '[clojure.string :as str])
+
+(def expected (edn/read-string (slurp "test/clj/library-expected.edn")))
+
+;; a report: its "FAIL in (name)" line and the lines after it, to the next
+(defn reports [text]
+  (for [[_ test body] (re-seq #"(?ms)^(?:FAIL|ERROR) in \(([^)]+)\)(.*?)(?=^(?:FAIL|ERROR) in |^Ran \d|\z)" text)]
+    {:test test :body body}))
+
+(let [rs (mapcat (comp reports slurp) *command-line-args*)
+      matches (fn [e r] (and (= (:test e) (:test r)) (str/includes? (:body r) (:text e))))
+      unexpected (remove (fn [r] (some #(matches % r) expected)) rs)
+      stale (remove (fn [e] (some #(matches e %) rs)) expected)]
+  (doseq [r unexpected] (println "UNEXPECTED in" (str "(" (:test r) ")") (str/trim (subs (:body r) 0 (min 300 (count (:body r)))))))
+  (doseq [e stale] (println "STALE expectation, nothing matched it:" (pr-str e)))
+  (println (format "library-expected: %d reports, %d expected (DEVIATIONS %s), %d unexpected, %d stale"
+                   (count rs) (- (count rs) (count unexpected))
+                   (str/join ", " (sort (distinct (map :deviation expected)))) (count unexpected) (count stale)))
+  (System/exit (if (or (seq unexpected) (seq stale)) 1 0)))
