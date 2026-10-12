@@ -1,0 +1,82 @@
+#!/usr/bin/env bb
+;; dist-bundle: make an installed clotran relocatable (make dist, PLAN 35).
+;;
+;;   scripts/dist-bundle STAGE
+;;
+;; STAGE is a PREFIX make install filled: STAGE/bin/clotran,
+;; STAGE/lib/clotran/clotran-bin, and clotran-deps beside them. This
+;; carries every shared library the binary needs beyond the C library into
+;; STAGE/lib/clotran/lib, points the binary there by its own location
+;; ($ORIGIN on Linux, @executable_path on macOS), and rewrites the two
+;; commands in STAGE/bin to find their homes from where they are, so the
+;; directory runs wherever it is unpacked. On Linux the one system
+;; library left is glibc, no older than the build machine's; a static
+;; binary is not possible, as packages and clotran compile's libraries
+;; are dlopen'd into it and resolve its symbols.
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.string :as str])
+
+(def stage (str (fs/absolutize (or (first *command-line-args*)
+                                   (do (println "usage: scripts/dist-bundle STAGE") (System/exit 2))))))
+(def home (str stage "/lib/clotran"))
+(def bin (str home "/clotran-bin"))
+(def libdir (str home "/lib"))
+(defn sh [& args] (:out (apply p/shell {:out :string} args)))
+(fs/create-dirs libdir)
+
+;; what the C library and the loader are, and so stays the system's
+(def system-lib? #(re-find #"^(libc|libm|libpthread|libdl|librt|libresolv|libutil|ld-linux.*|linux-vdso)\.so" %))
+
+(defn linux []
+  (doseq [[_ name path] (re-seq #"(?m)^\s*(\S+) => (/\S+)" (sh "ldd" bin))
+          :when (not (system-lib? name))]
+    (fs/copy path (str libdir "/" name) {:replace-existing true})
+    (println "carried" name))
+  (p/shell "patchelf" "--set-rpath" "$ORIGIN/lib" bin)
+  ;; a carried library finds its fellows beside it
+  (doseq [f (fs/list-dir libdir)] (p/shell "patchelf" "--set-rpath" "$ORIGIN" (str f))))
+
+;; macOS: every library outside /usr/lib and /System, and theirs in turn
+;; -- an @rpath one found where the library naming it lives, as
+;; Homebrew's libgfortran names libquadmath and libgcc_s
+(defn deps-of [f]
+  (for [[_ ref] (re-seq #"(?m)^\s+(\S+) \(" (sh "otool" "-L" f))
+        :when (not (re-find #"^/(usr/lib|System)/" ref))
+        :when (or (str/starts-with? ref "/") (str/starts-with? ref "@rpath/"))]
+    [ref (if (str/starts-with? ref "@rpath/")
+           (str (fs/parent (fs/canonicalize f)) "/" (subs ref 7))
+           ref)]))
+
+(defn macos []
+  (loop [todo (deps-of bin) seen #{}]
+    (when-let [[_ path] (first todo)]
+      (let [nm (fs/file-name path)]
+        (if (or (seen nm) (not (fs/exists? path)))
+          (recur (rest todo) seen)
+          (let [dest (str libdir "/" nm)]
+            (fs/copy path dest {:replace-existing true})
+            (fs/set-posix-file-permissions dest "rwxr-xr-x")
+            (p/shell "install_name_tool" "-id" (str "@rpath/" nm) dest)
+            (println "carried" nm)
+            (recur (concat (rest todo) (deps-of path)) (conj seen nm)))))))
+  (doseq [f (cons bin (map str (fs/list-dir libdir)))]
+    (doseq [[ref _] (deps-of f) :when (str/starts-with? ref "/")]
+      (p/shell "install_name_tool" "-change" ref (str "@rpath/" (fs/file-name ref)) f)))
+  ;; each looks beside itself; a library may say so already
+  (p/shell {:continue true :err :string} "install_name_tool" "-add_rpath" "@executable_path/lib" bin)
+  (doseq [f (map str (fs/list-dir libdir))] (p/shell {:continue true :err :string} "install_name_tool" "-add_rpath" "@loader_path" f))
+  ;; a changed Mach-O must be signed again, or arm64 macOS kills it
+  (doseq [f (cons bin (map str (fs/list-dir libdir)))] (p/shell {:err :string} "codesign" "-s" "-" "-f" f)))
+
+(case (str/trim (sh "uname" "-s"))
+  "Linux" (linux)
+  "Darwin" (macos))
+
+;; the commands in bin, by their own place rather than the install's path
+(doseq [[cmd target] [["clotran" "lib/clotran/clotran"] ["clotran-deps" "lib/clotran-deps/bin/clotran-deps"]]
+        :let [f (str stage "/bin/" cmd)]
+        :when (fs/exists? f)]
+  (spit f (str "#!/bin/sh\n# " cmd ", from a clotran release: its home is beside this directory\n"
+               "here=$(cd \"$(dirname \"$0\")/..\" && pwd)\nexec \"$here/" target "\" \"$@\"\n")))
+(println "dist-bundle:" stage)

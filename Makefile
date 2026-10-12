@@ -215,7 +215,7 @@ unit-tests = gc_test persistent_vector_test persistent_list_test persistent_arra
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
 
-.PHONY: all crosscheck crosscheck-here clean compiled-core embed image install uninstall
+.PHONY: all crosscheck crosscheck-here clean compiled-core embed image install uninstall dist
 all: clotran-bin $(test-bins) $(B)/core.image $(B)/fc
 
 $(B) $(BT):
@@ -746,6 +746,19 @@ install: clotran-bin $(B)/fc
 	fi
 	@case ":$$PATH:" in *":$(CLOTRAN_BIN):"*) echo "clotran is installed: $(CLOTRAN_BIN)/clotran" ;; \
 	  *) echo "clotran is installed: $(CLOTRAN_BIN)/clotran -- $(CLOTRAN_BIN) is not on your PATH; add it" ;; esac
+
+# A release: what make install puts in a PREFIX, made relocatable --
+# the shared libraries the binary needs beyond the C library carried
+# beside it, the commands finding their homes from where they are
+# (scripts/dist-bundle) -- as build/dist/NAME.tar.gz. A Linux one is
+# built on an old glibc (scripts/dist-linux) so it runs on any newer one.
+DIST_NAME = clotran-$(shell cat VERSION)-$(shell uname -s | tr A-Z a-z)-$(shell uname -m)
+dist: clotran-bin $(B)/fc
+	rm -rf $(B)/dist
+	$(MAKE) install PREFIX=$(CURDIR)/$(B)/dist/$(DIST_NAME)
+	scripts/dist-bundle $(B)/dist/$(DIST_NAME)
+	cd $(B)/dist && tar czf $(DIST_NAME).tar.gz $(DIST_NAME)
+	@echo "dist: $(B)/dist/$(DIST_NAME).tar.gz"
 
 uninstall:
 	rm -rf "$(CLOTRAN_LIB)" "$(CLOTRAN_LIB).new" "$(CLOTRAN_BIN)/clotran"

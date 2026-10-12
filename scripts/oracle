@@ -121,6 +121,10 @@
         core (str repo "/src/clj/clojure/core.clj")
         go (fn [env] (let [r (p/shell {:dir (str dir) :in "" :out :string :err :string :continue true :extra-env env}
                                       bin core (str gen))]
+                       ;; a run that stops early says how: its status and its last words
+                       (when-not (zero? (:exit r))
+                         (println "oracle-gc: a run" (pr-str env) "ended with status" (:exit r) "--"
+                                  (str/join " | " (take-last 3 (str/split-lines (str (:err r)))))))
                        (->> (str/split-lines (:out r))
                             (remove #(or (str/starts-with? % "note:") (str/starts-with? % "user=>") (str/blank? %)))
                             (mapv #(str/replace % #"0x[0-9a-f]+" "0x")))))

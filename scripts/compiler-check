@@ -392,9 +392,10 @@
                  "(defn lcg-sum [n] (loop [i 0 x 12345 acc 0.0] (if (< i n) (let [x (mod (+ (* x 1103515245) 12345) 2147483648)] (recur (inc i) x (+ acc (/ (double x) 2147483648.0)))) acc)))\n"))
   ;; a pure loop in a future runs with the mutators released (PLAN step
   ;; 13): the main thread allocates and collects while it runs, and the
-  ;; loop (~0.6 s compiled) is still going when that is done
+  ;; loop (~2.4 s compiled; 0.6 s was outrun under a loaded Linux gate)
+  ;; is still going when that is done
   (spit stall (str "(load-file \"" src "\")\n"
-                   "(let [f (future (cc-space/lcg-sum 500000000))]\n"
+                   "(let [f (future (cc-space/lcg-sum 2000000000))]\n"
                    "  (apply + (take 100000 (range)))\n"
                    "  (prn [:pure-loop-still-running (not (realized? f)) :sum (< 0.0 (deref f))]))\n"))
   (spit run (str "(load-file \"" src "\")\n"

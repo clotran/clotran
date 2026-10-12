@@ -22,8 +22,11 @@
   (loop [waited 0]
     (if-let [[_ n] (some #(re-find #"a REPL on port (\d+)" %) (lines))]
       (parse-long n)
-      (if (or (> waited 600) (not (p/alive? proc)))
-        (fail "the solver ended without serving:" (pr-str (lines)))
+      ;; two minutes: the solver loads core.clj from source first, and a
+      ;; gate's both halves at once in a container took over thirty seconds
+      (if (or (> waited 2400) (not (p/alive? proc)))
+        (fail "the solver ended without serving:" (pr-str (lines))
+              (when-not (p/alive? proc) (let [r @proc] (str "-- exit " (:exit r) ", stderr: " (pr-str (:err r))))))
         (do (p/shell "sleep" "0.05") (recur (inc waited)))))))
 
 ;; the REPL, through nc: a client that is not the solver's
