@@ -2,9 +2,10 @@
 # Alpine 3.20, musl 1.2.5, gfortran 13. A dynamically linked musl binary
 # dlopens packages as the glibc one does -- it is only a STATIC binary
 # that cannot -- so Alpine gets a tarball of its own, built here and run
-# on Alpine 3.20 and newer. babashka is its static build.
+# on Alpine 3.20 and newer. babashka, a build tool only, is its "static"
+# build, which on aarch64 still wants glibc's loader: gcompat gives it one.
 FROM alpine:3.20
-RUN apk add --no-cache build-base gfortran bash curl git make patchelf tar coreutils
+RUN apk add --no-cache build-base gfortran bash curl git make patchelf tar coreutils gcompat
 RUN curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install -o /tmp/bbi \
  && bash /tmp/bbi --version 1.3.185 --static && rm /tmp/bbi
 WORKDIR /src
