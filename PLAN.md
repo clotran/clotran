@@ -5294,7 +5294,10 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    binary. The sibling repositories stay local until James says.
 5. *The version.* VERSION 1.0.0, the pinned Clojure release named, a
    stated policy for what a minor and a patch may change (DEVIATIONS
-   entries, the ABI, the package format).
+   entries, the ABI, the package format). Begun 2026-10-12: VERSION is
+   1.0.0-rc.1 and README's Versions section states the policy; 1.0.0
+   itself is James's to tag, after `make fuzz-all` at full size, as
+   CLAUDE.md asks of a release candidate.
 6. *Windows*, last: the mingw build under Wine as the quick check, a
    real runner as the authority -- or 1.1, named as such.
 

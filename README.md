@@ -641,6 +641,37 @@ That's the trade, and it's the right way round: the friction is in the
 value representation, which is a solved problem in any language, and
 the payoff is at the interop boundary, which is not.
 
+## Versions
+
+clotran is `1.0.0-rc.1`: the release candidate of 1.0, which is the
+language and nothing else -- the binary, its image, core and the
+libraries vendored from Clojure, the launcher and, beside it,
+`clotran-deps` (`PLAN.md` step 35). It runs Clojure **1.12.6**: the
+vendored `core.clj` and test suite are that release (`upstream/`), and
+`clj`, the oracle every behaviour is checked against, is pinned to it.
+
+What a release may change, by its number:
+
+- **A patch** (1.0.x) fixes. A difference from clj made smaller, or a
+  bug fixed, with its oracle case or regression; a DEVIATIONS entry
+  resolved or narrowed toward clj. Nothing a correct program relies on
+  changes, the compiled-code ABI (`clotran.loader/abi`, 5) and the
+  package format (`PACKAGES.md`) stay as they are, and a library
+  compiled by 1.0.0 loads.
+- **A minor** (1.x) adds. New libraries and packages, new `clotran.*`
+  names, the Clojure release moved to a later 1.12 patch, a new entry
+  point in the ABI. A DEVIATIONS entry may be added only as a host limit
+  or by design, saying why. The ABI version moves only for an addition
+  an older library does not need, and an older library still loads.
+- **A major** (2.0) may break. An ABI change that refuses older
+  compiled libraries, an incompatible package format, a Clojure minor
+  release (1.13), or a by-design deviation reversed in a way a correct
+  program can see.
+
+The heap image (`build/core.image`) is not a format anything keeps: a
+binary refuses an image from another build and rebuilds it from the
+sources.
+
 ## Status
 
 `PLAN.md` is where this is going and why, in order. `NOTES.md` is the
