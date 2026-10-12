@@ -1,0 +1,82 @@
+#!/usr/bin/env bb
+;; readme-check: README.md's examples are verified output, so run them.
+;;
+;;   scripts/readme-check [README.md]
+;;
+;; Two kinds of block are checked, each in a fresh ./clotran:
+;;
+;;   ```clojure blocks with `;=>` -- every form is evaluated in order, and
+;;     a form whose line ends `;=> v` must print (pr-str) as v; the text
+;;     after a second `;` is a comment.
+;;   ``` blocks whose lines begin `user=> ` -- a REPL session: the forms
+;;     after each prompt, `[1] user=> ` at a break's nested one too (with
+;;     `  #_=> ` continuation lines; a `$ ` line is the shell's) are piped to
+;;     ./clotran, and what it prints must be the block's other lines.
+;;
+;; Any other block is shell, Fortran or output a check of its own owns,
+;; and is counted, not run. Exit 1 on any difference.
+(require '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[edamame.core :as e])
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def readme (or (first *command-line-args*) (str repo "/README.md")))
+
+(defn blocks [text]
+  (loop [ls (map-indexed vector (str/split-lines text)) cur nil out []]
+    (if-let [[i l] (first ls)]
+      (cond (and (nil? cur) (str/starts-with? l "```")) (recur (rest ls) {:lang (subs l 3) :line (inc i) :lines []} out)
+            (and cur (str/starts-with? l "```")) (recur (rest ls) nil (conj out cur))
+            cur (recur (rest ls) (update cur :lines conj l) out)
+            :else (recur (rest ls) cur out))
+      out)))
+
+(defn run-clotran [stdin & files]
+  (let [r (apply p/shell {:out :string :err :string :in stdin :continue true :dir repo :timeout 120000}
+                 (str repo "/clotran") files)]
+    (str/join "\n" (remove #(re-find #"^note: " %) (str/split-lines (str (:out r) (:err r)))))))
+
+;; a ```clojure block: each form, and what its last line says it is
+(defn check-eval [{:keys [line lines]}]
+  (let [src (str/join "\n" lines)
+        forms (e/parse-string-all src {:all true :row-key :row :col-key :col :end-row-key :end-row :end-col-key :end-col :auto-resolve name :read-cond :allow :features #{:cljf}})
+        expect (fn [f] (let [l (nth lines (dec (:end-row (meta f))))]
+                         (when-let [[_ v] (re-find #";=>\s*(.*)$" l)]
+                           (str/trim (first (str/split v #"\s;"))))))
+        ;; each form's own text, from where it starts to where it ends
+        texts (for [f forms]
+                (let [m (meta f) a (dec (:row m)) b (:end-row m)
+                      ls (subvec lines a b)
+                      ls (update ls (dec (count ls)) #(subs % 0 (dec (:end-col m))))]
+                  (subs (str/join "\n" ls) (dec (:col m)))))
+        prog (str/join "\n" (map-indexed (fn [i t] (str "(let [rc-v (do " t "\n)] (println \"RC" i "\" (pr-str rc-v)))")) texts))
+        f (str (fs/create-temp-file {:prefix "readme" :suffix ".cljf"}))]
+    (spit f prog)
+    (let [out (run-clotran "" f)
+          got (into {} (for [[_ i v] (re-seq #"(?m)^RC(\d+) (.*)$" out)] [(parse-long i) v]))]
+      (for [[i fm] (map-indexed vector forms)
+            :let [want (expect fm)]
+            :when (and want (not= want (get got i)))]
+        {:line (+ line (:end-row (meta fm))) :want want :got (or (get got i) (last (str/split-lines out)))}))))
+
+;; a REPL session: input after the prompts, the rest is output
+(defn check-repl [{:keys [line lines]}]
+  (let [input (str/join "\n" (keep #(or (second (re-find #"^(?:\[\d+\] )?user=> (.*)$" %)) (second (re-find #"^  #_=> (.*)$" %))) lines))
+        want (remove #(re-find #"^((\[\d+\] )?user=> |  #_=> |\$ )" %) lines)
+        out (run-clotran (str input "\n"))
+        got (->> (str/split-lines out) (map #(str/replace % #"^(((\[\d+\] )?user|#_)=> )+" "")) (remove str/blank?))]
+    (when (not= (vec want) (vec got))
+      [{:line line :want (str/join " | " want) :got (str/join " | " got)}])))
+
+(let [bs (blocks (slurp readme))
+      evals (filter #(and (= "clojure" (:lang %)) (some (fn [l] (str/includes? l ";=>")) (:lines %))) bs)
+      repls (filter #(and (= "" (:lang %)) (some (fn [l] (str/starts-with? l "user=> ")) (:lines %))) bs)
+      bad (concat (mapcat check-eval evals) (mapcat check-repl repls))]
+  (doseq [{:keys [line want got]} bad]
+    (println (str "README.md:" line))
+    (println "  README: " want)
+    (println "  clotran:" got))
+  (println (format "readme-check: %d blocks run (%d evaluated, %d REPL sessions) of %d, %d differ"
+                   (+ (count evals) (count repls)) (count evals) (count repls) (count bs) (count bad)))
+  (System/exit (if (seq bad) 1 0)))

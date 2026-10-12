@@ -12,7 +12,7 @@ where clj stands, and the language comes from Clojure's own source.
 $ make && ./clotran
 user=> (defn greet [who]
   #_=>   (str "hello, " who))
-#'greet
+#'user/greet
 user=> (greet "world")
 "hello, world"
 user=> (->> (range 20) (filter odd?) (partition-all 3) (map vec))
@@ -131,8 +131,11 @@ The bytes ARE a Fortran array at an address the collector never moves,
 which is what a Fortran library expects to be handed -- and is:
 
 ```clojure
-(def a (f/make-array "real8" 2 3))    ; fill with 1..6, row-major reading
-(def b (f/make-array "real8" 3 2))    ; 7..12
+(alias 'f 'fortran)
+(def a (f/make-array "real8" 2 3))    ; 1 2 3 / 4 5 6
+(doseq [i (range 2) j (range 3)] (f/aset a i j (double (+ 1 (* 3 i) j))))
+(def b (f/make-array "real8" 3 2))    ; 7 8 / 9 10 / 11 12
+(doseq [i (range 3) j (range 2)] (f/aset b i j (double (+ 7 (* 2 i) j))))
 (fortran/load-package "packages/blas") (require 'blas)
 (def c (blas/dgemm a b))              ; the reference BLAS, vendored in src/f/blas, a package
 (f/aget c 1 1)                        ;=> 154.0
@@ -210,8 +213,8 @@ three in that order.
 **Sorted collections.** `sorted-map`, `sorted-map-by`, `sorted-set`,
 `sorted-set-by`, `subseq`, `rsubseq` and `rseq`, from core.clj's own
 definitions: a sorted map is the array map with its keys kept in
-comparator order, never promoted to a hash trie, and a sorted set is
-a set over one. Verified: `(subseq (sorted-set 1 2 3 4 5) >= 2 < 4)`
+a counted B+-tree in comparator order, O(log n) to find, insert and
+remove, as clj's red-black tree is, and a sorted set is a set over one. Verified: `(subseq (sorted-set 1 2 3 4 5) >= 2 < 4)`
 is `(2 3)`, and `(into (sorted-set) (range 20 0 -1))` counts up.
 
 **Host members written in Clojure.** `sequence`, `eduction`,
@@ -252,26 +255,36 @@ answer resumes it: `:continue`, `{:continue v}`, `:step-in`,
 `:step-over`, `:step-out` or `:abort`. `binding` the Var scopes a
 handler; with none bound the break is a snapshot and the map is its
 value, which is what a script wants. At the REPL the handler is a
-nested REPL, and this is verified output:
+nested REPL, and this is verified output (`scripts/readme-check` runs
+it):
 
 ```
-user=> #'sq
-user=> #'hyp
-user=> break: :break 
+user=> (defn sq [x] (* x x))
+#'user/sq
+user=> (defn hyp [a b] (clotran-break) (+ (sq a) (sq b)))
+#'user/hyp
+user=> (hyp 3 4)
+break: :break 
   0 user/hyp (1:17)
       a = 3
       b = 4
 ;; (clotran-resume :continue | {:continue v} | :step-in | :step-over | :step-out | :abort)
-[1] user=> {a 3, b 4}
-[1] user=> break: :step 
+[1] user=> (:env (first (:frames (clotran-last-break))))
+{a 3, b 4}
+[1] user=> (clotran-resume :step-in)
+break: :step 
   0 user/sq (1:14)
       x = 3
   1 user/hyp (1:36)
       a = nil
       b = 4
 ;; (clotran-resume :continue | {:continue v} | :step-in | :step-over | :step-out | :abort)
-[1] user=> 25
+[1] user=> (clotran-resume :continue)
+25
 ```
+
+`a` is nil in the second break because its last use has passed: the
+compiler's locals clearing, which clj does too.
 
 `(clotran-break-on! true)` breaks at every error too, taken at the
 throw so the frames are still there, and `CLOTRAN_BREAK_FILE=path`
@@ -283,44 +296,37 @@ once the current frame has returned. Evaluating in a frame is the
 handler's own `let` over `:env`, since locals are immutable and the
 values are already in the map.
 
-**Futures and promises, on one thread.** core.clj's own `future`,
-`promise`, `pmap`, `pcalls`, `pvalues` and `deref`, verbatim, over a
-task the host runs in an evaluator context of its own -- a green
-thread: it runs when made, parks when it blocks, and resumes when
-something waits for it. Verified output:
+**Futures, promises and agents, on threads.** core.clj's own `future`,
+`promise`, `pmap`, `pcalls`, `pvalues`, `deref` and agents, verbatim:
+a future runs on an OS thread of its own beside its maker, and an
+agent's actions on a pool of workers (the README's table below says
+more, and DEVIATIONS 29 and 38 how they came to be). Verified:
 
+```clojure
+(def p (promise))
+(def f (future (* 3 @p)))
+(realized? f)                                  ;=> false
+(deliver p 5)
+@f                                             ;=> 15
+(pmap inc [1 2 3])                             ;=> (2 3 4)
+(deref (promise) 10 :nobody-delivered)         ;=> :nobody-delivered
+(let [a (agent 0)] (send a + 5) (await a) @a)  ;=> 5
 ```
-user=> #'p
-user=> #'f
-user=> false
-user=> #object[clotran.reify__2]
-user=> 15
-user=> (2 3 4)
-user=> :nobody-delivered
-```
 
-There is one OS thread, so this is concurrency without parallelism;
-what it buys is that pipeline code reads as straight-line Clojure.
-DEVIATIONS 38 lists what differs from a clj thread.
+**A thread is a contract.** `clotran.thread` is the protocol a kind
+of thread implements -- `spawn`, `join`, `status`, `cancel!`, a
+mailbox with `send!` and `receive`, and `self` for replies -- with one
+current kind, the way core.matrix keeps a current implementation. The
+default, `:green`, is the task a future is; another kind -- a process,
+a coarray image -- would answer the same names. Verified:
 
-**A thread is a contract, and green is its default.** `clotran.thread`
-is the protocol a kind of thread implements -- `spawn`, `join`,
-`status`, `cancel!`, a mailbox with `send!` and `receive`, and `self`
-for replies -- with one current kind, the way core.matrix keeps a
-current implementation. `green` is the task above; a process kind is
-next, behind the same names. Verified output:
-
-```
-user=> nil
-user=> nil
-user=> :green
-user=> #'worker
-user=> :parked
-user=> nil
-user=> 144
-user=> nil
-user=> nil
-user=> :done
+```clojure
+(require '[clotran.thread :as t])
+(t/kind-name)                                  ;=> :green
+(def worker (t/spawn (fn [] (* 12 (t/receive)))))
+(t/send! worker 12)
+(t/join worker)                                ;=> 144
+(t/status worker)                              ;=> :done
 ```
 
 Four oracles keep it honest: gfortran and flang must agree
@@ -447,7 +453,7 @@ design.
 | the five host-bound sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
 | regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where clj's are ASCII |
 | `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` turns `s/assert` on, as in clj (DEVIATIONS 42, resolved) |
-| calling a Fortran library | one routine, `dgemm`, hand-bound; the generator that would do it for any routine is PLAN.md step 7 |
+| calling a Fortran library | a package per library: `scripts/bind-fortran` writes its shims and manifest from the library's own signatures, free-form or F77 (`packages/blas`, `packages/chemsol`); derived types, optional and pointer dummies are listed, not bound (PLAN.md step 9). A package built by another compiler than clotran's brings a second Fortran runtime into the process: built by clotran's own is the supported case |
 
 `DEVIATIONS.md` is the full ledger: every place clotran does something
 real Clojure does not, why, and what removing it would take. A
@@ -468,7 +474,8 @@ native, using ClojureScript as the control group.
 - `test/f` -- unit tests for the Fortran host, one file per module.
 - `test/clj` -- Clojure's own test suite, derived the same way. The
   conformance measure; `scripts/run-clojure-tests` drives it.
-- `scripts/clotran` -- the user-facing launcher (see below).
+- `clotran` -- the launcher, and `clotran-bin` the binary it runs
+  (see below).
 
 ## Build
 

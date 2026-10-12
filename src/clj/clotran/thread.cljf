@@ -1,10 +1,10 @@
 (ns clotran.thread
   "A thread is work the runtime runs apart from its caller, with a handle
   the caller keeps. What KIND of thread runs it is an implementation of
-  the Kind protocol -- green, the default: a task in an evaluator context
-  of its own, on this OS thread -- and later a process, an OS thread, a
-  coarray image: one API, pluggable implementations, the way core.matrix
-  does it.
+  the Kind protocol -- green, the default: a task, an evaluator context
+  of its own on an OS thread of its own (tasks.inc), what a future is --
+  and later a process or a coarray image: one API, pluggable
+  implementations, the way core.matrix does it.
 
     (spawn f)          starts f under the current kind; answers a handle
     (join h) / @h      its value, once it has one; a failure is rethrown

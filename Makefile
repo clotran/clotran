@@ -435,7 +435,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
-	check-autocompile check-break check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
+	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
 ifeq ($(notdir $(FC)),gfortran)
@@ -541,6 +541,9 @@ check-break:
 	@echo "--- a break pauses into a nested REPL, and clotran-resume answers it ---"
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
 	  | ./clotran-bin src/clj/clojure/core.clj > $(B)/break_check.out 2>&1; grep -q '42$$' $(B)/break_check.out
+check-readme:
+	@echo "--- README.md's examples, run: its verified output stays verified ---"
+	scripts/readme-check
 check-libraries:
 	@echo "--- the portable libraries, on Clojure's OWN tests, verbatim ---"
 	scripts/run-library-tests
