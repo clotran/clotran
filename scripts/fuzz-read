@@ -77,6 +77,8 @@
                   (g/fmap #(str "@" %) inner)
                   (g/fmap #(str "#_" % " ") inner)
                   (g/fmap (fn [[m x]] (str "^" m " " x)) (g/tuple (g/one-of [g-kw g-sym (g/return "{:a 1}")]) inner))
+                  ;; stacked: the outer's entries merged over the inner's (MetaReader)
+                  (g/fmap (fn [[m n x]] (str "^" m " ^" n " " x)) (g/tuple (g/one-of [g-kw g-sym (g/return "{:a 1}")]) (g/one-of [g-kw g-sym (g/return "{:a 2 :b 3}")]) inner))
                   (g/fmap #(str "#(" % " %1 %&)") items)
                   (g/fmap #(str "#uuid \"" % "\"") (g/elements ["6a2f41a3-c54c-fce8-32d2-0324e1c32e22" "zz"]))
                   (g/fmap #(str % " ; a comment\n") inner)])))
@@ -103,12 +105,17 @@
 
 ;; ---- reading them ---------------------------------------------------------------
 
-(def canon "(defn fz-canon [x]
+;; metadata printed too, sorted as a map is: ^int ^:foo x is {:foo true, :tag int}
+(def canon "(declare fz-canon)
+(defn fz-canon-meta [x]
+  (let [m (meta x)] (if (seq m) (str \"^\" (fz-canon m) \" \") \"\")))
+(defn fz-canon [x]
+  (str (fz-canon-meta x)
   (cond (map? x) (str \"{\" (clojure.string/join \", \" (sort (map (fn [e] (str (fz-canon (key e)) \" \" (fz-canon (val e)))) x))) \"}\")
         (set? x) (str \"#{\" (clojure.string/join \" \" (sort (map fz-canon x))) \"}\")
         (vector? x) (str \"[\" (clojure.string/join \" \" (map fz-canon x)) \"]\")
         (sequential? x) (str \"(\" (clojure.string/join \" \" (map fz-canon x)) \")\")
-        :else (pr-str x)))
+        :else (pr-str x))))
 (defn fz-read [i s]
   (println (str \"FZ \" i \" \"
     (try (fz-canon (binding [*read-eval* false] (read-string (str \"[\" s \"\\n]\"))))

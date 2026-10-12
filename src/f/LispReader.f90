@@ -1525,6 +1525,24 @@ contains
        call fail("Metadata can only be applied to IMetas", "clotran.host.illegal_argument_exception")
        call vs_leave(base); return
     end if
+    ! A form with metadata already (^int ^:foo x): MetaReader merges, the
+    ! outer ^'s entries over the form's own -- {:foo true, :tag int} --
+    ! where a second wrapper hid the first and records' ^int
+    ! ^:unsynchronized-mutable __hash read as immutable
+    if (gc_kind(vs_get(base + 2)) == OBJ_META) then
+       block
+         type(gc_value), allocatable :: ks(:), vals(:)
+         integer :: i
+         call gca_entries(vs_get(base + 1), ks, vals)
+         call vs_set(base + 3, gc_slot(vs_get(base + 2), 2))
+         call vs_set(base + 2, gc_slot(vs_get(base + 2), 1))
+         do i = 1, size(ks)
+            m = gca_assoc(vs_get(base + 3), ks(i), vals(i), roots)
+            call vs_set(base + 3, m)
+         end do
+         call vs_set(base + 1, vs_get(base + 3))
+       end block
+    end if
     ! On a list read from a file, MetaReader adds the ^'s own line and
     ! column to the map, over any the map gave.
     if (gcl_is(vs_get(base + 2)) .and. rdx%cur_file /= 0) then

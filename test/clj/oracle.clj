@@ -3378,3 +3378,5 @@ x10
 [(map class [(drop 1 [1 2 3]) (drop 1 (range 5)) (drop 5 [1]) (drop 0 [1]) (drop 1 (seq [1 2])) (drop 2 (drop 1 (vec (range 70))))])
  [(drop 2 (range 10)) (drop 3 (range 10 0 -3)) (drop 40 (vec (range 50))) (nthrest (vec (range 5)) 2) (nthnext (range 5) 2)
   (drop 1.5 [1 2 3]) (instance? clotran.host.i_drop [1]) (instance? clotran.host.i_drop (range 1.0 3.0)) (drop 9 (range 10)) (drop 10 (range 10))]]
+;; stacked metadata merges, the outer ^'s entries over the inner's
+[(meta '^int ^:foo x) (meta '^:foo ^int x) (meta '^{:a 1} ^:b ^clotran.host.string y) (meta (read-string "^{:a 1} ^{:a 2 :c 3} z"))]
