@@ -105,7 +105,7 @@
       cl-file (str repo "/test/clj/.bench-clotran.clj")]
   (spit clj-file (names/to-upstream (timed-script true)))
   (spit cl-file (timed-script false))
-  (let [clj-ms (run-lines {} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-file)
+  (let [clj-ms (run-lines {} "clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" clj-file)
         ;; bb: sci interprets the form, its core is compiled -- what an
         ;; interpreter over a compiled runtime does on the same work
         bb-ms (run-lines {} "bb" clj-file)

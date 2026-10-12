@@ -537,7 +537,7 @@
 (defn run-clj [forms]
   (let [f (str work "/cases.clj")]
     (spit f (names/to-upstream (case-script forms)))
-    (let [r (sh {} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" f)
+    (let [r (sh {} "clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" f)
           out (update-vals (outputs (:out r)) names/from-clj)]
       ;; a case clj does not answer is not compared: say why it stopped
       (when (< (count out) (count forms))

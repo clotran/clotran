@@ -180,7 +180,7 @@
                          (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) (if (clojure.core/record? x) (clojure.core/vec (clojure.core/vals x)) x)))) o]))"
                               " (catch clotran.host.throwable e (clojure.core/pr-str [:threw (.getMessage e)]))))\n"))
                        cases)))))
-(def clj-side (parse-cases (names/from-clj (:out (shell {:out :string :err :string :dir (str repo) :continue true} "clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M" (str (fs/file work "for-clj.clj")))))))
+(def clj-side (parse-cases (names/from-clj (:out (shell {:out :string :err :string :dir (str repo) :continue true} "clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (fs/file repo "deps.edn")))) "-M" (str (fs/file work "for-clj.clj")))))))
 (when (empty? clj-side) (println "pure-check: clj did not run the cases") (System/exit 1))
 
 ;; ---- the library road (PLAN step 13) ----------------------------------

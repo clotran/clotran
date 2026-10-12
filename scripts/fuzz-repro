@@ -60,7 +60,7 @@
   (spit cf (names/to-upstream (script form)))
   (spit tf (script form))
   (println "form:   " form)
-  (println "clj:    " (names/from-clj (run ["clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" cf] {})))
+  (println "clj:    " (names/from-clj (run ["clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" cf] {})))
   (println (str "clotran (" (:mode opts) "): ") (run [bin core tf] env))
   (println "case:   " tf)
   (when (:debug opts)

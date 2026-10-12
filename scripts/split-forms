@@ -31,7 +31,7 @@
         from (if from (parse-long from) 0)
         lines (vec (str/split-lines (slurp src)))
         ;; each top-level form's last line, from the reader's positions
-        forms (e/parse-string-all (str/join "\n" lines) {:all true :read-cond :allow :features #{:clj}})
+        forms (e/parse-string-all (str/join "\n" lines) {:all true :read-cond :allow :features #{:clj} :auto-resolve (fn [a] (if (= a :current) (quote user) a))})
         spans (loop [acc [] start 0 fs forms]
                 (if-let [f (first fs)]
                   (let [end (or (:end-row (meta f)) start)]

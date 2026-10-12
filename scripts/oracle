@@ -143,7 +143,7 @@
       clj-gen (fs/file repo "test/clj/.oracle-gen-clj.clj")
       _ (spit clj-gen (script cs names/to-upstream))
       ;; the two sides at once: neither reads what the other writes
-      want-f (future (run "clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M" (str clj-gen)))
+      want-f (future (run "clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (fs/file repo "deps.edn")))) "-M" (str clj-gen)))
       got (run "./clotran-bin" "src/clj/clojure/core.clj" (str gen))
       raw @want-f
       want (mapv names/from-clj raw)

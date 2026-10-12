@@ -301,7 +301,7 @@
   (.mkdirs expected-dir) (.mkdirs (fs/file work "cases"))
   (pmap-n 6 (fn [[v cs]]
               (spit (fs/file expected-dir (str (munge-var v) ".edn"))
-                    (pr-str (answers-for :clj ["clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M"] v cs)))
+                    (pr-str (answers-for :clj ["clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (fs/file repo "deps.edn")))) "-M"] v cs)))
               (print ".") (flush))
           (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %)))))
   (println))
@@ -349,7 +349,7 @@
   (.mkdirs (fs/file work "cases"))
   (let [jobs (parse-long (or (System/getenv "CLOTRAN_TEST_JOBS") "4"))
         groups (cond->> (by-var (load-cases)) (seq only) (filter #(contains? only (key %))))
-        clj-cmd ["clj" "-Sdeps" (slurp (fs/file repo "deps.edn")) "-M"]
+        clj-cmd ["clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (fs/file repo "deps.edn")))) "-M"]
         ct-cmd [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj")]
         rows (pmap-n jobs (fn [[v cs]]
                             (let [r {:var v :ids (mapv case-id cs)

@@ -123,7 +123,7 @@
     (spit f ((resolve 'names/to-upstream)
              (str "(require 'clojure.string)\n" canon "\n"
                   (str/join "\n" (map-indexed (fn [i x] (str "(println \"FZ\" " i " (pr-str " (wrap x) "))")) forms)) "\n")))
-    (let [r (deref (p/process {:dir repo :out :string :err :string} "clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" f) 600000 ::timeout)]
+    (let [r (deref (p/process {:dir repo :out :string :err :string} "clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" f) 600000 ::timeout)]
       (if (= r ::timeout) {}
           (into {} (for [[_ i v] (re-seq #"FZ (\d+) (.*)" (:out r))] [(parse-long i) (edn/read-string ((resolve 'names/from-clj) v))]))))))
 

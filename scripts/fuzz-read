@@ -158,7 +158,7 @@
       clj-f (str work "/read.clj") ct-f (str work "/read.cljf")]
   (spit clj-f (names/to-upstream (script texts)))
   (spit ct-f (str/replace (script texts) "Throwable" "clotran.host.throwable"))
-  (let [c (run ["clj" "-Sdeps" (slurp (str repo "/deps.edn")) "-M" clj-f] 600)
+  (let [c (run ["clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" clj-f] 600)
         want (update-vals (answers (:out c)) (comp norm names/from-clj))
         ;; clotran in pieces, so a text that kills the reader is found
         ;; by itself: bisect a run that dies or hangs
