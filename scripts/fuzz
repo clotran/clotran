@@ -47,6 +47,7 @@
          '[clojure.test.check.rose-tree :as rose]
          '[clojure.test.check.random :as random]
          '[clojure.string :as str]
+         '[clojure.walk :as walk]
          '[babashka.fs :as fs]
          '[babashka.process :as p])
 
@@ -481,9 +482,23 @@
 
 (def requires (str/join " " (map #(str "'" %) (into ["clojure.string" "clojure.set" "clojure.walk"] (:requires opts)))))
 
+;; A case printed with the metadata it was written with -- a field's
+;; ^:volatile-mutable, a ^long hint -- which plain pr-str drops: every
+;; mutable-field case of fuzz-deftype reached clj with its fields
+;; immutable and was refused by both sides. The reader's own positions
+;; are left out.
+(defn pr-case [f]
+  (binding [*print-meta* true]
+    ;; a form's parts with metadata are symbols and collections, all of
+    ;; which take with-meta
+    (pr-str (walk/postwalk (fn [x] (if-let [m (meta x)]
+                                     (with-meta x (not-empty (dissoc m :line :column :end-line :end-column)))
+                                     x))
+                           f))))
+
 (defn case-script [forms]
   (str "(in-ns 'user)\n(require " requires ")\n" prelude fixture
-       (apply str (map-indexed (fn [i f] (str "(fz-out " i " (fn [] " (pr-str f) "))\n")) forms))
+       (apply str (map-indexed (fn [i f] (str "(fz-out " i " (fn [] " (pr-case f) "))\n")) forms))
        "(shutdown-agents)\n"))
 
 (defn outputs [text]
@@ -561,7 +576,7 @@
         (fs/create-dirs (str work "/fz"))
         (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]"
                        (apply str (map #(str " [" % "]") (:requires opts))) "))\n" fixture
-                       (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-str f) ")\n")) forms))))
+                       (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-case f) ")\n")) forms))))
         (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)]
           (when-not (fs/exists? lib)
             (println "compiled mode: no library:")

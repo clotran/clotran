@@ -79,7 +79,7 @@
                              (~'deref [~'_] ~@body-d)
                              clotran.host.i_fn
                              (~'invoke [~'this ~'x] ~@body-i))
-                           (new ~tname ~@inits))
+                           (~(symbol (str "->" tname)) ~@inits))
                   ~'o (~'make)
                   ~'rs (mapv (fn [c#] (if (= c# :deref) @~'o (~'o (second c#)))) ~(vec calls))]
               ;; only an IMMUTABLE field is public in clj; a mutable one is read
@@ -120,7 +120,7 @@
         `(do (deftype ~tname [~(with-meta 'fa {:volatile-mutable true})]
                clotran.host.i_fn
                (~'invoke [~'this ~'k] ~body))
-             ((new ~tname ~init) ~k))))))
+             ((~(symbol (str "->" tname)) ~init) ~k))))))
 
 ;; a type defined in another namespace: its bare name is refused here until
 ;; imported, its full name works throughout (DEVIATIONS 17 resolved)
