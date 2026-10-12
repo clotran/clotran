@@ -1749,6 +1749,12 @@
     type(gc_value), intent(inout) :: out
     type(gc_value) :: x, t
     x = x0
+    done = .false.
+    ! a range's rest is () when nothing is left (Range.more), which the
+    ! builtin asks; its cell's slot 3 is an empty range
+    if (id == B_REST .and. gc_kind(x) == OBJ_LAZY) then
+       if (gc_i2(x) == 1) return
+    end if
     ! nil, a list, a realised lazy cell: the generated op (model/heapsq.lisp)
     done = gc_seq_fast(id, x, out)
     if (done) return

@@ -119,6 +119,8 @@
   "clojure.lang.PersistentHashSet$TransientHashSet"
   "clotran.host.persistent_hash_set_transient_hash_set",
   "clojure.lang.PersistentList" "clotran.host.persistent_list",
+  "clojure.lang.PersistentList$EmptyList"
+  "clotran.host.persistent_list_empty_list",
   "clojure.lang.PersistentQueue" "clotran.host.persistent_queue",
   "clojure.lang.PersistentStructMap"
   "clotran.host.persistent_struct_map",

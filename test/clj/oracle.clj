@@ -3363,3 +3363,12 @@ x10
            #(clotran.host.math/scalb (identity 2) (identity 3)) #(clotran.host.math/addExact (identity 2.0) (identity 3.0))
            #(clotran.host.math/floorDiv (identity 1/2) (identity 3)) #(clotran.host.math/sqrt (identity 1/4))
            #(clotran.host.math/pow (identity 1/4) (identity 2N))]))
+;; () is PersistentList.EMPTY, an EmptyList: not a PersistentList, and
+;; what rest gives past the last element of any seq (ASeq.more,
+;; LongRange.more, Range.more)
+[(class ()) (class (list)) (class (with-meta () {:a 1})) (class (pop (list 1))) (class (empty (list 1 2)))
+ (instance? clotran.host.persistent_list ()) (instance? clotran.host.i_persistent_list ()) (class (conj () 1))
+ (map class [(rest [1]) (rest (seq {:a 1})) (rest "a") (rest (range 1)) (rest (range 0.0 0.5 0.5)) (rest (lazy-seq [1]))
+             (rest #{1}) (rest (sorted-map 1 2)) (rest (sorted-set 1)) (rest (cons 1 nil)) (rest (seq (int-array [1])))
+             (rest (keys {:a 1})) (rest (rseq [1])) (rest nil) (rest []) (range 0)])
+ (map class [(rest (range 2 3)) (rest (range 3 0 -1)) (rest [1 2]) (rest (map inc [1])) (rest (iterate inc 1))])]

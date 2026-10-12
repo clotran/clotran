@@ -17898,6 +17898,18 @@ contains
           if (out%tag == GCT_NIL) out = gcl_empty(roots)
        end if
     end if
+    ! ASeq.more: past the last element is (), not an exhausted view
+    if (gc_kind(out) == OBJ_SEQ) then
+       if (seq_len(gc_slot(out, 1)) <= gc_i1(out)) out = gcl_empty(roots)
+    end if
+    ! Range.more and LongRange.more: () when nothing is left
+    if (gc_kind(out) == OBJ_LAZY) then
+       if (gc_i2(out) == 1) then
+          call vs_set(vst, base + 2, out)
+          s = to_seq(out, [roots, out])
+          if (s%tag == GCT_NIL) out = gcl_empty(roots)
+       end if
+    end if
     call vs_leave(vst, base)
   end function sq_rest
 
@@ -19954,7 +19966,10 @@ contains
     case ("clotran.host.persistent_hash_set"); yes = (t == "set")
     case ("clotran.host.persistent_tree_map"); yes = (t == "map") .and. is_sorted_coll(v)
     case ("clotran.host.persistent_tree_set"); yes = (t == "set") .and. is_sorted_coll(v)
-    case ("clotran.host.persistent_list"); yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1)
+    case ("clotran.host.persistent_list")
+       yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1 .and. gc_i1(strip_meta(v)) /= 0)
+    case ("clotran.host.persistent_list_empty_list")
+       yes = (t == "list" .and. gc_i2(strip_meta(v)) /= 1 .and. gc_i1(strip_meta(v)) == 0)
     case ("clotran.host.lazy_seq"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) /= 1)
     case ("clotran.host.long_range", "clotran.host.range"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1)
     case ("clotran.host.iterate"); yes = (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 2)
@@ -20711,7 +20726,7 @@ contains
          chain(1:4) = [character(len=36) :: "clotran.host.sorted", "clotran.host.reversible", &
               "clotran.host.i_persistent_set", "clotran.host.i_persistent_collection"]
          cnt = 4
-      case ("clotran.host.persistent_list")
+      case ("clotran.host.persistent_list", "clotran.host.persistent_list_empty_list")
          chain(1:3) = [character(len=36) :: "clotran.host.i_persistent_list", "clotran.host.i_seq", &
               "clotran.host.i_persistent_collection"]
          cnt = 3
@@ -20864,7 +20879,12 @@ contains
        select case (gc_kind(v))
        case (OBJ_CONS)
           s = "clotran.host.persistent_list"
-          if (gc_i2(v) == 1) s = "clotran.host.cons"
+          if (gc_i2(v) == 1) then
+             s = "clotran.host.cons"
+          else if (gc_i1(v) == 0) then
+             ! PersistentList.EMPTY is an EmptyList, a class of its own
+             s = "clotran.host.persistent_list_empty_list"
+          end if
        case (OBJ_VECTOR);  s = "clotran.host.persistent_vector"
        case (OBJ_TVECTOR); s = "clotran.host.persistent_vector_transient_vector"
        case (OBJ_TMAP)
