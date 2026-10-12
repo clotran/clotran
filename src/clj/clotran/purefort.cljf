@@ -946,12 +946,15 @@ end module " mod "
         ;; in a library the loop is a plain do: nothing impure, and no
         ;; return, is allowed inside do concurrent, and the error check
         ;; is both
-        (when (and *library* (not impure?) et-ok) (swap! st update :decls conj [k :long]))
+        ;; the index a local of its own either way: a type in the do
+        ;; concurrent header, (integer(int64) :: k = ...), is newer than
+        ;; gfortran 14, which refused it (Debian 13's, in the Linux gate)
+        (when (and (not impure?) et-ok) (swap! st update :decls conj [k :long]))
         (when (and (not impure?) et-ok)
           [(concat ll
                    [(if *library*
                       (str "do " k " = 0, " le " - 1")
-                      (str "do concurrent (integer(int64) :: " k " = 0:" le " - 1)"))
+                      (str "do concurrent (" k " = 0:" le " - 1)"))
                     "   block"]
                    (for [[v t] (distinct inner) :when (fort-type t)]
                      (str "      " (if (#{:doubles :longs} t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
