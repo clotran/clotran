@@ -107,22 +107,26 @@
               (:clojure.spec.alpha/problems (clojure.spec.alpha/explain-data ~sp v#)))
         (clojure.spec.alpha/form ~sp)])))
 
+;; the specs the cases name, defined beside every batch the harness runs
+;; (--fixture) -- as case 0 they were missing from a case run alone, when
+;; a batch was halved
 (def fixture
-  '(do (clojure.spec.alpha/def :fz/a int?) (clojure.spec.alpha/def :fz/b keyword?)
-       (clojure.spec.alpha/def :fz/c string?) nil))
+  "(clojure.spec.alpha/def :fz/a int?) (clojure.spec.alpha/def :fz/b keyword?)
+   (clojure.spec.alpha/def :fz/c string?)\n")
 
 (let [{:keys [n k seed]} opts
       forms (for [i (range n)] (draw g-spec-form (+ 2 (mod i 4)) (+ seed (* 1000 i))))
       bad (remove #(s/valid? ::spec-form %) forms)
-      cases (vec (cons fixture
-                       (for [[i f] (map-indexed vector forms)
-                             :when (s/valid? ::spec-form f)
-                             v (concat (conforming f k (+ seed (* 1000 i)))
-                                       (for [j (range k)] (draw g-any 4 (+ seed (* 1000 i) 500 j))))]
-                         (case-form f v))))
-      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-spec" :suffix ".edn"})))]
+      cases (vec (for [[i f] (map-indexed vector forms)
+                        :when (s/valid? ::spec-form f)
+                        v (concat (conforming f k (+ seed (* 1000 i)))
+                                  (for [j (range k)] (draw g-any 4 (+ seed (* 1000 i) 500 j))))]
+                    (case-form f v)))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-spec" :suffix ".edn"})))
+      fx (str out ".fixture.clj")]
   (doseq [b bad] (println "BUG in fuzz-spec: a generated form is not a ::spec-form:" (pr-str b)))
   (spit out (binding [*print-namespace-maps* false] (pr-str cases)))
-  (println (str "fuzz-spec: " (count forms) " spec forms, " (dec (count cases)) " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-r" "clojure.spec.alpha" "-m" (:modes opts))]
+  (spit fx fixture)
+  (println (str "fuzz-spec: " (count forms) " spec forms, " (count cases) " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-r" "clojure.spec.alpha" "--fixture" fx "-m" (:modes opts))]
     (System/exit (if (and (empty? bad) (zero? (:exit r))) 0 1))))
