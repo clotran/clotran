@@ -2471,3 +2471,20 @@ count `skip` answers past the end differs.
 **Removal**: none intended: it is clj's host's buffering, not the
 language (no-clj-emulation). `scripts/fuzz-bytes` exercises `skip` over
 an array's stream, where the two agree.
+
+## 81. `.hashCode` of a core value is not a member
+
+clj's host gives every object a `hashCode`, its own 32-bit hash beside
+the language's `hash` (hasheq): `(.hashCode {:a 1})` is 1013910568,
+`(.hashCode "ab")` 3105. clotran has the one hash, `hash`, which is
+clj's hasheq bit for bit (DEVIATIONS 15); `.hashCode` on a map, vector,
+string, keyword or number is "No matching method hashCode", and on a
+record, whose generated method calls `APersistentMap/mapHash`, "no such
+member". A deftype or reify that defines `hashCode` itself has it, and
+it is that type's `hash` when it defines no `hasheq` (DEVIATIONS 60).
+ClojureScript has no `hashCode` either; it is the host's, not the
+language's (no-clj-emulation).
+
+**Removal**: none intended. Writing clj's host's string, number and
+collection hashCode formulas into this host would emulate that host for
+a number no Clojure function asks for.

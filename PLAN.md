@@ -5275,9 +5275,10 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    (a loop and a let may set it, a fn made in the method may read but
    not set it, an immutable field is refused, a mutable one is private);
    the oracle's Tally and Shadow, the language test's refusal, and
-   scripts/fuzz-deftype in the gate, 30 of 30 with clj. The residual:
-   the refusal comes at the method's first run, where clj's comes
-   when the type is defined, since a body is analysed when first run.
+   scripts/fuzz-deftype in the gate, 30 of 30 with clj. The refusal
+   of a `set!` to any local, an immutable field included, now comes
+   when the form is analysed -- a deftype's methods with the deftype --
+   as clj's does (2026-10-12; it had been left to the first run).
 3. *Step 15's tail* -- DONE 2026-10-12: raw bytes to and from files
    (clotran.files' byte streams, scripts/fuzz-bytes), and bit-set,
    bit-clear, bit-flip and bit-test checked against clj.

@@ -3378,5 +3378,11 @@ x10
 [(map class [(drop 1 [1 2 3]) (drop 1 (range 5)) (drop 5 [1]) (drop 0 [1]) (drop 1 (seq [1 2])) (drop 2 (drop 1 (vec (range 70))))])
  [(drop 2 (range 10)) (drop 3 (range 10 0 -3)) (drop 40 (vec (range 50))) (nthrest (vec (range 5)) 2) (nthnext (range 5) 2)
   (drop 1.5 [1 2 3]) (instance? clotran.host.i_drop [1]) (instance? clotran.host.i_drop (range 1.0 3.0)) (drop 9 (range 10)) (drop 10 (range 10))]]
+;; set! of a local -- a let binding, a parameter, a deftype's immutable
+;; field -- is refused when the form is analysed, not when it runs
+(do (definterface IOM (m []))
+    [(try (eval '(deftype TOZ [x] IOM (m [_] (set! x 1)))) :defined (catch clotran.host.throwable e :refused))
+     (try (eval '(fn [] (let [x 1] (set! x 2)))) :defined (catch clotran.host.throwable e :refused))
+     (try (eval '(fn [y] (set! y 2))) :defined (catch clotran.host.throwable e :refused))])
 ;; stacked metadata merges, the outer ^'s entries over the inner's
 [(meta '^int ^:foo x) (meta '^:foo ^int x) (meta '^{:a 1} ^:b ^clotran.host.string y) (meta (read-string "^{:a 1} ^{:a 2 :c 3} z"))]

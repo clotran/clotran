@@ -1519,12 +1519,11 @@
 
 ;;; ---- mutable deftype fields (DEVIATIONS 20 resolved): the values are
 ;;; the oracle's; what only clotran can check is the refusal's wording,
-;;; clj's, for a set! of a field not declared mutable -- here at the
-;;; first call, since a method body is analysed when first run, where
-;;; clj refuses when the type is defined
-(deftype NoSet [w] clotran.host.i_deref (deref [_] (set! w 2)))
-(check "set! of an immutable field is refused as clj refuses it, at the first call"
-       (try @(->NoSet 1) (catch clotran.host.throwable e (re-find #"^Cannot assign to non-mutable: w" (.getMessage e))))
+;;; clj's, for a set! of a field not declared mutable, refused when the
+;;; type is defined, as clj refuses it
+(check "set! of an immutable field is refused as clj refuses it, when the type is defined"
+       (try (eval '(deftype NoSet [w] clotran.host.i_deref (deref [_] (set! w 2))))
+            (catch clotran.host.throwable e (re-find #"^Cannot assign to non-mutable: w" (.getMessage e))))
        "Cannot assign to non-mutable: w")
 
 ;;; ---- recur's arity refusal, clj's words (DEVIATIONS 19 resolved): a

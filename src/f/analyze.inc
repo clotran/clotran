@@ -4302,11 +4302,11 @@
           ! A local -- a let binding, a parameter, or an immutable field
           ! bound as one (bind_fields) -- is not an assignable place:
           ! clj's AssignExpr refuses every local binding that is not a
-          ! mutable field with this wording. At run time, as a method body
-          ! is analysed when first run.
+          ! mutable field with this wording, when the form is analysed (a
+          ! deftype's methods with the deftype)
           block
              call gc_ref_text(tgt%ref, s=dlt_1)
-             nd = fail_node("Cannot assign to non-mutable: " // dlt_1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+             call fail("Cannot assign to non-mutable: " // dlt_1)
           end block
           call vs_leave(vst, base)
           return
