@@ -361,12 +361,25 @@
              (and (= ta tb) (= na nb)))
            :else (= va vb)))))
 
-(def compilers
+(def all-compilers
   [["gfortran" "pure_g" []]
    ["flang" "pure_f" []]
    ;; and threaded: do concurrent run in parallel, the same answers
    ["flang" "pure_fp" ["-fopenmp" "-fdo-concurrent-to-openmp=host"]]
    ["gfortran" "pure_gp" ["-fopenmp" "-ftree-parallelize-loops=4"]]])
+
+;; a compiler that does not take a threaded build's flags -- flang before
+;; 20 has no -fdo-concurrent-to-openmp (Debian 13's 19, in the Linux gate)
+;; -- builds it not, and says so
+(defn takes-flags? [fc flags]
+  (let [d (str (fs/create-temp-dir {:prefix "pure-flags"}))]
+    (spit (str d "/t.f90") "program t\nend program t\n")
+    (zero? (:exit (shell {:dir d :out :string :err :string :continue true} (str/join " " (concat [fc] flags ["t.f90" "-o" "t"])))))))
+(def compilers
+  (filterv (fn [[fc exe flags]]
+             (or (empty? flags) (takes-flags? fc flags)
+                 (do (println "pure-check: not built:" exe "--" fc "does not take" (str/join " " flags)) false)))
+           all-compilers))
 (doseq [[fc exe flags] compilers] (build fc exe flags))
 (def sample? (= src "test/clj/pure_sample.cljf"))
 (when-not (or (not sample?) (re-find #"(?m)^\s*do concurrent \(" (slurp f90)))

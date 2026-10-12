@@ -1,7 +1,9 @@
 #!/usr/bin/env bb
 ;; gate-linux: make crosscheck on Linux, in packaging/linux/Dockerfile.gate
 ;; (Debian 13, gfortran and flang, the oracle's clj and bb at the macOS
-;; gate's versions), on this tree's tracked files as they are now.
+;; gate's versions), on this tree's tracked files as they are now: the
+;; compilers' two halves one after the other (XC_SERIAL), as at once they
+;; outgrew the container's memory.
 ;;
 ;;   scripts/gate-linux [log]      default build/gate-linux.log
 ;;
@@ -20,7 +22,7 @@
          "-f" (str repo "/packaging/linux/Dockerfile.gate") (str repo "/packaging/linux"))
 (p/shell {:dir repo} "sh" "-c" (str "git ls-files -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf " work "/src.tar"))
 (p/shell {:continue true} "docker" "run" "--rm" "-v" (str work ":/w") "-v" "clotran-m2:/root/.m2" "clotran-gate" "bash" "-c"
-         "cd /src && tar xf /w/src.tar && (make crosscheck > /w/gate.log 2>&1; echo \"EXIT $?\" >> /w/gate.log)")
+         "cd /src && tar xf /w/src.tar && (make crosscheck XC_SERIAL=1 > /w/gate.log 2>&1; echo \"EXIT $?\" >> /w/gate.log)")
 (fs/create-dirs (fs/parent log))
 (fs/copy (str work "/gate.log") log {:replace-existing true})
 (println "gate-linux:" (last (str/split-lines (slurp log))) "--" log)

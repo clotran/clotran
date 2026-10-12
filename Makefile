@@ -669,6 +669,10 @@ XC_DIR ?= $(or $(TMPDIR),/tmp)/clotran-crosscheck
 # output is its own log, printed whole once both have finished, and the
 # gate fails if either did.
 XC_JOBS ?= 4
+# XC_SERIAL=1: the halves one after the other -- half the memory at the
+# peak, for a machine where both at once ran out (scripts/gate-linux's
+# 8 GB container killed a torture run, status 137)
+XC_BG = $(if $(XC_SERIAL),;,&)
 XC_SYNC = rsync -a --delete --exclude .git --exclude /build --exclude /clotran-bin \
 	  --exclude /clotran-bin.dSYM --exclude /examples/embed/heat ./
 crosscheck:
@@ -676,8 +680,8 @@ crosscheck:
 	$(XC_SYNC) $(XC_DIR)/flang/
 	$(XC_SYNC) $(XC_DIR)/gfortran/
 	echo "crosscheck: fuzz seed $(SEED) (make crosscheck SEED=$(SEED) repeats it)"; \
-	( $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) & \
-	( $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) & \
+	( $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
+	( $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
 	wait; \
 	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
 	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
