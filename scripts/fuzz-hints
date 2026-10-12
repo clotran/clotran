@@ -1,0 +1,139 @@
+#!/usr/bin/env bb
+;; fuzz-hints: the static half of type hints, generated (DEVIATIONS 48).
+;;
+;;   scripts/fuzz-hints [-n N] [-s SEED] [-m modes] [-o cases.edn]
+;;
+;; clj types an expression when it compiles it, and refuses two things
+;; by that type: a recur to a ^long or ^double fn parameter whose argument
+;; is not that primitive (RecurExpr), and a hinted let or loop local whose
+;; init is a primitive (LocalBinding). Each case is one of
+;;
+;;   (fn ^R [^K a ^K b] (if (pos? 1) (recur E E) a))   K, R: long, double or none
+;;   (let [y E ^T x E] x)                               T: long, double, String or none
+;;   (loop [^T x E] x)
+;;   (do (defn h ^R [^K a] E) (let [^T x (h 1)] x))      invokePrim
+;;   (let [y E] (fn [] (let [^T x y] x)))                a closed-over local
+;;   (let [^A a (identity (A-array 1)) ^T x (aget a 0)] x)  an array, hinted or not
+;;   (fn [] (loop [i E] (let [^T x i] (if (pos? 1) (recur E) x))))
+;;
+;; where E is a random expression -- literals, casts, Numbers ops of every
+;; arity clj inlines, the promoting ops, a call through a Var (identity),
+;; count, a comparison, an if, a let, the locals in scope, a string or a
+;; keyword -- evaluated inside a try, answering :ok or which refusal it
+;; was, :recur or :hint (anything else is :other, a run-time error both
+;; sides reach). Through clj and every mode by scripts/fuzz -f: the
+;; answers must agree. A nil is not generated: clj's compiler throws an
+;; NPE on (recur nil) to a primitive parameter, a bug of its own.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 60 :seed 1 :modes "flat,tree,compiled"}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  "-m" (recur (drop 2 as) (assoc o :modes (second as)))
+                  "-o" (recur (drop 2 as) (assoc o :out (second as)))
+                  (do (println "usage: scripts/fuzz-hints [-n N] [-s SEED] [-m modes] [-o cases.edn]") (System/exit 2))))))
+
+(def g-long (g/choose -9 9))
+(def g-dbl (g/fmap #(/ % 4.0) (g/choose -20 20)))
+(def g-nz (g/elements [1 2 3 -2 2.0 0.5]))
+
+;; a NUMBER-valued expression over the locals `env`, so nothing in it
+;; throws for want of a number; its static type is whatever it comes to
+(defn g-num [env depth]
+  (let [leaf (g/one-of (concat [g-long g-dbl (g/fmap (fn [n] `(identity ~n)) g-long)]
+                               (when (seq env) [(g/elements env)])))]
+    (if (zero? depth)
+      leaf
+      (let [e (g-num env (dec depth))]
+        (g/frequency
+         [[3 leaf]
+          [2 (g/fmap (fn [[f x]] (list f x)) (g/tuple (g/elements '[long double int unchecked-long inc dec - inc' dec' unchecked-inc identity]) e))]
+          [3 (g/fmap (fn [[f x y]] (list f x y)) (g/tuple (g/elements '[+ - * max min unchecked-add unchecked-multiply]) e e))]
+          [1 (g/fmap (fn [[x y z]] `(+ ~x ~y ~z)) (g/tuple e e e))]
+          [1 (g/fmap (fn [[f x d]] (list f x d)) (g/tuple (g/elements '[/ quot rem]) e g-nz))]
+          [1 (g/fmap (fn [[x y]] `(bit-and (long ~x) (long ~y))) (g/tuple e e))]
+          [1 (g/fmap (fn [x] `(count [~x])) e)]
+          ;; the host's math, typed as Math's: one signature or overloaded
+          ;; (the arguments an overloaded one is given are of one type: Math's
+          ;; overload choice among them is clj's host's, not the language's)
+          [1 (g/fmap (fn [[f x]] (list f x)) (g/tuple (g/elements '[clotran.host.math/sqrt clotran.host.math/abs abs]) e))]
+          [1 (g/fmap (fn [[f x]] (list f (list 'double x))) (g/tuple (g/elements '[clotran.host.math/round clotran.host.math/signum]) e))]
+          [1 (g/fmap (fn [[x y]] `(clotran.host.math/pow ~x ~y)) (g/tuple e e))]
+          [1 (g/fmap (fn [[x y]] `(clotran.host.math/floorDiv (long ~x) (long ~y))) (g/tuple e g-nz))]
+          [1 (g/fmap (fn [[x y]] `(if (pos? 1) ~x ~y)) (g/tuple e e))]
+          [1 (g/fmap (fn [x] `(let [~'z ~x] ~'z)) e)]])))))
+
+;; any value: a number, a comparison, or an Object that is no number
+(defn g-any [env]
+  (g/frequency [[6 (g-num env 2)]
+                [1 (g/fmap (fn [[x y]] `(< ~x ~y)) (g/tuple (g-num env 1) (g-num env 1)))]
+                [1 (g/elements ["s" :k true [1]])]]))
+
+(def g-hint (g/elements [nil 'long 'double]))
+
+(defn hinted [sym t] (if t (with-meta sym {:tag t}) sym))
+
+(def g-recur
+  (g/let [ka g-hint kb g-hint ret (g/frequency [[4 (g/return nil)] [1 g-hint]])
+          [ea eb] (g/tuple (g-any '[a b]) (g-any '[a b]))]
+    (let [params (hinted [(hinted 'a ka) (hinted 'b kb)] ret)]
+      `(fn ~params (if (pos? 1) (recur ~ea ~eb) ~'a)))))
+
+(def g-let
+  (g/let [t (g/elements [nil 'long 'double 'String]) loop? (g/frequency [[3 (g/return false)] [1 (g/return true)]])
+          y (g-num [] 2) x (g-any '[y])]
+    (if loop?
+      `(loop [~(hinted 'x t) ~y] ~'x)
+      `(let [~'y ~y ~(hinted 'x t) ~x] ~'x))))
+
+;; a fn whose :arglists has a primitive signature is called through
+;; invokePrim, typed by its return; a local a fn closes over keeps its
+;; primitive type there
+(def g-call
+  (g/let [k (g/choose 0 99999) r g-hint ka g-hint t (g/elements [nil 'long 'double])
+          body (g-num '[a] 1) y (g-num [] 1)
+          shape (g/elements [:defn :closure])]
+    (let [h (symbol (str "h" k))]
+      (case shape
+        :defn `(do (defn ~h ~(hinted [(hinted 'a ka)] r) ~body)
+                   (let [~(hinted 'x t) (~h 1)] ~'x))
+        :closure `(let [~'y ~y] (fn [] (let [~(hinted 'x t) ~'y] ~'x)))))))
+
+;; an array's element and length are primitives when its type is hinted,
+;; a reflective call's Object when not; a loop local is its init's
+;; primitive through the body (clj's first pass)
+(def g-array
+  (g/let [[ah mk] (g/elements [[nil 'double-array] ['doubles 'double-array] ['longs 'long-array] ['ints 'int-array]])
+          t (g/elements [nil 'long 'double])
+          f (g/elements ['aget 'alength])]
+    `(let [~(hinted 'a ah) (identity (~mk 1))
+           ~(hinted 'x t) ~(if (= f 'aget) `(aget ~'a 0) `(alength ~'a))]
+       ~'x)))
+
+(def g-loop
+  (g/let [i (g-num [] 1) t (g/elements [nil 'long 'double 'String]) e (g-any '[i])]
+    `(fn [] (loop [~'i ~i] (let [~(hinted 'x t) ~'i] (if (pos? 1) (recur ~e) ~'x))))))
+
+(def g-case
+  (g/fmap (fn [form]
+            `(try (eval (quote ~form)) :ok
+                  (catch clotran.host.throwable e#
+                    (let [m# (str (.getMessage (or (.getCause e#) e#)))]
+                      (cond (str/includes? m# "recur arg for primitive local") :recur
+                            (str/includes? m# "type hint a local") :hint
+                            :else :other)))))
+          (g/frequency [[3 g-recur] [2 g-let] [1 g-call] [1 g-array] [1 g-loop]])))
+
+(let [{:keys [n seed]} opts
+      forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))
+      out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-hints" :suffix ".edn"})))]
+  ;; *print-meta*: the hints are metadata on the symbols and vectors
+  (spit out (str "[" (str/join "\n" (map #(binding [*print-meta* true] (pr-str %)) forms)) "]"))
+  (println (str "fuzz-hints: " n " cases -> " out))
+  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
+    (System/exit (:exit r))))

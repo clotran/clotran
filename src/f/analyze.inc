@@ -225,6 +225,681 @@
     call vs_leave(vst, base)
   end subroutine bind_array_hint
 
+  ! ---- primitive kinds, as Compiler.maybePrimitiveType answers them --
+  !
+  ! clj types an expression statically; two of its refusals follow from
+  ! that (DEVIATIONS 48): a hinted let or loop local whose init is a
+  ! primitive (LocalBinding), and a recur to a ^long or ^double fn
+  ! parameter whose argument is not that primitive (RecurExpr). A node's
+  ! kind here is PK_LONG .. PK_CHAR, PK_OBJ for an Object for certain, or
+  ! 0 for not known -- and an unknown is never refused, so what clotran
+  ! cannot type it lets through rather than refuse what clj accepts.
+
+  ! The kind recorded for a local's slot in this fn's blocks, or 0.
+  integer function local_kind(sc0, slot) result(k)
+    type(gc_value), intent(in) :: sc0
+    integer, intent(in) :: slot
+    type(gc_value) :: sc, m, v
+    k = 0
+    sc = sc0
+    do while (gc_kind(sc) == OBJ_AST)
+       m = gc_slot(sc, 5)
+       if (gca_is(m)) then
+          if (gca_contains(m, gc_int(slot))) then
+             v = gca_get(m, gc_int(slot))
+             k = int(v%ival)
+             return
+          end if
+       end if
+       ! a fn's root block has no parent block: slots are the fn's own
+       sc = gc_slot(sc, 2)
+    end do
+  end function local_kind
+
+  ! m[:key], or nil when m is no map or has no such key.
+  function gca_get_or_nil(m, key) result(v)
+    type(gc_value), intent(in) :: m
+    character(len=*), intent(in) :: key
+    type(gc_value) :: v, k
+    v = gc_nil()
+    if (.not. gca_is(m)) return
+    k = gc_key(key, [m])
+    if (gca_contains(m, k)) v = gca_get(m, k)
+  end function gca_get_or_nil
+
+  ! The kind of the local `sym` names where it is bound, when that is an
+  ! enclosing fn's: the walk local_array_hint makes, outward.
+  recursive integer function captured_kind(sc0, sym) result(k)
+    type(gc_value), intent(in) :: sc0, sym
+    type(gc_value) :: sc, hit
+    logical :: crossed
+    k = 0
+    if (sym%tag /= GCT_SYM) return
+    sc = sc0
+    crossed = .false.
+    do while (gc_kind(sc) == OBJ_AST)
+       if (gca_is(gc_slot(sc, 1))) then
+          if (gca_contains(gc_slot(sc, 1), sym)) then
+             ! bound in this very fn: local_kind already answered
+             if (.not. crossed) return
+             hit = gca_get(gc_slot(sc, 1), sym)
+             k = local_kind(sc, int(hit%ival))
+             if (k == 0) k = captured_kind(sc, sym)
+             return
+          end if
+       end if
+       if (gc_kind(gc_slot(sc, 2)) == OBJ_AST) then
+          sc = gc_slot(sc, 2)
+       else
+          sc = gc_slot(gc_slot(sc, 3), 2)
+          crossed = .true.
+       end if
+    end do
+  end function captured_kind
+
+  ! Files `val` under `key` in the block's own map (slot 5, beside the
+  ! array hints, which are keyed by symbol).
+  subroutine block_note(sc, key, val, roots)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: sc, key, val
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, sc)
+    call vs_set(vst, base + 2, key)
+    call vs_set(vst, base + 3, val)
+    m = gc_slot(vs_get(vst, base + 1), 5)
+    if (.not. gca_is(m)) m = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, m)
+    m = gca_assoc(vs_get(vst, base + 4), vs_get(vst, base + 2), vs_get(vst, base + 3), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
+    call gc_set_slot(vs_get(vst, base + 1), 5, m)
+    call vs_leave(vst, base)
+  end subroutine block_note
+
+  subroutine bind_local_kind(sc, slot, kind, roots)
+    type(gc_value), intent(in) :: sc
+    integer, intent(in) :: slot, kind
+    type(gc_value), intent(in) :: roots(:)
+    if (kind /= 0) call block_note(sc, gc_int(slot), gc_int(kind), roots)
+  end subroutine bind_local_kind
+
+  ! A primitive kind's name, as Class.getName spells it.
+  ! (A subroutine: a deferred-length function result is static in
+  ! gfortran, shared by every thread -- scripts/no-static-slen.)
+  subroutine prim_name(k, s)
+    integer, intent(in) :: k
+    character(len=:), allocatable, intent(out) :: s
+    select case (k)
+    case (PK_LONG); s = "long"
+    case (PK_DOUBLE); s = "double"
+    case (PK_INT); s = "int"
+    case (PK_BOOL); s = "boolean"
+    case (PK_FLOAT); s = "float"
+    case (PK_SHORT); s = "short"
+    case (PK_BYTE); s = "byte"
+    case (PK_CHAR); s = "char"
+    case default; s = "Object"
+    end select
+  end subroutine prim_name
+
+  ! The kind of a call to clojure.core's `nm` with these argument nodes:
+  ! what its :inline expands to answers statically in clj (a cast, a
+  ! Numbers op, RT.count), for the arities it is inline at; 0 for the rest.
+  recursive integer function core_call_kind(nm, kids, sc) result(k)
+    character(len=*), intent(in) :: nm
+    type(gc_value), intent(in) :: kids, sc
+    integer :: nargs
+    k = 0
+    nargs = gcv_count(kids) - 1
+    if (index(nm, "clotran-math-") == 1) then
+       k = math_call_kind(nm(14:), kids, sc)
+       return
+    end if
+    select case (nm)
+    case ("abs")
+       if (nargs == 1) k = arith_kind(kids, sc, 4)
+    case ("long", "unchecked-long")
+       if (nargs == 1) k = PK_LONG
+    case ("double", "unchecked-double")
+       if (nargs == 1) k = PK_DOUBLE
+    case ("int", "unchecked-int")
+       if (nargs == 1) k = PK_INT
+    case ("boolean")
+       if (nargs == 1) k = PK_BOOL
+    case ("float", "unchecked-float")
+       if (nargs == 1) k = PK_FLOAT
+    case ("short", "unchecked-short")
+       if (nargs == 1) k = PK_SHORT
+    case ("byte", "unchecked-byte")
+       if (nargs == 1) k = PK_BYTE
+    case ("char", "unchecked-char")
+       if (nargs == 1) k = PK_CHAR
+    case ("count")
+       if (nargs == 1) k = PK_INT
+    case ("alength")
+       ! an int when the array's type is known -- a hint, here -- and a
+       ! reflective call, an Object, when it is not (not modelled: 0)
+       if (nargs == 1) then
+          if (array_elem_kind(gcv_nth(kids, 1)) /= -99) k = PK_INT
+       end if
+    case ("aget")
+       ! a hinted array's element, its primitive
+       if (nargs == 2) then
+          k = array_elem_kind(gcv_nth(kids, 1))
+          if (k == -99) k = 0
+       end if
+    case ("<", ">", "<=", ">=", "==", "=", "identical?")
+       if (nargs == 2) k = PK_BOOL
+    case ("zero?", "pos?", "neg?", "nil?")
+       if (nargs == 1) k = PK_BOOL
+    case ("bit-and", "bit-or", "bit-xor", "bit-and-not")
+       if (nargs >= 2) k = PK_LONG
+    case ("bit-shift-left", "bit-shift-right", "unsigned-bit-shift-right")
+       if (nargs == 2) k = PK_LONG
+    case ("bit-not")
+       if (nargs == 1) k = PK_LONG
+    case ("+", "*", "-")
+       if (nargs >= 2) k = arith_kind(kids, sc, 1)
+       if (nargs == 1 .and. nm == "-") k = arith_kind(kids, sc, 4)
+    case ("max", "min")
+       if (nargs >= 2) k = arith_kind(kids, sc, 5)
+    case ("unchecked-add", "unchecked-multiply", "unchecked-subtract")
+       if (nargs == 2) k = arith_kind(kids, sc, 1)
+    case ("quot", "rem")
+       if (nargs == 2) k = arith_kind(kids, sc, 3)
+    case ("inc", "dec", "unchecked-inc", "unchecked-dec", "unchecked-negate")
+       if (nargs == 1) k = arith_kind(kids, sc, 4)
+    case ("inc'", "dec'")
+       if (nargs == 1) k = arith_kind(kids, sc, 6)
+    case ("+'", "*'", "-'")
+       if (nargs >= 2) k = arith_kind(kids, sc, 2)
+       if (nargs == 1 .and. nm == "-'") k = arith_kind(kids, sc, 6)
+    case ("/")
+       ! Numbers.divide(long, long) is a Number: a ratio, or not
+       if (nargs >= 2) k = arith_kind(kids, sc, 2)
+    end select
+  end function core_call_kind
+
+  ! The element kind of an array argument cast_array_arg put a hint's
+  ! cast on -- (clotran-array-cast a :doubles) -- or -99 for an
+  ! argument with no cast.
+  integer function array_elem_kind(arg) result(k)
+    type(gc_value), intent(in) :: arg
+    type(gc_value) :: kids, h, kw
+    character(len=:), allocatable :: nm
+    k = -99
+    if (gc_kind(arg) /= OBJ_AST) return
+    if (gc_i1(arg) /= N_CALL) return
+    kids = gc_slot(arg, 1)
+    if (gcv_count(kids) /= 3) return
+    h = gcv_nth(kids, 0)
+    if (gc_kind(h) /= OBJ_AST) return
+    if (gc_i1(h) /= N_CONST) return
+    h = strip_meta(gc_slot(h, 2))
+    if (gc_kind(h) /= OBJ_BUILTIN) return
+    if (gc_i1(h) /= B_ARRAYCAST) return
+    kw = gcv_nth(kids, 2)
+    if (gc_kind(kw) /= OBJ_AST) return
+    kw = strip_meta(gc_slot(kw, 2))
+    if (kw%tag /= GCT_KEY) return
+    call gc_ref_text(kw%ref, s=nm)
+    select case (nm)
+    case ("doubles"); k = PK_DOUBLE
+    case ("longs"); k = PK_LONG
+    case ("ints"); k = PK_INT
+    case ("floats"); k = PK_FLOAT
+    case ("shorts"); k = PK_SHORT
+    case ("bytes"); k = PK_BYTE
+    case ("chars"); k = PK_CHAR
+    case ("booleans"); k = PK_BOOL
+    case default; k = PK_OBJ
+    end select
+  end function array_elem_kind
+
+  ! clotran.host.math's methods, typed as the Math methods they stand
+  ! for: one signature is its primitive whatever it is given (the
+  ! Compiler converts the argument); an overloaded one is primitive
+  ! when its arguments are and an Object when one is (a reflective
+  ! call), by the overload the arguments pick.
+  recursive integer function math_call_kind(m, kids, sc) result(k)
+    character(len=*), intent(in) :: m
+    type(gc_value), intent(in) :: kids, sc
+    integer :: i, a
+    logical :: dbl
+    k = 0
+    select case (m)
+    case ("E", "PI", "sin", "cos", "tan", "asin", "acos", "atan", "toRadians", "toDegrees", "exp", "log", &
+         "log10", "sqrt", "cbrt", "ceil", "floor", "rint", "sinh", "cosh", "tanh", "expm1", "log1p", &
+         "IEEEremainder", "atan2", "pow", "hypot", "random")
+       k = PK_DOUBLE
+       return
+    end select
+    dbl = .false.
+    do i = 1, gcv_count(kids) - 1
+       a = static_prim(gcv_nth(kids, i), sc)
+       if (a == 0 .or. a == PK_BOOL) return
+       if (a == PK_OBJ) then
+          k = PK_OBJ
+          return
+       end if
+       if (a == PK_DOUBLE .or. a == PK_FLOAT) dbl = .true.
+    end do
+    select case (m)
+    case ("abs", "max", "min", "negateExact", "incrementExact", "decrementExact", &
+         "addExact", "subtractExact", "multiplyExact", "floorDiv", "floorMod")
+       k = merge(PK_DOUBLE, PK_LONG, dbl)
+    case ("round")
+       k = PK_LONG
+    case ("getExponent")
+       k = PK_INT
+    case ("signum", "ulp", "nextUp", "nextDown", "copySign", "nextAfter", "scalb")
+       k = PK_DOUBLE
+    end select
+  end function math_call_kind
+
+  ! A Numbers op on these operands, folded left as the nary inline
+  ! nests it, by Numbers' overloads (`how`):
+  !   1 add, subtract, multiply: two primitive integers are a long; a
+  !     primitive double beside anything typed is a double
+  !     (Numbers.add(double, Object) is a double); else a Number
+  !   2 divide and the promoting ops: the same, but two longs a Number
+  !   3 quot, rem: an Object operand makes a Number, else as 1
+  !   4 one operand (inc, dec, negate): its own kind
+  !   5 max, min: a primitive only when both are the same one
+  !     (Numbers.max(double, long) is an Object)
+  !   6 one operand, promoting (inc', dec'): a double stays one
+  ! Unknown anywhere is unknown.
+  recursive integer function arith_kind(kids, sc, how) result(k)
+    type(gc_value), intent(in) :: kids, sc
+    integer, intent(in) :: how
+    integer :: i, a
+    k = 0
+    do i = 1, gcv_count(kids) - 1
+       a = static_prim(gcv_nth(kids, i), sc)
+       if (a == 0 .or. a == PK_BOOL) then
+          k = 0
+          return
+       end if
+       ! a primitive integer is a long here, a float a double
+       if (any(a == [PK_INT, PK_SHORT, PK_BYTE, PK_CHAR])) a = PK_LONG
+       if (a == PK_FLOAT) a = PK_DOUBLE
+       if (i == 1) then
+          k = a
+       else if (how == 5) then
+          if (k /= a) k = PK_OBJ
+       else if (how == 3 .and. (k == PK_OBJ .or. a == PK_OBJ)) then
+          k = PK_OBJ
+       else if (k == PK_DOUBLE .or. a == PK_DOUBLE) then
+          k = PK_DOUBLE
+       else if (k == PK_OBJ .or. a == PK_OBJ) then
+          k = PK_OBJ
+       else if (how == 2) then
+          k = PK_OBJ
+       end if
+    end do
+    if (how == 6 .and. k /= PK_DOUBLE .and. k /= 0) k = PK_OBJ
+  end function arith_kind
+
+  ! A call through a Var with `nargs` arguments, as InvokeExpr types it:
+  ! an :inline expands to what is not modelled here (0); an :arglists
+  ! vector of that count with a ^long or ^double in it is invokePrim,
+  ! answering its return's primitive or an Object (FnMethod.primInterface);
+  ! anything else is IFn.invoke, an Object.
+  integer function var_call_kind(var, nargs) result(k)
+    type(gc_value), intent(in) :: var
+    integer, intent(in) :: nargs
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: md, al, v, sq, vec
+    integer :: i, base
+    logical :: prim
+    k = 0
+    if (.not. gcn_is_var(var)) return
+    vst => gc_my_stack()
+    md = gc_slot(var, 2)
+    if (gca_is(md)) then
+       if (gca_contains(md, gc_key("inline", [var, md]))) return
+       al = strip_meta(gca_get(md, gc_key("arglists", [var, md])))
+       ! (quote ([x] ...)) as written, or the list it evaluates to
+       if (gcl_is(al)) then
+          v = strip_meta(gcl_first(al))
+          if (v%tag == GCT_SYM) then
+             if (gc_ref_is(v%ref, "quote")) al = strip_meta(gcl_first(gcl_rest(al, [var, md, al])))
+          end if
+       end if
+       ! any seq: a list, or the indexed seq quote leaves -- each step
+       ! rooted, prim_hint_kind allocating
+       base = vs_enter(vst, 1)
+       sq = to_seq(al, [var, md, al])
+       call vs_set(vst, base + 1, sq)
+       do while (sq%tag /= GCT_NIL)
+          vec = sq_first(sq, [var, md, al, sq])
+          if (gcv_is(strip_meta(vec))) then
+             if (gcv_count(strip_meta(vec)) == nargs) then
+                prim = prim_hint_kind(vec) > 0
+                do i = 0, nargs - 1
+                   if (prim_hint_kind(gcv_nth(strip_meta(vec), i)) > 0) prim = .true.
+                end do
+                k = PK_OBJ
+                if (prim .and. prim_hint_kind(vec) > 0) k = prim_hint_kind(vec)
+                if (prim .and. nargs > 4) k = 0
+                call vs_leave(vst, base)
+                return
+             end if
+          end if
+          sq = to_seq(sq_rest(sq, [var, md, al, sq]), [var, md, al])
+          call vs_set(vst, base + 1, sq)
+       end do
+       call vs_leave(vst, base)
+    end if
+    k = PK_OBJ
+  end function var_call_kind
+
+  ! clojure.core's Var named `nm`, or nil.
+  function core_var(nm, roots) result(var)
+    type(gc_value), intent(in) :: roots(:)
+    character(len=*), intent(in) :: nm
+    type(gc_value) :: var, nsv
+    var = gc_nil()
+    nsv = gcn_find("clojure.core")
+    if (gc_kind(nsv) /= OBJ_NS) return
+    var = gcn_lookup(nsv, gc_sym(nm, [roots, nsv]))
+  end function core_var
+
+  ! A recur, or a do ending in one.
+  recursive logical function is_recur(nd) result(yes)
+    type(gc_value), intent(in) :: nd
+    integer :: n
+    yes = .false.
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) == N_RECUR) then
+       yes = .true.
+    else if (gc_i1(nd) == N_DO) then
+       n = gcv_count(gc_slot(nd, 1))
+       if (n > 0) yes = is_recur(gcv_nth(gc_slot(nd, 1), n - 1))
+    end if
+  end function is_recur
+
+  ! A node's primitive kind (above), in the scope it was analysed in.
+  recursive integer function static_prim(nd, sc) result(k)
+    type(gc_value), intent(in) :: nd, sc
+    type(gc_value) :: kids, v, head
+    character(len=:), allocatable :: nm
+    integer :: n, a, b
+    k = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    kids = gc_slot(nd, 1)
+    select case (gc_i1(nd))
+    case (N_CONST)
+       v = strip_meta(gc_slot(nd, 2))
+       select case (v%tag)
+       case (GCT_INT); k = PK_LONG
+       case (GCT_REAL); k = PK_DOUBLE
+       case default; k = PK_OBJ
+       end select
+    case (N_LOCAL)
+       k = local_kind(sc, gc_i2(nd))
+       ! not bound in this fn: captured, and a primitive stays one in the
+       ! closure (a closed-over field of its type)
+       if (k == 0) k = captured_kind(sc, gc_slot(nd, 2))
+    case (N_VECTOR, N_MAP, N_SET, N_FN, N_NEW)
+       k = PK_OBJ
+    case (N_DO)
+       n = gcv_count(kids)
+       if (n > 0) k = static_prim(gcv_nth(kids, n - 1), sc)
+    case (N_LET, N_LOOP)
+       ! [init_0 .. init_{n-1}, body], slot 2 the first slot: the body's
+       ! kind when it is a literal, an outer local or one of these (whose
+       ! kind is its init's -- a loop's only an Object for certain)
+       n = gcv_count(kids)
+       if (n == 0) return
+       head = gcv_nth(kids, n - 1)
+       do while (gc_kind(head) == OBJ_AST)
+          if (gc_i1(head) /= N_DO) exit
+          if (gcv_count(gc_slot(head, 1)) == 0) exit
+          head = gcv_nth(gc_slot(head, 1), gcv_count(gc_slot(head, 1)) - 1)
+       end do
+       a = -1
+       if (gc_kind(head) == OBJ_AST) then
+          if (gc_i1(head) == N_LOCAL) a = gc_i2(head) - int_of(gc_slot(nd, 2))
+       end if
+       if (a >= 0 .and. a < gc_i2(nd)) then
+          k = static_prim(gcv_nth(kids, a), sc)
+          if (gc_i1(nd) == N_LOOP .and. k > 0) k = 0
+       else if (gc_kind(head) == OBJ_AST) then
+          if (gc_i1(head) /= N_LOCAL) k = static_prim(head, sc)
+       end if
+    case (N_IF)
+       ! IfExpr: a primitive when both branches are the same one
+       if (gcv_count(kids) >= 2) then
+          a = static_prim(gcv_nth(kids, 1), sc)
+          b = PK_OBJ
+          if (gcv_count(kids) >= 3) b = static_prim(gcv_nth(kids, 2), sc)
+          ! a branch that recurs never answers: the if is the other's
+          ! type (IfExpr, Recur.class)
+          if (is_recur(gcv_nth(kids, 1))) a = b
+          if (gcv_count(kids) >= 3) then
+             if (is_recur(gcv_nth(kids, 2))) b = a
+          end if
+          if (a == 0 .or. b == 0) then
+             k = 0
+          else if (a == b) then
+             k = a
+          else
+             k = PK_OBJ
+          end if
+       end if
+    case (N_CALL)
+       if (gcv_count(kids) < 1) return
+       head = gcv_nth(kids, 0)
+       if (gc_kind(head) /= OBJ_AST) return
+       select case (gc_i1(head))
+       case (N_LOCAL, N_FN)
+          ! invoked through IFn: an Object
+          k = PK_OBJ
+       case (N_CONST)
+          v = strip_meta(gc_slot(head, 2))
+          if (v%tag == GCT_KEY) then
+             k = PK_OBJ
+          else if (gc_kind(v) == OBJ_BUILTIN) then
+             ! a core fn the analyser put its builtin in place of (inc,
+             ! long, count, ...), or a host method row: named as the core
+             ! fn that is the same operation
+             v = gc_slot(v, 1)
+             if (v%tag == GCT_SYM) then
+                call gc_ref_text(v%ref, s=nm)
+                k = core_call_kind(nm, kids, sc)
+                if (k == 0) k = var_call_kind(core_var(nm, [nd, sc]), gcv_count(kids) - 1)
+             end if
+          else if (gc_kind(v) == OBJ_CLOSURE) then
+             call fn_who(v, nm)
+             if (index(nm, "clojure.core/") == 1) then
+                k = core_call_kind(nm(14:), kids, sc)
+                if (k == 0) k = var_call_kind(core_var(nm(14:), [nd, sc]), gcv_count(kids) - 1)
+             end if
+          end if
+       case (N_VAR)
+          v = gc_slot(gc_slot(head, 2), 4)
+          if (v%tag == GCT_SYM) then
+             call gc_ref_text(v%ref, s=nm)
+             if (index(nm, "clojure.core/") == 1) k = core_call_kind(nm(14:), kids, sc)
+          end if
+          if (k == 0) k = var_call_kind(gc_slot(head, 2), gcv_count(kids) - 1)
+       end select
+    end select
+  end function static_prim
+
+  ! A fn arity's ^long and ^double parameters, for its recurs: the kinds
+  ! and the names, filed on the arity's block. A return hint makes
+  ! prim_hint_body wrap the body in a loop*, which is then the recur
+  ! target: its kinds, names and the return's kind are left for that
+  ! loop to take (take_arg_kinds). Every other parameter is an Object
+  ! for certain. Not for a deftype or reify method, whose parameters
+  ! take their types from the interface.
+  subroutine note_arg_kinds(clause, params, nfixed, variadic, blk, start, roots)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: clause, params, blk
+    integer, intent(in) :: nfixed, start
+    logical, intent(in) :: variadic
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: kv, names
+    integer :: kinds(max(nfixed, 1)), i, base, ret
+    logical :: any_prim
+    vst => gc_my_stack()
+    any_prim = .false.
+    do i = 0, nfixed - 1
+       kinds(i + 1) = max(prim_hint_kind(gcv_nth(params, i)), 0)
+       if (kinds(i + 1) > 0) then
+          any_prim = .true.
+       else
+          call bind_local_kind(blk, start + i, PK_OBJ, roots)
+       end if
+    end do
+    if (variadic) then
+       call bind_local_kind(blk, start + nfixed, PK_OBJ, roots)
+       return
+    end if
+    ret = max(prim_hint_kind(gcl_first(clause)), 0)
+    if (.not. any_prim .and. ret == 0) return
+    base = vs_enter(vst, 2)
+    kv = int_vec([kinds(1:nfixed), ret], [roots, clause, params, blk])
+    call vs_set(vst, base + 1, kv)
+    names = gcv_empty([roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, names)
+    do i = 0, nfixed - 1
+       names = gcv_conj(vs_get(vst, base + 2), strip_meta(gcv_nth(params, i)), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 2, names)
+    end do
+    ! the kinds vector carries the return's kind last
+    if (ret > 0) then
+       call block_note(blk, gc_key("clotran/loop-kinds", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+            vs_get(vst, base + 1), [roots, vs_get(vst, base + 2)])
+       call block_note(blk, gc_key("clotran/loop-names", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+            vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+    else
+       call block_note(blk, gc_key("clotran/recur-kinds", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+            vs_get(vst, base + 1), [roots, vs_get(vst, base + 2)])
+       call block_note(blk, gc_key("clotran/recur-names", [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+            vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+    end if
+    call vs_leave(vst, base)
+  end subroutine note_arg_kinds
+
+  ! The loop* a return-hinted arity's body was wrapped in takes the
+  ! arguments' kinds its arity left (note_arg_kinds), once, and answers
+  ! the return's kind -- 0 for any other loop.
+  integer function take_arg_kinds(parent, blk, roots) result(ret)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: parent, blk
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m, k, kv, nv
+    integer :: base
+    ret = 0
+    if (gc_kind(parent) /= OBJ_AST) return
+    m = gc_slot(parent, 5)
+    if (.not. gca_is(m)) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, m)
+    k = gc_key("clotran/loop-kinds", [roots, parent, blk, vs_get(vst, base + 1)])
+    kv = gca_get(vs_get(vst, base + 1), k)
+    if (gcv_is(kv)) then
+       ret = int_of(gcv_nth(kv, gcv_count(kv) - 1))
+       call vs_set(vst, base + 2, kv)
+       k = gc_key("clotran/loop-names", [roots, parent, blk, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       nv = gca_get(vs_get(vst, base + 1), k)
+       call vs_set(vst, base + 3, nv)
+       call block_note(blk, gc_key("clotran/recur-kinds", [roots, parent, vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+            vs_get(vst, base + 2), [roots, parent, vs_get(vst, base + 3)])
+       call block_note(blk, gc_key("clotran/recur-names", [roots, parent, vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+            vs_get(vst, base + 3), [roots, parent, vs_get(vst, base + 2)])
+       call block_note(parent, gc_key("clotran/loop-kinds", [roots, parent, blk]), gc_nil(), [roots, blk])
+    end if
+    call vs_leave(vst, base)
+  end function take_arg_kinds
+
+  ! RecurExpr's check: an argument to a ^long or ^double fn parameter
+  ! must be that primitive (an int to a long, a float to a double).
+  ! `kids` are the argument nodes, without a method's this.
+  logical function recur_args_ok(sc, kids, roots) result(ok)
+    type(gc_value), intent(in) :: sc, kids
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: own, rinfo, up, m, kv, nv, kid, v
+    integer :: i, p, k
+    character(len=:), allocatable :: had, nm, need
+    ok = .true.
+    rinfo = gc_slot(sc, 4)
+    ! the block that set this recur target: its children share the vector
+    own = sc
+    do
+       up = gc_slot(own, 2)
+       if (gc_kind(up) /= OBJ_AST) exit
+       v = gc_slot(up, 4)
+       if (v%ref /= rinfo%ref .or. v%tag /= rinfo%tag) exit
+       own = up
+    end do
+    m = gc_slot(own, 5)
+    if (.not. gca_is(m)) return
+    kv = gca_get(m, gc_key("clotran/recur-kinds", [roots, sc, kids, m]))
+    if (.not. gcv_is(kv)) return
+    nv = gca_get(m, gc_key("clotran/recur-names", [roots, sc, kids, m, kv]))
+    do i = 0, min(gcv_count(kv), gcv_count(kids)) - 1
+       p = int_of(gcv_nth(kv, i))
+       if (p <= 0) cycle
+       kid = gcv_nth(kids, i)
+       k = static_prim(kid, sc)
+       if (k == 0) cycle
+       if (p == PK_LONG .and. any(k == [PK_LONG, PK_INT, PK_SHORT, PK_BYTE, PK_CHAR])) cycle
+       if (p == PK_DOUBLE .and. any(k == [PK_DOUBLE, PK_FLOAT])) cycle
+       call prim_name(k, had)
+       if (k == PK_OBJ .and. gc_i1(kid) == N_CONST) then
+          v = strip_meta(gc_slot(kid, 2))
+          if (v%tag /= GCT_NIL) call class_name_of(v, s=had)
+       end if
+       nm = "?"
+       if (gcv_is(nv)) then
+          v = gcv_nth(nv, i)
+          if (v%tag == GCT_SYM) call gc_ref_text(v%ref, s=nm)
+       end if
+       ! clj finds it when the fn is EMITTED, after its whole body is
+       ! analysed and after a return hint's check: filed on the arity's
+       ! block, the first one, and raised when the arity is done
+       if (int_of(gcv_nth(rinfo, 0)) == 0) own = gc_slot(own, 2)
+       if (tag_of(gca_get_or_nil(gc_slot(own, 5), "clotran/recur-error")) == GCT_NIL) then
+          block
+            type(gc_stack), pointer :: vst
+            integer :: base
+            vst => gc_my_stack()
+            base = vs_enter(vst, 1)
+            call prim_name(p, need)
+            call vs_set(vst, base + 1, gc_str(" recur arg for primitive local: " // nm // " is not matching primitive, had: " &
+                 // had // ", needed: " // need, [roots, sc, kids, own]))
+            call block_note(own, gc_key("clotran/recur-error", [roots, sc, kids, own, vs_get(vst, base + 1)]), &
+                 vs_get(vst, base + 1), [roots, sc, kids])
+            call vs_leave(vst, base)
+          end block
+       end if
+       return
+    end do
+  end function recur_args_ok
+
+  ! Whether a binding form carries a :tag, as Compiler.tagOf reads one.
+  logical function has_tag(raw)
+    type(gc_value), intent(in) :: raw
+    type(gc_value) :: md, tg
+    has_tag = .false.
+    if (gc_kind(raw) /= OBJ_META) return
+    md = gc_slot(raw, 2)
+    if (.not. gca_is(md)) return
+    tg = gc_key("tag", [raw, md])
+    if (.not. gca_contains(md, tg)) return
+    ! Compiler.tagOf: a symbol or a string; a class -- case's {:tag
+    ! Object}, evaluated -- is no tag
+    has_tag = any(tag_of(gca_get(md, tg)) == [GCT_SYM, GCT_STR])
+  end function has_tag
+
   ! The array hint of the local `sym` names here, or nil. The walk is
   ! name resolution's: the innermost scope that BINDS the name decides,
   ! so a rebinding with no hint hides an outer one that had it.
@@ -238,6 +913,7 @@
           if (gca_contains(gc_slot(sc, 1), sym)) then
              m = gc_slot(sc, 5)
              if (gca_is(m)) h = gca_get(m, sym)
+             if (h%tag /= GCT_KEY) h = gc_nil()
              return
           end if
        end if
@@ -2084,7 +2760,8 @@
     type(gc_value), intent(in) :: rest, sc
     logical, intent(in) :: is_loop
     type(gc_value) :: nd, binds, blk, kids, c, k, rinfo
-    integer :: base, i, n, start
+    integer :: base, i, n, start, ret
+    logical :: args_loop
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -2111,9 +2788,15 @@
     blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, blk)
     start = reserve_slots(vs_get(vst, base + 4), n)
+    ret = 0
+    args_loop = .false.
     if (is_loop) then
        rinfo = int_vec([0, start, n], [vs_get(vst, base + 1), vs_get(vst, base + 4)])
        call gc_set_slot(vs_get(vst, base + 4), 4, rinfo)
+       ! the loop* prim_hint_body wraps a ^long-returning fn's body in
+       ! IS its arguments: a recur to it is checked as one to them
+       ret = take_arg_kinds(vs_get(vst, base + 2), vs_get(vst, base + 4), [vs_get(vst, base + 1)])
+       args_loop = gcv_is(gca_get_or_nil(gc_slot(vs_get(vst, base + 4), 5), "clotran/recur-kinds"))
     end if
     kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 5, kids)
@@ -2131,6 +2814,32 @@
        end if
        kids = gcv_conj(vs_get(vst, base + 5), c, [vs_get(vst, base + 1), vs_get(vst, base + 4), c])
        call vs_set(vst, base + 5, kids)
+       ! LocalBinding: a hinted local with a primitive init is refused; a
+       ! let local is its init's kind, a loop local only an Object for
+       ! certain (a primitive one is boxed when a recur does not match)
+       block
+         integer :: pk
+         pk = static_prim(gcv_nth(vs_get(vst, base + 5), i), vs_get(vst, base + 4))
+         if (pk > 0 .and. has_tag(gcv_nth(vs_get(vst, base + 3), 2 * i))) then
+            call raise_class("clotran.host.unsupported_operation_exception", &
+                 "Can't type hint a local with a primitive initializer", [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
+            return
+         end if
+         ! a loop local is its init's primitive through the body, as clj's
+         ! first pass types it -- an int a long, a float a double
+         ! (LetExpr.Parser); its errors are final there too, the boxing
+         ! of a mismatched recur only re-analysing a loop that had none
+         if (is_loop .and. pk == PK_INT) pk = PK_LONG
+         if (is_loop .and. pk == PK_FLOAT) pk = PK_DOUBLE
+         ! the arguments a return-hinted fn's loop* stands for are typed
+         ! by their hints, and never boxed
+         if (args_loop) then
+            pk = int_of(gcv_nth(gca_get_or_nil(gc_slot(vs_get(vst, base + 4), 5), "clotran/recur-kinds"), i))
+            if (pk == 0) pk = PK_OBJ
+         end if
+         call bind_local_kind(vs_get(vst, base + 4), start + i, pk, [vs_get(vst, base + 1), vs_get(vst, base + 5)])
+       end block
        k = strip_meta(gcv_nth(vs_get(vst, base + 3), 2 * i))
        if (k%tag /= GCT_SYM) then
           call fail("let* needs a symbol to bind")
@@ -2166,6 +2875,24 @@
     end if
     kids = gcv_conj(vs_get(vst, base + 5), c, [vs_get(vst, base + 1), vs_get(vst, base + 4), c])
     call vs_set(vst, base + 5, kids)
+    ! ObjMethod.emitBody: a ^long or ^double return takes a body of that
+    ! primitive (a long an int, a double a float), or one not typed
+    if (ret > 0) then
+       block
+         integer :: bk
+         character(len=:), allocatable :: rn, bn
+         bk = static_prim(c, vs_get(vst, base + 4))
+         if (bk > 0 .and. bk /= ret .and. .not. (ret == PK_LONG .and. bk == PK_INT) &
+              .and. .not. (ret == PK_DOUBLE .and. bk == PK_FLOAT)) then
+            call prim_name(ret, rn)
+            call prim_name(bk, bn)
+            call raise_class("clotran.host.illegal_argument_exception", "Mismatched primitive return, expected: " // &
+                 rn // ", had: " // bn, [vs_get(vst, base + 1)])
+            call vs_leave(vst, base)
+            return
+         end if
+       end block
+    end if
     nd = mk_node(merge(N_LOOP, N_LET, is_loop), vs_get(vst, base + 5), gc_int(start), gc_nil(), n, &
          [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)
@@ -2588,9 +3315,18 @@
   function cast_fn(kind, roots) result(f)
     integer, intent(in) :: kind
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: f
+    type(gc_value) :: f, nsv, v
     if (kind == 1) then
-       f = native(B_NUMLONG, "long", roots)
+       ! under *unchecked-math* when the fn is analysed, RT's
+       ! uncheckedLongCast, as Compiler.emitUnboxArg chooses
+       nsv = gcn_find("clojure.core")
+       v = gc_nil()
+       if (gc_kind(nsv) == OBJ_NS) v = gcn_var_value(gcn_lookup(nsv, gc_sym("*unchecked-math*", [roots, nsv])))
+       if (v%tag /= GCT_NIL .and. .not. (v%tag == GCT_BOOL .and. v%ival == 0)) then
+          f = native(B_LONGCAST, "unchecked-long", roots)
+       else
+          f = native(B_NUMLONG, "long", roots)
+       end if
     else
        f = native(B_DBLCAST, "double", roots)
     end if
@@ -2661,6 +3397,8 @@
     rinfo = int_vec([merge(2, 1, variadic), start, merge(nfixed + 1, nfixed, variadic)], &
          [vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call gc_set_slot(vs_get(vst, base + 4), 4, rinfo)
+    if (hints) call note_arg_kinds(vs_get(vst, base + 1), vs_get(vst, base + 3), nfixed, variadic, &
+         vs_get(vst, base + 4), start, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     body = prim_hint_body(gcl_first(vs_get(vst, base + 1)), vs_get(vst, base + 3), nfixed, variadic, &
          gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]), hints, &
          [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
@@ -2676,6 +3414,19 @@
        return
     end if
     call vs_set(vst, base + 5, body)
+    ! a recur argument that did not match (recur_args_ok), as emitting
+    ! the arity finds it
+    block
+      type(gc_value) :: re
+      character(len=:), allocatable :: rm
+      re = gca_get_or_nil(gc_slot(vs_get(vst, base + 4), 5), "clotran/recur-error")
+      if (re%tag == GCT_STR) then
+         call gc_ref_text(re%ref, s=rm)
+         call raise_class("clotran.host.illegal_argument_exception", rm, [vs_get(vst, base + 1)])
+         call vs_leave(vst, base)
+         return
+      end if
+    end block
     ar = gcv_empty([vs_get(vst, base + 5)])
     ar = gcv_conj(ar, gc_int(nfixed), [vs_get(vst, base + 5), ar])
     ar = gcv_conj(ar, gc_bool(variadic), [vs_get(vst, base + 5), ar])
@@ -2728,6 +3479,12 @@
     end if
     kids = analyze_all(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, kids)
+    if (.not. tctx%has_error .and. .not. method) then
+       if (.not. recur_args_ok(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
+          return
+       end if
+    end if
     if (method .and. .not. tctx%has_error) then
        ! [this args...]: the local in the method's first parameter slot
        m = gc_slot(scope_info(vs_get(vst, base + 2)), 5)

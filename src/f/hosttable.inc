@@ -30,15 +30,15 @@
   ! written against Array. Every typed variant shares one implementation:
   ! the element's kind is the array's, not the accessor's name.
        hm("clotran.host.array", "newInstance", B_ANEWINST, "clotran-array-new"), &
-       hm("clotran.host.array", "get", B_AGET, "aget"), &
-       hm("clotran.host.array", "getInt", B_AGET, "aget"), &
-       hm("clotran.host.array", "getLong", B_AGET, "aget"), &
-       hm("clotran.host.array", "getDouble", B_AGET, "aget"), &
-       hm("clotran.host.array", "getFloat", B_AGET, "aget"), &
-       hm("clotran.host.array", "getBoolean", B_AGET, "aget"), &
-       hm("clotran.host.array", "getChar", B_AGET, "aget"), &
-       hm("clotran.host.array", "getByte", B_AGET, "aget"), &
-       hm("clotran.host.array", "getShort", B_AGET, "aget"), &
+       hm("clotran.host.array", "get", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getInt", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getLong", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getDouble", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getFloat", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getBoolean", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getChar", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getByte", B_ARRAYGET, "aget"), &
+       hm("clotran.host.array", "getShort", B_ARRAYGET, "aget"), &
        hm("clotran.host.array", "set", B_JASET, "aset"), &
        hm("clotran.host.array", "setInt", B_JASET, "aset"), &
        hm("clotran.host.array", "setLong", B_JASET, "aset"), &

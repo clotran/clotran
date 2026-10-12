@@ -37,6 +37,8 @@
    ["fuzz-coll" "fuzz-coll"     ["-n" "120"]              ["-n" "1500"]              90]
    ["fuzz-macro" "fuzz-macro"    ["-n" "150"]              ["-n" "2000"]              60]
    ["fuzz-fn" "fuzz-fn"       ["-n" "30" "-k" "4"]      ["-n" "300" "-k" "6"]      60]
+   ["fuzz-deftype" "fuzz-deftype" ["-n" "20"]             ["-n" "400"]              60]
+   ["fuzz-hints" "fuzz-hints"  ["-n" "60"]               ["-n" "2000"]             60]
    ["fuzz-read" "fuzz-read"     ["-n" "400"]              ["-n" "5000"]             60]
    ["fuzz-threads" "fuzz-threads"  ["-n" "20"]               ["-n" "300"]               60]
    ["fuzz-pure" "fuzz-pure"     ["-n" "30"]               ["-n" "300"]               60]

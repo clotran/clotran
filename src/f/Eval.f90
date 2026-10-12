@@ -254,7 +254,7 @@ module Eval
   integer, parameter :: B_RATIONALIZE = 431
   ! the agent scheduler (PLAN step 24, model/agents.lisp)
   integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434, B_AGENTSHUTDOWN = 435
-  integer, parameter :: B_HOSTBOX = 436, B_IMPORT = 437
+  integer, parameter :: B_HOSTBOX = 436, B_IMPORT = 437, B_ARRAYGET = 438
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -495,6 +495,10 @@ module Eval
        N_SETBANG = 24, N_FAIL = 25, N_TOP = 26, N_TOPDO = 27, N_LATEVAR = 28, &
        N_FLAT = 29, &   ! a fn body as flat instructions (flat.inc)
        N_VMB = 30       ! a fn body the generated VM runs (vm.inc)
+  ! A node's primitive kind, as the analyser can know it (analyze.inc
+  ! static_prim); 0 is not known
+  integer, parameter :: PK_OBJ = -1, PK_LONG = 1, PK_DOUBLE = 2, PK_INT = 3, PK_BOOL = 4, &
+       PK_FLOAT = 5, PK_SHORT = 6, PK_BYTE = 7, PK_CHAR = 8
   ! vm.inc's: a translation's state
   type :: vm_tr_ctx
      logical :: ok = .true., fn_recur = .false.
@@ -4400,6 +4404,34 @@ contains
     import_ns(n_imports) = here
     call gc_state_unlock()
   end subroutine record_import
+
+  ! RT's array methods have an overload per array type and none for
+  ! anything else, so a non-array is the Reflector's
+  ! IllegalArgumentException: no method for a value, more than one for
+  ! nil, which every overload accepts (DEVIATIONS 48)
+  ! -- and Array.get, which aget's fn body calls (through apply, say),
+  ! has one that refuses a non-array in its own words (`reflective`)
+  subroutine no_array_method(name, nargs, a, reflective)
+    character(len=*), intent(in) :: name
+    integer, intent(in) :: nargs
+    type(gc_value), intent(in) :: a
+    logical, intent(in), optional :: reflective
+    character(len=16) :: cbuf
+    type(gc_value) :: none(0)
+    if (present(reflective)) then
+       if (reflective .and. a%tag /= GCT_NIL) then
+          call raise_class("clotran.host.illegal_argument_exception", "Argument is not an array", none)
+          return
+       end if
+    end if
+    if (a%tag == GCT_NIL) then
+       call raise_class("clotran.host.illegal_argument_exception", "More than one matching method found: " // name, none)
+    else
+       write(cbuf, '(I0)') nargs
+       call raise_class("clotran.host.illegal_argument_exception", "No matching method " // name // &
+            " found taking " // trim(cbuf) // " args", none)
+    end if
+  end subroutine no_array_method
 
   ! Undoes a record_import of `full` in the current namespace: a
   ! deftype's short name is its methods' (the compile stub), and the
@@ -11253,7 +11285,7 @@ contains
          integer, allocatable :: ext(:)
          a0 = strip_meta(gcv_nth(args, 0))
          if (gc_kind(a0) /= OBJ_ARRAY) then
-            call fail("alength: not an array")
+            call no_array_method("alength", 1, a0)
          else
             ext = array_own_extents(a0)
             out = gc_int(ext(1))
@@ -11294,7 +11326,7 @@ contains
          end if
        end block
 
-    case (B_AGET, B_ASET, B_JASET)
+    case (B_AGET, B_ASET, B_JASET, B_ARRAYGET)
        ! (aget a i j ...) and (aset a i j ... v). FEWER subscripts than
        ! the array's own rank is not an error: Clojure's own aget/aset
        ! always pass exactly one index and recur --
@@ -11313,23 +11345,18 @@ contains
          character(len=:), allocatable :: kn
          a0 = strip_meta(gcv_nth(args, 0))
          if (gc_kind(a0) /= OBJ_ARRAY) then
-            ! RT.aset has no overload for a non-array: the Reflector's words
+            ! RT.aget and RT.aset have no overload for a non-array
             if (id == B_JASET) then
-               block
-                 character(len=16) :: cbuf
-                 write(cbuf, '(I0)') n
-                 call raise_class("clotran.host.illegal_argument_exception", "No matching method aset found taking " // &
-                      trim(cbuf) // " args", [vs_get(vst, base + 1)])
-               end block
+               call no_array_method("aset", n, a0)
             else
-               call fail("aget/aset: not an array")
+               call no_array_method("aget", 2, a0, id == B_ARRAYGET)
             end if
             call vs_leave(vst, base)
             return
          end if
          h = gc_i1(a0)
          nsub = n - 1
-         if (id /= B_AGET) nsub = n - 2
+         if ((id /= B_AGET .and. id /= B_ARRAYGET)) nsub = n - 2
          if (nsub < 1) then
             call fail("aget/aset: needs at least one index")
             call vs_leave(vst, base)
@@ -11372,7 +11399,7 @@ contains
             ! assigns a whole sub-array at once -- core.clj's own
             ! multi-arg aset always slices down to a full index before
             ! writing -- so this path is aget-only.
-            if (id /= B_AGET) then
+            if ((id /= B_AGET .and. id /= B_ARRAYGET)) then
                call fail("aset: not enough indices")
                call vs_leave(vst, base)
                return
@@ -11399,14 +11426,14 @@ contains
          if (kn == "value") then
             ! The run is the storage. gc_vec_set is O(1) and the
             ! collector already traces what goes in.
-            if (id == B_AGET) then
+            if ((id == B_AGET .or. id == B_ARRAYGET)) then
                out = gc_vec_get(gc_slot(a0, 1), at)
             else
                val = gcv_nth(args, n - 1)
                call gc_vec_set(gc_slot(a0, 1), at, val)
                out = val
             end if
-         else if (id == B_AGET) then
+         else if ((id == B_AGET .or. id == B_ARRAYGET)) then
             call array_read(h, at, kn, out, ok)
             if (.not. ok) call fail("aget: unreadable element kind '" // kn // "'")
          else

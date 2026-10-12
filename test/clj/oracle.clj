@@ -2437,9 +2437,7 @@
  (hint-t #((fn [^objects a] (aget a 0)) (long-array [3]))) (hint-t #(let [^doubles a [1 2]] (aget a 0)))
  (hint-t #((fn [^doubles a] (let [a [1]] (nth a 0))) (double-array 1)))
  (hint-t #((fn [^doubles a] (aget a 0)) (double-array [2.5])))]
-(expect-diff "DEVIATIONS 48: recur to a ^long local with a double is a compile error in clj, a conversion here")
 [(hint-t #((fn [^long n acc] (if (< n 1) acc (recur (- n 0.5) (conj acc n)))) 2 []))]
-(expect-diff "DEVIATIONS 48: a primitive hint on a let local is an UnsupportedOperationException in clj")
 [(hint-t #(let [^long x 1.5] x))]
 [(hint-t #((fn [^doubles a] (aset a 0 2)) (double-array 1)))]
 
@@ -3284,3 +3282,17 @@ x10
 (deftype E60 [k] clotran.host.i_hash_eq (hasheq [_] (hash k)) clotran.host.value (equals [_ o] (and (instance? E60 o) (= k (.-k ^E60 o)))))
 [(get {(E60. [1 2]) :yes} (E60. [1 2])) (contains? #{(E60. :a)} (E60. :a)) (count (hash-set (E60. 1) (E60. 1) (E60. 2)))]
 (try (deref 5) (catch clotran.host.throwable e (re-find #"^class \S+ cannot be cast to class" (.getMessage e))))
+
+;; the static half of type hints (DEVIATIONS 48): a recur to a ^long or ^double fn parameter must be that primitive,
+;; a hinted local's init must not be a primitive (Compiler.tagOf: a symbol or string tag; case's evaluated class is none)
+(defn r48 [f] (try (eval f) :ok (catch clotran.host.throwable e (let [c (or (.getCause e) e)] (re-find #"^ ?[A-Za-z' ]+" (.getMessage c))))))
+(mapv r48 '[(fn [^long n] (if (pos? n) (recur 1.5) n)) (fn [^long n] (if (pos? n) (recur (dec n)) n)) (fn [^long n x] (if (pos? n) (recur x x) n))
+            (fn [^long n] (if (pos? n) (recur (identity 1)) n)) (fn [^long n] (recur (int 1))) (fn [^double d] (if (pos? d) (recur 1) d))
+            (fn [^double d] (recur (/ d 2))) (fn [^long n] (recur (if (pos? n) 1 2.0))) (fn [^long n] (recur (dec' n))) (fn [^long n] (recur "s"))
+            (fn ^long [^long n] (if (pos? n) (recur 2.5) n)) (fn ^long [^long n a] (if (pos? n) (recur (dec n) a) n)) (fn [] (loop [i 0.0] (if (< i 3) (recur 1) i)))
+            (let [^long x 1] x) (let [^long x (inc 1)] x) (let [^long x (count [1])] x) (let [^long x (< 1 2)] x) (let [x 1 ^long y x] y)
+            (fn [^long n] (let [^long m n] m)) (let [^long x (+ 1 (identity 2))] x) (let [^long x (:a {:a 1})] x) (let [^long x "s"] x) (let [^long x true] x)
+            (fn [] (loop [^long i 0] i)) (case (count [1]) 1 :a :b)])
+(binding [*unchecked-math* true] (eval '((fn [^long n] n) 1e20)))
+(mapv (fn [f] (try (eval f) (catch clotran.host.throwable e (.getMessage (or (.getCause e) e)))))
+      (quote [(aget nil 0) (let [v nil] (aget v 0)) (alength [1]) (apply aget [[1] 0]) (aset (identity [1]) 0 1)]))

@@ -1710,38 +1710,61 @@ object, or a separate registry for imports -- and filter it out of
 `gcn_all`. The resolution path that creates them is `analyze_symbol`'s,
 and it is the only caller that should be setting the flag.
 
-## 48. Type hints: the runtime half is Clojure's, the compile-time half is not
+## 48. Type hints: clj's static types, inferred here for what they refuse, narrower
 
-A hint changes what a Clojure program DOES, and clotran now does it: a
+A hint changes what a Clojure program DOES, and clotran does it: a
 `^long` or `^double` parameter or return converts by `RT.longCast` /
 `RT.doubleCast` after a checkcast to Number (`Compiler.emitUnboxArg`),
-so `((fn [^long n] n) 1.5)` is 1 and `((fn [^long n] n) \a)` throws; an
-array hint is a checkcast where the value is USED as an array (`aget`,
-`aset`, `alength`), so a `^doubles` parameter handed a vector is fine
-until indexed. More than four primitive parameters, a variadic one, and
-`^int`/`^float` parameters fail as they do in clj. The oracle's
-"Type hints" cases compare all of this by exception class.
+or by `uncheckedLongCast` when `*unchecked-math*` is on as the fn is
+analysed, so `((fn [^long n] n) 1.5)` is 1 and `((fn [^long n] n) \a)`
+throws; an array hint is a checkcast where the value is USED as an
+array (`aget`, `aset`, `alength`); more than four primitive parameters,
+a variadic one, and `^int`/`^float` parameters fail as they do in clj;
+and `aget`, `aset` and `alength` on a non-array are the Reflector's
+IllegalArgumentException ("No matching method aget found taking 2
+args", "More than one matching method found" for nil, "Argument is not
+an array" through aget's fn body).
 
-What differs is everything clj decides by its static types:
+clj also types each expression when it compiles it, and refuses by
+that type (since 2026-10-12 here too, analyze.inc `static_prim`):
 
-- `recur` to a `^long` parameter with a double is a compile error there
-  ("recur arg for primitive local ... is not matching primitive"); here
-  the value is converted again on the next iteration.
-- `(let [^long x 1.5] x)` is an UnsupportedOperationException there
-  ("Can't type hint a local with a primitive initializer"); here the
-  hint on a let local is ignored.
-- `*unchecked-math*` does not switch a parameter's conversion to
-  `uncheckedLongCast`; the checked cast is always used.
-- `aget`/`alength` (not `aset`, which answers as the Reflector does) on an UNHINTED non-array is a reflection
-  IllegalArgumentException there (and on a literal `nil`, a compile
-  error); here it is a RuntimeException "not an array". A hinted nil is
-  a NullPointerException on both, with a different message.
+- a recur to a `^long` or `^double` fn parameter whose argument is not
+  that primitive ("recur arg for primitive local ... is not matching
+  primitive", RecurExpr), found when the fn is emitted: after its body,
+  and after
+- a primitive return hint given a body of another primitive
+  ("Mismatched primitive return", ObjMethod.emitBody), and
+- a hinted let or loop local whose init is a primitive ("Can't type
+  hint a local with a primitive initializer", LocalBinding; a tag is a
+  symbol or a string, as Compiler.tagOf reads one, so `case`'s
+  evaluated `{:tag Object}` is none).
 
-**Removal**: each item is a static check in the analyser. The recur
-check needs the primitive kind of each loop local, which
-`prim_hint_body` already knows; the let check needs the init's
-primitive type, which needs the compiler's type inference in the
-analyser rather than only in `compiler.cljf`.
+The inference types literals, the casts, Numbers' ops by their
+overloads (`+` of a double and an Object is a double, of a long and an
+Object a Number; `max` of a long and a double an Object), comparisons,
+`count`, a hinted array's `aget` and `alength`, the host's math as
+`Math`'s signatures, `if` (a recurring branch the other's type), `do`,
+`let`, locals (a loop local its init's, as clj's first pass; a
+closed-over one where it was bound), and calls through a Var (an
+`:arglists` vector with a primitive is invokePrim, else an Object).
+`scripts/fuzz-hints` generates all of these against clj.
+
+What differs: what it does not type, it lets through, so clotran
+accepts some programs clj refuses and never the reverse -- a host
+instance method or field, a deftype's primitive field, a static of a
+host class other than math, an array whose type clj knows from its
+constructor's return rather than a hint, and an `:inline` core fn
+outside its table (bit-test, say). A loop
+clj re-analyses with a boxed local (a recur that did not match) is not
+re-analysed here; only an error that second pass alone would find
+differs. The class a recur message names is clotran's, or Object where
+clj names one of its host's (a Number, a vector's abstract class); `(recur nil)` to a primitive
+parameter is that IllegalArgumentException here, a NullPointerException
+inside clj's compiler there. A hinted nil array is a
+NullPointerException on both, with a different message.
+
+**Removal**: each untyped form above is a case of `static_prim`;
+`scripts/fuzz-hints` grows a shape with each.
 
 ## 49. (Resolved 2026-09-25) A task blocked below compiled code was pinned
 
