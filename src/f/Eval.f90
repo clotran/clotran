@@ -633,7 +633,7 @@ module Eval
      type(gc_value) :: cls_val(32)
      type(gc_root) :: cls_root
      ! the rest of what was one module variable each, now one per thread
-     integer :: id = 0, qq_depth = 0, task_loop_depth = 0
+     integer :: id = 0, task_loop_depth = 0
      logical :: analyzing_method = .false., yield_flag = .false.
      ! a fn's display name as clj gives its class: the enclosing fns'
      ! path, and the name a let or def binds the next fn* to (Compiler
@@ -1152,6 +1152,7 @@ contains
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
+    call gcr_set_sq_expander(sq_reader_hook)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     ! The sweep tells us when an object owning out-of-heap storage
@@ -1673,6 +1674,7 @@ contains
     call gcp_set_forcer(gce_force)
     call gca_set_comparer(compare_via)
     call gcr_set_ns_resolver(kw_ns_of)
+    call gcr_set_sq_expander(sq_reader_hook)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])
@@ -2391,7 +2393,7 @@ contains
           gc_ref_is(sym%ref, "let*") .or. gc_ref_is(sym%ref, "fn*") .or. &
           gc_ref_is(sym%ref, "letfn*") .or. &
           gc_ref_is(sym%ref, "loop*") .or. gc_ref_is(sym%ref, "recur") .or. &
-          gc_ref_is(sym%ref, "defmacro*") .or. gc_ref_is(sym%ref, "quasiquote") .or. &
+          gc_ref_is(sym%ref, "defmacro*") .or. &
           gc_ref_is(sym%ref, "try") .or. gc_ref_is(sym%ref, "throw") .or. &
           gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, ".") .or. &
           gc_ref_is(sym%ref, "new") .or. gc_ref_is(sym%ref, "clojure.core/import*") .or. &
@@ -6259,143 +6261,280 @@ contains
     call vs_leave(vst, base)
   end function expand_macro
 
-  ! Syntax-quote, expanded into cons/concat calls exactly as mal and
-  ! clotran's own qq_expand do:
+  ! ---- syntax-quote, at READ time ------------------------------------
   !
-  !   (unquote x)              -> x
-  !   ((splice-unquote x) ...) -> (concat x <rest>)
-  !   (a ...)                  -> (cons <qq a> <rest>)
-  !   a symbol                 -> (quote a)
-  !   anything else            -> itself
+  ! LispReader.syntaxQuote, ported: `form is expanded by the reader
+  ! (installed as its expander, gcr_set_sq_expander), resolving names in
+  ! the namespace current when it is read -- (read-string "`x") is
+  ! (quote user/x), as in clj (DEVIATIONS 6 resolved).
   !
-  ! Built right to left so the result comes out in order.
-  recursive function qq_expand(form, env) result(out)
+  !   a special form, a symbol    (quote sym), sym resolved (qq_alias) or
+  !                               an x# made one fresh name (auto_gensym)
+  !   ~x                          x
+  !   ~@x outside a list          IllegalStateException
+  !   a map, vector, set          (apply hash-map|vector|hash-set
+  !                                 (seq (concat <items>)))
+  !   a list                      (seq (concat <items>)), () (list)
+  !   keyword, number, char, str  itself
+  !   anything else (nil, true)   (quote x)
+  !   metadata but :line/:column  (with-meta <that> <`meta>)
+  !
+  ! where each item is (list `item), (list x) for ~x, x for ~@x.
+  recursive function syntax_quote(form) result(out)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: form, env
-    type(gc_value) :: out, head, elt, inner, sym
+    type(gc_value), intent(in) :: form
+    type(gc_value) :: out, v, md, h, items
     integer :: base, i, n
-    logical :: spliced
-
-    ! Six slots, and every intermediate goes into one BEFORE anything
-    ! that can allocate runs. The first version computed `sym` into a
-    ! Fortran local and then called nth_of/qq_expand, both of which
-    ! allocate -- so under torture the symbol was collected before it
-    ! was ever stored, and the accumulated tail went with it. Only the
-    ! torture pass showed it; the plain pass was perfectly green.
     tctx => ctx_self()
     vst => tctx%stk
-    base = vs_enter(vst, 6)
+    out = gc_nil()
+    base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, form)
-    call vs_set(vst, base + 2, env)
-
-    if (gcv_is(form)) then
-       ! `[a ~b] -- a vector inside syntax-quote. Expanded as a seq and
-       ! rebuilt, which is what LispReader does: (apply vector (seq
-       ! (concat ...))). Without this a vector passed straight through
-       ! and every unquote inside it stayed literal, which is most of
-       ! what a (let [...]) template is.
-       out = qq_rebuild(form, "vec", vs_get(vst, base + 2))
-       call vs_leave(vst, base)
-       return
-    end if
-
-    if (gca_is(form)) then
-       ! `{k ~v} -- flattened to k v k v, expanded as a seq, rebuilt as
-       ! a map. syntaxQuote does the same through flattenMap. Missing
-       ! this let a whole subtree through as literal data: every (ns ...)
-       ! expands into a with-loading-context whose body is a MAP, and
-       ! the gensym inside it was never renamed.
-       out = qq_rebuild(flatten_map(form, vs_get(vst, base + 2)), "hash-map", &
-            vs_get(vst, base + 2), .true.)
-       call vs_leave(vst, base)
-       return
-    end if
-
-    if (gc_kind(form) == OBJ_SET) then
-       out = qq_rebuild(set_elems(form, vs_get(vst, base + 2)), "set", &
-            vs_get(vst, base + 2))
-       call vs_leave(vst, base)
-       return
-    end if
-
-    if (gc_kind(form) == OBJ_META) then
-       ! A HINTED form inside a template is still that form. (.getClass
-       ! ^Object loading#) hides its gensym behind a wrapper, and
-       ! treating the wrapper as an opaque leaf renamed the other
-       ! occurrence of loading# and not this one -- which is worse than
-       ! renaming neither.
-       out = qq_expand(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2))
-       call vs_leave(vst, base)
-       return
-    end if
-
-    if (.not. gcl_is(form)) then
-       if (form%tag == GCT_SYM) then
-          call vs_set(vst, base + 1, auto_gensym(vs_get(vst, base + 1)))
-          call vs_set(vst, base + 1, qq_alias(vs_get(vst, base + 1), vs_get(vst, base + 2)))
-          sym = gc_sym("quote", [vs_get(vst, base + 1)])
-          call vs_set(vst, base + 3, sym)
-          out = gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
-          out = gcl_cons(vs_get(vst, base + 1), out, [vs_get(vst, base + 3), out])
-          out = gcl_cons(vs_get(vst, base + 3), out, [vs_get(vst, base + 1), out])
+    v = strip_meta(form)
+    call vs_set(vst, base + 2, v)
+    if (v%tag == GCT_SYM) then
+       if (is_special(v)) then
+          out = sq_list2("quote", v, [vs_get(vst, base + 1)])
        else
-          out = form
+          call vs_set(vst, base + 2, auto_gensym(vs_get(vst, base + 2)))
+          call vs_set(vst, base + 2, qq_alias(vs_get(vst, base + 2), gc_nil()))
+          out = sq_list2("quote", vs_get(vst, base + 2), [vs_get(vst, base + 1)])
        end if
+    else if (is_unquote(v, "clojure.core/unquote")) then
+       ! the form itself, metadata and all
+       out = gcl_first(gcl_rest(v, [vs_get(vst, base + 1)]))
+       call vs_leave(vst, base)
+       return
+    else if (is_unquote(v, "clojure.core/unquote-splicing")) then
+       call raise_class("clotran.host.illegal_state_exception", "splice not in list", [vs_get(vst, base + 1)])
+       call vs_leave(vst, base)
+       return
+    else if (gc_kind(v) == OBJ_INST) then
+       ! a record read as a literal stays one
+       out = v
+    else if (is_tag_marker(v)) then
+       ! #tag form, read as a marker the tag's reader replaces after the
+       ! whole read (DEVIATIONS 46): quoted whole, as the value it stands
+       ! for is -- `#uuid "..." is (quote #uuid "...")
+       out = sq_list2("quote", v, [vs_get(vst, base + 1)])
+    else if (gca_is(v) .or. gcv_is(v) .or. gc_kind(v) == OBJ_SET) then
+       if (gca_is(v)) then
+          items = flatten_map(v, vs_get(vst, base + 1))
+       else if (gcv_is(v)) then
+          items = v
+       else
+          items = set_elems(v, vs_get(vst, base + 1))
+       end if
+       call vs_set(vst, base + 3, items)
+       out = sq_concat(vs_get(vst, base + 3))
+       if (tctx%has_error) then
+          call vs_leave(vst, base)
+          return
+       end if
+       call vs_set(vst, base + 3, out)
+       if (gca_is(vs_get(vst, base + 2))) then
+          h = gc_sym("clojure.core/hash-map", [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       else if (gcv_is(vs_get(vst, base + 2))) then
+          h = gc_sym("clojure.core/vector", [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       else
+          h = gc_sym("clojure.core/hash-set", [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       end if
+       call vs_set(vst, base + 4, h)
+       out = sq_list2("clojure.core/apply", vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 4, out)
+       ! (apply ctor (seq (concat ...))): the third element
+       out = gcl_cons(vs_get(vst, base + 3), gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)]), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 3, out)
+       out = gcl_cons(gcl_first(gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 3)])), vs_get(vst, base + 3), &
+            [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 3, out)
+       out = gcl_cons(gcl_first(vs_get(vst, base + 4)), vs_get(vst, base + 3), [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    else if (gcl_is(v)) then
+       if (gcl_count(v) == 0) then
+          out = gcl_cons(gc_sym("clojure.core/list", [vs_get(vst, base + 1)]), gcl_empty([vs_get(vst, base + 1)]), &
+               [vs_get(vst, base + 1)])
+       else
+          ! the items as a vector, for sq_concat
+          items = gcv_empty([vs_get(vst, base + 1)])
+          call vs_set(vst, base + 3, items)
+          n = gcl_count(vs_get(vst, base + 2))
+          do i = 0, n - 1
+             items = gcv_conj(vs_get(vst, base + 3), nth_of(vs_get(vst, base + 2), i), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+             call vs_set(vst, base + 3, items)
+          end do
+          out = sq_concat(vs_get(vst, base + 3))
+       end if
+    else if (v%tag == GCT_KEY .or. v%tag == GCT_STR .or. v%tag == GCT_CHAR .or. is_number(v)) then
+       out = v
+    else
+       out = sq_list2("quote", v, [vs_get(vst, base + 1)])
+    end if
+    if (tctx%has_error) then
        call vs_leave(vst, base)
        return
     end if
+    ! metadata, but the reader's own :line and :column
+    if (gc_kind(vs_get(vst, base + 1)) == OBJ_META) then
+       call vs_set(vst, base + 3, out)
+       md = gc_slot(vs_get(vst, base + 1), 2)
+       if (gca_is(md)) then
+          md = gca_dissoc(md, gc_key("line", [vs_get(vst, base + 1), vs_get(vst, base + 3)]), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 4, md)
+          md = gca_dissoc(vs_get(vst, base + 4), gc_key("column", [vs_get(vst, base + 1), vs_get(vst, base + 3), &
+               vs_get(vst, base + 4)]), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+          call vs_set(vst, base + 4, md)
+          if (gca_count(vs_get(vst, base + 4)) > 0) then
+             md = syntax_quote(vs_get(vst, base + 4))
+             if (tctx%has_error) then
+                call vs_leave(vst, base)
+                return
+             end if
+             call vs_set(vst, base + 4, md)
+             ! (with-meta out `meta)
+             out = gcl_cons(vs_get(vst, base + 4), gcl_empty([vs_get(vst, base + 3), vs_get(vst, base + 4)]), &
+                  [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 4, out)
+             out = gcl_cons(vs_get(vst, base + 3), vs_get(vst, base + 4), [vs_get(vst, base + 3), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 4, out)
+             out = gcl_cons(gc_sym("clojure.core/with-meta", [vs_get(vst, base + 4)]), vs_get(vst, base + 4), &
+                  [vs_get(vst, base + 4)])
+          else
+             out = vs_get(vst, base + 3)
+          end if
+       else
+          out = vs_get(vst, base + 3)
+       end if
+    end if
+    call vs_leave(vst, base)
+  end function syntax_quote
 
-    ! (unquote x) -> x
-    if (gcl_count(form) == 2) then
-       head = gcl_first(form)
-       if (head%tag == GCT_SYM) then
-          if (gc_ref_is(head%ref, "clojure.core/unquote") .or. gc_ref_is(head%ref, "unquote")) then
-             out = nth_of(vs_get(vst, base + 1), 1)
+  ! Whether v is the reader's marker for a tagged literal,
+  ! {:clotran/tagged-literal true :tag t :form f}.
+  logical function is_tag_marker(v) result(yes)
+    type(gc_value), intent(in) :: v
+    yes = .false.
+    if (.not. gca_is(v)) return
+    yes = truthy(gca_get(v, gc_key("clotran/tagged-literal", [v])))
+  end function is_tag_marker
+
+  ! Whether v is (head x).
+  logical function is_unquote(v, head) result(yes)
+    type(gc_value), intent(in) :: v
+    character(len=*), intent(in) :: head
+    type(gc_value) :: h
+    yes = .false.
+    if (.not. gcl_is(v)) return
+    if (gcl_count(v) /= 2) return
+    h = strip_meta(gcl_first(v))
+    if (h%tag /= GCT_SYM) return
+    yes = gc_ref_is(h%ref, head)
+  end function is_unquote
+
+  ! (sym x)
+  function sq_list2(sym, x, roots) result(out)
+    type(gc_stack), pointer :: vst
+    character(len=*), intent(in) :: sym
+    type(gc_value), intent(in) :: x
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, x)
+    out = gcl_cons(vs_get(vst, base + 1), gcl_empty([roots, vs_get(vst, base + 1)]), [roots, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, out)
+    out = gcl_cons(gc_sym(sym, [roots, vs_get(vst, base + 2)]), vs_get(vst, base + 2), [roots, vs_get(vst, base + 2)])
+    call vs_leave(vst, base)
+  end function sq_list2
+
+  ! (clojure.core/seq (clojure.core/concat <item>...)) over a vector of
+  ! items: sqExpandList's (list `item), (list x) for ~x, x for ~@x
+  recursive function sq_concat(items) result(out)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: items
+    type(gc_value) :: out, it, e
+    integer :: base, i
+    tctx => ctx_self()
+    vst => tctx%stk
+    out = gc_nil()
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, items)
+    ! expanded front to back, as sqExpandList, so x# names are made in
+    ! reading order; collected in a vector, then the list built from it
+    call vs_set(vst, base + 2, gcv_empty([vs_get(vst, base + 1)]))
+    do i = 0, gcv_count(vs_get(vst, base + 1)) - 1
+       it = gcv_nth(vs_get(vst, base + 1), i)
+       call vs_set(vst, base + 3, it)
+       if (is_unquote(strip_meta(it), "clojure.core/unquote")) then
+          e = sq_list2("clojure.core/list", gcl_first(gcl_rest(strip_meta(it), [vs_get(vst, base + 1)])), &
+               [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       else if (is_unquote(strip_meta(it), "clojure.core/unquote-splicing")) then
+          e = gcl_first(gcl_rest(strip_meta(it), [vs_get(vst, base + 1)]))
+       else
+          e = syntax_quote(vs_get(vst, base + 3))
+          if (tctx%has_error) then
              call vs_leave(vst, base)
              return
           end if
+          call vs_set(vst, base + 4, e)
+          e = sq_list2("clojure.core/list", vs_get(vst, base + 4), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        end if
-    end if
-
-    n = gcl_count(vs_get(vst, base + 1))
-    out = gcl_empty([vs_get(vst, base + 1)])
-    call vs_set(vst, base + 4, out)
-    do i = n - 1, 0, -1
-       elt = nth_of(vs_get(vst, base + 1), i)
-       call vs_set(vst, base + 5, elt)
-       spliced = .false.
-       if (gcl_is(elt)) then
-          if (gcl_count(elt) == 2) then
-             head = gcl_first(elt)
-             if (head%tag == GCT_SYM) spliced = gc_ref_is(head%ref, "clojure.core/unquote-splicing") &
-                  .or. gc_ref_is(head%ref, "splice-unquote")
-          end if
-       end if
-       if (spliced) then
-          sym = gc_sym("concat", [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 5)])
-          call vs_set(vst, base + 3, sym)
-          inner = nth_of(vs_get(vst, base + 5), 1)
-       else
-          sym = gc_sym("cons", [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 5)])
-          call vs_set(vst, base + 3, sym)
-          inner = qq_expand(vs_get(vst, base + 5), vs_get(vst, base + 2))
-          if (tctx%has_error) then
-             call vs_leave(vst, base); return
-          end if
-       end if
-       call vs_set(vst, base + 6, inner)
-       ! (sym inner <acc>), built back to front.
-       out = gcl_empty([vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 6)])
-       out = gcl_cons(vs_get(vst, base + 4), out, &
-            [vs_get(vst, base + 3), vs_get(vst, base + 6), out])
-       out = gcl_cons(vs_get(vst, base + 6), out, [vs_get(vst, base + 3), out])
-       out = gcl_cons(vs_get(vst, base + 3), out, [out])
-       call vs_set(vst, base + 4, out)
+       call vs_set(vst, base + 4, e)
+       call vs_set(vst, base + 2, gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 4), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)]))
     end do
-    out = vs_get(vst, base + 4)
+    call vs_set(vst, base + 5, gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    do i = gcv_count(vs_get(vst, base + 2)) - 1, 0, -1
+       call vs_set(vst, base + 5, gcl_cons(gcv_nth(vs_get(vst, base + 2), i), vs_get(vst, base + 5), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 5)]))
+    end do
+    call vs_set(vst, base + 2, vs_get(vst, base + 5))
+    call vs_set(vst, base + 2, gcl_cons(gc_sym("clojure.core/concat", [vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+         vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    out = sq_list2("clojure.core/seq", vs_get(vst, base + 2), [vs_get(vst, base + 1)])
     call vs_leave(vst, base)
-  end function qq_expand
+  end function sq_concat
+
+  ! The reader's expander: a fresh gensym map for this syntax-quote and
+  ! the outer one back after (SyntaxQuoteReader binds GENSYM_ENV), and
+  ! an error handed to the reader to raise as its own. The reader's
+  ! roots -- the list it is part way through, held in its locals -- go
+  ! on the value stack for the duration: the expansion allocates without
+  ! them, and a collection then took the enclosing form (core.clj's
+  ! (defmacro sync ...) read as ()).
+  subroutine sq_reader_hook(form, roots, out, err, cls)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), intent(out) :: out
+    character(len=:), allocatable, intent(out) :: err, cls
+    integer :: base, i
+    tctx => ctx_self()
+    vst => tctx%stk
+    err = ""
+    cls = ""
+    base = vs_enter(vst, 2 + size(roots))
+    call vs_set(vst, base + 1, form)
+    if (gc_root_live(gensym_root)) call vs_set(vst, base + 2, gc_root_get(gensym_root))
+    do i = 1, size(roots)
+       call vs_set(vst, base + 2 + i, roots(i))
+    end do
+    call gc_global_keep(gensym_root, gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    out = syntax_quote(vs_get(vst, base + 1))
+    call gc_global_keep(gensym_root, vs_get(vst, base + 2))
+    if (tctx%has_error) then
+       call gce_error(s=err)
+       cls = "clotran.host.illegal_state_exception"
+       call gce_clear_error()
+       out = gc_nil()
+    end if
+    call vs_leave(vst, base)
+  end subroutine sq_reader_hook
 
   ! x# inside a syntax-quote becomes one fresh name, the SAME fresh
   ! name everywhere it appears in that syntax-quote and a different one
@@ -6487,7 +6626,14 @@ contains
     end if
     if (t == "&" .or. t == "/") return
     if (t(1:1) == ".") return
-    if (t(n:n) == ".") return
+    ! Ctor. -- the class part resolved, as syntaxQuote does
+    if (t(n:n) == ".") then
+       if (n > 1) then
+          call canon_class(t(1:n-1), c=dlt_1)
+          if (dlt_1 /= t(1:n-1)) out = gc_sym(dlt_1 // ".", [sym])
+       end if
+       return
+    end if
     ! Compiler.resolveSymbol: a name with a dot in it is a class name
     ! and stays as written -- `clojure.core is clojure.core, not
     ! this-ns/clojure.core, which is what (use 'clojure.core) inside a
@@ -6500,7 +6646,13 @@ contains
     if (gc_ref_is(sym%ref, "catch") .or. gc_ref_is(sym%ref, "finally") .or. &
          gc_ref_is(sym%ref, "unquote") .or. gc_ref_is(sym%ref, "splice-unquote") .or. &
          gc_ref_is(sym%ref, "clojure.core/unquote") .or. gc_ref_is(sym%ref, "clojure.core/unquote-splicing")) return
-    if (is_class_name(sym)) return
+    ! a name the namespace maps to a class is that class's full name
+    ! (resolveSymbol's getMapping); a capital alone does not make one
+    call canon_class(t, c=dlt_1)
+    if (dlt_1 /= t) then
+       out = gc_sym(dlt_1, [sym])
+       return
+    end if
     var = resolve_var(sym, gc_nil())
     if (gcn_is_var(var)) then
        if (gc_kind(gc_slot(var, 3)) == OBJ_NS) then
@@ -6557,59 +6709,6 @@ contains
     out = vs_get(vst, base + 1)
     call vs_leave(vst, base)
   end function set_elems
-
-  ! A collection inside syntax-quote: expand its elements as a seq,
-  ! then rebuild the collection from them with `ctor`.
-  ! Rebuilds a vector, map or set literal from the expanded seq of
-  ! its elements.
-  !
-  ! use_apply matters and is not cosmetic. hash-map takes k v k v as
-  ! SEPARATE arguments, so handing it one seq gave (hash-map '(:a 1))
-  ! -- which answered {} rather than erroring, so every syntax-quoted
-  ! map literal in the tree silently became empty. clojure.test builds
-  ! every assertion result that way, which is why 156 tests reported
-  ! zero passes. Clojure emits (apply hash-map (seq (concat ...))).
-  !
-  ! `vec` and `set` both take a collection, so only the map needs it.
-  recursive function qq_rebuild(form, ctor, env, use_apply) result(out)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: form, env
-    character(len=*), intent(in) :: ctor
-    logical, intent(in), optional :: use_apply
-    type(gc_value) :: out, lst, inner
-    logical :: ap
-    integer :: base, i
-
-    tctx => ctx_self()
-    vst => tctx%stk
-    ap = .false.
-    if (present(use_apply)) ap = use_apply
-
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, form)
-    call vs_set(vst, base + 2, env)
-    ! The elements as a list, so the existing list path expands them.
-    lst = gcl_empty([vs_get(vst, base + 1)])
-    call vs_set(vst, base + 3, lst)
-    do i = gcv_count(vs_get(vst, base + 1)) - 1, 0, -1
-       lst = gcl_cons(gcv_nth(vs_get(vst, base + 1), i), vs_get(vst, base + 3), &
-            [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-       call vs_set(vst, base + 3, lst)
-    end do
-    inner = qq_expand(vs_get(vst, base + 3), vs_get(vst, base + 2))
-    if (tctx%has_error) then
-       out = gc_nil()
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 3, inner)
-    out = gcl_empty([vs_get(vst, base + 3)])
-    out = gcl_cons(vs_get(vst, base + 3), out, [vs_get(vst, base + 3), out])
-    out = gcl_cons(gc_sym(ctor, [vs_get(vst, base + 3), out]), out, [out])
-    if (ap) out = gcl_cons(gc_sym("apply", [out]), out, [out])
-    call vs_leave(vst, base)
-  end function qq_rebuild
 
   ! Each clause of a multi-arity fn, body expanded, params untouched.
 
@@ -7932,8 +8031,8 @@ contains
   ! so nil will do; the KEYS are the answer.
   !
   ! Clojure's list, not is_special's. The two differ: clotran has
-  ! quasiquote, defmacro* and lazy-seq* as special forms where Clojure
-  ! reaches them another way (DEVIATIONS.md 6), and answering true for
+  ! defmacro* and lazy-seq* as special forms where Clojure
+  ! reaches them another way, and answering true for
   ! those would make special-symbol? report on our host rather than on
   ! the language.
   function specials_map(roots) result(out)
@@ -15819,8 +15918,8 @@ contains
   end function call_builtin
 
   ! A list view of a value: lists pass through, vectors are copied
-  ! into one, nil is the empty list. Enough for cons/concat and for
-  ! quasiquote's splicing; a real seq abstraction is a later feature.
+  ! into one, nil is the empty list. Enough for cons and concat;
+  ! a real seq abstraction is a later feature.
   function as_list(v, roots) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: v

@@ -158,35 +158,32 @@ interned under a name nobody could spell.
 **Removal**: none available. Widening `gc_value` would cost a word on every
 value in the heap to serve the few that carry metadata.
 
-## 6. Syntax-quote expands at analysis time, not read time
+## 6. RESOLVED -- syntax-quote is the reader's
 
-`SyntaxQuoteReader` is a READER macro (`LispReader`): `` `x `` is
-resolved, gensym-ed and expanded into `concat`/`seq` calls before the form
-is ever evaluated. Ours is a `quasiquote` special form that `qq_expand`
-handles during ANALYSIS (`analyze_quasiquote`), once per form, in the
-namespace the form is analysed in -- which for a macro body is the
-namespace the macro was written in. It used to run at every evaluation.
+**RESOLVED 2026-10-12.** `SyntaxQuoteReader` is a READER macro and so is
+clotran's: `` `form `` is expanded as it is read (Eval.f90
+`syntax_quote`, a port of `LispReader.syntaxQuote`, installed as the
+reader's expander), into clj's own shape -- `(clojure.core/seq
+(clojure.core/concat (clojure.core/list ...) ...))`, `(clojure.core/apply
+clojure.core/vector ...)` for a vector, `hash-map` and `hash-set` likewise,
+`(clojure.core/with-meta ...)` for metadata but the reader's `:line` and
+`:column`, `(quote x)` for nil, true and a special form. `(read-string
+"`x")` is `(quote user/x)`, as in clj, and the expansion is a seq, not a
+list: `(list? `(a))` is false on both. Names resolve in the namespace
+current when the form is read (`Compiler.resolveSymbol`): a Var to its
+own namespace, anything else to the reader's, a name the namespace maps
+to a class to the class's full name, `catch`, `finally`, `&`, `.m` and
+specials as written; each syntax-quote has its own `x#` names, made in
+reading order (`GENSYM_ENV`). `(quasiquote x)` is no special form, as
+in clj. A tagged literal's marker (DEVIATIONS 46) is quoted whole.
 
-Auto-gensym is faithful -- one fresh name per syntax-quote, scoped by a map
-the way `GENSYM_ENV` is -- and so, since 2026-09-19, is symbol
-resolution: `qq_alias` is `Compiler.resolveSymbol` as `syntaxQuote`
-calls it. An unqualified symbol becomes `ns/name` -- the Var's own
-namespace if it resolves to one, the writing namespace otherwise --
-unless it is a special form, a class name, an auto-gensym, `&`, or host
-sugar. That is what makes a macro immune to a caller having rebound a
-name, and what makes clojure.test's `run-test` find `test-var`, which
-is defined later in its file than the macro that names it.
-
-Two consequences had to be handled where Clojure's compiler handles
-them: a member name in a `.` form and a method name in a `deftype*`
-arrive qualified and are read by their name part (`HostExpr.Parser`,
-`NewInstanceMethod.parse`), and `(def ns/x ...)` defines `x` when `ns`
-is the current namespace (`DefExpr`).
-
-What remains open is only WHEN: analysis time rather than read time.
-The difference is observable through `read-string` -- `(read-string
-"`x")` answers the unexpanded `(quasiquote x)` here and the expansion
-in Clojure -- and closes by moving `qq_expand` into the reader.
+What it took beyond the port: a form now reaches the analyser holding
+seqs where it held lists, as clj's compiler accepts (`forms_as_lists`
+lists them at the top level and after a macro or an `:inline`
+expansion); and while the expansion runs the reader's roots -- the
+form it is part way through -- are on the value stack. A `#(...)` names its
+parameters as FnReader does, each numbered at its first use.
+`scripts/fuzz-read` generates syntax-quote against clj.
 
 ## 7. RESOLVED -- recursion runs out of stack about twenty times sooner
 
@@ -2440,7 +2437,7 @@ clotran's host is Fortran: its classes are `clotran.host.math`,
 `clotran.host.string_builder`, `clotran.host.string`, and a program
 writes them so (or imports them). `(Math/abs -3)` here is "No such
 namespace: Math" when analysed, `(StringBuilder. "ab")` "Unable to
-resolve classname: StringBuilder". `Object` too: a deftype or reify implementing it writes `clotran.host.value`, as the derived macros do, and `(reify Object ...)` is ClassNotFoundException: Object (since 2026-10-11, when unknown interfaces began to be refused). upstream/class-names.edn's
+resolve classname: StringBuilder", and `` `String `` reads as `user/String` (a name no namespace maps to a class). `Object` too: a deftype or reify implementing it writes `clotran.host.value`, as the derived macros do, and `(reify Object ...)` is ClassNotFoundException: Object (since 2026-10-11, when unknown interfaces began to be refused). upstream/class-names.edn's
 `:implicit` lists clj's set, for the derive to rename in the vendored
 sources; the runtime never sees it. Measured 2026-10-11, when seeding
 those names into every namespace was tried and taken out: it was the

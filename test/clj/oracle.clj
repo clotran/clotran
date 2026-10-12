@@ -3296,3 +3296,18 @@ x10
 (binding [*unchecked-math* true] (eval '((fn [^long n] n) 1e20)))
 (mapv (fn [f] (try (eval f) (catch clotran.host.throwable e (.getMessage (or (.getCause e) e)))))
       (quote [(aget nil 0) (let [v nil] (aget v 0)) (alength [1]) (apply aget [[1] 0]) (aset (identity [1]) 0 1)]))
+
+;; syntax-quote is the reader's (DEVIATIONS 6 resolved): read-string answers the expansion, resolved where it is
+;; read; the result is a seq, not a list; (quasiquote x) is no special form; #() parameters number in first use
+(read-string "`x")
+(read-string "`(a ~b ~@c)")
+(read-string "`[a {:k ~b} #{c} \"s\" :k 1 \\c nil true]")
+(read-string "`(if (fn* [] (new X)) catch finally & .m Ctor. clojure.core/map)")
+(read-string "`^:m [1]")
+(read-string "`()")
+(read-string "`#uuid \"6a2f41a3-c54c-fce8-32d2-0324e1c32e22\"")
+(let [f (read-string "`(x# y# x#)")] (= (second (second (nth f 1))) (second (second (nth f 3)))))
+[(list? `(a b)) (seq? `(a b)) (vector? `[a]) (map? `{:a 1})]
+(try (read-string "`~@a") (catch clotran.host.throwable e (.getMessage e)))
+(try (eval '(quasiquote 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: quasiquote" (.getMessage (or (.getCause e) e)))))
+(let [[_ ps] (read-string "#(+ %3 %)")] (mapv #(re-find #"^p\d" (name %)) ps))

@@ -69,6 +69,11 @@
                   (g/fmap #(str "{" % "}") (g/fmap #(str/join " " (mapcat identity %)) (g/vector (g/tuple g-kw inner) 0 3)))
                   (g/fmap #(str "#{" (str/join " " (distinct %)) "}") (g/vector g-number 0 3))
                   (g/fmap #(str "'" %) inner)
+                  ;; syntax-quote, read as clj reads it (DEVIATIONS 6 resolved):
+                  ;; resolution, x# names, ~ and ~@ inside it
+                  (g/fmap #(str "`" %) inner)
+                  (g/fmap #(str "`(" (str/join " " (map (fn [[k x]] (case k 0 x 1 (str "~" x) 2 (str "~@" x) 3 "x#")) %)) ")")
+                          (g/vector (g/tuple (g/choose 0 3) inner) 0 4))
                   (g/fmap #(str "@" %) inner)
                   (g/fmap #(str "#_" % " ") inner)
                   (g/fmap (fn [[m x]] (str "^" m " " x)) (g/tuple (g/one-of [g-kw g-sym (g/return "{:a 1}")]) inner))
@@ -79,9 +84,7 @@
 
 ;; ---- mutations ----------------------------------------------------------------
 
-;; no backquote: syntax-quote expands at analysis here, not at read
-;; (DEVIATIONS 6), so read-string's answers for it differ by design
-(def alphabet (vec "()[]{}\"\\#^'~@:/;.,0123456789eExMNr+-_%&ab λ\n"))
+(def alphabet (vec "()[]{}\"\\#^'`~@:/;.,0123456789eExMNr+-_%&ab λ\n"))
 
 (defn mutate [s [kind i j c]]
   (let [n (count s) i (if (pos? n) (mod i n) 0) j (if (pos? n) (mod j n) 0)]
@@ -132,7 +135,7 @@
 (defn norm [s]
   (when s
     (-> s
-        (str/replace #"(p\d+|rest)__\d+#" "$1__N#")
+        (str/replace #"(p\d+|rest)__\d+(#|__)" "$1__N$2")
         (str/replace #"__\d+__auto__" "__N__auto__")
         (str/replace #"^(!error clotran\.host\.pattern_syntax_exception):.*" "$1")
         ;; the host's words for a bad digit under a radix, and for #:{
@@ -170,8 +173,6 @@
     (go (vec (range n)))
     (let [uuid-refused? (fn [i w gv] (or (and (re-find #"#\s*uuid" (nth texts i))
                                               (some #(str/starts-with? (str %) "!error") [w gv]))
-                                         ;; DEVIATIONS 6: syntax-quote, from a mutation
-                                         (str/includes? (nth texts i) "`")
                                          ;; DEVIATIONS 33: a reader conditional is read in every
                                          ;; file here; clj refuses one outside a .cljc file
                                          (str/includes? (str w) "Conditional read not allowed")

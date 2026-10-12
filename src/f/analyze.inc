@@ -1332,6 +1332,143 @@
     end if
   end function norm_form
 
+  ! A form as the analyser reads one: every seq in it a list. clj's
+  ! compiler takes any ISeq where a list is written; the special forms
+  ! here walk theirs as lists (fn*'s arities, catch, set!'s target, a
+  ! . call), and syntax-quote -- read as clj reads it, (seq (concat
+  ! ...)) -- hands a macro's caller nested seqs, not the cons lists
+  ! the analysis-time expansion used to build. Called on what enters
+  ! analysis: a top-level form, a macro's expansion, an :inline's. A
+  ! (quote ...) is data and left as it is; metadata is kept; a form
+  ! with no seq in it comes back itself, nothing copied.
+  recursive function forms_as_lists(form, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, v, items, x, y, t
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, i, n, k
+    logical :: changed, proper
+    vst => gc_my_stack()
+    out = form
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, form)
+    v = strip_meta(form)
+    call vs_set(vst, base + 2, v)
+    k = gc_kind(v)
+    if (k == OBJ_CONS .or. k == OBJ_LAZY .or. k == OBJ_SEQ .or. k == OBJ_CHUNKSEQ) then
+       ! a proper list of forms that need nothing stays as it is
+       proper = .false.
+       if (k == OBJ_CONS) then
+          proper = .true.
+          t = v
+          do while (gcl_is(t))
+             if (gcl_count(t) == 0) exit
+             t = gcl_rest(t, [roots, vs_get(vst, base + 1)])
+          end do
+          if (.not. gcl_is(t) .and. t%tag /= GCT_NIL) proper = .false.
+          if (proper .and. gcl_count(v) > 0) then
+             x = strip_meta(gcl_first(v))
+             if (x%tag == GCT_SYM) then
+                if (gc_ref_is(x%ref, "quote")) then
+                   call vs_leave(vst, base)
+                   return
+                end if
+             end if
+          end if
+       end if
+       items = coll_to_vector(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 3, items)
+       n = gcv_count(items)
+       ! (quote ...) of any seq kind is data
+       if (n > 0 .and. k /= OBJ_CONS) then
+          x = strip_meta(gcv_nth(items, 0))
+          if (x%tag == GCT_SYM) then
+             if (gc_ref_is(x%ref, "quote")) then
+                out = seq_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
+                call rewrap(out)
+                call vs_leave(vst, base)
+                return
+             end if
+          end if
+       end if
+       changed = .not. proper
+       do i = 0, n - 1
+          x = gcv_nth(vs_get(vst, base + 3), i)
+          y = forms_as_lists(x, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+          if (y%ref /= x%ref .or. y%tag /= x%tag) then
+             changed = .true.
+             call vs_set(vst, base + 4, y)
+             call vs_set(vst, base + 3, gcv_assoc(vs_get(vst, base + 3), i, vs_get(vst, base + 4), &
+                  [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)]))
+          end if
+       end do
+       if (.not. changed) then
+          call vs_leave(vst, base)
+          return
+       end if
+       out = gcl_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 5, out)
+       do i = n - 1, 0, -1
+          call vs_set(vst, base + 5, gcl_cons(gcv_nth(vs_get(vst, base + 3), i), vs_get(vst, base + 5), &
+               [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 5)]))
+       end do
+       out = vs_get(vst, base + 5)
+       call rewrap(out)
+    else if (gcv_is(v)) then
+       changed = .false.
+       call vs_set(vst, base + 3, v)
+       do i = 0, gcv_count(v) - 1
+          x = gcv_nth(vs_get(vst, base + 3), i)
+          y = forms_as_lists(x, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+          if (y%ref /= x%ref .or. y%tag /= x%tag) then
+             changed = .true.
+             call vs_set(vst, base + 4, y)
+             call vs_set(vst, base + 3, gcv_assoc(vs_get(vst, base + 3), i, vs_get(vst, base + 4), &
+                  [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)]))
+          end if
+       end do
+       if (changed) then
+          out = vs_get(vst, base + 3)
+          call rewrap(out)
+       end if
+    else if (gca_is(v)) then
+       ! a map literal's keys and values, rebuilt in order when one changed
+       call gca_entries(v, ks, vls)
+       changed = .false.
+       do i = 1, size(ks)
+          call vs_set(vst, base + 4, ks(i))
+          y = forms_as_lists(ks(i), [roots, vs_get(vst, base + 1)])
+          if (y%ref /= ks(i)%ref .or. y%tag /= ks(i)%tag) changed = .true.
+          y = forms_as_lists(vls(i), [roots, vs_get(vst, base + 1)])
+          if (y%ref /= vls(i)%ref .or. y%tag /= vls(i)%tag) changed = .true.
+          if (changed) exit
+       end do
+       if (changed) then
+          call vs_set(vst, base + 3, gca_empty([roots, vs_get(vst, base + 1)]))
+          do i = 1, size(ks)
+             call vs_set(vst, base + 4, forms_as_lists(ks(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+             call vs_set(vst, base + 5, forms_as_lists(vls(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), &
+                  vs_get(vst, base + 4)]))
+             call vs_set(vst, base + 3, gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5), &
+                  [roots, vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 5)]))
+          end do
+          out = vs_get(vst, base + 3)
+          call rewrap(out)
+       end if
+    end if
+    call vs_leave(vst, base)
+  contains
+    ! the original's metadata on the rebuilt form
+    subroutine rewrap(o)
+      type(gc_value), intent(inout) :: o
+      if (gc_kind(vs_get(vst, base + 1)) /= OBJ_META) return
+      call vs_set(vst, base + 4, o)
+      o = gc_obj(OBJ_META, [vs_get(vst, base + 4), gc_slot(vs_get(vst, base + 1), 2)], &
+           [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
+    end subroutine rewrap
+  end function forms_as_lists
+
   ! Analyses every form of a list or vector into a children vector.
   recursive function analyze_all(forms, sc, roots) result(out)
     type(gc_stack), pointer :: vst
@@ -1921,6 +2058,7 @@
                 return
              end if
              call vs_set(vst, base + 4, expanded)
+             call vs_set(vst, base + 4, forms_as_lists(vs_get(vst, base + 4), [vs_get(vst, base + 1)]))
              tctx%fn_hint = hint
              nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
              call vs_leave(vst, base)
@@ -1948,6 +2086,7 @@
                 return
              end if
              call vs_set(vst, base + 4, expanded)
+             call vs_set(vst, base + 4, forms_as_lists(vs_get(vst, base + 4), [vs_get(vst, base + 1)]))
              nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
              call vs_leave(vst, base)
              return
@@ -2520,8 +2659,6 @@
        nd = analyze_reify(vs_get(vst, base + 3), vs_get(vst, base + 2), .false.)
     else if (gc_ref_is(head%ref, "proxy")) then
        nd = analyze_reify(vs_get(vst, base + 3), vs_get(vst, base + 2), .true.)
-    else if (gc_ref_is(head%ref, "quasiquote")) then
-       nd = analyze_quasiquote(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "monitor-enter") .or. gc_ref_is(head%ref, "monitor-exit")) then
        ! A monitor, held by one thread at a time (PLAN.md step 14f): the
        ! call (clojure.core/clotran-monitor-enter x), or -exit, analysed
@@ -4076,31 +4213,6 @@
   ! `x -> expanded to cons/concat calls, then analysed. Done here, once,
   ! rather than at every evaluation of the macro body that contains it
   ! (DEVIATIONS 6 moves from "at eval time" to "at analysis time").
-  recursive function analyze_quasiquote(rest, sc) result(nd)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: rest, sc
-    type(gc_value) :: nd, expanded
-    integer :: base
-    tctx => ctx_self()
-    vst => tctx%stk
-    nd = gc_nil()
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, rest)
-    call vs_set(vst, base + 2, sc)
-    if (tctx%qq_depth == 0) call gc_global_keep(gensym_root, gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
-    tctx%qq_depth = tctx%qq_depth + 1
-    expanded = qq_expand(gcl_first(vs_get(vst, base + 1)), gc_nil())
-    tctx%qq_depth = tctx%qq_depth - 1
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 3, expanded)
-    nd = analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
-    call vs_leave(vst, base)
-  end function analyze_quasiquote
-
   ! (. Class field), the dot form of a static: three elements, the dot,
   ! a class name, a field symbol
   logical function static_dot_field(form)
@@ -4559,12 +4671,10 @@
     vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 4)
-    form = form0
+    ! every seq in it a list (forms_as_lists), as for a macro's expansion
+    call vs_set(vst, base + 1, form0)
+    form = forms_as_lists(vs_get(vst, base + 1), [vs_get(vst, base + 1)])
     if (gc_kind(form) == OBJ_META) form = strip_meta(form)
-    if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ) then
-       call vs_set(vst, base + 1, form)
-       form = seq_to_list(vs_get(vst, base + 1), [vs_get(vst, base + 1)])
-    end if
     call vs_set(vst, base + 1, form)
     if (gcl_is(form)) then
        if (gcl_count(form) > 0) then

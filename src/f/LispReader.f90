@@ -38,7 +38,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error, gcr_error_class
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
-  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file
+  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file, gcr_set_sq_expander
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 
   ! ::x is resolved at READ time against the current namespace, and
@@ -52,6 +52,21 @@ module LispReader
      end subroutine ns_resolver_i
   end interface
   procedure(ns_resolver_i), pointer, save :: ns_resolver => null()
+
+  ! `form is expanded at READ time, as SyntaxQuoteReader does; the
+  ! expansion resolves names in the current namespace, which the reader
+  ! does not know, so the evaluator installs it (Eval's sq_reader_hook).
+  ! err is a message to fail with (of class cls), or "".
+  abstract interface
+     subroutine sq_expander_i(form, roots, out, err, cls)
+       import :: gc_value
+       type(gc_value), intent(in) :: form
+       type(gc_value), intent(in) :: roots(:)
+       type(gc_value), intent(out) :: out
+       character(len=:), allocatable, intent(out) :: err, cls
+     end subroutine sq_expander_i
+  end interface
+  procedure(sq_expander_i), pointer, save :: sq_expander => null()
 
   ! SOURCE POSITIONS. A list form records where it was read from:
   ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
@@ -110,6 +125,10 @@ module LispReader
      logical :: tag_markers = .true.   ! #tag form is a marker, resolved before analysis (clotran.reader)
      ! the #(...) being read: its suffix, from the shared anon_seq
      integer :: anon_cur = 0
+     ! and each parameter's own number, given when the body first uses
+     ! it, as FnReader's garg does (0 until then; anon_rest for %&)
+     integer, allocatable :: anon_ids(:)
+     integer :: anon_rest = 0
      ! inside a #(...)'s body: another is refused (FnReader)
      logical :: in_anon = .false.
      ! the map read next is a #:ns map's: its odd count says so
@@ -668,7 +687,13 @@ contains
        v = wrap("quote", text, pos, roots)
     case ("`")
        pos = pos + 1
-       v = wrap("quasiquote", text, pos, roots)
+       ! expanded by the evaluator's expander; a reader with none (the
+       ! reader's own tests) leaves the form (quasiquote x)
+       if (associated(sq_expander)) then
+          v = read_syntax_quote(text, pos, roots)
+       else
+          v = wrap("quasiquote", text, pos, roots)
+       end if
     case ("@")
        pos = pos + 1
        ! qualified, as LispReader reads them: @x is (clojure.core/deref x)
@@ -786,15 +811,21 @@ contains
     ! locals reachable only through it, and reading #(...) inside a
     ! larger form must not collect the form being built around it.
     ! Same defect read_set had.
+    ! Each parameter is a gensym as Clojure's are (p1__1#), numbered as
+    ! FnReader numbers them: when the body first uses it, in reading
+    ! order, and one the body skips after the body -- so it cannot shadow
+    ! a `p1` of the program's own (every-pred's #() once read the
+    ! predicate as its own argument).
+    if (allocated(rdx%anon_ids)) deallocate(rdx%anon_ids)
+    allocate(rdx%anon_ids(max(maxn, 1)))
+    rdx%anon_ids = 0
+    rdx%anon_rest = 0
+    body = rewrite_percent(vs_get(base + 1), roots)
+    call vs_set(base + 1, body)
     params = gcv_empty(roots)
     call vs_set(base + 2, params)
-    ! Each #(...) gets a fresh suffix, so its parameters are gensyms
-    ! as Clojure's are (p1__1#) and cannot shadow a `p1` of the
-    ! program's own -- every-pred's, for one, whose #() read the
-    ! predicate as its own argument.
-    call set_anon_cur(gc_next(anon_seq))
     do i = 1, maxn
-       write(nm, '(A,I0,A,I0,A)') "p", i, "__", anon_cur(), "#"
+       write(nm, '(A,I0,A,I0,A)') "p", i, "__", anon_id(i), "#"
        sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
@@ -805,15 +836,12 @@ contains
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
-       write(nm, '(A,I0,A)') "rest__", anon_cur(), "#"
+       write(nm, '(A,I0,A)') "rest__", anon_id(-1), "#"
        sym = gc_sym(trim(nm), roots)
        call vs_set(base + 3, sym)
        params = gcv_conj(vs_get(base + 2), vs_get(base + 3), roots)
        call vs_set(base + 2, params)
     end if
-
-    body = rewrite_percent(vs_get(base + 1), roots)
-    call vs_set(base + 1, body)
     sym = gc_sym("fn*", roots)
     call vs_set(base + 3, sym)
     v = gcl_empty(roots)
@@ -825,6 +853,20 @@ contains
     v = gcl_cons(vs_get(base + 3), vs_get(base + 4), roots)
     call vs_leave(base)
   end function read_anon_fn
+
+  ! The number of #()'s parameter n (-1 for %&), given at its first use.
+  integer function anon_id(n) result(id)
+    integer, intent(in) :: n
+    type(rd_state), pointer :: rdx
+    rdx => rd_self()
+    if (n < 0) then
+       if (rdx%anon_rest == 0) rdx%anon_rest = gc_next(anon_seq)
+       id = rdx%anon_rest
+    else
+       if (rdx%anon_ids(n) == 0) rdx%anon_ids(n) = gc_next(anon_seq)
+       id = rdx%anon_ids(n)
+    end if
+  end function anon_id
 
   ! Highest %n used anywhere in the form, and whether %& appears.
   recursive subroutine scan_percent(form, maxn, has_rest)
@@ -914,15 +956,15 @@ contains
        if (len(t) < 1) return
        if (t(1:1) /= "%") return
        if (t == "%") then
-          write(nm, '(A,I0,A)') "p1__", anon_cur(), "#"
+          write(nm, '(A,I0,A)') "p1__", anon_id(1), "#"
           out = gc_sym(trim(nm), roots)
        else if (t == "%&") then
-          write(nm, '(A,I0,A)') "rest__", anon_cur(), "#"
+          write(nm, '(A,I0,A)') "rest__", anon_id(-1), "#"
           out = gc_sym(trim(nm), roots)
        else
           read(t(2:), *, iostat=ios) num
           if (ios == 0) then
-             write(nm, '(A,I0,A,I0,A)') "p", num, "__", anon_cur(), "#"
+             write(nm, '(A,I0,A,I0,A)') "p", num, "__", anon_id(num), "#"
              out = gc_sym(trim(nm), roots)
           end if
        end if
@@ -1616,6 +1658,26 @@ contains
   end function read_meta
 
   ! (sym form) -- what ', `, @ and ~ expand to.
+  ! `form: the next form, expanded by the evaluator's expander
+  recursive function read_syntax_quote(text, pos, roots) result(v)
+    type(rd_state), pointer :: rdx
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v, inner
+    character(len=:), allocatable :: err, cls
+    rdx => rd_self()
+    v = gc_nil()
+    inner = read_form(text, pos, roots)
+    if (rdx%has_error) return
+    if (cond_leaked()) return
+    call sq_expander(inner, with(roots, inner), v, err, cls)
+    if (len(err) > 0) then
+       call fail(err, cls)
+       v = gc_nil()
+    end if
+  end function read_syntax_quote
+
   recursive function wrap(name, text, pos, roots) result(v)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: name
@@ -2298,6 +2360,11 @@ contains
       end if
     end function checks
   end function symbol_token_ok
+
+  subroutine gcr_set_sq_expander(f)
+    procedure(sq_expander_i) :: f
+    sq_expander => f
+  end subroutine gcr_set_sq_expander
 
   subroutine gcr_set_ns_resolver(f)
     procedure(ns_resolver_i) :: f

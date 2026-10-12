@@ -303,13 +303,15 @@ contains
   end subroutine check_varargs
 
   subroutine check_quasiquote()
-    call ev("12a. ", "(quasiquote 1)", "1")
+    ! expanded by the reader, as LispReader does: (quasiquote x) is no
+    ! special form, as it is none in clj (12i)
+    call ev("12a. ", "`1", "1")
     ! A bare symbol is quoted, not evaluated -- and QUALIFIED with
     ! the namespace it resolves in, which is what makes a macro's
     ! expansion mean the same thing wherever it lands. Real Clojure
     ! answers user/x here too; this asserted bare x while syntax-quote
     ! qualified nothing.
-    call ev("12b. ", "(do (def x 9) (quasiquote x))", "user/x")
+    call ev("12b. ", "(do (def x 9) `x)", "user/x")
     ! ~x evaluates; the reader turns it into (clojure.core/unquote x).
     call ev("12c. ", "(do (def x 9) `~x)", "9")
     call ev("12d. ", "(do (def x 9) `(a ~x))", "(user/a 9)")
@@ -318,6 +320,7 @@ contains
     call ev("12f. ", "(do (def xs (list 2 3)) `(1 ~@xs 4))", "(1 2 3 4)")
     call ev("12g. ", "(do (def xs (list 2 3)) `(1 ~xs))", "(1 (2 3))")
     call ev("12h. ", "`(a (b ~(+ 1 2)))", "(user/a (user/b 3))")
+    call ev_err("12i. ", "(quasiquote 1)")
   end subroutine check_quasiquote
 
   ! A macro gets its arguments UNEVALUATED and its result is evaluated
