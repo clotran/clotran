@@ -1953,30 +1953,26 @@ behaviour is an optimisation leaking through (the retry's error is an
 NPE about the compiler's own field), so matching it buys nothing a
 program could want; not done.
 
-## 60. A deftype's hash is asked once, when it is made
+## 60. RESOLVED -- a deftype's hash is asked at each hash
 
-A deftype's own `equals` (and `equiv`) is its `=`, and its `hasheq`, else
-`hashCode`, is its `hash`, as a map key and in a set too -- as clj's
-`Util.equiv` and `Util.hasheq` ask them (scripts/fuzz-spec found that
-they were not, when UUID became a deftype, 2026-10-02). Its
-`compareTo` is its `compare`.
-
-What differs: clotran calls the hash method ONCE, when the instance is
-constructed, and keeps the answer (Eval.f90 `inst_cache_hash`). Hashing
-happens inside a map insert, where running Clojure code could collect
-what the insert holds, so the method is not called there. So a
-`hashCode` with a side effect has it at construction, not at each
-`hash`, and a type whose hash reads a `^:volatile-mutable` field keeps
-the hash it had when made.
+**RESOLVED 2026-10-11.** A deftype's own `equals` (and `equiv`) is its
+`=`, and its `hasheq`, else `hashCode`, is its `hash`, as a map key and
+in a set too -- as clj's `Util.equiv` and `Util.hasheq` ask them. Its
+`compareTo` is its `compare`. The hash method is now called at EACH
+hash, as in clj: a `hashCode` with a side effect has it every time, and
+a type whose hash reads a `^:volatile-mutable` field answers the field's
+current value. It used to be asked once, at construction, because
+hashing runs inside a map insert, where running Clojure could collect
+what the insert holds; `gc_hash` now calls `gce_coll_hash` under the
+GC hold (GC.f90 `gc_hold_begin`), which defers every collection until
+the hold ends, so the method runs there as a lazy seq's realisation
+already did.
 
 Records are equal by type and values and hash as emit-defrecord's
 hasheq does, computed in Fortran from the field names (Eval.f90
 `gce_coll_hash`, `gce_coll_equal`). A type that declares no hash
-method hashes by identity, as in clj.
-
-**Removal**: hashing that can call out safely -- the insert's operands
-rooted across the call, which scripts/root-check can now check -- and
-then the method called at each hash.
+method hashes by identity, as in clj. `scripts/fuzz-deftype` moves a
+hash field between hashes and counts the calls, against clj.
 
 ## 61. A vector key past 32 bits is out of range, not wrapped
 
@@ -2421,7 +2417,7 @@ clotran's host is Fortran: its classes are `clotran.host.math`,
 `clotran.host.string_builder`, `clotran.host.string`, and a program
 writes them so (or imports them). `(Math/abs -3)` here is "No such
 namespace: Math" when analysed, `(StringBuilder. "ab")` "Unable to
-resolve classname: StringBuilder". upstream/class-names.edn's
+resolve classname: StringBuilder". `Object` too: a deftype or reify implementing it writes `clotran.host.value`, as the derived macros do, and `(reify Object ...)` is ClassNotFoundException: Object (since 2026-10-11, when unknown interfaces began to be refused). upstream/class-names.edn's
 `:implicit` lists clj's set, for the derive to rename in the vendored
 sources; the runtime never sees it. Measured 2026-10-11, when seeding
 those names into every namespace was tried and taken out: it was the

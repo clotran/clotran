@@ -133,7 +133,39 @@
                     (do (import (quote ~full)) (eval (quote (.-a (new ~tname ~v)))))])))
           (g/tuple (g/choose 0 9999) (g/choose -9 9))))
 
-(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur] [1 g-import]]))
+;; a hash is the method's answer at each hash (DEVIATIONS 60 resolved): a
+;; volatile field read by hashCode or hasheq, moved by invoke between
+;; hashes, and a counter the method bumps; the hash of the instance, of a
+;; vector holding it, and a set built after each move must agree with clj.
+;; One case in four names an interface nothing knows, refused on both sides.
+(def g-hash
+  (g/let [k (g/choose 0 9999)
+          how (g/elements [:hashCode :hasheq :unknown])
+          init (g/choose -50 50)
+          moves (g/vector (g/choose -50 50) 0 4)]
+    ;; the counter is a Var: a deftype's method sees no enclosing local
+    (let [tname (symbol (str "H" k (name how)))
+          n (symbol (str "hn" k (name how)))
+          method (if (= how :hasheq)
+                   `(clotran.host.i_hash_eq (~'hasheq [~'_] (swap! ~n inc) ~'h))
+                   `(clotran.host.value (~'hashCode [~'_] (swap! ~n inc) ~'h)))]
+      (if (= how :unknown)
+        `(try (eval (quote (deftype ~tname [] ~(symbol (str "no.such.I" k)) (~'x [~'_]))))
+              :ran
+              (catch clotran.host.throwable e# :refused))
+        `(do
+           (def ~n (atom 0))
+           (deftype ~tname [~(with-meta 'h {:volatile-mutable true})]
+             ~@method
+             clotran.host.i_fn
+             (~'invoke [~'_ ~'v] (set! ~'h ~'v)))
+           (let [~'o (~(symbol (str "->" tname)) ~init)]
+             [@~n
+              (mapv (fn [v#] (when v# (~'o v#)) [(hash ~'o) (hash [~'o]) (count (hash-set ~'o ~'o))])
+                    ~(vec (cons nil moves)))
+              @~n]))))))
+
+(def g-case (g/frequency [[5 g-type] [1 g-refusal] [2 g-recur] [1 g-import] [2 g-hash]]))
 
 (let [{:keys [n seed]} opts
       forms (vec (for [i (range n)] (g/generate g-case 10 (+ seed i))))

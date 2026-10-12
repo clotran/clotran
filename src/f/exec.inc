@@ -2561,8 +2561,5 @@
        end if
     end if
     out = gc_obj(OBJ_INST, [vs_get(vst, base + 1), vs_get(vst, base + 2), gc_nil()], [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 2, out)
-    call inst_cache_hash(vs_get(vst, base + 2))
-    out = vs_get(vst, base + 2)
     call vs_leave(vst, base)
   end function construct_type_vals

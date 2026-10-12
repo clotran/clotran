@@ -3292,23 +3292,6 @@ contains
     call vs_leave(vst, base)
   end function inst_equiv
 
-  ! A deftype's own hash, asked once when the instance is made and kept
-  ! in slot 4: hasheq, else hashCode, as Util.hasheq asks. Hashing runs
-  ! inside a map insert, where calling Clojure could collect what the
-  ! insert holds (gce_coll_hash), so it is not asked there. A record
-  ! hashes by its fields (gce_coll_hash); an instance whose type has
-  ! neither hashes by identity. DEVIATIONS 74.
-  recursive subroutine inst_cache_hash(inst)
-    type(gc_value), intent(in) :: inst
-    type(gc_value) :: h
-    logical :: found
-    if (gc_kind(inst) /= OBJ_INST) return
-    if (record_meta_index(inst) >= 0) return
-    h = inst_invoke0(inst, "hasheq", found)
-    if (.not. found) h = inst_invoke0(inst, "hashCode", found)
-    if (found .and. h%tag == GCT_INT) call gc_set_slot(inst, 4, h)
-  end subroutine inst_cache_hash
-
   ! (keys inst) / (vals inst), built from the instance's own seq --
   ! which hands back map entries, so the key is each entry's first and
   ! the value its second. Going through seq rather than reading the
@@ -11919,7 +11902,11 @@ contains
           else if (is_reduced(a)) then
              out = gc_slot(strip_meta(a), 1)
           else
-             out = a
+             ! deref-future's (.get ^Future fut): anything else is not a
+             ! Future, where it answered itself
+             call class_name_of(a, s=dlt_1)
+             call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+                  " cannot be cast to class clotran.host.future", [vs_get(vst, base + 1)])
           end if
        end if
     case (B_SUBMIT)
@@ -16062,13 +16049,19 @@ contains
          character(len=:), allocatable :: nm
          m = record_meta_index(v)
          if (m < 0) then
-            ! the hash its type answered when it was made (inst_cache_hash)
-            f = gc_slot(v, 4)
-            if (f%tag == GCT_INT) then
-               h = int(f%ival)
-            else
-               h = mix32(ieor(v%ref, v%tag))
-            end if
+            ! its own hasheq, else hashCode, asked at each hash as
+            ! Util.hasheq asks it; safe inside a map insert because
+            ! gc_hash calls this under the hold
+            block
+              logical :: found
+              f = inst_invoke0(v, "hasheq", found)
+              if (.not. found) f = inst_invoke0(v, "hashCode", found)
+              if (found .and. f%tag == GCT_INT) then
+                 h = int(f%ival)
+              else
+                 h = mix32(ieor(v%ref, v%tag))
+              end if
+            end block
          else
             fields = gc_slot(gc_slot(v, 1), 2)
             h = 0

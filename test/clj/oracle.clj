@@ -3273,3 +3273,14 @@ x10
 (try (eval '(let [n 1] (deftype ZL61 [] clotran.host.value (toString [_] (str n))))) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: n" (.getMessage (or (.getCause e) e)))))
 (let [n 1] (str (reify clotran.host.value (toString [_] (str n)))))
 (try (eval '(fn [] (deftype ZS61 []) (ZS61.))) (catch clotran.host.throwable e (re-find #"^Unable to resolve classname: ZS61" (.getMessage (or (.getCause e) e)))))
+
+;; a deftype's hash is its method's answer at each hash (DEVIATIONS 60 resolved): a volatile field read by hashCode
+;; moves its hash, a hashCode with an effect runs at each hash, not at construction; and deref asks an IDeref deftype
+(deftype H60 [^:volatile-mutable h] clotran.host.value (hashCode [_] h) clotran.host.i_deref (deref [_] (set! h 7) h))
+(let [x (H60. 3)] [(hash x) @x (hash x)])
+(def n60 (atom 0))
+(deftype C60 [] clotran.host.value (hashCode [_] (swap! n60 inc) 5))
+(let [c (C60.)] [@n60 (hash c) (hash c) @n60])
+(deftype E60 [k] clotran.host.i_hash_eq (hasheq [_] (hash k)) clotran.host.value (equals [_ o] (and (instance? E60 o) (= k (.-k ^E60 o)))))
+[(get {(E60. [1 2]) :yes} (E60. [1 2])) (contains? #{(E60. :a)} (E60. :a)) (count (hash-set (E60. 1) (E60. 1) (E60. 2)))]
+(try (deref 5) (catch clotran.host.throwable e (re-find #"^class \S+ cannot be cast to class" (.getMessage e))))
