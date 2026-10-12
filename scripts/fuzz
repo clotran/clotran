@@ -264,6 +264,11 @@
         [1 (g/let [n k] (list 'take n '(range)))]
         [1 (g/let [n k x (i)] (list 'take n (list 'repeat x)))]
         [2 (g/let [n k s (sq)] (list 'drop n s))]
+        ;; IDrop's: a vector's, its seq's and a long range's drop n further on
+        [1 (g/let [n k s (sq)] (list 'drop n (list 'vec s)))]
+        [1 (g/let [n k s (sq)] (list 'nthrest (list 'seq (list 'vec s)) n))]
+        [1 (g/let [n k s (sq)] (list 'nthnext s n))]
+        [1 (g/let [n k a (g/choose -5 5) b (g/choose -9 9) c (g/elements [1 2 3 -1 -2])] (list 'drop n (list 'range a b c)))]
         [3 (g/let [fn (f) s (sq)] (list 'map fn s))]
         [1 (g/let [s (sq) t (sq)] (list 'map '+ s t))]
         [2 (g/let [p (g/elements '[even? odd? pos? neg? zero?]) s (sq)] (list 'filter p s))]

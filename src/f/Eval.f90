@@ -256,6 +256,7 @@ module Eval
   integer, parameter :: B_SCHEDTAKE = 432, B_SCHEDPUSH = 433, B_AGENTPEEK = 434, B_AGENTSHUTDOWN = 435
   integer, parameter :: B_HOSTBOX = 436, B_IMPORT = 437, B_ARRAYGET = 438
   integer, parameter :: B_FILESIZE = 439, B_READBYTES = 440, B_WRITEBYTES = 441
+  integer, parameter :: B_IDROP = 442
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -8707,6 +8708,39 @@ contains
     end subroutine step
   end function reduce_native
 
+  ! A long range's bounds and how many it has left: LongRange, which is
+  ! an IDrop, where a range of other numbers (Range) is not. A range
+  ! whose tail has been walked keeps its bounds further along only, and
+  ! answers false: drop walks it instead.
+  logical function long_range_of(c, lo, hi, st, cnt) result(ok)
+    type(gc_value), intent(in) :: c
+    type(gc_value), intent(out) :: lo, hi, st
+    integer(gc_ip), intent(out) :: cnt
+    type(gc_value) :: t
+    integer :: n
+    ok = .false.
+    cnt = 0
+    lo = gc_nil(); hi = gc_nil(); st = gc_nil()
+    if (gc_kind(c) /= OBJ_LAZY .or. gc_i2(c) /= 1) return
+    t = c
+    if (gc_i1(c) == LAZY_CONS) t = gc_slot(c, 3)
+    if (gc_kind(t) /= OBJ_LAZY .or. gc_i2(t) /= 1 .or. gc_i1(t) /= LAZY_PENDING) return
+    if (tag_of(gc_slot(t, 1)) /= GCT_INT .or. tag_of(gc_slot(t, 2)) /= GCT_INT &
+         .or. tag_of(gc_slot(t, 3)) /= GCT_INT) return
+    n = 0
+    if (.not. range_count(t, n)) return
+    hi = gc_slot(t, 2); st = gc_slot(t, 3)
+    if (gc_i1(c) == LAZY_CONS) then
+       lo = gc_slot(c, 2)
+       if (tag_of(lo) /= GCT_INT) return
+       cnt = n + 1
+    else
+       lo = gc_slot(t, 1)
+       cnt = n
+    end if
+    ok = .true.
+  end function long_range_of
+
   recursive function range_cell(lo, hi, stp, roots) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: lo, hi, stp
@@ -11549,6 +11583,37 @@ contains
     ! array, answering how many; (clotran-write-bytes path bytes off len
     ! append?), len bytes from off, replacing the file or added to it.
     ! A file that cannot be opened is clj's FileNotFoundException.
+    ! IDrop.drop (clj 1.12; drop, nthrest and nthnext ask it first): a
+    ! vector's or its seq's view n further on (PersistentVector.drop,
+    ! ChunkedSeq.drop), a long range n further on (LongRange.drop), nil
+    ! past the end
+    case (B_IDROP)
+       block
+         type(gc_value) :: c, lo, hi, st
+         integer(gc_ip) :: k, cnt
+         c = strip_meta(gcv_nth(args, 0))
+         k = int(num_dbl(gcv_nth(args, 1)), gc_ip)
+         if (gcv_is(c)) then
+            if (k < gcv_count(c)) then
+               out = gc_obj(OBJ_SEQ, [c], [vs_get(vst, base + 1)])
+               call gc_set_i1(out, int(max(k, 0_gc_ip)))
+            end if
+         else if (gc_kind(c) == OBJ_SEQ .and. is_chunked_seq(c)) then
+            if (gc_i1(c) + k < gcv_count(gc_slot(c, 1))) then
+               out = gc_obj(OBJ_SEQ, [gc_slot(c, 1)], [vs_get(vst, base + 1)])
+               call gc_set_i1(out, int(gc_i1(c) + max(k, 0_gc_ip)))
+            end if
+         else if (long_range_of(c, lo, hi, st, cnt)) then
+            if (k <= 0) then
+               out = gcv_nth(args, 0)
+            else if (k < cnt) then
+               out = range_cell(gc_int(lo%ival + st%ival * k), hi, st, [vs_get(vst, base + 1)])
+            end if
+         else
+            call raise_class("clotran.host.illegal_argument_exception", &
+                 "No matching method drop found taking 1 args", [gc_nil()])
+         end if
+       end block
     case (B_FILESIZE, B_READBYTES, B_WRITEBYTES)
        block
          character(len=:), allocatable :: path, kn
@@ -19981,6 +20046,13 @@ contains
     case ("clotran.host.i_reduce_init", "clotran.host.i_reduce")
        yes = (t == "vector" .or. t == "list" .or. (t == "lazy-seq" .and. gc_i2(strip_meta(v)) == 1))
     case ("clotran.host.i_chunked_seq"); yes = is_chunked_seq(strip_meta(v))
+    case ("clotran.host.i_drop")
+       block
+         type(gc_value) :: lo, hi, st, c
+         integer(gc_ip) :: cnt
+         c = strip_meta(v)
+         yes = gcv_is(c) .or. (gc_kind(c) == OBJ_SEQ .and. is_chunked_seq(c)) .or. long_range_of(c, lo, hi, st, cnt)
+       end block
     case ("clotran.host.i_chunk", "clotran.host.array_chunk"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNK)
     case ("clotran.host.chunk_buffer"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKBUF)
     case ("clotran.host.chunked_cons"); yes = (gc_kind(strip_meta(v)) == OBJ_CHUNKSEQ)

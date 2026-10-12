@@ -3374,3 +3374,7 @@ x10
  (map class [(rest (range 2 3)) (rest (range 3 0 -1)) (rest [1 2]) (rest (map inc [1])) (rest (iterate inc 1))])]
 ;; more live regex literals than the first 4096 handles
 (let [ps (read-string (str "[" (apply str (repeat 5000 "#\"a+\" ")) "]"))] [(count ps) (re-find (peek ps) "baa")])
+;; IDrop: a vector's, its seq's and a long range's drop is a view n further on
+[(map class [(drop 1 [1 2 3]) (drop 1 (range 5)) (drop 5 [1]) (drop 0 [1]) (drop 1 (seq [1 2])) (drop 2 (drop 1 (vec (range 70))))])
+ [(drop 2 (range 10)) (drop 3 (range 10 0 -3)) (drop 40 (vec (range 50))) (nthrest (vec (range 5)) 2) (nthnext (range 5) 2)
+  (drop 1.5 [1 2 3]) (instance? clotran.host.i_drop [1]) (instance? clotran.host.i_drop (range 1.0 3.0)) (drop 9 (range 10)) (drop 10 (range 10))]]

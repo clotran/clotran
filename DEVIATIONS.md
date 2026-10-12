@@ -1313,7 +1313,10 @@ What still differs from a `Class`:
   `clotran.host.persistent_vector_chunked_seq`, as in clj; a map's, a
   set's and a string's are each a `clotran.host.a_seq`, the superclass
   of clj's `PersistentArrayMap$Seq`, `APersistentMap$KeySeq` and
-  `StringSeq`. An array's class is its
+  `StringSeq`. So IDrop, which clj 1.12's `drop`, `nthrest` and
+  `nthnext` ask first, is the vector's, its seq's and a long range's
+  here, and not a string's or an array map's seq's or `repeat`'s: those
+  drop by walking, to the same values, as a lazy seq. An array's class is its
   element kind and rank, `int/1`.
 - a function's class is named as clj's compiler names it,
   `clojure.core$int_QMARK_`, `user$foo_bar$hop` (and as cljs names its

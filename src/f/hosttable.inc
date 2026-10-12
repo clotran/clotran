@@ -427,7 +427,7 @@
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
   type(hm), parameter :: HOST_STATICS(324) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(98) = [ &
+  type(hm), parameter :: HOST_METHODS_1(99) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -477,6 +477,7 @@
        hm("", "refer", B_NSREFER, "clotran-ns-refer"), &
        hm("", "addAlias", B_NSADDALIAS, "clotran-ns-add-alias"), &
        hm("", "startsWith", B_STARTSWITH, "clotran-starts-with"), &
+       hm("", "drop", B_IDROP, "clotran-idrop"), &
        hm("", "endsWith", B_ENDSWITH, "clotran-ends-with"), &
        hm("", "trim", B_RTFN, "string-trim"), &
        hm("", "replace", B_REPLACE, "clotran-replace"), &
@@ -637,4 +638,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(177) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(178) = [HOST_METHODS_1, HOST_METHODS_2]
