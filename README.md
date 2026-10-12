@@ -63,10 +63,16 @@ $ sudo make install PREFIX=/usr/local # or anywhere else
 $ make uninstall                      # the same PREFIX
 ```
 
-It installs clotran and nothing else -- the binary, its heap image, the
-Clojure sources it loads on first use, and the launcher -- under
-`PREFIX/lib/clotran`, built for this machine's architecture. Packages
-come from a project's `deps.edn` (`PACKAGES.md`).
+It installs clotran -- the binary, its heap image, the Clojure sources
+it loads on first use, and the launcher -- under `PREFIX/lib/clotran`,
+built for this machine's architecture, and beside it the package
+manager, `clotran-deps`, from the checkout next to this one
+(`CLOTRAN_DEPS=dir` names another), as the `clj` script ships
+tools.deps. In a directory with a `deps.edn`, `clotran` asks it for the
+project's path; nobody sets `CLOTRAN_PATH` by hand. Everything else --
+packages, and the optional tools (`clotran-nrepl`, `clotran-mode`) --
+comes from a project's `deps.edn` as a `:local/root` or a `:git/url`
+pinned by its full `:git/sha` (`PACKAGES.md`).
 
 For Emacs, `~/jborden/clotran-mode` opens `.cljf` files in clojure-mode
 and has `M-x clotran-jack-in`, which starts clotran with the nREPL server

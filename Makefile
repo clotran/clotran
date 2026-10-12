@@ -462,6 +462,17 @@ check-install:
 	@$(MAKE) -s install PREFIX=$(CURDIR)/$(B)/inst >/dev/null
 	@echo "(require (quote [clojure.set :as set])) (println :installed-says (set/union #{1} #{2}) (clojure-version))" > $(B)/outside/t.cljf
 	cd $(B)/outside && $(CURDIR)/$(B)/inst/bin/clotran t.cljf </dev/null 2>&1 | grep -q ":installed-says #{1 2}"
+	@# a project: its deps.edn read by the clotran-deps installed beside clotran,
+	@# a :local/root library on the path -- when there was one to install
+	@if [ -x $(B)/inst/bin/clotran-deps ]; then \
+	  mkdir -p $(B)/outside/lib/src/lib $(B)/outside/app/src/app && \
+	  echo '{:paths ["src"]}' > $(B)/outside/lib/deps.edn && \
+	  echo '(ns lib.core) (def v :from-lib)' > $(B)/outside/lib/src/lib/core.cljf && \
+	  echo '{:paths ["src"] :deps {my/lib {:local/root "../lib"}}}' > $(B)/outside/app/deps.edn && \
+	  echo '(ns app.core (:require [lib.core])) (println :project-says lib.core/v)' > $(B)/outside/app/src/app/core.cljf && \
+	  (cd $(B)/outside/app && PATH=$(CURDIR)/$(B)/inst/bin:$$PATH $(CURDIR)/$(B)/inst/bin/clotran -m app.core </dev/null 2>&1) | grep -q ":project-says :from-lib" && \
+	  echo "    a deps.edn project resolved through the installed clotran-deps"; \
+	else echo "    (no clotran-deps beside this tree: its part skipped)"; fi
 	@$(MAKE) -s uninstall PREFIX=$(CURDIR)/$(B)/inst
 	@test -z "$$(find $(B)/inst -type f)"
 check-new:
@@ -700,6 +711,10 @@ PREFIX ?= $(HOME)/.local
 endif
 CLOTRAN_LIB = $(PREFIX)/lib/clotran
 CLOTRAN_BIN = $(PREFIX)/bin
+# clotran-deps, the package manager the launcher asks for a project's
+# path (PACKAGES.md): installed beside clotran from its checkout, as the
+# clj script ships tools.deps -- the one beside this one unless named
+CLOTRAN_DEPS ?= $(abspath $(CURDIR)/../clotran-deps)
 
 # the Fortran compiler this build uses, by absolute path: `clotran compile`
 # falls back to it where gfortran is not on PATH (an Emacs from the Dock)
@@ -718,11 +733,17 @@ install: clotran-bin $(B)/fc
 	mv "$(CLOTRAN_LIB).new" "$(CLOTRAN_LIB)"
 	printf '#!/bin/sh\n# clotran, installed by make install: the launcher in its home\nexec "%s/clotran" "$$@"\n' "$(CLOTRAN_LIB)" > "$(CLOTRAN_BIN)/clotran"
 	chmod +x "$(CLOTRAN_BIN)/clotran"
+	@if [ -x "$(CLOTRAN_DEPS)/bin/clotran-deps" ]; then \
+	  $(MAKE) -s -C "$(CLOTRAN_DEPS)" install PREFIX="$(PREFIX)"; \
+	else \
+	  echo "note: no clotran-deps at $(CLOTRAN_DEPS) (CLOTRAN_DEPS=dir names one): a project whose deps.edn names sources needs it (PACKAGES.md)"; \
+	fi
 	@case ":$$PATH:" in *":$(CLOTRAN_BIN):"*) echo "clotran is installed: $(CLOTRAN_BIN)/clotran" ;; \
 	  *) echo "clotran is installed: $(CLOTRAN_BIN)/clotran -- $(CLOTRAN_BIN) is not on your PATH; add it" ;; esac
 
 uninstall:
 	rm -rf "$(CLOTRAN_LIB)" "$(CLOTRAN_LIB).new" "$(CLOTRAN_BIN)/clotran"
+	rm -rf "$(PREFIX)/lib/clotran-deps" "$(CLOTRAN_BIN)/clotran-deps"
 
 # clojure.core, compiled (clotran compile). Opt-in: generating it takes
 # about 100 s, and `clean` -- so the gate -- removes it. When present,

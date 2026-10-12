@@ -5281,8 +5281,11 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
 3. *Step 15's tail* -- DONE 2026-10-12: raw bytes to and from files
    (clotran.files' byte streams, scripts/fuzz-bytes), and bit-set,
    bit-clear, bit-flip and bit-test checked against clj.
-4. *The install.* `make install PREFIX=`: the binary, the image, the
-   core sources and the launcher. The launcher resolves a project's
+4. *The install* -- DONE 2026-10-12: `make install PREFIX=` puts the
+   binary, the image, the core sources and the launcher under
+   PREFIX/lib/clotran and installs clotran-deps beside them from its
+   checkout (CLOTRAN_DEPS); check-install runs a deps.edn project with a
+   :local/root library through the installed pair. As decided: the launcher resolves a project's
    `deps.edn` by calling `clotran-deps`, shipped beside it as the
    `clj` script ships tools.deps, so nobody sets `CLOTRAN_PATH` by
    hand; `clotran new` writes a `deps.edn`. The optional tools
