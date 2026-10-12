@@ -21,7 +21,7 @@ Categories:
 | # | What | Kind | Where |
 |---|------|------|-------|
 | 1 | RESOLVED -- load reads one form, evaluates it, reads the next | -- | `src/f/main.f90` |
-| 2 | `host.clj` preloaded before `core.clj` | temporary | `src/clj/host.clj` |
+| 2 | RESOLVED -- nothing preloaded before `core.clj` | -- | `src/f/main.f90` |
 | 3 | Symbols fall back to `clojure.core` instead of being referred | temporary | `src/f/Eval.f90` |
 | 4 | `.` reaches a fixed table of host members, not arbitrary classes | host | `src/f/Eval.f90` |
 | 5 | Metadata is a wrapper object, not carried on the value | host | `src/f/GC.f90` |
@@ -61,14 +61,17 @@ does. The same change gave list forms a source position (the opening
 paren's offset, on the cons cell), which the analyser copies to its
 node and an error reports as `file:line:col`.
 
-## 2. `host.clj` is loaded before `core.clj`
+## 2. RESOLVED -- nothing of clotran's loads before core.clj
 
-Clojure loads nothing before `clojure/core.clj`; its bootstrap is clj
-(`RT.doInit`). Ours is partly Clojure, in `src/clj/host.clj`.
-
-**Removal**: as natives replace it, `host.clj` shrinks. It is already down
-to type predicates over `clotran-type` plus three scaffolding macros. When
-`defn`/`fn`/`let` come from core.clj itself, the file goes.
+**RESOLVED 2026-10-12.** Clojure loads nothing before `clojure/core.clj`;
+its bootstrap is the host's (`RT.doInit`). clotran's once loaded
+`src/clj/host.clj` first -- scaffolding `defn`, `fn` and `let` macros
+and type predicates over `clotran-type`, from when core.clj could not
+load. core.clj defines every one of them itself, and it now loads with
+nothing ahead of it; the file is gone. What stands in for `RT.doInit`
+is Fortran: the special forms, the builtins core.clj's host calls
+reach, and the `ns` and `in-ns` core answers in every namespace
+(DEVIATIONS 3).
 
 ## 3. RESOLVED -- a namespace sees clojure.core by referral, not by a fall-back
 
@@ -1341,8 +1344,8 @@ What still differs from a `Class`:
   with the runtime's own answers behind it.
 
 The internal type TAG -- `:string`, `:vector`, `:int` -- is what
-`clotran-type` answers and what `host.clj`'s predicates are written
-on; it is not `class`, and never was meant to leak.
+`clotran-type` answers; it is not `class`, and never was meant to
+leak.
 
 ## 35. RESOLVED -- an unrealised seq hashed by identity, so it was not found as a map key
 

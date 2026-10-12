@@ -5,8 +5,7 @@
 ;;   scripts/chemsol-check [chemsol-tests-dir]   default ~/jborden/chemsol/tests
 ;;
 ;; Each input runs in its own clotran process (the library's random
-;; generator is module state), from the repo root (clotran loads
-;; src/clj/host.clj relative to it). solvout appends to cs.arc in the
+;; generator is module state), from the repo root. solvout appends to cs.arc in the
 ;; working directory; that file is removed afterwards. Exit status is
 ;; non-zero if any of the three differs; the first differing lines are
 ;; printed.

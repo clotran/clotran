@@ -431,7 +431,7 @@ module Eval
   ! CLOTRAN_AUTOCOMPILE, read once: 0 unset, 1 set (clotran.loader/auto)
   integer, save :: autocompile = -1
   logical, save :: no_install = .false.   ! gce_set_no_install: an image is being taken, no library installs
-  ! files loaded while core.clj itself was loading -- host.clj, the
+  ! files loaded while core.clj itself was loading -- the
   ! printer, protocols -- wait for core to finish: clotran.loader is
   ! written in the Clojure core defines
   logical, save :: auto_ready = .false.
@@ -1942,8 +1942,8 @@ contains
     if (no_install) return
     tctx => ctx_self()
     vst => tctx%stk
-    ! A file that loads while core.clj itself is loading -- host.clj,
-    ! the printer, core/protocols -- waits for core to finish: installing
+    ! A file that loads while core.clj itself is loading -- the
+    ! printer, core/protocols -- waits for core to finish: installing
     ! a library, or building one, runs clotran.loader, which is written in
     ! the Clojure core defines. When core has loaded, its own library goes
     ! in first, then the files that waited, in the order they loaded.
@@ -20457,8 +20457,8 @@ contains
   ! class literal evaluates (in full), so (= (class "a")
   ! clotran.host.string) holds, (condp = (class x) clotran.host.string ...) takes its branch,
   ! and a protocol's :impls map keyed by the literal is hit directly.
-  ! The type TAG (type_name) stays internal: host.clj's predicates
-  ! read it through clotran-type, and messages use it. Where clotran
+  ! The type TAG (type_name) stays internal: clotran-type reads it,
+  ! and messages use it. Where clotran
   ! has one type for several of Clojure's classes -- one map, one
   ! seq view -- the most common class stands for it.
   ! The class named s, as this thread made it the first time: Clojure's

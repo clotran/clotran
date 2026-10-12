@@ -486,7 +486,7 @@ after core.clj, so `./clotran prog.cljf` runs a program. It works from
 any directory: the binary takes its own directory as a classpath root.
 
 `./clotran-bin` is the interpreter alone, a plain stdin/stdout REPL that
-loads only `host.clj` and the files named on its command line -- which
+loads only the files named on its command line -- which
 is what the scripts and the Makefile use, passing core.clj explicitly.
 
 ```

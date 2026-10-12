@@ -5229,13 +5229,16 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    (42 had turned from a throw into a silent no-op) and are corrected.
    The order to resolve the rest, cheapest by each entry's own removal
    sentence: 36 (DONE 2026-10-10), 42 (DONE), 23 (DONE), 10 (DONE), 19
-   (DONE), 32 (DONE, for a user's code), 62 (DONE), 68 (DONE), 17 (DONE), 3 (DONE), 60 (DONE), 48 (narrowed: the static checks inferred, what is not typed let through), 6 (DONE), then 2 -- each in its own gated
-   commit, or reclassified by design with the reason. Owed by 6: a
-   native lazy concat -- syntax-quote now expands to clj's (seq (concat
-   ...)), and core.clj's concat, interpreted, made loading source about
-   0.25 s slower over core.clj (0.48 to 0.73 s, image off) and some 20%
-   over spec and pprint; the eager B_CONCAT cannot stand in, as
-   `(1 ~@(range)) taken lazily must not hang. Three are
+   (DONE), 32 (DONE, for a user's code), 62 (DONE), 68 (DONE), 17 (DONE), 3 (DONE), 60 (DONE), 48 (narrowed: the static checks inferred, what is not typed let through), 6 (DONE), 2 (DONE) -- each in its own gated
+   commit, or reclassified by design with the reason. Measured with 6:
+   syntax-quote now expands to clj's (seq (concat ...)), and core.clj's
+   concat, interpreted, made loading source about 0.25 s slower over
+   core.clj (0.48 to 0.73 s, image off) and some 20% over spec and
+   pprint. Not a native concat: clj writes concat in Clojure, so making
+   it native would replace core's own definition, which clotran does only
+   at a host seam (SEAMS.md); the eager B_CONCAT could not stand in
+   anyway, `(1 ~@(range)) taken lazily must not hang. It is the
+   interpreter's speed, which compiled core and the JIT address. Three are
    reclassified on 2026-10-10 as staying through 1.0, each entry saying
    so: 54 (a namespace with a slash in it needs a boundary stored beside
    every symbol's and keyword's interned text, for names clojuredocs

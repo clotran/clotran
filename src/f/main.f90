@@ -112,18 +112,9 @@ contains
        call vs_set(base + 1, env)
     end if
 
-    ! The host shim -- type predicates that core.clj cannot supply,
-    ! because it would ask instance? about clj classes. NOT a core
-    ! library: everything else Clojure programs use must come from
-    ! the real core.clj, which is the point of the project.
-    if (.not. imaged) then
-       block
-          character(len=:), allocatable :: dlr_2
-          call under_home("src/clj/host.clj", p=dlr_2)
-          call load_file(dlr_2, vs_get(base + 1))
-       end block
-    end if
-    ! host.clj leaves clojure.core current, being part of its bootstrap.
+    ! Nothing of clotran's loads ahead of core.clj (DEVIATIONS 2
+    ! resolved): the shim host.clj once did, scaffolding macros and
+    ! type predicates that core.clj, once it could load, defined itself.
 
     ! Any files named on the command line load next, in order, so
     ! that `clotran some.clj` is how a file gets tried against

@@ -77,7 +77,7 @@
   ! and its .equals is (APersistentMap/mapEquals this o): clotran.rt's map-equals
        hm("clotran.host.a_persistent_map", "mapEquals", B_RTFN, "map-equals"), &
   ! Util.classOf and .getClass are `class`: the canonical class keyword
-  ! (class_name_of). clotran-type, the internal tag, is host.clj's.
+  ! (class_name_of). clotran-type is the internal tag.
        hm("clotran.host.util", "classOf", B_CLASSOF, "clotran-class"), &
        hm("clotran.host.lazily_persistent_vector", "create", B_VEC, "vec"), &
        hm("clotran.host.lazily_persistent_vector", "createOwning", B_VEC, "vec"), &
