@@ -786,9 +786,9 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: reason
-    type(gc_value) :: out, h, cmd, argv, thrown
+    type(gc_value) :: out, h, cmd, argv, thrown, binds
     type(gc_value) :: none(0)
-    integer :: base, paused, depth
+    integer :: base, paused, depth, pbase
     logical :: failed
     character(len=:), allocatable :: msg, trc
 
@@ -813,9 +813,17 @@
     ctxs(handler_ctx)%c%ev_depth = tctx%ev_depth   ! one Fortran stack: the nesting limit counts on
     ! the handler is not a task, whatever it interrupted was
     in_handler = .true.
+    ! with the paused code's bindings, *ns* among them, as a handler called
+    ! on the same thread would have them: the nested REPL's prompt is the
+    ! namespace that broke, not clojure.core (held on the paused stack,
+    ! which stays rooted across the switch)
+    pbase = vs_enter(vst, 1)
+    call vs_set(vst, pbase + 1, gc_bindings_get())
+    binds = vs_get(vst, pbase + 1)
     call gce_ctx_switch(handler_ctx)
     tctx => ctx_self()   ! the handler's context now: re-read
     vst => tctx%stk
+    call gc_bindings_set(binds)
     tctx%cur_task = gc_nil()
     tctx%task_loop_depth = 0
     call gce_clear_error()
@@ -837,6 +845,7 @@
     call gce_ctx_switch(paused)
     tctx => ctx_self()   ! the paused context again
     vst => tctx%stk
+    call vs_leave(vst, pbase)
     in_handler = .false.
     ! back where the break was taken; the error state is as it was
 
