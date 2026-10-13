@@ -81,7 +81,9 @@ change.
   aarch64 has no `ieee_arithmetic`, and clotran's own bit-level version
   stands in (`src/f/ieee_lite.f90`, checked against the intrinsic one on
   every gate). x86_64 is built the same way (`scripts/dist-linux
-  x86_64`, emulated on an arm64 machine) and is gated nowhere yet.
+  x86_64`, emulated on an arm64 machine), and the gate runs on real
+  x86_64 Linux (`scripts/gate-wsl`); the tarball itself is checked in
+  clean images on aarch64 only.
 - **Windows** (x86_64, Windows 10 and on): built natively under MSYS2's
   UCRT64 gfortran and tested on a Windows 10 machine -- `make test`
   passing whole, every fuzzer at full size, the oracle's forms agreeing

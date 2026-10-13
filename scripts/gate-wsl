@@ -1,0 +1,38 @@
+#!/usr/bin/env bb
+;; gate-wsl: scripts/gate-linux on a Windows machine's WSL, so the Linux
+;; gate runs on real x86_64 (from an arm64 Mac, Docker would emulate it).
+;; The WSL distro needs docker.io, bb and git, and is reached as root
+;; through the machine's ssh, whose shell is cmd.exe:
+;;
+;;   GATE_SSH='ssh -i KEY user@host' scripts/gate-wsl [log]
+;;
+;; default log build/gate-wsl.log; the verdict is its last line, EXIT n.
+;; This tree's files as they are now, tracked and new, go to /root/clotran
+;; there, made a repository again since gate-linux lists files by git.
+(require '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.string :as str])
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def log (str (fs/absolutize (or (first *command-line-args*) (str repo "/build/gate-wsl.log")))))
+(def ssh (str/split (or (System/getenv "GATE_SSH") (do (println "gate-wsl: set GATE_SSH, e.g. 'ssh -i KEY user@host'") (System/exit 2))) #"\s+"))
+
+;; a command in the distro; one without quotes or pipes, as cmd.exe reads it first
+(defn wsl [opts & cmd] (apply p/shell (merge {:err :string} opts) (concat ssh ["wsl" "-u" "root" "--"] cmd)))
+
+;; WSL keeps no daemon between sessions: the run starts dockerd if it is down
+(def run-sh (str "#!/bin/bash\n"
+                 "if ! docker info > /dev/null 2>&1; then\n"
+                 "  setsid nohup dockerd > /var/log/dockerd.log 2>&1 < /dev/null &\n"
+                 "  for i in $(seq 60); do docker info > /dev/null 2>&1 && break; sleep 1; done\n"
+                 "fi\n"
+                 "docker info > /dev/null 2>&1 || { echo 'gate-wsl: dockerd did not start'; exit 1; }\n"
+                 "cd /root/clotran && rm -rf .git && git init -q && git add -A && git -c user.name=gate -c user.email=gate commit -qm tree\n"
+                 "timeout 7200 bb scripts/gate-linux /root/gate-wsl.log\n"))
+(wsl {:in run-sh} "bash" "-c" "\"tr -d '\\r' > /root/gate-wsl.sh\"")
+(let [tar (p/process {:dir repo} "sh" "-c" "git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf -")]
+  (wsl {:in (:out tar)} "bash" "-c" "\"rm -rf /root/clotran && mkdir -p /root/clotran && tar xf - -C /root/clotran\""))
+(wsl {:continue true :out :inherit} "bash" "/root/gate-wsl.sh")
+(fs/create-dirs (fs/parent log))
+(spit log (:out (wsl {:out :string :continue true} "cat" "/root/gate-wsl.log")))
+(println "gate-wsl:" (or (last (str/split-lines (slurp log))) "no log") "--" log)

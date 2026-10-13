@@ -5332,7 +5332,12 @@ remains before 1.0.0, in order:
   fresh clone never built ICU; gfortran before 14 wants
   -ffree-line-length-none; pure Fortran's do concurrent had a type in
   its header gfortran 14 refused; the newest Clojure CLI reads a -Sdeps
-  value as a path. x86_64 builds the same way and is gated nowhere yet.
+  value as a path. x86_64 builds the same way; the gate runs there on
+  real x86_64 since 2026-10-13 (`scripts/gate-wsl`: gate-linux in WSL on
+  the Windows box), its tarball not yet through `scripts/dist-check`.
+  Debian's flang-19 lost compiler-check's race there -- it initializes
+  every gc_value local through its runtime, clotran 5x slower than under
+  23 -- so the gate image takes flang 23 from apt.llvm.org, as macOS's.
 - **Windows** -- DONE 2026-10-12 for x86_64: built natively under
   MSYS2's UCRT64 gfortran on a Windows 10 machine, `make test` passing
   whole there, and the release a zip that runs the launcher under a
