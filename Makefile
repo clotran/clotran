@@ -24,8 +24,9 @@ B = build
 # gfortran at -O3 on arm64 fused n - q*d and answered the exact residual,
 # 2.55E-15 (scripts/fuzz-num). Both compilers, and clotran compile too.
 FCFLAGS = -g -O2 -ffp-contract=off -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
-LDFLAGS = $(FCFLAGS_$(notdir $(FC)))
-TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC)))
+# OS_OBJECTS (win_shim on Windows) on every link line, once
+LDFLAGS = $(FCFLAGS_$(notdir $(FC))) $(OS_OBJECTS) $(OS_LDFLAGS)
+TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC))) $(OS_OBJECTS) $(OS_LIBS) $(OS_LDFLAGS)
 
 # Fortran 2018 made every procedure recursive by default. flang follows
 # it; gfortran still defaults to F2008, where a procedure not marked
@@ -122,11 +123,59 @@ T = test/f
 #
 # Platform-detected rather than hardcoded to macOS, since the goal is
 # to build the same way on Linux -- ICU's own runConfigureICU already
-# has a profile for each. Windows is NOT wired here: that build goes
-# through ICU's own MSVC solution files (src/c/icu/source/allinone),
-# vendored but not invoked by this POSIX-shaped Makefile.
+# has a profile for each, MinGW's among them. Windows is built natively
+# under MSYS2's UCRT64 (gfortran) -- a build machine of the same C
+# runtime as the user's gfortran, so a package a user builds shares it.
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Darwin)
+OS_TARGET ?= $(if $(filter MINGW% MSYS%,$(UNAME_S)),Windows,$(UNAME_S))
+ifeq ($(OS_TARGET),Windows)
+ICU_PLATFORM = MinGW
+# ICU's own tools (which its data step runs) link only against its shared
+# libraries there; clotran links the static ones
+ICU_SHARED = --enable-shared
+LIBCXX = -lstdc++
+SOEXT = dll
+LIBDL =
+# A compiled namespace or package is a DLL, whose imports are bound when
+# it loads: it links against this import library of clotran-bin.exe's
+# own symbols, every one exported. --wrap=rename: win_shim.c's rename,
+# which replaces an existing file as POSIX's does.
+# --exclude-libs: clotran's own symbols, not the static runtimes'.
+EXPORTDYN = -Wl,--export-all-symbols,--exclude-libs,ALL,--wrap=rename
+# The import library is written from the exe's clotran_* exports by
+# dlltool, every one a function: the linker's own (--out-implib) took 64 of
+# the 79 for data, after LTO, so a compiled library called them through a
+# 32-bit pseudo-relocation, which failed once Windows loaded the DLL more
+# than 2 GB from the exe ("32 bit pseudo relocation ... out of range")
+# ClotranABI's entries are called only from outside -- compiled code, an
+# embedder -- and LTO, told nothing of PE exports (-rdynamic tells it on
+# ELF), dropped them: every clotran_* export pointed at the image base.
+# That one file is compiled without LTO on Windows.
+$(B)/ClotranABI.o: FCFLAGS += -fno-lto
+WIN_IMPLIB = { echo "LIBRARY clotran-bin.exe"; echo EXPORTS; objdump -p clotran-bin.exe | sed -n 's/^.* \(clotran_[A-Za-z0-9_]*\)$$/\1/p'; } > $(B)/clotran-bin.def && dlltool -d $(B)/clotran-bin.def -l $(B)/libclotran-bin.dll.a
+# win_shim.c's sysconf answers the processor count whatever it is asked
+SC_NPROCESSORS_ONLN = 84
+# pthread_key_t: unsigned in winpthreads' pthread.h
+PTHREAD_KEY_KIND = c_int
+PATH_SEP = ;
+# line.separator: Windows' CR LF, as clj's there (println, newline, format's %n)
+LINE_SEP = achar(13)//achar(10)
+# winpthreads hands a stack size to _beginthreadex, which COMMITS it: the
+# 1 GB main stack and 256 MB a task thread were charged in full at once
+# (1.2 GB for an idle REPL). The link's --stack RESERVES 1 GB for every
+# thread instead, committed as it is touched.
+STACK_BY_LINK = .true.
+# -static: libgfortran, libquadmath, libstdc++, libgcc and winpthread linked
+# in, so clotran-bin.exe, and a program clotran build makes of it, runs
+# where no MSYS2 is (a program is one file; its DLLs would not travel)
+OS_LDFLAGS = -Wl,--stack,1073741824 -static
+OS_OBJECTS = $(B)/win_shim.o $(B)/win_utf8.o
+OS_LIBS = -lws2_32
+WINDRES ?= windres
+# the linker names an executable .exe; clotran-bin is the target still
+EXE = .exe
+ICU_CFLAGS = -DU_STATIC_IMPLEMENTATION
+else ifeq ($(OS_TARGET),Darwin)
 ICU_PLATFORM = macOS
 LIBCXX = -lc++
 SOEXT = dylib
@@ -162,6 +211,9 @@ endif
 $(B)/osconst.inc: Makefile | $(B)
 	printf '  integer(c_int), parameter :: SC_NPROCESSORS_ONLN = %s\n' $(SC_NPROCESSORS_ONLN) > $@.new
 	printf '  integer, parameter :: PTHREAD_KEY_KIND = %s\n' $(PTHREAD_KEY_KIND) >> $@.new
+	printf '  character(len=*), parameter :: PATH_SEP = "%s"\n' '$(PATH_SEP)' >> $@.new
+	printf '  character(len=*), parameter :: LINE_SEP = %s\n' '$(LINE_SEP)' >> $@.new
+	printf '  logical, parameter :: STACK_BY_LINK = %s\n' $(STACK_BY_LINK) >> $@.new
 	cmp -s $@.new $@ || mv $@.new $@
 	rm -f $@.new
 $(B)/Threads.o: $(B)/osconst.inc
@@ -169,12 +221,28 @@ $(B)/Threads.o: $(B)/osconst.inc
 # the IEEE names the host uses (src/f/clotran_ieee.f90): the intrinsic
 # module, or ieee_lite where a compiler has none -- gfortran with musl on
 # aarch64 -- so for every musl build, where it costs nothing
-IEEE ?= $(if $(shell ldd --version 2>&1 | grep -i musl),lite,intrinsic)
+ifndef IEEE
+IEEE := $(if $(shell ldd --version 2>&1 | grep -i musl),lite,intrinsic)
+endif
+
+# what separates a list of paths, path.separator: ; on Windows, where : is a drive's
+PATH_SEP ?= :
+# what ends a line, line.separator: CR LF on Windows
+LINE_SEP ?= achar(10)
+# a thread's stack size given to pthreads (.false.), or the link's (Windows)
+STACK_BY_LINK ?= .false.
+
+ICU_SHARED ?= --disable-shared
 
 CC ?= cc
 ICU_SRC = src/c/icu/source
 ICU_STAMP = $(ICU_SRC)/.built
+# ICU names its static libraries with an s on Windows, but its data's not
+ifeq ($(OS_TARGET),Windows)
+ICU_LIBS = $(ICU_SRC)/lib/libsicuin.a $(ICU_SRC)/lib/libsicuuc.a $(ICU_SRC)/lib/libicudt.a
+else
 ICU_LIBS = $(ICU_SRC)/lib/libicui18n.a $(ICU_SRC)/lib/libicuuc.a $(ICU_SRC)/lib/libicudata.a
+endif
 ICU_INC = -I$(ICU_SRC)/common -I$(ICU_SRC)/i18n
 
 # One recipe, several output files -- old GNU Make (3.81, macOS's
@@ -189,7 +257,7 @@ ICU_INC = -I$(ICU_SRC)/common -I$(ICU_SRC)/i18n
 # build needed) directly into libicudata.a, so the built binary needs
 # no data file and no locale directory at runtime, anywhere.
 $(ICU_STAMP):
-	cd $(ICU_SRC) && ./runConfigureICU $(ICU_PLATFORM) --enable-static --disable-shared \
+	cd $(ICU_SRC) && ./runConfigureICU $(ICU_PLATFORM) --enable-static $(ICU_SHARED) \
 		--disable-extras --disable-icuio --with-data-packaging=static
 	mkdir -p $(ICU_SRC)/bin $(ICU_SRC)/lib
 	for d in stubdata common i18n tools data; do $(MAKE) -C $(ICU_SRC)/$$d || exit 1; done
@@ -207,7 +275,14 @@ $(B)/fs_shim.o: src/c/fs_shim.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
 $(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B) $(FCSTAMP)
-	$(CC) -c $(ICU_INC) $< -o $@
+	$(CC) -c $(ICU_CFLAGS) $(ICU_INC) $< -o $@
+
+$(B)/win_shim.o: src/c/win_shim.c | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
+
+# the UTF-8 code page manifest, as a linkable resource
+$(B)/win_utf8.o: src/c/win_utf8.rc src/c/win_utf8.manifest | $(B) $(FCSTAMP)
+	cd src/c && $(WINDRES) win_utf8.rc -O coff -o $(abspath $@)
 
 # --- the host ----------------------------------------------------------
 
@@ -219,6 +294,8 @@ unit-tests = $(if $(filter intrinsic,$(IEEE)),ieee_lite_test) gc_test persistent
 	persistent_hash_map_test env_test assoc_test printer_test reader_test eval_test bigint_test \
 	bigdec_test abi_test native_array_test threads_test gc_mt_test
 test-bins = $(addprefix $(BT)/,$(unit-tests))
+# what a test needs of the OS beyond its own modules (win_shim on Windows)
+$(test-bins): $(OS_OBJECTS)
 
 .PHONY: all crosscheck crosscheck-here clean compiled-core embed image install uninstall dist
 all: clotran-bin $(test-bins) $(B)/core.image $(B)/fc
@@ -239,7 +316,8 @@ $(B) $(BT):
 # so the first build after a compiler switch deleted bigint.mod and then
 # compiled BigDec against it ("Cannot open module file"); the second
 # build worked. Done here, make judges an empty directory.
-FCSTAMP = $(B)/.built-with-$(FCNAME)
+# and to one IEEE: clotran_ieee.o is one of two sources by it
+FCSTAMP = $(B)/.built-with-$(FCNAME)-$(IEEE)
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
 ifeq ($(wildcard $(FCSTAMP)),)
 $(shell rm -rf $(B)/*.o $(B)/*.mod $(B)/.built-with-* $(BT); mkdir -p $(BT); touch $(FCSTAMP))
@@ -260,7 +338,7 @@ ieee-objects = $(B)/ieee_lite.o $(B)/clotran_ieee.o
 $(B)/clotran_ieee.o: $(S)/clotran_ieee$(if $(filter lite,$(IEEE)),_lite).f90 $(B)/ieee_lite.o | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 $(B)/Printer.o $(B)/LispReader.o $(B)/Eval.o: $(B)/clotran_ieee.o
-$(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o $(S)/gen/heap_gen.inc
+$(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(S)/gen/heap_gen.inc
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
 $(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
 $(B)/Assoc.o: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o
@@ -332,19 +410,20 @@ socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o
 $(B)/Socket.o: $(B)/GC.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(vm-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
-LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread
+LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread $(OS_LIBS)
 
 # The build's identity, for main.f90: a stamp an image is tied to, and
 # what the REPL's banner says -- VERSION, the pins the deriver recorded
 # (test/clj/derived/PROVENANCE.md), and the machine.
-clotran-bin: $(eval-objects) $(S)/main.f90 $(ICU_LIBS) VERSION test/clj/derived/PROVENANCE.md
+clotran-bin: $(eval-objects) $(OS_OBJECTS) $(S)/main.f90 $(ICU_LIBS) VERSION test/clj/derived/PROVENANCE.md
 	printf 'character(len=*), parameter :: BUILD_STAMP = "%s"\n' "$$(date +%s)-$$$$" > $(B)/stamp.inc
 	printf 'character(len=*), parameter :: CLOTRAN_VERSION = "%s"\n' "$$(cat VERSION)" >> $(B)/stamp.inc
 	printf 'character(len=*), parameter :: CLOJURE_PIN = "%s"\n' "$$(sed -n 's/^clojure //p' test/clj/derived/PROVENANCE.md)" >> $(B)/stamp.inc
 	printf 'character(len=*), parameter :: CLJS_PIN = "%s"\n' "$$(sed -n 's/^clojurescript //p' test/clj/derived/PROVENANCE.md)" >> $(B)/stamp.inc
 	printf 'character(len=*), parameter :: BUILD_ARCH = "%s"\n' "$$(uname -m)-$$(uname -s | tr A-Z a-z)" >> $(B)/stamp.inc
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
-	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@ $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
+	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@$(EXE) $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
+	$(WIN_IMPLIB)
 
 # Test binaries: each links exactly the modules it exercises, so a
 # module's test cannot pass by accident through something above it.
@@ -512,7 +591,11 @@ check-program: $(B)/core.image
 	mkdir -p $(B)/program/elsewhere && mv $(B)/program/prog $(B)/program/elsewhere/
 	cd $(B)/program/elsewhere && env -i TMPDIR=$(CURDIR)/$(B)/program ./prog y </dev/null | grep -qx ':main ("y")'
 	cd $(B)/program/elsewhere && ! env -i TMPDIR=$(CURDIR)/$(B)/program ./prog boom </dev/null >/dev/null 2>&1
+ifneq ($(OS_TARGET),Windows)
 	cd $(B)/program/elsewhere && env -i TMPDIR=$(CURDIR)/$(B)/program ./prog how </dev/null | grep -q '#<compiled p.core/-main>'
+else
+	@echo "(Windows: a built program runs interpreted -- its libraries would import from clotran-bin.exe by that name)"
+endif
 	@rm -f $(B)/program/elsewhere/prog
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
@@ -666,7 +749,7 @@ check-static:
 	@echo "--- no static string lengths (gfortran slen: shared by every thread, step 14f) ---"
 	scripts/no-static-slen clotran-bin packages/chemsol/libchemsol.$(SOEXT) packages/blas/libblas.$(SOEXT)
 	@echo "--- no text relocations: musl's loader cannot apply them (src/f/Threads.f90, th_start); ELF only ---"
-	@if [ "$(UNAME_S)" != Darwin ] && command -v readelf >/dev/null; then for b in clotran-bin $(test-bins); do if readelf -d $$b | grep -q TEXTREL; then echo "$$b has text relocations"; exit 1; fi; done; echo none; else echo "not ELF here"; fi
+	@if [ "$(UNAME_S)" != Darwin ] && [ "$(OS_TARGET)" != Windows ] && command -v readelf >/dev/null; then for b in clotran-bin $(test-bins); do [ -f $$b ] || { echo "$$b is missing"; exit 1; }; if readelf -d $$b | grep -q TEXTREL; then echo "$$b has text relocations"; exit 1; fi; done; echo none; else echo "not ELF here"; fi
 
 # What runs before every commit. Ends on the default compiler so the
 # tree is left with the build you actually use.
@@ -749,9 +832,10 @@ install: clotran-bin $(B)/fc
 	@echo "--- installing clotran into $(CLOTRAN_LIB), the command into $(CLOTRAN_BIN) ---"
 	rm -rf "$(CLOTRAN_LIB).new"
 	mkdir -p "$(CLOTRAN_LIB).new/src" "$(CLOTRAN_LIB).new/build" "$(CLOTRAN_BIN)"
-	cp clotran-bin clotran "$(CLOTRAN_LIB).new/"
+	cp clotran-bin$(EXE) clotran "$(CLOTRAN_LIB).new/"
 	cp -R src/clj "$(CLOTRAN_LIB).new/src/"
 	cp $(B)/fc "$(CLOTRAN_LIB).new/build/fc"
+	[ -z "$(EXE)" ] || cp $(B)/libclotran-bin.dll.a "$(CLOTRAN_LIB).new/build/"
 	cd "$(CLOTRAN_LIB).new" && CLOTRAN_IMAGE=0 CLOTRAN_IMAGE_SAVE=build/core.image ./clotran-bin src/clj/clojure/core.clj </dev/null >/dev/null
 	rm -rf "$(CLOTRAN_LIB)"
 	mv "$(CLOTRAN_LIB).new" "$(CLOTRAN_LIB)"
@@ -770,13 +854,16 @@ install: clotran-bin $(B)/fc
 # beside it, the commands finding their homes from where they are
 # (scripts/dist-bundle) -- as build/dist/NAME.tar.gz. A Linux one is
 # built on an old glibc (scripts/dist-linux) so it runs on any newer one.
-DIST_NAME = clotran-$(shell cat VERSION)-$(shell uname -s | tr A-Z a-z)-$(shell uname -m)$(shell ldd 2>&1 | grep -qi musl && echo -musl)
+DIST_OS = $(if $(filter Windows,$(OS_TARGET)),windows,$(shell uname -s | tr A-Z a-z))
+DIST_NAME = clotran-$(shell cat VERSION)-$(DIST_OS)-$(shell uname -m)$(shell ldd 2>&1 | grep -qi musl && echo -musl)
+# a zip on Windows, where every user has one; a tarball elsewhere
+DIST_PACK = $(if $(filter Windows,$(OS_TARGET)),zip -qr $(DIST_NAME).zip $(DIST_NAME),tar czf $(DIST_NAME).tar.gz $(DIST_NAME))
 dist: clotran-bin $(B)/fc
 	rm -rf $(B)/dist
 	$(MAKE) install PREFIX=$(CURDIR)/$(B)/dist/$(DIST_NAME)
 	scripts/dist-bundle $(B)/dist/$(DIST_NAME)
-	cd $(B)/dist && tar czf $(DIST_NAME).tar.gz $(DIST_NAME)
-	@echo "dist: $(B)/dist/$(DIST_NAME).tar.gz"
+	cd $(B)/dist && $(DIST_PACK)
+	@echo "dist: $(B)/dist/$(DIST_NAME)"
 
 uninstall:
 	rm -rf "$(CLOTRAN_LIB)" "$(CLOTRAN_LIB).new" "$(CLOTRAN_BIN)/clotran"

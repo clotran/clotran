@@ -38,7 +38,7 @@
             [(str scripts "/fuzz-spec") "-n" (str (max 4 (quot n 6))) "-k" "2" "-s" (str seed) "-m" modes "-o" (str out "/spec.edn")]]
       results (doall (for [cmd runs]
                        (do (println "===" (fs/file-name (first cmd)))
-                           (:exit (apply p/shell {:continue true} cmd)))))]
+                           (:exit (apply p/shell {:continue true} "bb" cmd)))))]
   (fs/delete-tree out)
   (println "fuzz-gc:" (count (remove zero? results)) "of" (count runs) "generators found something")
   (System/exit (if (every? zero? results) 0 1)))

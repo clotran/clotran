@@ -2,24 +2,27 @@
 ;; fuzz-all: every fuzzer, one after another, each under a deadline, and
 ;; a scorecard (PLAN step 29).
 ;;
-;;   scripts/fuzz-all [--size quick|full] [-s SEED] [--only a,b]
+;;   scripts/fuzz-all [--size quick|full] [-s SEED] [--only a,b] [-j N]
 ;;
 ;; quick is what make test runs, piece by piece; full is many times that,
 ;; for a run left going. Each fuzzer's own last line says what it covered
 ;; and found; this prints them side by side with pass, FAIL, TIMEOUT or
 ;; SKIP, and the time each took, and exits 1 if any failed. One at a time
-;; and niced: the machine stays usable.
+;; and niced: the machine stays usable -- or -j N at once, in turns of N,
+;; on a machine given over to it (a deadline missed under the load is
+;; still a finding to look at).
 (require '[clojure.string :as str]
          '[babashka.fs :as fs]
          '[babashka.process :as p])
 
-(def opts (loop [as *command-line-args* o {:size "quick" :seed 1}]
+(def opts (loop [as *command-line-args* o {:size "quick" :seed 1 :jobs 1}]
             (if (empty? as) o
                 (case (first as)
                   "--size" (recur (drop 2 as) (assoc o :size (second as)))
                   "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
                   "--only" (recur (drop 2 as) (assoc o :only (set (str/split (second as) #","))))
-                  (do (println "usage: scripts/fuzz-all [--size quick|full] [-s SEED] [--only a,b]") (System/exit 2))))))
+                  "-j" (recur (drop 2 as) (assoc o :jobs (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-all [--size quick|full] [-s SEED] [--only a,b] [-j N]") (System/exit 2))))))
 
 (def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
 
@@ -45,26 +48,27 @@
    ["fuzz-pure" "fuzz-pure"     ["-n" "30"]               ["-n" "300"]               60]
    ["fuzz-gc" "fuzz-gc"       ["-n" "10"]               ["-n" "100"]              120]
    ["fuzz-net" "fuzz-net"      ["-n" "20"]               ["-n" "300"]               60]
-   ["fuzz-deps" "fuzz-deps"     ["-n" "20"]               ["-n" "200"]               60]
+   ["fuzz-deps" "fuzz-deps"     ["-n" "20"]               ["-n" "200"]               60 :deps]
    ["fuzz-bind" "fuzz-bind"     ["-n" "12"]               ["-n" "120"]               60]
    ["fuzz-door" "fuzz-door"     ["-n" "500"]              ["-n" "20000"]             60 :acl2]])
 
 (defn skip-reason [needs]
   (case needs
     :acl2 (when-not (fs/exists? (str (fs/home) "/jborden/acl2/saved_acl2")) "no ACL2 (make model)")
+    ;; as scripts/fuzz-deps finds it; a skip there exited 0 and read as a pass
+    :deps (when-not (fs/exists? (or (System/getenv "CLOTRAN_DEPS") (str (fs/home) "/jborden/clotran-deps"))) "no clotran-deps")
     nil))
 
 (defn last-lines [s k] (str/join " | " (take-last k (remove str/blank? (str/split-lines (or s ""))))))
 
-(let [{:keys [size seed only]} opts
-      rows (for [[nm script quick full mins needs] fuzzers
-                 :when (or (nil? only) (only nm))]
+(let [{:keys [size seed only jobs]} opts
+      run (fn [[nm script quick full mins needs]]
              (let [args (concat (if (= size "full") full quick) ["-s" (str seed)])]
                (if-let [why (skip-reason needs)]
                  (do (println (format "%-14s SKIP     %s" nm why)) {:name nm :status "SKIP" :note why})
                  (let [t0 (System/currentTimeMillis)
                        proc (apply p/process {:dir repo :out :string :err :string :in ""}
-                                   "nice" (str repo "/scripts/" script) args)
+                                   "nice" "bb" (str repo "/scripts/" script) args)
                        r (deref proc (* 60000 mins) ::timeout)
                        secs (quot (- (System/currentTimeMillis) t0) 1000)
                        status (cond (= r ::timeout) (do (p/destroy-tree proc) "TIMEOUT")
@@ -74,7 +78,11 @@
                    (println (format "%-14s %-8s %5ds  %s" nm status secs (subs note 0 (min 160 (count note)))))
                    (flush)
                    {:name nm :status status :secs secs :note note :out (when (map? r) (:out r))}))))
-      rows (doall rows)
+      rows (->> fuzzers
+                (filter (fn [[nm]] (or (nil? only) (only nm))))
+                (partition-all jobs)
+                (mapcat #(doall (pmap run %)))
+                doall)
       bad (filter #(#{"FAIL" "TIMEOUT"} (:status %)) rows)]
   (doseq [{:keys [name out]} bad :when out]
     (println "\n=====" name "=====")

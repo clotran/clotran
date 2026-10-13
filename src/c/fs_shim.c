@@ -1,7 +1,7 @@
 /* fs_shim.c -- the two questions about a directory Fortran cannot ask:
  * is this path a directory, and what does it hold. readdir's struct is
- * laid out differently on each system, so it is read here, in C. POSIX;
- * Windows (FindFirstFile) waits for v1.0. */
+ * laid out differently on each system, so it is read here, in C. mingw-w64
+ * has dirent.h and stat, so Windows reads it the same way. */
 #include <dirent.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -50,6 +50,14 @@ long clotran_exe_path(char *buf, long cap) {
   if (!realpath(raw, buf)) return -1;
   (void)size;
   return (long)strlen(buf);
+}
+#elif defined(_WIN32)
+#include <windows.h>
+long clotran_exe_path(char *buf, long cap) {
+  DWORD n = GetModuleFileNameA(0, buf, (DWORD)cap);
+  if (n == 0 || n >= (DWORD)cap) return -1;
+  for (char *p = buf; *p; p++) if (*p == '\\') *p = '/';
+  return (long)n;
 }
 #else
 #include <unistd.h>

@@ -45,5 +45,5 @@
       out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-print" :suffix ".edn"})))]
   (spit out (binding [*print-namespace-maps* false] (pr-str cases)))
   (println (str "fuzz-print: " (count cases) " values -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
     (System/exit (:exit r))))

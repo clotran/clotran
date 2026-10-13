@@ -27,7 +27,15 @@ module Threads
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
   public :: th_start, th_join, th_spawn, th_exit, th_ncpus
   public :: th_key, th_key_create, th_key_set, th_key_get
-  public :: th_cond_timedwait, th_sleep_ms
+  public :: th_cond_timedwait, th_sleep_ms, th_wall_ms, PATH_SEP, LINE_SEP
+
+  ! struct timespec: a 64-bit time_t, then a C long of nanoseconds -- 64
+  ! bits on macOS and Linux, 32 and padding on Windows. bind(C) lays it
+  ! out as the C compiler does, on each.
+  type, bind(C) :: th_timespec
+     integer(c_int64_t) :: sec
+     integer(c_long) :: nsec
+  end type th_timespec
 
   integer, parameter :: OPAQUE_WORDS = 16   ! 128 bytes
   ! the platform's sysconf name for online processors (Makefile)
@@ -98,24 +106,23 @@ module Threads
        integer(PTHREAD_KEY_KIND), value :: k
        type(c_ptr) :: v
      end function pthread_getspecific
-     ! struct timespec is two C longs on macOS (sys/_types/_timespec.h)
-     ! and on 64-bit glibc; CLOCK_REALTIME is 0 on both (_time.h,
-     ! bits/time.h)
+     ! CLOCK_REALTIME is 0 on macOS, glibc, musl and winpthreads (_time.h,
+     ! bits/time.h, pthread_time.h)
      function pthread_cond_timedwait(c, m, ts) bind(C, name="pthread_cond_timedwait") result(r)
-       import :: c_ptr, c_int, c_long
+       import :: c_ptr, c_int, th_timespec
        type(c_ptr), value :: c, m
-       integer(c_long), intent(in) :: ts(2)
+       type(th_timespec), intent(in) :: ts
        integer(c_int) :: r
      end function pthread_cond_timedwait
      function clock_gettime(id, ts) bind(C, name="clock_gettime") result(r)
-       import :: c_int, c_long
+       import :: c_int, th_timespec
        integer(c_int), value :: id
-       integer(c_long), intent(out) :: ts(2)
+       type(th_timespec), intent(out) :: ts
        integer(c_int) :: r
      end function clock_gettime
      function nanosleep(req, rem) bind(C, name="nanosleep") result(r)
-       import :: c_int, c_long, c_ptr
-       integer(c_long), intent(in) :: req(2)
+       import :: c_int, c_ptr, th_timespec
+       type(th_timespec), intent(in) :: req
        type(c_ptr), value :: rem
        integer(c_int) :: r
      end function nanosleep
@@ -250,7 +257,11 @@ contains
     th_start_sized = .false.
     attr = 0
     if (pthread_attr_init(c_loc(attr)) /= 0) return
-    if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    ! Windows commits a stack size given here, all of it, at once: the
+    ! link's --stack reserves instead (Makefile, STACK_BY_LINK)
+    if (.not. STACK_BY_LINK) then
+       if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    end if
     th_start_sized = pthread_create(t%handle, c_loc(attr), fn, arg) == 0
     if (pthread_attr_destroy(c_loc(attr)) /= 0) continue
   end function th_start_sized
@@ -269,7 +280,11 @@ contains
     th_spawn = .false.
     attr = 0
     if (pthread_attr_init(c_loc(attr)) /= 0) return
-    if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    ! Windows commits a stack size given here, all of it, at once: the
+    ! link's --stack reserves instead (Makefile, STACK_BY_LINK)
+    if (.not. STACK_BY_LINK) then
+       if (pthread_attr_setstacksize(c_loc(attr), bytes) /= 0) return
+    end if
     tls_multi = .true.
     if (pthread_create(t, c_loc(attr), fn, arg) /= 0) return
     if (pthread_attr_destroy(c_loc(attr)) /= 0) return
@@ -329,28 +344,37 @@ contains
   logical function th_cond_timedwait(c, l, ms)
     type(th_cond), target, intent(inout) :: c
     type(th_lock), target, intent(inout) :: l
-    integer(c_long), intent(in) :: ms
-    integer(c_long) :: ts(2)
+    integer(c_int64_t), intent(in) :: ms
+    type(th_timespec) :: ts
     integer(c_int) :: r
     r = clock_gettime(0_c_int, ts)
-    ts(1) = ts(1) + ms / 1000_c_long
-    ts(2) = ts(2) + mod(ms, 1000_c_long) * 1000000_c_long
-    if (ts(2) >= 1000000000_c_long) then
-       ts(1) = ts(1) + 1
-       ts(2) = ts(2) - 1000000000_c_long
+    ts%sec = ts%sec + ms / 1000_c_int64_t
+    ts%nsec = ts%nsec + int(mod(ms, 1000_c_int64_t) * 1000000_c_int64_t, c_long)
+    if (ts%nsec >= 1000000000_c_long) then
+       ts%sec = ts%sec + 1
+       ts%nsec = ts%nsec - 1000000000_c_long
     end if
     th_cond_timedwait = pthread_cond_timedwait(c_loc(c%raw), c_loc(l%raw), ts) == 0
   end function th_cond_timedwait
 
   ! Sleep this thread ms milliseconds.
   subroutine th_sleep_ms(ms)
-    integer(c_long), intent(in) :: ms
-    integer(c_long) :: ts(2)
+    integer(c_int64_t), intent(in) :: ms
+    type(th_timespec) :: ts
     integer(c_int) :: r
-    ts(1) = ms / 1000_c_long
-    ts(2) = mod(ms, 1000_c_long) * 1000000_c_long
+    ts%sec = ms / 1000_c_int64_t
+    ts%nsec = int(mod(ms, 1000_c_int64_t) * 1000000_c_int64_t, c_long)
     r = nanosleep(ts, c_null_ptr)
   end subroutine th_sleep_ms
+
+  ! The wall clock in milliseconds since the epoch (CLOCK_REALTIME): what
+  ! currentTimeMillis answers. 0 if the clock cannot be read.
+  integer(c_int64_t) function th_wall_ms()
+    type(th_timespec) :: ts
+    th_wall_ms = 0
+    if (clock_gettime(0_c_int, ts) /= 0) return
+    th_wall_ms = ts%sec * 1000_c_int64_t + int(ts%nsec, c_int64_t) / 1000000_c_int64_t
+  end function th_wall_ms
 
   logical function th_join(t)
     type(th_thread), intent(inout) :: t

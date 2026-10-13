@@ -190,5 +190,5 @@
   ;; and pr-str drops metadata unless told to keep it (as fuzz-fn does for hints)
   (spit out (str "[" (str/join "\n" (map #(binding [*print-meta* true] (pr-str %)) forms)) "]"))
   (println (str "fuzz-deftype: " n " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
     (System/exit (:exit r))))

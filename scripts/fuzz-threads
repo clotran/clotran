@@ -63,5 +63,5 @@
       out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-threads" :suffix ".edn"})))]
   (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
   (println (str "fuzz-threads: " n " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300" "--chunk" "50")]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300" "--chunk" "50")]
     (System/exit (:exit r))))

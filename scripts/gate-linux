@@ -1,13 +1,14 @@
 #!/usr/bin/env bb
 ;; gate-linux: make crosscheck on Linux, in packaging/linux/Dockerfile.gate
 ;; (Debian 13, gfortran and flang, the oracle's clj and bb at the macOS
-;; gate's versions), on this tree's tracked files as they are now: the
+;; gate's versions), on this tree's files as they are now, tracked and new (not ignored): the
 ;; compilers' two halves one after the other (XC_SERIAL), as at once they
 ;; outgrew the container's memory.
 ;;
 ;;   scripts/gate-linux [log]      default build/gate-linux.log
 ;;
 ;; The verdict is the log's last line, EXIT n, as for make crosscheck.
+;; GATE_TARGET runs another make target there instead -- fuzz-all, say.
 ;; A volume keeps clj's Maven downloads between runs.
 (require '[babashka.fs :as fs]
          '[babashka.process :as p]
@@ -16,13 +17,18 @@
 (def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
 (def log (str (fs/absolutize (or (first *command-line-args*) (str repo "/build/gate-linux.log")))))
 (def work (str (fs/create-temp-dir {:prefix "gate-linux"})))
+(def target (or (System/getenv "GATE_TARGET") "crosscheck XC_SERIAL=1"))
 (def arch (let [m (str/trim (:out (p/shell {:out :string} "uname" "-m")))] (if (= m "arm64") "aarch64" m)))
 
 (p/shell "docker" "build" "-q" "-t" "clotran-gate" "--build-arg" (str "ARCH=" arch)
          "-f" (str repo "/packaging/linux/Dockerfile.gate") (str repo "/packaging/linux"))
-(p/shell {:dir repo} "sh" "-c" (str "git ls-files -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf " work "/src.tar"))
-(p/shell {:continue true} "docker" "run" "--rm" "-v" (str work ":/w") "-v" "clotran-m2:/root/.m2" "clotran-gate" "bash" "-c"
-         "cd /src && tar xf /w/src.tar && (make crosscheck XC_SERIAL=1 > /w/gate.log 2>&1; echo \"EXIT $?\" >> /w/gate.log)")
+(p/shell {:dir repo} "sh" "-c" (str "git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf " work "/src.tar"))
+;; clotran-deps beside it, read-only, where scripts/fuzz-deps looks
+(def deps (str (fs/home) "/jborden/clotran-deps"))
+(apply p/shell {:continue true} "docker" "run" "--rm" "-v" (str work ":/w") "-v" "clotran-m2:/root/.m2"
+       (concat (when (fs/exists? deps) ["-v" (str deps ":/root/jborden/clotran-deps:ro")])
+               ["clotran-gate" "bash" "-c"
+         (str "cd /src && tar xf /w/src.tar && (make " target " > /w/gate.log 2>&1; echo \"EXIT $?\" >> /w/gate.log)")]))
 (fs/create-dirs (fs/parent log))
 (fs/copy (str work "/gate.log") log {:replace-existing true})
 (println "gate-linux:" (last (str/split-lines (slurp log))) "--" log)

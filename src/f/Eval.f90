@@ -1947,7 +1947,7 @@ contains
   end subroutine check_specs
 
   ! After a source file loads: when a compiled library sits beside it
-  ! -- foo.cljf and foo.dylib or foo.so, as a class file sits beside a
+  ! -- foo.cljf and foo.dylib, foo.so or foo.dll, as a class file sits beside a
   ! .clj for RT.load -- clotran.loader installs it over the functions
   ! the source just defined. A file under src/clj/ may instead have its
   ! library at the same place under build/compiled/: clojure/core.clj
@@ -1966,7 +1966,7 @@ contains
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     character(len=*), intent(in) :: path
-    character(len=5), parameter :: exts(2) = [character(len=5) :: "dylib", "so"]
+    character(len=5), parameter :: exts(3) = [character(len=5) :: "dylib", "so", "dll"]
     character(len=:), allocatable :: stem, cand
     type(gc_value) :: args, r
     logical :: there
@@ -2017,12 +2017,12 @@ contains
     dot = index(path, ".", back=.true.)
     if (dot <= index(path, "/", back=.true.)) return
     stem = path(1:dot)
-    do i = 1, 4
-       cand = stem // trim(exts(mod(i - 1, 2) + 1))
-       if (i > 2) then
+    do i = 1, 2 * size(exts)
+       cand = stem // trim(exts(mod(i - 1, size(exts)) + 1))
+       if (i > size(exts)) then
           at = index(stem, "src/clj/", back=.true.)
           if (at == 0) exit
-          cand = stem(1:at-1) // "build/compiled/" // stem(at+8:) // trim(exts(i - 2))
+          cand = stem(1:at-1) // "build/compiled/" // stem(at+8:) // trim(exts(i - size(exts)))
        end if
        inquire(file=cand, exist=there)
        if (.not. there) cycle
@@ -7729,7 +7729,7 @@ contains
        if (conv == "n") then
           block
              character(len=:), allocatable :: dlw
-             dlw = s // achar(10)
+             dlw = s // LINE_SEP
              call move_alloc(dlw, s)
           end block
           cycle
@@ -14960,22 +14960,8 @@ contains
             secs = real(c, gc_dp) / real(r, gc_dp)
             out = gc_int(int(secs * 1.0d9, 8))
          else
-            ! currentTimeMillis is the WALL clock since the epoch:
-            ! clock_gettime(CLOCK_REALTIME), 0 on macOS and Linux both,
-            ! a timespec of two 64-bit fields on both
-            block
-              interface
-                 function clock_gettime(clk, ts) bind(C, name="clock_gettime") result(rc)
-                   import :: c_int, c_int64_t
-                   integer(c_int), value :: clk
-                   integer(c_int64_t), intent(out) :: ts(2)
-                   integer(c_int) :: rc
-                 end function clock_gettime
-              end interface
-              integer(c_int64_t) :: ts(2)
-              if (clock_gettime(0_c_int, ts) /= 0) ts = 0
-              out = gc_int(ts(1) * 1000_c_int64_t + ts(2) / 1000000_c_int64_t)
-            end block
+            ! currentTimeMillis is the WALL clock since the epoch
+            out = gc_int(th_wall_ms())
          end if
        end block
     case (B_GETPROP)
@@ -14985,7 +14971,9 @@ contains
        a = gcv_nth(args, 0)
        out = gc_nil()
        if (a%tag == GCT_STR) then
-          if (gc_ref_is(a%ref, "line.separator")) out = gc_str(achar(10), [vs_get(vst, base + 1)])
+          if (gc_ref_is(a%ref, "line.separator")) out = gc_str(LINE_SEP, [vs_get(vst, base + 1)])
+          ! what joins a list of paths, CLOTRAN_PATH's among them: ; on Windows
+          if (gc_ref_is(a%ref, "path.separator")) out = gc_str(PATH_SEP, [vs_get(vst, base + 1)])
           ! where this clotran lives: the launcher, src/clj, build/
           if (gc_ref_is(a%ref, "clotran.home") .and. allocated(clotran_home)) &
                out = gc_str(clotran_home, [vs_get(vst, base + 1)])
@@ -15021,21 +15009,70 @@ contains
        ! exit status; (clotran-sh cmd false) starts it and returns nil at
        ! once -- the background compiles of clotran.loader. Out of the
        ! running mutators while it waits: a collection must not wait for it.
+       ! On Windows (PATH_SEP is ;) execute_command_line hands its line to
+       ! cmd.exe, and every caller writes sh: cmd goes into a script, LF line
+       ! ends, that an sh runs -- CLOTRAN_SH (clotran.cmd sets it), else the
+       ! sh.exe beside clotran (a release, a built program), else sh on PATH
+       ! (MSYS2) -- and the script is removed once it has run. The whole line
+       ! is quoted once more for cmd.exe /c, which strips the outer pair.
+       ! mingw's libgfortran runs a command synchronously even unwaited.
        block
-         character(len=:), allocatable :: cmd
-         integer :: ex, cs
-         logical :: wait_for
+         character(len=:), allocatable :: cmd, shell, script
+         character(len=4096) :: env
+         character(len=24) :: num
+         integer :: ex, cs, el, u
+         integer(c_int64_t) :: tick
+         integer, save :: sh_count = 0
+         logical :: wait_for, there
          call text_of(gcv_nth(args, 0), s=cmd)
+         script = ""
+         if (PATH_SEP == ";") then
+            call get_environment_variable("CLOTRAN_SH", env, el, cs)
+            if (cs == 0 .and. el > 0) then
+               shell = env(1:el)
+            else
+               shell = "sh"
+               if (allocated(clotran_home)) then
+                  inquire(file=clotran_home // "/sh.exe", exist=there)
+                  if (there) shell = clotran_home // "/sh.exe"
+               end if
+            end if
+            call get_environment_variable("TEMP", env, el, cs)
+            if (cs /= 0 .or. el == 0) then
+               env = "."
+               el = 1
+            end if
+            call system_clock(tick)
+            sh_count = sh_count + 1
+            write(num, '(I0,A,I0)') tick, "-", sh_count
+            script = env(1:el) // "/clotran-sh-" // trim(num) // ".sh"
+            open(newunit=u, file=script, access="stream", form="unformatted", &
+                 status="replace", action="write", iostat=cs)
+            if (cs /= 0) then
+               call fail("clotran-sh: cannot write " // script)
+               return
+            end if
+            write(u) cmd // achar(10)
+            close(u)
+            cmd = '""' // shell // '" "' // script // '""'
+         end if
          wait_for = .true.
          if (n >= 2) wait_for = truthy(gcv_nth(args, 1))
          ex = -1
-         if (wait_for) then
-            call gc_mutator_leave()
+         call gc_mutator_leave()
+         if (wait_for .or. len(script) > 0) then
             call execute_command_line(cmd, wait=.true., exitstat=ex, cmdstat=cs)
-            call gc_mutator_enter()
-            out = gc_int(int(ex, gc_ip))
          else
             call execute_command_line(cmd, wait=.false., cmdstat=cs)
+         end if
+         call gc_mutator_enter()
+         if (len(script) > 0) then
+            open(newunit=u, file=script, status="old", iostat=cs)
+            if (cs == 0) close(u, status="delete")
+         end if
+         if (wait_for) then
+            out = gc_int(int(ex, gc_ip))
+         else
             out = gc_nil()
          end if
        end block
@@ -19580,8 +19617,8 @@ contains
   end function mf_lookup
 
   ! The library a package name reaches: the path itself when it is a
-  ! file; <path>.dylib or .so when it has no extension; and for a
-  ! DIRECTORY, <dir>/lib<name>.dylib or .so, with the directory joining
+  ! file; <path>.dylib, .so or .dll when it has no extension; and for a
+  ! DIRECTORY, <dir>/lib<name>.dylib, .so or .dll, with the directory joining
   ! the classpath roots so that (require 'name) finds the package's own
   ! Clojure beside its library. That is what a package is: a directory
   ! holding a shared library and the namespaces that wrap it.
@@ -19590,7 +19627,7 @@ contains
     character(len=:), allocatable, intent(out) :: path
     character(len=:), allocatable :: base, cand
     character(len=1024), allocatable :: grown(:)
-    character(len=5), parameter :: exts(2) = [character(len=5) :: "dylib", "so"]
+    character(len=5), parameter :: exts(3) = [character(len=5) :: "dylib", "so", "dll"]
     logical :: there
     integer :: i, slash
     path = given
@@ -19598,7 +19635,7 @@ contains
     if (there .and. index(given, ".", back=.true.) > index(given, "/", back=.true.)) return
     slash = index(given, "/", back=.true.)
     base = given(slash+1:)
-    do i = 1, 2
+    do i = 1, size(exts)
        cand = given // "/lib" // base // "." // trim(exts(i))
        inquire(file=cand, exist=there)
        if (there) then
@@ -19611,7 +19648,7 @@ contains
           return
        end if
     end do
-    do i = 1, 2
+    do i = 1, size(exts)
        cand = given // "." // trim(exts(i))
        inquire(file=cand, exist=there)
        if (there) then
@@ -19624,7 +19661,7 @@ contains
     ! no extension and no library found: a package directory that is
     ! not built, not a file for dlopen to try a page of paths on
     if (index(base, ".") == 0) &
-         call fail("load-package: no lib" // base // ".dylib or .so in " // given // " (is the package built?)")
+         call fail("load-package: no lib" // base // ".dylib, .so or .dll in " // given // " (is the package built?)")
   end subroutine pkg_library
 
   ! (call-package* handle routine args), marshalled by the manifest and
@@ -21330,7 +21367,8 @@ contains
     ! CLOTRAN_PATH: the source roots a project's packages add, as clj's
     ! -cp, computed by clotran-deps (PACKAGES.md). Entries are separated
     ! by : -- or by ; when there is one, as on Windows, where : is part of
-    ! a drive letter.
+    ! a drive letter. On Windows a : split is drive-aware too: C:/x is one
+    ! entry, not C and /x, so a one-entry path needs no ;.
     block
       character(len=4096) :: cp
       character(len=1) :: sep
@@ -21346,6 +21384,16 @@ contains
             z = n + 1
          else
             z = a + z - 1
+         end if
+         if (sep == ":" .and. PATH_SEP == ";" .and. z == a + 1 .and. z < n) then
+            if (scan(cp(z+1:z+1), "/\") > 0) then
+               z = index(cp(z+1:n), ":")
+               if (z == 0) then
+                  z = n + 1
+               else
+                  z = a + 1 + z
+               end if
+            end if
          end if
          if (z > a) then
             do e = 1, 3

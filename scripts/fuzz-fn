@@ -166,5 +166,5 @@
   (println (str "fuzz-fn: " n " fns, " (count cases) " calls -> " out " (fns: " fixture ")"))
   (if (str/blank? (:modes opts))
     (System/exit 0)
-    (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "--fixture" fixture "-m" (:modes opts))]
+    (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "--fixture" fixture "-m" (:modes opts))]
       (System/exit (:exit r)))))

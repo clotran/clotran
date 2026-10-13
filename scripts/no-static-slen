@@ -9,9 +9,12 @@
 ;; argument of a SUBROUTINE instead, which has no such static. This fails
 ;; if one has come back, and names it. flang never makes them.
 (require '[babashka.process :as p]
+         '[babashka.fs :as fs]
          '[clojure.string :as str])
 
-(def bins (or (seq *command-line-args*) ["clotran-bin"]))
+;; a binary is NAME.exe on Windows
+(def bins (for [b (or (seq *command-line-args*) ["clotran-bin"])]
+            (if (and (not (fs/exists? b)) (fs/exists? (str b ".exe"))) (str b ".exe") b)))
 (def bad (for [bin bins
                :let [n (count (filter #(re-find #"(?<![A-Za-z])slen\.\d+" %)
                                       (str/split-lines (:out (p/shell {:out :string} "nm" bin)))))]

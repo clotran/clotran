@@ -128,5 +128,5 @@
   (spit out (binding [*print-namespace-maps* false] (pr-str cases)))
   (spit fx fixture)
   (println (str "fuzz-spec: " (count forms) " spec forms, " (count cases) " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-r" "clojure.spec.alpha" "--fixture" fx "-m" (:modes opts))]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-r" "clojure.spec.alpha" "--fixture" fx "-m" (:modes opts))]
     (System/exit (if (and (empty? bad) (zero? (:exit r))) 0 1))))

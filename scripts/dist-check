@@ -15,6 +15,8 @@
 (def images (rest *command-line-args*))
 (def outdir (str (fs/parent tarball)))
 (def top (str/replace (fs/file-name tarball) #"\.tar\.gz$" ""))
+;; the images run as the tarball's machine, emulated where it is not this one
+(def platform (cond (str/includes? top "x86_64") "linux/amd64" (str/includes? top "aarch64") "linux/arm64"))
 
 (def script
   (str "set -e; cd /tmp && tar xzf /d/" (fs/file-name tarball) " && c=/tmp/" top "/bin/clotran\n"
@@ -33,7 +35,7 @@
   (doall
    (for [img images]
      (let [r (p/shell {:out :string :err :string :continue true}
-                      "docker" "run" "--rm" "-v" (str outdir ":/d") img "sh" "-c" script)
+                      "docker" "run" "--rm" "--platform" platform "-v" (str outdir ":/d") img "sh" "-c" script)
            got (vec (remove #(re-find #"^note:" %) (str/split-lines (:out r))))]
        (if (and (zero? (:exit r)) (= want got))
          (do (println "pass" img) nil)

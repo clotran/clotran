@@ -30,8 +30,17 @@
 # over the functions it compiled (clotran.loader); editing the source
 # makes the library stale, and it is then reported and not used. FC
 # picks the Fortran compiler, gfortran by default.
-root=$(cd "$(dirname "$0")" && pwd)
+case "$(uname -s)" in MINGW*|MSYS*|Windows_NT) windows=1 ;; *) windows= ;; esac
+# A directory as clotran-bin names it. Under MSYS2's sh a path is /tmp/x,
+# which MSYS turns into C:/msys64/tmp/x in a native program's arguments
+# but not inside a file the launcher writes (a driver's Clojure); pwd -W
+# gives the native name there. busybox-w32's sh names it natively already.
+npwd() { if [ -n "$windows" ]; then pwd -W 2>/dev/null || pwd; else pwd; fi; }
+nmktemp() { d=$(mktemp -d) || return 1; (cd "$d" && npwd); }
+root=$(cd "$(dirname "$0")" && npwd)
 bin="$root/clotran-bin"
+# Windows: the binary is clotran-bin.exe, and cp and test want the name
+[ -n "$windows" ] && [ -f "$bin.exe" ] && bin="$bin.exe"
 core="$root/src/clj/clojure/core.clj"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
 
@@ -86,7 +95,7 @@ fi
 if [ "$1" = "explain" ]; then
   # `clotran explain B001`: what a --report code means (clotran.tiers/codes)
   [ $# -eq 2 ] || { echo "usage: clotran explain CODE" >&2; exit 2; }
-  work=$(mktemp -d) || exit 1
+  work=$(nmktemp) || exit 1
   trap 'rm -rf "$work"' EXIT
   printf '(clotran.tiers/explain "%s")\n' "$2" > "$work/explain.clj"
   "$bin" "$core" "$root/src/clj/clotran/loader.cljf" "$root/src/clj/clotran/tiers.cljf" "$work/explain.clj" </dev/null 2>&1 \
@@ -101,8 +110,8 @@ if [ "$1" = "compile" ] && [ "$2" = "--pure" ]; then
   # listed with why; --report says more.
   [ $# -eq 3 ] || [ $# -eq 4 ] || { echo "usage: clotran compile --pure file.cljf [out.f90]" >&2; exit 2; }
   out=${4:-${3%.*}_pure.f90}
-  case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
-  work=$(mktemp -d) || exit 1
+  case "$out" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) out="$(npwd)/$out" ;; esac
+  work=$(nmktemp) || exit 1
   trap 'rm -rf "$work"' EXIT
   cat > "$work/pure.clj" <<CLJ
 (let [r (clotran.purefort/generate "$3")]
@@ -121,7 +130,7 @@ if [ "$1" = "compile" ] && [ "$2" = "--report" ]; then
   # Fortran, B the collector, C the interpreter -- and, at every call
   # site that leaves tier A, why and how to stay (clotran.tiers).
   [ $# -eq 3 ] || { echo "usage: clotran compile --report file.cljf" >&2; exit 2; }
-  work=$(mktemp -d) || exit 1
+  work=$(nmktemp) || exit 1
   trap 'rm -rf "$work"' EXIT
   printf '(clotran.tiers/report "%s")\n' "$3" > "$work/report.clj"
   "$bin" "$core" "$root/src/clj/clotran/loader.cljf" "$root/src/clj/clotran/tiers.cljf" "$work/report.clj" </dev/null 2>&1 \
@@ -132,15 +141,20 @@ fi
 if [ "$1" = "compile" ]; then
   [ $# -eq 2 ] || [ $# -eq 3 ] || { echo "usage: clotran compile file.cljf [library]" >&2; exit 2; }
   src=$2
+  # it goes into a Clojure string below, where a backslash would be an escape
+  [ -n "$windows" ] && src=$(printf %s "$src" | tr '\\' /)
   stem=${src%.*}
   case "$(uname -s)" in
     Darwin) lib="$stem.dylib"; undef="-Wl,-undefined,dynamic_lookup" ;;
+    # a DLL binds its imports when it loads, from clotran-bin.exe's import
+    # library (Makefile, EXPORTDYN)
+    MINGW*|MSYS*|Windows_NT) lib="$stem.dll"; undef="$root/build/libclotran-bin.dll.a" ;;
     *)      lib="$stem.so";    undef="" ;;
   esac
   # a source under src/clj/ may keep its library under build/compiled/
   # instead -- clojure/core.clj is vendored and gets nothing added
   [ $# -eq 3 ] && lib=$3
-  work=$(mktemp -d) || exit 1
+  work=$(nmktemp) || exit 1
   trap 'rm -rf "$work"' EXIT
   # each function's road is printed: declined (interpreted), compiled
   # (tier B, through the runtime), or pure Fortran (tier A, PLAN step 13).
@@ -161,7 +175,7 @@ if [ "$1" = "compile" ]; then
   # directory: a stale clotran_rt_decl.mod in the caller's directory was
   # once read in place of the one this file defines, and every new
   # runtime entry became an unresolved implicit external.
-  case "$lib" in /*) out="$lib" ;; *) out="$(pwd)/$lib" ;; esac
+  case "$lib" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) out="$lib" ;; *) out="$(npwd)/$lib" ;; esac
   # written under another name and moved into place: a background compile
   # (clotran.loader) looks for the library, and must never find half of one
   # gfortran limits a free-form line to 132 columns unless told otherwise;
@@ -176,8 +190,9 @@ if [ "$1" = "compile" ]; then
   fi
   case "$(basename "$fc")" in flang*) long="" ;; *) long="-ffree-line-length-none" ;; esac
   build() {
-    (cd "$work" && $fc -O2 -ffp-contract=off -shared -fPIC $long $undef \
-      -o "$out.part" out.f90 2> "$work/build.err")
+    # undef after the source: an import library is scanned where it stands
+    (cd "$work" && $fc -O2 -ffp-contract=off -shared -fPIC $long \
+      -o "$out.part" out.f90 ${undef:+"$undef"} 2> "$work/build.err")
   }
   if ! build; then
     # the pure module is generated code too, and a shape it emits that a
@@ -264,12 +279,20 @@ if [ "$1" = "build" ]; then
       *) file=$1; shift ;;
     esac
   done
+  # Windows: a program is NAME.exe, and runs interpreted -- a compiled
+  # library there imports from the module named clotran-bin.exe, which a
+  # built program is not
+  if [ -n "$windows" ]; then
+    compiled=0
+    [ -n "$out" ] && case "$out" in *.exe) ;; *) out="$out.exe" ;; esac
+  fi
   [ -n "$ns$file" ] || { echo "usage: clotran build -m NS [-o out] | clotran build app.cljf [-o out]" >&2; exit 2; }
   if [ -z "$out" ]; then
     if [ -n "$ns" ]; then out=${ns##*.}; else out=$(basename "${file%.*}"); fi
+    [ -n "$windows" ] && out="$out.exe"
   fi
-  case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
-  work=$(mktemp -d) || exit 1
+  case "$out" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) out="$(npwd)/$out" ;; esac
+  work=$(nmktemp) || exit 1
   [ -n "$CLOTRAN_BUILD_KEEP" ] || trap 'rm -rf "$work"' EXIT
   # what clotran otherwise loads on first use, from its sources: a built
   # program has none, so it is in the image
@@ -277,7 +300,9 @@ if [ "$1" = "build" ]; then
   if [ -n "$ns" ]; then
     printf '(require (quote %s))\n(def clotran-build-ns (quote %s))\n' "$ns" "$ns" >> "$work/driver.clj"
   else
-    case "$file" in /*) ;; *) file="$(pwd)/$file" ;; esac
+    case "$file" in /*|[A-Za-z]:/*|[A-Za-z]:\\*) ;; *) file="$(npwd)/$file" ;; esac
+    # it goes into a Clojure string below, where a backslash would be an escape
+    [ -n "$windows" ] && file=$(printf %s "$file" | tr '\\' /)
     printf '(def clotran-build-ns (let [f (read-string (slurp "%s"))] (when (and (seq? f) (= (quote ns) (first f))) (second f))))\n(when-not clotran-build-ns (throw (ex-info "clotran build: the file must start with (ns ...)" {})))\n(load-file "%s")\n' "$file" "$file" >> "$work/driver.clj"
   fi
   printf '(when-not (ns-resolve clotran-build-ns (quote -main)) (throw (ex-info (str "clotran build: " clotran-build-ns " has no -main") {})))\n' >> "$work/driver.clj"
@@ -327,6 +352,7 @@ esac
 if [ -t 0 ] && [ "${TERM:-dumb}" != dumb ] && type rlwrap >/dev/null 2>&1; then
   exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" "$core" "$@"
 else
-  [ -t 0 ] && echo "note: install rlwrap for line editing and history" >&2
+  # Windows' console edits a line and keeps its history itself
+  [ -t 0 ] && [ -z "$windows" ] && echo "note: install rlwrap for line editing and history" >&2
   exec "$bin" "$core" "$@"
 fi

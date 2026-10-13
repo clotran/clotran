@@ -184,5 +184,5 @@
   (doseq [b bad] (println "BUG in fuzz-macro: not a binding form by core.specs:" (pr-str b)))
   (spit out (str "[" (str/join "\n" (map pr-str (remove spec-bad? forms))) "]"))
   (println (str "fuzz-macro: " (count forms) " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
     (System/exit (if (and (empty? bad) (zero? (:exit r))) 0 1))))

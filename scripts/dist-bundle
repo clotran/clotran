@@ -20,7 +20,8 @@
 (def stage (str (fs/absolutize (or (first *command-line-args*)
                                    (do (println "usage: scripts/dist-bundle STAGE") (System/exit 2))))))
 (def home (str stage "/lib/clotran"))
-(def bin (str home "/clotran-bin"))
+(def windows? (re-find #"^(MINGW|MSYS)" (str/trim (:out (p/shell {:out :string} "uname" "-s")))))
+(def bin (str home "/clotran-bin" (when windows? ".exe")))
 (def libdir (str home "/lib"))
 (defn sh [& args] (:out (apply p/shell {:out :string} args)))
 (fs/create-dirs libdir)
@@ -74,14 +75,38 @@
   ;; a changed Mach-O must be signed again, or arm64 macOS kills it
   (doseq [f (cons bin (map str (fs/list-dir libdir)))] (p/shell {:err :string} "codesign" "-s" "-" "-f" f)))
 
-(case (str/trim (sh "uname" "-s"))
-  "Linux" (linux)
-  "Darwin" (macos))
+;; Windows (MSYS2): the DLLs the binary needs that MSYS2 provides, beside
+;; it, where Windows looks first; busybox-w32's sh.exe, which runs the
+;; launcher and clotran-sh, pinned by its sha256 as PACKAGES.md asks; and
+;; the commands as .cmd files (packaging/windows)
+(def busybox {:url "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe"
+              :sha256 "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075"})
+
+(defn windows []
+  (doseq [[_ name path] (re-seq #"(?m)^\s*(\S+) => (/(?:ucrt64|mingw64|clang64)/\S+)" (sh "ldd" bin))]
+    (fs/copy path (str home "/" name) {:replace-existing true})
+    (println "carried" name))
+  (let [f (str home "/sh.exe")]
+    (p/shell "curl" "-sfL" "-o" f (:url busybox))
+    ;; on stdin: sha256sum puts a \ before the sum of a name with one in it
+    (let [got (first (str/split (:out (p/shell {:in (fs/file f) :out :string} "sha256sum")) #"\s"))]
+      (when (not= got (:sha256 busybox))
+        (println "dist-bundle: busybox-w32's sha256 is" got "not" (:sha256 busybox))
+        (System/exit 1))))
+  (doseq [cmd ["clotran" "clotran-deps"]]
+    (fs/delete-if-exists (str stage "/bin/" cmd))
+    (fs/copy (str (fs/parent (fs/parent (fs/absolutize *file*))) "/packaging/windows/" cmd ".cmd")
+             (str stage "/bin/" cmd ".cmd") {:replace-existing true})))
+
+(cond windows? (windows)
+      :else (case (str/trim (sh "uname" "-s"))
+              "Linux" (linux)
+              "Darwin" (macos)))
 
 ;; the commands in bin, by their own place rather than the install's path
 (doseq [[cmd target] [["clotran" "lib/clotran/clotran"] ["clotran-deps" "lib/clotran-deps/bin/clotran-deps"]]
         :let [f (str stage "/bin/" cmd)]
-        :when (fs/exists? f)]
+        :when (and (not windows?) (fs/exists? f))]
   (spit f (str "#!/bin/sh\n# " cmd ", from a clotran release: its home is beside this directory\n"
                "here=$(cd \"$(dirname \"$0\")/..\" && pwd)\nexec \"$here/" target "\" \"$@\"\n")))
 (println "dist-bundle:" stage)

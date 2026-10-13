@@ -79,7 +79,7 @@
     (let [lib (str repo "/build/bench/bench_loops" (if (str/includes? (str/lower-case (System/getProperty "os.name")) "linux") ".so" ".dylib"))
           cl-file (str repo "/test/clj/.bench-loops.clj")]
       (fs/create-dirs (str repo "/build/bench"))
-      (p/shell {:dir repo :out :string :err :string :continue true :in ""} "./clotran" "compile" loops-src lib)
+      (p/shell {:dir repo :out :string :err :string :continue true :in ""} "sh" "./clotran" "compile" loops-src lib)
       (spit cl-file (str "(load-file \"" loops-src "\")\n"
                          "(println (clotran.loader/install \"" lib "\" \"" loops-src "\"))\n"
                          "(in-ns 'user)\n"

@@ -15,7 +15,7 @@ change.
   load beside it, and `clojure.spec.alpha` is consulted before every
   macro expansion, as Clojure's compiler does.
 - **Measured against Clojure itself.** `clj` 1.12.6 is the oracle for
-  every behaviour: 1,325 forms run through both, 1,303 agreeing and 22
+  every behaviour: 1,331 forms run through both, 1,309 agreeing and 22
   differing as their DEVIATIONS entries say they must, none otherwise. Clojure's own test suite, derived
   to the language that clj and ClojureScript share: 39 namespaces, 312
   tests, 2,719 assertions, every one passing and every namespace run.
@@ -82,14 +82,31 @@ change.
   stands in (`src/f/ieee_lite.f90`, checked against the intrinsic one on
   every gate). x86_64 is built the same way (`scripts/dist-linux
   x86_64`, emulated on an arm64 machine) and is gated nowhere yet.
-- **Windows** is not in 1.0: the build needs a mingw gfortran toolchain
-  and a runner to gate on (PLAN step 35, item 6).
+- **Windows** (x86_64, Windows 10 and on): built natively under MSYS2's
+  UCRT64 gfortran and tested on a Windows 10 machine -- `make test`
+  passing whole, every fuzzer at full size, the oracle's forms agreeing
+  with clj there, a line ending CR LF as clj's does.
+  The release is a zip: `bin\clotran.cmd`, which runs the launcher under
+  the busybox-w32 `sh.exe` beside it (GPLv2, pinned by sha256), and
+  `clotran-bin.exe` with gfortran's runtimes linked in. `clotran compile`
+  needs MSYS2's gfortran; a program `clotran build` makes there runs
+  interpreted, as its compiled libraries would import from a module
+  named `clotran-bin.exe`. Found and fixed on the way, for every system:
+  `Math/round` and integer division by -1 trapped or answered wrong on
+  x86_64; clj's `unchecked-*-int` wrapped at 64 bits, not 32;
+  `struct timespec` was two C longs (32-bit on Windows); mingw's reader
+  of a decimal rounded some 16-digit doubles to the wrong neighbour, so
+  doubles are read by the C library's `strtod` everywhere.
 
 ## Install
 
     tar xzf clotran-1.0.0-<os>-<arch>.tar.gz
     clotran-1.0.0-<os>-<arch>/bin/clotran
 
+and on Windows, the zip unpacked anywhere:
+
+    clotran-1.0.0-windows-x86_64\bin\clotran.cmd
+
 or from a checkout, `make install` (README, "Build"; `PREFIX=` names
-where). `make dist` builds the tarball for the machine it runs on, and
+where). `make dist` builds the tarball (the zip on Windows) for the machine it runs on, and
 `scripts/dist-linux` the Linux one in its container.

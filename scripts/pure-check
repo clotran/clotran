@@ -16,6 +16,7 @@
 ;; under this checkout's build/, not the shared temp directory: make
 ;; crosscheck runs two checkouts at once
 (def work (fs/file repo "build" "pure-check"))
+(load-file (str (fs/file repo "scripts" "platform.clj")))
 ;;   scripts/pure-check [SRC CASES.edn]   another namespace and its cases
 ;;                                       (scripts/fuzz-pure), a vector of calls
 (def src (or (first *command-line-args*) "test/clj/pure_sample.cljf"))
@@ -131,15 +132,15 @@
 (.mkdirs work)
 (def f90 (fs/file work "pure.f90"))
 (spit (fs/file work "drive.clj")
-      (str "(let [r (clotran.purefort/generate \"" src "\")]\n"
-           "  (clotran-spit \"" f90 "\" (:text r))\n"
+      (str "(let [r (clotran.purefort/generate \"" (platform/slashes src) "\")]\n"
+           "  (clotran-spit \"" (platform/slashes f90) "\" (:text r))\n"
            "  (println \"SIGS\" (pr-str (into {} (for [[s vs] (:emitted r)] [(name s) (mapv (juxt :ts :ret) vs)]))))\n"
            "  (println \"SKIPPED\" (pr-str (into {} (for [[s why] (:skipped r)] [(name s) why]))))\n"
            "  (println \"PRUNED\" (pr-str (into {} (for [[s ts] (:pruned r)] [(name s) ts]))))\n"
            "  (println \"RECORDS\" (pr-str (into {} (for [[n rr] (:records r)] [n (:fields rr)])))))\n"
            ;; the versions library mode emits (a checked operation inside a
            ;; condition declines there), for the library road's control below
-           "(println \"LIBSIGS\" (pr-str (into {} (for [[s vs] (:emitted (clotran.purefort/generate \"" src "\" {:library true}))] [(name s) (mapv (juxt :ts :ret :prints) vs)]))))\n"
+           "(println \"LIBSIGS\" (pr-str (into {} (for [[s vs] (:emitted (clotran.purefort/generate \"" (platform/slashes src) "\" {:library true}))] [(name s) (mapv (juxt :ts :ret :prints) vs)]))))\n"
            "(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
@@ -161,8 +162,10 @@
                  (str/includes? text "public :: circle_area")))
     (println "pure-check: private pruning is wrong:" (pr-str pruned))
     (System/exit 1)))
+;; a line printed on Windows ends CR LF -- by clj, clotran and a pure
+;; program's records alike -- read as \n on every side
 (defn parse-cases [out]
-  (into {} (for [l (str/split-lines out) :let [m (re-matches #"CASE (\d+) (.*)" l)] :when m]
+  (into {} (for [l (str/split-lines (str/replace out "\\r\\n" "\\n")) :let [m (re-matches #"CASE (\d+) (.*)" l)] :when m]
              [(parse-long (second m))
               (let [[k v & more] (edn/read-string {:readers {'Inf (constantly ##Inf)}} (str/replace (nth m 2) #"##(-?)Inf" "$1##Inf"))]
                 (into [k (if (and (= k :threw) (string? v)) (first (str/split v #"  at ")) v)] more))])))
@@ -174,7 +177,7 @@
 (load-file (str (fs/file repo "upstream" "names.clj")))
 (spit (fs/file work "sample-for-clj.cljf") (names/to-upstream (slurp src)))
 (spit (fs/file work "for-clj.clj")
-      (names/to-upstream (str "(load-file \"" (fs/file work "sample-for-clj.cljf") "\")\n(in-ns '" ns-name ")\n"
+      (names/to-upstream (str "(load-file \"" (platform/slashes (fs/file work "sample-for-clj.cljf")) "\")\n(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
                          (str "(clojure.core/println \"CASE " i "\" (try (clojure.core/let [v (clojure.core/atom nil) o (clojure.core/with-out-str (clojure.core/reset! v " (pr-str c) "))] (clojure.core/pr-str [:val (clojure.core/let [x @v] (if (clojure.core/instance? (clojure.core/class (clojure.core/double-array 0)) x) (clojure.core/vec x) (if (clojure.core/instance? (clojure.core/class (clojure.core/long-array 0)) x) (clojure.core/vec x) (if (clojure.core/record? x) (clojure.core/vec (clojure.core/vals x)) x)))) o]))"
@@ -193,8 +196,8 @@
 ;; pure, else this road would be testing tier B under the pure road's name.
 (def lib-sigs (some #(when (str/starts-with? % "LIBSIGS ") (edn/read-string (subs % 8))) (str/split-lines out)))
 (def lib (str (fs/file work (str (str/replace (str ns-name) #"[^A-Za-z0-9]" "_")
-                                 (if (str/includes? (str/lower-case (System/getProperty "os.name")) "linux") ".so" ".dylib")))))
-(def compile-out (let [r (shell {:out :string :err :string :dir (str repo) :continue true :in ""} "./clotran" "compile" src lib)]
+                                 "." platform/soext))))
+(def compile-out (let [r (shell {:out :string :err :string :dir (str repo) :continue true :in ""} "sh" "./clotran" "compile" src lib)]
                    (str (:out r) (:err r))))
 (def pure-fns (set (map second (re-seq #"(?m)^pure Fortran: (\S+)" compile-out))))
 (let [supported (set (for [[f vs] lib-sigs
@@ -209,8 +212,8 @@
     (println compile-out)
     (System/exit 1)))
 (spit (fs/file work "drive-lib.clj")
-      (str "(load-file \"" src "\")\n"
-           "(println \"INSTALLED\" (clotran.loader/install \"" lib "\" \"" src "\"))\n"
+      (str "(load-file \"" (platform/slashes src) "\")\n"
+           "(println \"INSTALLED\" (clotran.loader/install \"" (platform/slashes lib) "\" \"" (platform/slashes src) "\"))\n"
            "(in-ns '" ns-name ")\n"
            (apply str (map-indexed
                        (fn [i c]
@@ -299,7 +302,7 @@
 (defn run-case [exe i]
   (let [r (shell {:out :string :err :string :continue true :dir (str work)} (str "./" exe) (str i))]
     (if (zero? (:exit r))
-      (let [out (:out r)
+      (let [out (str/replace (:out r) "\r\n" "\n")   ; a Fortran record on Windows ends CR LF
             at (str/last-index-of out "==R==\n")
             printed (subs out 0 at)
             result (let [s (subs out (+ at 6))] (if (str/ends-with? s "\n") (subs s 0 (dec (count s))) s))
@@ -377,8 +380,12 @@
     (zero? (:exit (shell {:dir d :out :string :err :string :continue true} (str/join " " (concat [fc] flags ["t.f90" "-o" "t"])))))))
 (def compilers
   (filterv (fn [[fc exe flags]]
-             (or (empty? flags) (takes-flags? fc flags)
-                 (do (println "pure-check: not built:" exe "--" fc "does not take" (str/join " " flags)) false)))
+             (cond
+               ;; a compiler not installed is said, not crashed on: MSYS2
+               ;; has flang only in its CLANG64 environment, not UCRT64's
+               (not (fs/which fc)) (do (println "pure-check: not built:" exe "--" fc "is not installed") false)
+               (or (empty? flags) (takes-flags? fc flags)) true
+               :else (do (println "pure-check: not built:" exe "--" fc "does not take" (str/join " " flags)) false)))
            all-compilers))
 (doseq [[fc exe flags] compilers] (build fc exe flags))
 (def sample? (= src "test/clj/pure_sample.cljf"))

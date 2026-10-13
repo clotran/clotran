@@ -24,12 +24,26 @@
 (def work (str (fs/create-temp-dir {:prefix "dist-linux"})))
 (def platform ({"aarch64" "linux/arm64" "x86_64" "linux/amd64"} arch))
 (def image (str "clotran-dist-" arch (when (= libc "musl") "-musl")))
+(when-not (and platform (#{"glibc" "musl"} libc))
+  (println "usage: scripts/dist-linux [--tree] [aarch64|x86_64] [glibc|musl] -- not" arch libc)
+  (System/exit 2))
+;; the working tree's files, those that exist (--cached lists one deleted
+;; and not yet staged), for one tar to read
+(defn tree-tar [dir out]
+  (let [names (->> (str/split (:out (p/shell {:dir dir :out :string} "git" "ls-files" "-z" "--cached" "--others" "--exclude-standard")) #"\x00")
+                   (remove str/blank?) distinct (filter #(fs/exists? (fs/file dir %))))
+        lst (str work "/files")]
+    (spit lst (str/join "\n" names))
+    ;; bsdtar (macOS) would carry the files' extended attributes; GNU tar has no such flag
+    (apply p/shell {:dir dir} "tar" (concat (when (= "Darwin" (str/trim (:out (p/shell {:out :string} "uname" "-s"))))
+                                                ["--no-mac-metadata"])
+                                              ["-cf" out "-T" lst]))))
 
-(p/shell "docker" "build" "-q" "--platform" platform "-t" image
-         "--build-arg" (str "BASE=quay.io/pypa/manylinux_2_28_" arch)
-         "-f" (str repo "/packaging/linux/Dockerfile" (when (= libc "musl") ".musl")) (str repo "/packaging/linux"))
+(apply p/shell "docker" "build" "-q" "--platform" platform "-t" image
+         (concat (when (= libc "glibc") ["--build-arg" (str "BASE=quay.io/pypa/manylinux_2_28_" arch)])
+                 ["-f" (str repo "/packaging/linux/Dockerfile" (when (= libc "musl") ".musl")) (str repo "/packaging/linux")]))
 (if tree?
-  (p/shell {:dir repo} "sh" "-c" (str "git ls-files -z --cached --others --exclude-standard | tar --no-mac-metadata --null -T - -cf " work "/src.tar"))
+  (tree-tar repo (str work "/src.tar"))
   (p/shell {:dir repo} "sh" "-c" (str "git archive --format=tar HEAD > " work "/src.tar")))
 (p/shell {:dir deps} "sh" "-c" (str "git archive --format=tar --prefix=clotran-deps/ HEAD > " work "/deps.tar"))
 (p/shell "docker" "run" "--rm" "--platform" platform "-v" (str work ":/w") image "bash" "-c"

@@ -80,7 +80,7 @@
     (let [nsf (str work "/bigo/ops.cljf") lib (str work "/bigo.dylib") drv (str work "/drive.cljf")]
       (fs/create-dirs (str work "/bigo"))
       (spit nsf (str "(ns bigo.ops)\n" (op-defs)))
-      (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)
+      (sh {"CLOTRAN_CACHE" (str work "/cache")} "sh" (str repo "/clotran") "compile" nsf lib)
       (when-not (fs/exists? lib) (println "compiled: no library built; the operations run interpreted"))
       (spit drv (str "(load-file " (pr-str nsf) ")\n(require 'clotran.loader)\n"
                      (when (fs/exists? lib) (str "(clotran.loader/install " (pr-str lib) " " (pr-str nsf) ")\n"))

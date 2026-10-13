@@ -460,6 +460,8 @@ contains
     rest = entry
     allocate(paths(0))
     call get_environment_variable("TMPDIR", tmp, tl)
+    ! Windows names its temporary directory TEMP
+    if (tl == 0) call get_environment_variable("TEMP", tmp, tl)
     if (tl == 0) then
        dir = "/tmp"
     else

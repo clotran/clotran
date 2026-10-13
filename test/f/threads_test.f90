@@ -124,7 +124,7 @@ program threads_test
     integer(8) :: t0, t1, rate
     ok = th_lock_acquire(lk)
     call system_clock(t0, rate)
-    if (th_cond_timedwait(cv, lk, 50_c_long)) then
+    if (th_cond_timedwait(cv, lk, 50_c_int64_t)) then
        print '(a)', 'FAIL - a timed wait nobody signalled did not time out'
        fails = fails + 1
     end if
@@ -135,7 +135,7 @@ program threads_test
        fails = fails + 1
     end if
     call system_clock(t0)
-    call th_sleep_ms(30_c_long)
+    call th_sleep_ms(30_c_int64_t)
     call system_clock(t1)
     if (real(t1 - t0) * 1000.0 / real(rate) < 28.0) then
        print '(a)', 'FAIL - a 30 ms sleep returned early'

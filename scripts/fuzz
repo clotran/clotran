@@ -583,7 +583,7 @@
         (spit nsf (str "(ns fz.cases (:require [clojure.string] [clojure.set] [clojure.walk]"
                        (apply str (map #(str " [" % "]") (:requires opts))) "))\n" fixture
                        (apply str (map-indexed (fn [i f] (str "(defn c" i " [] " (pr-case f) ")\n")) forms))))
-        (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} (str repo "/clotran") "compile" nsf lib)]
+        (let [c (sh {"CLOTRAN_CACHE" (str work "/cache")} "sh" (str repo "/clotran") "compile" nsf lib)]
           (when-not (fs/exists? lib)
             (println "compiled mode: no library:")
             (println (str/join "\n" (take-last 25 (str/split-lines (str (:out c) (:err c))))))))

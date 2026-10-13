@@ -112,7 +112,7 @@
     (doseq [gen ["fuzz-num" "fuzz-str" "fuzz-coll"]]
       (let [out (str work "/" gen ".edn")]
         ;; their generators, run for the cases alone (-m with no mode: none run)
-        (p/shell {:continue true :out :string :err :string} (str repo "/scripts/" gen) "-n" (str n) "-s" (str seed) "-m" "" "-o" out)
+        (p/shell {:continue true :out :string :err :string} "bb" (str repo "/scripts/" gen) "-n" (str n) "-s" (str seed) "-m" "" "-o" out)
         (when (fs/exists? out)
           (swap! forms into (map pr-str (read-string (slurp out)))))))
     @forms))

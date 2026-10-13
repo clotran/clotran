@@ -497,6 +497,14 @@ test binaries in `build/test/` -- and the only artifact in the root is
 `./clotran-bin` itself. The first build also compiles vendored ICU from
 source, which takes a few minutes once; after that it is cached.
 
+On Windows the build is native, in MSYS2's UCRT64 environment (its
+gfortran, gcc, make and git: `pacman -S mingw-w64-ucrt-x86_64-gcc-fortran
+mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libgomp make git`), with the
+same commands. The binary is `clotran-bin.exe`, its runtimes linked in, so
+it and a program `clotran build` makes run where there is no MSYS2. A
+release (`make dist`) is a zip: `bin\clotran.cmd` runs the launcher
+under the busybox-w32 `sh.exe` it carries.
+
 `./clotran` is the entry point, a shell script: it hands `clotran-bin`
 core.clj and wraps the REPL in `rlwrap` when there is a terminal and
 `rlwrap` is installed, for history and arrow-key editing, exactly the

@@ -8,6 +8,9 @@
 (require '[clojure.java.io :as io] '[clojure.string :as str])
 (load-file "upstream/names.clj")
 
+;; a file's path with / between its parts: Windows' java.io.File writes \
+(defn slashed [f] (str/replace (str f) "\\" "/"))
+
 (def trees [["upstream/clojure/src/clj/clojure" "src/clj/clojure"]
             ["upstream/clojure/test/clojure" "test/clj/clojure"]])
 
@@ -26,7 +29,7 @@ run upstream/derive. upstream/README.md says where the sources came from.
          (for [[from to] trees
                f (file-seq (io/file from))
                :when (.isFile f)
-               :let [rel (subs (str f) (inc (count from)))]
+               :let [rel (subs (slashed f) (inc (count from)))]
                :when (not= rel "PROVENANCE.md")]
            [(str to "/" (names/rename-path rel))
             (if (re-find #"\.(clj|cljc|cljs|edn)$" rel)
@@ -35,7 +38,7 @@ run upstream/derive. upstream/README.md says where the sources came from.
          (for [[_ to] trees] [(str to "/GENERATED.md") notice]))))
 
 (def existing
-  (set (for [[_ to] trees f (file-seq (io/file to)) :when (.isFile f)] (str f))))
+  (set (for [[_ to] trees f (file-seq (io/file to)) :when (.isFile f)] (slashed f))))
 
 (if check?
   (let [stale (concat (for [[p text] outputs :when (not= text (when (.exists (io/file p)) (slurp p)))] p)

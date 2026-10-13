@@ -72,6 +72,6 @@
   (spit src (str "(ns fuzz-pure)\n" (str/join "\n" (map-indexed fn-src fns)) "\n"))
   (spit cases (pr-str cs))
   (println (str "fuzz-pure: " n " functions, " (count cs) " calls -> " src))
-  (let [r (deref (p/process {:inherit true} (str (fs/parent *file*) "/pure-check") src cases) (* 1000 900) ::timeout)]
+  (let [r (deref (p/process {:inherit true} "bb" (str (fs/parent *file*) "/pure-check") src cases) (* 1000 900) ::timeout)]
     (System/exit (cond (= r ::timeout) (do (println "TIMEOUT: pure-check took over 900 s") 1)
                        :else (:exit r)))))

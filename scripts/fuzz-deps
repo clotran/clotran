@@ -224,7 +224,7 @@
   (clj prints the project's own paths relative); jars and what is not
   there dropped."
   [path base]
-  (set (for [e (str/split (str/trim path) #":") :when (seq e)
+  (set (for [e (str/split (str/trim path) (re-pattern fs/path-separator)) :when (seq e)
              :let [a (if (fs/absolute? e) e (str base "/" e))] :when (fs/directory? a)]
          (str (fs/canonicalize a)))))
 
@@ -236,7 +236,7 @@
     (let [cj (let [proc (p/process {:dir pd :out :string :err :string :in ""} "clj" "-Srepro" "-Spath" "-Sforce")
                    r (deref proc 120000 ::timeout)]
                (if (= r ::timeout) (do (p/destroy-tree proc) nil) r))
-          cd (run [deps-bin pd] {"HOME" home "CLOTRAN" repo} 300)
+          cd (run ["sh" deps-bin pd] {"HOME" home "CLOTRAN" repo} 300)
           clj-refuses (or (nil? cj) (not= 0 (:exit cj)) (str/includes? (str (:err cj)) "Error building classpath"))
           ours-refuses (= 1 (:exit cd))
           msg (str/trim (str (:err cd)))]
@@ -266,7 +266,7 @@
           _ (fs/create-dirs dir)
           {:keys [project alias? expect loads]} (with-redefs [fs/home (constantly home)] (build! dir cs))
           _ (swap! kinds update (or (:error expect) (if (some #(str/includes? % ".cache/clotran/gitlibs") (:path expect)) :path-with-git :path)) (fnil inc 0))
-          r (run (cond-> [deps-bin] alias? (conj "-A:dev") true (conj project)) {"HOME" home "CLOTRAN" repo} 300)]
+          r (run (cond-> ["sh" deps-bin] alias? (conj "-A:dev") true (conj project)) {"HOME" home "CLOTRAN" repo} 300)]
       (cond
         (:timeout r) (problem "TIMEOUT case" c ": clotran-deps did not answer in 300 s")
         (:error expect)
@@ -278,7 +278,7 @@
           (when-not ok (problem "case" c ": wanted a" (name (:error expect)) "error; got exit" (:exit r) (pr-str msg) "path" (str/trim (:out r)))))
         (not= 0 (:exit r)) (problem "case" c ": clotran-deps failed:" (str/trim (:err r)))
         :else
-        (let [got (vec (map #(str (fs/canonicalize %)) (str/split (str/trim (:out r)) #":")))
+        (let [got (vec (map #(str (fs/canonicalize %)) (str/split (str/trim (:out r)) (re-pattern fs/path-separator))))
               want (mapv #(str (fs/canonicalize %)) (:path expect))]
           (if (not= (set got) (set want))
             (problem "case" c ": path\n   want:" (pr-str want) "\n   got: " (pr-str got))
@@ -294,6 +294,8 @@
     (malformed-case top home c text)
     (print "!") (flush))
   (println)
+  ;; git leaves its objects read-only, which Windows will not delete
+  (doseq [x (fs/glob top "**" {:hidden true})] (.setWritable (fs/file x) true))
   (fs/delete-tree top)
   (println (str "fuzz-deps: " n " projects and " (+ (count shapes) n) " malformed deps.edn " (pr-str @kinds) ", " (count @problems) " problems"))
   (System/exit (if (empty? @problems) 0 1)))

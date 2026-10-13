@@ -135,5 +135,5 @@
   ;; *print-meta*: the hints are metadata on the symbols and vectors
   (spit out (str "[" (str/join "\n" (map #(binding [*print-meta* true] (pr-str %)) forms)) "]"))
   (println (str "fuzz-hints: " n " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts) "--timeout" "300")]
     (System/exit (:exit r))))

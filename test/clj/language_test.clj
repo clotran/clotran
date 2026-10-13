@@ -1258,8 +1258,8 @@
 ;; routine, built by the Makefile like any package. (fortran/load-package
 ;; path) opens it and interns its routines as fns in the namespace the
 ;; manifest names.
-(def tp (try (fortran/load-package "build/libtestpkg.dylib")
-             (catch clotran.host.exception e (fortran/load-package "build/libtestpkg.so"))))
+;; no extension: load-package finds the .dylib, .so or .dll
+(def tp (fortran/load-package "build/libtestpkg"))
 (check "the manifest names the package" (:package tp) "testpkg")
 (check "an :out scalar comes back by name" (testpkg/double-it 21.0) {:y 42.0})
 (check "an array goes by pointer with its extent; a :returns value is the value"
@@ -1276,8 +1276,7 @@
 ;;; ---- a library bound by the generator: scripts/bind-fortran -----------
 ;; test/f/samplelib.f90 has no shims and no manifest; the Makefile runs
 ;; the generator over it and builds build/libsamplelib from the two.
-(def sl (try (fortran/load-package "build/libsamplelib.dylib")
-             (catch clotran.host.exception e (fortran/load-package "build/libsamplelib.so"))))
+(def sl (fortran/load-package "build/libsamplelib"))
 (check "the generator named the package" (:package sl) "samplelib.raw")
 (check "a generated :out scalar" (samplelib.raw/double-it 21.0) {:y 42.0})
 (check "a generated function over an array and its length"
@@ -1514,7 +1513,7 @@
          (let [ms (mapv #(cond-> % (:exception %) (update :val (comp :cause read-string))) ms)]
            (conj (vec (remove #(= :tap (:tag %)) ms)) (first (filter #(= :tap (:tag %)) ms)))))
        [{:tag :ret :val "3" :ns "user" :form "(+ 1 2)"}
-        {:tag :out :val "hi\n"}
+        {:tag :out :val (str "hi" (clotran.host.system/getProperty "line.separator"))}   ; CR LF on Windows, as clj's
         {:tag :ret :val "nil" :ns "user" :form "(println \"hi\")"}
         {:tag :ret :val "Divide by zero" :ns "user" :form "(/ 1 0)" :exception true}
         {:tag :ret :val "nil" :ns "lt-p" :form "(ns lt-p)"}

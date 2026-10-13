@@ -197,7 +197,8 @@
   (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (clotran.host.system/getenv "HOME") "/.cache/clotran")))
 
 (def ^:private ext
-  (delay (if (zero? (clotran-sh "[ \"$(uname -s)\" = Darwin ]")) "dylib" "so")))
+  (delay (case (clotran-sh "case \"$(uname -s)\" in Darwin) exit 0;; MINGW*|MSYS*|Windows_NT) exit 2;; *) exit 1;; esac")
+           0 "dylib" 2 "dll" "so")))
 
 (defn- q
   "`s` quoted for /bin/sh."

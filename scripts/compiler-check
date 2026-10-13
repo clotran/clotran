@@ -27,6 +27,7 @@
 ;; under build/, as every check's output is: the gate runs two copies of
 ;; the tree at once, and a directory under /tmp would be shared
 (def work (fs/file repo "build" "compiler-check"))
+(load-file (str (fs/file repo "scripts" "platform.clj")))
 (def keep? (some #{"--keep"} *command-line-args*))
 (def bench? (some #{"--bench"} *command-line-args*))
 
@@ -275,7 +276,7 @@
                 :let [[nm form calls] (nth all-cases i)]]
             (str "(let [r (clotran.compiler/compile-fn \"cc\" \"f" i "\" '" (src form) ")\n"
                  "      h (clotran-pool-register (:pool r))]\n"
-                 "  (clotran-load-compiled \"" (str work) "/libf" i "." soext "\" h)\n"
+                 "  (clotran-load-compiled \"" (platform/slashes work) "/libf" i "." soext "\" h)\n"
                  "  (let [interp " (src form) "\n"
                  "        comp @(resolve 'cc/f" i ")]\n"
                  (apply str
@@ -304,7 +305,7 @@
 (when-not keep? (doseq [f (.listFiles work)] (.delete f)))
 (.mkdirs work)
 
-(def soext (if (str/starts-with? (System/getProperty "os.name") "Mac") "dylib" "so"))
+(def soext platform/soext)
 
 (spit (fs/file work "gen.clj") (driver-source))
 (let [out (run-clotran (fs/file work "gen.clj"))
@@ -347,10 +348,9 @@
                   ;; undefined at link time on purpose. Linux allows that
                   ;; in a shared object; macOS wants to be told.
                   r (apply shell {:out :string :err :string :continue true :dir (str work)}
-                           (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC" "-ffree-line-length-none"]
-                                   (when (= soext "dylib")
-                                     ["-Wl,-undefined,dynamic_lookup"])
-                                   ["-o" (str lib) (str src)]))]]
+                           (concat ["gfortran" "-g" "-O2" "-shared" "-fPIC" "-ffree-line-length-none"
+                                    "-o" (str lib) (str src)]
+                                   (platform/compiled-link (str repo))))]]
       (when-not (zero? (:exit r))
         (println "BUILD FAILED for case" i (first (nth all-cases i)))
         (println (:err r))
@@ -394,11 +394,11 @@
   ;; 13): the main thread allocates and collects while it runs, and the
   ;; loop (~2.4 s compiled; 0.6 s was outrun under a loaded Linux gate)
   ;; is still going when that is done
-  (spit stall (str "(load-file \"" src "\")\n"
+  (spit stall (str "(load-file \"" (platform/slashes src) "\")\n"
                    "(let [f (future (cc-space/lcg-sum 2000000000))]\n"
                    "  (apply + (take 100000 (range)))\n"
                    "  (prn [:pure-loop-still-running (not (realized? f)) :sum (< 0.0 (deref f))]))\n"))
-  (spit run (str "(load-file \"" src "\")\n"
+  (spit run (str "(load-file \"" (platform/slashes src) "\")\n"
                  "(prn [(cc-space/total (double-array [1 2 3])) (cc-space/total (long-array [1 2]))\n"
                  "      (cc-space/summary (double-array 4)) (cc-space/guarded 5) (cc-space/guarded 0) (cc-space/guarded 2.5)\n"
                  "      (cc-space/many 1 2 3) (try (cc-space/total [1]) (catch clotran.host.exception e :threw))])\n"
@@ -409,7 +409,7 @@
                  "(prn (mapv deref (mapv (fn [a] (future (cc-space/total a))) [(double-array [1 2 3]) (long-array [4 5])])))\n"))
   (.delete lib)
   (let [interp (go run)
-        r (shell {:out :string :err :string :dir (str repo) :continue true :in ""} "./clotran" "compile" (str src))
+        r (shell {:out :string :err :string :dir (str repo) :continue true :in ""} "sh" "./clotran" "compile" (str src))
         compiled (go run)
         beside (go stall)
         _ (spit src (str (slurp src) "(defn added [] 1)\n"))

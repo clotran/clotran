@@ -113,7 +113,7 @@
 ;; ---- the door's -----------------------------------------------------------
 
 (defn door-verdicts []
-  (let [src (str "(fortran/load-package \"build/libsamplelib.dylib\")\n"
+  (let [src (str "(fortran/load-package \"build/libsamplelib\")\n"
                  "(defn same? [a b] (if (and (number? a) (number? b) (not= a a)) (not= b b) (and (= a b) (= (str a) (str b)))))\n"
                  "(defn door [i k slot v]\n"
                  "  (let [args (assoc [0 0 0.0 false] slot v)\n"

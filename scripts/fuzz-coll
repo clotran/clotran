@@ -106,5 +106,5 @@
       out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-coll" :suffix ".edn"})))]
   (spit out (str "[" (str/join "\n" (map pr-str forms)) "]"))
   (println (str "fuzz-coll: " n " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
     (System/exit (:exit r))))

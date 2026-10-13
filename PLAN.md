@@ -5300,7 +5300,10 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    itself is James's to tag, after `make fuzz-all` at full size, as
    CLAUDE.md asks of a release candidate.
 6. *Windows*, last: the mingw build under Wine as the quick check, a
-   real runner as the authority -- or 1.1, named as such.
+   real runner as the authority -- or 1.1, named as such. In 1.0
+   (James, 2026-10-12: "I also want windows to be part of the release
+   for v1.0"), built natively on a Windows 10 x86_64 machine, not under
+   Wine: the audit below says how.
 
 **Audited 2026-10-12 (James: "are you sure we are this close?"):** no.
 The first complete `make fuzz-all` failed 7 of 22, so `1.0.0-rc.1` was
@@ -5330,6 +5333,26 @@ remains before 1.0.0, in order:
   -ffree-line-length-none; pure Fortran's do concurrent had a type in
   its header gfortran 14 refused; the newest Clojure CLI reads a -Sdeps
   value as a path. x86_64 builds the same way and is gated nowhere yet.
+- **Windows** -- DONE 2026-10-12 for x86_64: built natively under
+  MSYS2's UCRT64 gfortran on a Windows 10 machine, `make test` passing
+  whole there, and the release a zip that runs the launcher under a
+  pinned busybox-w32 `sh.exe` (`packaging/windows/`). The host's
+  POSIX calls go through `src/c/win_shim.c` (dlopen, realpath,
+  sysconf, an atomic rename); stacks are reserved by the link, as
+  Windows commits a stack pthread_create is given; the binary is
+  static and exports its `clotran_*` names through an import library,
+  so a compiled namespace links against it. A line ends CR LF, as
+  clj's does there (line.separator). Found on the way, for every system: integer
+  division of the least long by -1 and `Math/round` trapped or
+  answered wrong on x86_64; `unchecked-*-int` wrapped at 64 bits;
+  `struct timespec` was declared as two C longs; mingw's decimal reader
+  rounded some doubles wrong, so doubles are read by `strtod`. Not
+  done: flang on Windows (MSYS2 has it only in CLANG64), and a program
+  `clotran build` makes there runs interpreted. busybox-w32 (GPLv2) is
+  fine for 1.0 (James, 2026-10-13: "busybox is fine for now, but we will
+  want to be sophisticated and probably write our own replacements in
+  clotran"): the launcher and clotran-deps written in clotran, so the
+  zip needs no shell -- 1.x.
 - release notes -- DONE 2026-10-12, RELEASE-NOTES.md.
 - README's examples run by a check -- DONE 2026-10-12,
   `scripts/readme-check` in the gate; its numbers re-measured.
@@ -5339,7 +5362,10 @@ remains before 1.0.0, in order:
   them found and fixed: bound? false for protocol Vars, a lower-case
   deftype name unresolved, a reify's class with no supers, clojure.main
   not loading, and PersistentQueue missing altogether.
-- `make fuzz-all` clean at full size on a frozen tree -- the last check.
+- `make fuzz-all` clean at full size on a frozen tree -- DONE 2026-10-13
+  on macOS (22 of 22), Linux (21, fuzz-door without ACL2 there) and
+  Windows (21, the same); it found a quadratic search in NativeArray's
+  claim and a deadline torture mode could not meet.
 - then James tags, and decides the branch: feat/threads is ahead of main
   by every commit since 2026-09.
 

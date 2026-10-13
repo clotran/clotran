@@ -19,7 +19,8 @@
     (.getParentFile (.getParentFile (.getAbsoluteFile (clojure.java.io/file *file*))))))
 (def files (->> (file-seq root)
                 (filter #(.isFile %))
-                (map #(subs (str %) (inc (count (str root)))))
+                ;; / between the parts, as the patterns below assume: Windows writes \
+                (map #(clojure.string/replace (subs (str %) (inc (count (str root)))) "\\" "/"))
                 (remove #(re-find #"^(build|\.[^/]*)/|/\.|^\." %))
                 (remove #(re-find skip %))
                 (filter #(re-find covered %))))

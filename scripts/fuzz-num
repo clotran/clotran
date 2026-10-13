@@ -86,5 +86,5 @@
       out (or (:out opts) (str (fs/create-temp-file {:prefix "fuzz-num" :suffix ".edn"})))]
   (spit out (str "[" (apply str (interpose "\n" (map case-form forms))) "]"))
   (println (str "fuzz-num: " n " cases -> " out))
-  (let [r (p/shell {:continue true} (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
+  (let [r (p/shell {:continue true} "bb" (str (fs/parent *file*) "/fuzz") "-f" out "-m" (:modes opts))]
     (System/exit (:exit r))))

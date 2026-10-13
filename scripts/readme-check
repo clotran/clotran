@@ -34,7 +34,7 @@
 
 (defn run-clotran [stdin & files]
   (let [r (apply p/shell {:out :string :err :string :in stdin :continue true :dir repo :timeout 120000}
-                 (str repo "/clotran") files)]
+                 "sh" (str repo "/clotran") files)]   ; sh: Windows runs no #! script
     (str/join "\n" (remove #(re-find #"^note: " %) (str/split-lines (str (:out r) (:err r)))))))
 
 ;; a ```clojure block: each form, and what its last line says it is
