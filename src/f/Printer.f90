@@ -23,6 +23,7 @@ module Printer
   use Assoc
   use NativeArray
   use clotran_ieee
+  use BigInt, only: text_double
   implicit none
   private
 
@@ -899,10 +900,10 @@ contains
   contains
     logical function reads_back(b)
       character(len=*), intent(in) :: b
-      integer :: st2
+      logical :: ok2
       reads_back = .false.
-      read(b, *, iostat=st2) back
-      if (st2 /= 0) return
+      call text_double(b, back, ok2)
+      if (.not. ok2) return
       if (sgl) then
          reads_back = real(back, kind(1.0)) == real(r, kind(1.0))
       else

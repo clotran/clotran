@@ -31,7 +31,7 @@ module BigInt
 
   public :: big_norm, big_valid, big_is_neg, big_neg, big_abs
   public :: big_cmp, big_add, big_sub, big_mul, big_divmod
-  public :: big_from_i64, big_fits_i64, big_to_i64, big_to_dbl, big_zero
+  public :: big_from_i64, big_fits_i64, big_to_i64, big_to_dbl, big_zero, text_double
 
 contains
 
@@ -460,12 +460,58 @@ contains
 
   ! The nearest double. Past ~1.8e308 that is infinity, which is what
   ! BigInteger.doubleValue answers too.
-  pure function big_to_dbl(s) result(d)
+  function big_to_dbl(s) result(d)
     character(len=*), intent(in) :: s
     double precision :: d
-    integer :: ios
-    read(s, *, iostat=ios) d
-    if (ios /= 0) d = 0.0d0
+    logical :: ok
+    call text_double(s, d, ok)
+    if (.not. ok) d = 0.0d0
   end function big_to_dbl
+
+  ! The double a decimal text denotes, correctly rounded, and whether it
+  ! is one. Plain decimal text -- digits, a sign, a point, an exponent --
+  ! goes to the C library's strtod, every token of it, not to a Fortran
+  ! READ: gfortran's runtime under mingw-w64 reads with __mingw_strtod,
+  ! which rounds some 16- and 17-digit decimals to the wrong neighbour
+  ! (6.483618076376551E178 read as 6.483618076376552E178), where the C
+  ! libraries of macOS, glibc, musl and Windows' UCRT round them
+  ! correctly. Anything else -- NaN, Infinity, a d exponent -- is READ as
+  ! before, so what is accepted does not change.
+  subroutine text_double(t, d, ok)
+    use, intrinsic :: iso_c_binding, only: c_char, c_ptr, c_double, c_null_char, c_loc, c_intptr_t
+    character(len=*), intent(in) :: t
+    double precision, intent(out) :: d
+    logical, intent(out) :: ok
+    interface
+       function c_strtod(s, endp) bind(C, name="strtod") result(r)
+         import :: c_char, c_ptr, c_double
+         character(kind=c_char), intent(in) :: s(*)
+         type(c_ptr), intent(out) :: endp
+         real(c_double) :: r
+       end function c_strtod
+    end interface
+    character(kind=c_char), allocatable, target :: buf(:)
+    type(c_ptr) :: endp
+    integer :: a, z, i, ios
+    d = 0.0d0
+    ok = .false.
+    a = verify(t, " ")
+    if (a == 0) return
+    z = len_trim(t)
+    if (verify(t(a:z), "0123456789+-.eE") == 0) then
+       if (scan(t(a:z), "0123456789") == 0) return
+       allocate(buf(z - a + 2))
+       do i = a, z
+          buf(i - a + 1) = t(i:i)
+       end do
+       buf(z - a + 2) = c_null_char
+       d = c_strtod(buf, endp)
+       ok = transfer(endp, 0_c_intptr_t) - transfer(c_loc(buf), 0_c_intptr_t) == z - a + 1
+       if (.not. ok) d = 0.0d0
+    else
+       read(t, *, iostat=ios) d
+       ok = ios == 0
+    end if
+  end subroutine text_double
 
 end module BigInt

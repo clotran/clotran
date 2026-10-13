@@ -3401,3 +3401,9 @@ x10
    (reversible? q) (peek E) (count (pop E)) (seq (conj q nil)) (contains? #{q} [1 2 3]) (reduce + q) (first q) (rest q)
    (= (pop (pop (pop q))) E) (instance? clotran.queue.PersistentQueue q) (empty? q) (empty? E)
    (with-out-str (clojure.pprint/pprint q))])
+
+;; integer division by -1: the least long over -1 traps on x86_64; clj wraps
+[(quot -9223372036854775808 -1) (rem -9223372036854775808 -1) (mod -9223372036854775808 -1) (/ -9223372036854775808 -1) (unchecked-divide-int -2147483648 -1) (quot -7 -1) (rem 7 -1)]
+
+;; unchecked int arithmetic: arguments narrowed as RT.intCast does, answers wrapped at 32 bits
+(for [f [(fn [] (unchecked-add-int 2147483647 1)) (fn [] (unchecked-subtract-int -2147483648 1)) (fn [] (unchecked-multiply-int 65536 65536)) (fn [] (unchecked-divide-int -2147483648 -1)) (fn [] (unchecked-remainder-int 7 -2)) (fn [] (unchecked-negate-int -2147483648)) (fn [] (unchecked-inc-int 2147483647)) (fn [] (unchecked-dec-int -2147483648)) (fn [] (unchecked-add-int 2147483648 1)) (fn [] (unchecked-add-int 1.5 1)) (fn [] (unchecked-divide-int 1 0))]] (try (f) (catch clotran.host.exception e [(class e) (.getMessage e)])))

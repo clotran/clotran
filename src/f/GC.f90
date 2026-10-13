@@ -595,6 +595,9 @@ module GC
      ! once touched; vstack_make.
      type(gc_value), pointer, contiguous :: vstack(:) => null()
      integer :: vs_hi = 0   ! the highest top reached; above it, untouched
+     ! a stack overflow raised in the reserve, which the handlers unwinding
+     ! it may now use (Eval.f90, stack_low)
+     logical :: vs_low_raised = .false.
      integer :: vs_top = 0
      logical :: holds_heap = .false.   ! this thread is inside heap_enter/heap_leave
      integer :: state_depth = 0        ! how deep this thread holds the state lock

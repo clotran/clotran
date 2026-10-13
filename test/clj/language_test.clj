@@ -1457,6 +1457,11 @@
               [(.readLine (net/reader c)) (deref served 5000 :timeout)]
               (finally (net/close c) (net/close s))))
        ["15 λ" :done])
+;; every interface takes IPv4 too: Windows made the [::] socket v6-only
+(check "a server on every interface is reached at 127.0.0.1"
+       (let [s (net/listen 0) c (net/connect "127.0.0.1" (:port s)) a (net/accept s 5000)]
+         (try (some? a) (finally (net/close a) (net/close c) (net/close s))))
+       true)
 (check "connecting to nothing is an IOException"
        (let [s (net/listen 0 {:host "127.0.0.1"}) p (:port s)] (net/close s)
          (try (net/connect "127.0.0.1" p) :connected (catch clotran.host.io_exception e :refused)))

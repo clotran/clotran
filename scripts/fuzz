@@ -61,7 +61,7 @@
 ;;; ---- options --------------------------------------------------------
 
 (def opts
-  (loop [a *command-line-args* o {:n 200 :seed 1 :modes ["flat" "tree" "compiled"] :shrink false :timeout 600 :probe-timeout 120}]
+  (loop [a *command-line-args* o {:n 200 :seed 1 :modes ["flat" "tree" "compiled"] :shrink false :timeout 600 :probe-timeout 120 :chunk 250}]
     (case (first a)
       nil o
       "-n" (recur (drop 2 a) (assoc o :n (parse-long (second a))))
@@ -74,6 +74,7 @@
       "--timeout" (recur (drop 2 a) (assoc o :timeout (parse-long (second a))))
       "--keep" (recur (rest a) (assoc o :keep true))
       "--probe-timeout" (recur (drop 2 a) (assoc o :probe-timeout (parse-long (second a))))
+      "--chunk" (recur (drop 2 a) (assoc o :chunk (parse-long (second a))))
       "-r" (recur (drop 2 a) (update o :requires (fnil conj []) (second a)))
       "--fns" (recur (drop 2 a) (assoc o :fns (parse-long (second a))))
       "--fixture" (recur (drop 2 a) (assoc o :fixture (second a)))
@@ -710,6 +711,9 @@
                               (str "cases " (first idxs) ".." (last idxs) " fail together and finish apart")]])}))))
 
 (def hangs (atom []))
+;; cases clj overflowed its stack on: not compared, but clotran dying on one
+;; is still a crash
+(def overflowed (atom #{}))
 
 (let [{:keys [n seed modes]} opts
       fixed (some-> (:file opts) slurp read-string vec)   ; the reader, not edn: a case may hold #"regex"
@@ -730,6 +734,7 @@
                  so (filter #(str/starts-with? (str (val %)) "!error clotran.host.stack_overflow_error") out)]
              (doseq [[i k] h] (println "clj" (name k) "on case" i "(not compared):" (pr-str (nth forms i))))
              (doseq [[i _] so] (println "clj overflowed its stack on case" i "(not compared):" (pr-str (nth forms i))))
+             (reset! overflowed (set (map key so)))
              (apply dissoc out (map key so)))
       _ (when (< (count want) n) (println "clj answered" (count want) "of" n "cases"))
       ;; what was tested: a case both sides throw on agrees, and says little
@@ -753,18 +758,20 @@
     ;; compiled builds a library of its batch, about 0.25 s a case (250
     ;; cases 68 s, 750 200 s, measured 2026-10-12), so 3000 outran the
     ;; 600 s deadline and a halved batch the 120 s probe: it is built a
-    ;; chunk at a time, each with the full deadline
-    (let [chunk (if (= m "compiled") 250 (max n 1))
+    ;; chunk at a time, each with the full deadline. --chunk: fewer for
+    ;; bigger cases -- fuzz-threads' take 1 s each, and 250 outran 300 s
+    ;; on one Linux core
+    (let [chunk (if (= m "compiled") (:chunk opts) (max n 1))
           rs (mapv #(run-finding-hangs (partial run-clotran m) forms (vec %) (count %)) (partition-all chunk (range n)))
           {got :out h :hangs} {:out (apply merge {} (map :out rs)) :hangs (vec (mapcat :hangs rs))}
-          _ (doseq [[i k err] h :when (contains? want i)]
+          _ (doseq [[i k err] h :when (or (contains? want i) (and (= k :crash) (@overflowed i)))]
               (swap! hangs conj [m i k])
               (println (str/upper-case (name k)) m "case" i
                        (case k
                          :timeout (str "(no answer in " (:probe-timeout opts) " s)")
                          :crash "(the process died)"
                          (:batch-timeout :batch-crash) "(only with the cases run beside it)")
-                       "-- clj answers" (get want i) ":" (pr-str (nth forms i)))
+                       "-- clj answers" (get want i "a stack overflow") ":" (pr-str (nth forms i)))
               (when (seq err) (println "   " err)))
           hung (set (map first h))
           diffs (filter #(and (not (hung %)) (contains? want %) (differs (get want %) (get got %) (nth forms %))) (range n))]

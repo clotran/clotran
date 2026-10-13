@@ -23,7 +23,7 @@
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14, &
        HK_BOXVAR = -15, HK_CLJVAR = -16
 
-  type(hm), parameter :: HOST_STATICS_1(97) = [ &
+  type(hm), parameter :: HOST_STATICS_1(98) = [ &
   ! a static field written in Clojure: the var the name gives, its
   ! namespace loaded first (HK_CLJVAR)
        hm("clotran.queue.PersistentQueue", "EMPTY", HK_CLJVAR, "clotran.queue/EMPTY"), &
@@ -105,18 +105,19 @@
        hm("clotran.host.numbers", "rationalize", B_RATIONALIZE, "rationalize"), &
        hm("clotran.host.numbers", "addP", B_PADD, "+'"), &
        hm("clotran.host.numbers", "unchecked_add", B_UADD, "unchecked-add"), &
-       hm("clotran.host.numbers", "unchecked_int_add", B_UADD, "unchecked-add"), &
+       hm("clotran.host.numbers", "unchecked_int_add", B_UIADD, "unchecked-add-int"), &
        hm("clotran.host.numbers", "minus", B_SUB, "-"), &
        hm("clotran.host.numbers", "minusP", B_PSUB, "-'"), &
        hm("clotran.host.numbers", "unchecked_minus", B_USUB, "unchecked-subtract"), &
-       hm("clotran.host.numbers", "unchecked_int_subtract", B_USUB, "unchecked-subtract"), &
+       hm("clotran.host.numbers", "unchecked_int_subtract", B_UISUB, "unchecked-subtract-int"), &
        hm("clotran.host.numbers", "multiply", B_MUL, "*"), &
        hm("clotran.host.numbers", "multiplyP", B_PMUL, "*'"), &
        hm("clotran.host.numbers", "unchecked_multiply", B_UMUL, "unchecked-multiply"), &
        hm("clotran.host.numbers", "divide", B_DIV, "/"), &
        ! INTEGER division, truncating: (unchecked-divide-int 7 2) is 3
-       hm("clotran.host.numbers", "unchecked_int_divide", B_QUOT, "quot"), &
-       hm("clotran.host.numbers", "unchecked_int_negate", B_SUB, "-"), &
+       hm("clotran.host.numbers", "unchecked_int_divide", B_UIDIV, "unchecked-divide-int"), &
+       hm("clotran.host.numbers", "unchecked_int_multiply", B_UIMUL, "unchecked-multiply-int"), &
+       hm("clotran.host.numbers", "unchecked_int_negate", B_UINEG, "unchecked-negate-int"), &
        hm("clotran.host.numbers", "lt", B_LT, "<"), &
        hm("clotran.host.numbers", "gt", B_GT, ">"), &
        hm("clotran.host.numbers", "lte", B_LTE, "<="), &
@@ -127,7 +128,7 @@
        hm("clotran.host.numbers", "inc", B_INC, "inc"), &
        hm("clotran.host.numbers", "incP", B_PINC, "inc'"), &
        hm("clotran.host.numbers", "unchecked_inc", B_UINC, "unchecked-inc"), &
-       hm("clotran.host.numbers", "unchecked_int_inc", B_UINC, "unchecked-inc"), &
+       hm("clotran.host.numbers", "unchecked_int_inc", B_UIINC, "unchecked-inc-int"), &
        hm("clotran.host.numbers", "dec", B_DEC, "dec"), &
        hm("clotran.host.numbers", "decP", B_PDEC, "dec'"), &
        ! (bigint x) for a number is (clotran.host.bigint/valueOf (long x))
@@ -148,10 +149,10 @@
        hm("clotran.host.rounding_mode", "HALF_EVEN", HK_SELFKEY), &
        hm("clotran.host.rounding_mode", "UNNECESSARY", HK_SELFKEY), &
        hm("clotran.host.numbers", "unchecked_dec", B_UDEC, "unchecked-dec"), &
-       hm("clotran.host.numbers", "unchecked_int_dec", B_UDEC, "unchecked-dec") ]
+       hm("clotran.host.numbers", "unchecked_int_dec", B_UIDEC, "unchecked-dec-int") ]
   type(hm), parameter :: HOST_STATICS_2(84) = [ &
        hm("clotran.host.numbers", "remainder", B_REM, "rem"), &
-       hm("clotran.host.numbers", "unchecked_int_remainder", B_REM, "rem"), &
+       hm("clotran.host.numbers", "unchecked_int_remainder", B_UIREM, "unchecked-remainder-int"), &
        hm("clotran.host.numbers", "quotient", B_QUOT, "quot"), &
        hm("clotran.host.numbers", "num", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "and", B_BITAND, "bit-and"), &
@@ -428,7 +429,7 @@
        hm("clotran.host.numbers", "longs", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(325) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(326) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(99) = [ &
   ! Instance members. The target becomes the first argument, which is all

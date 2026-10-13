@@ -11,17 +11,34 @@ program ieee_lite_test
   integer(int64) :: s, b, c
   real(real64) :: x, y
   integer :: i, bad
+  ! the classes no random pattern reaches: zeros, infinities, the
+  ! smallest subnormal and normal, the largest finite, NaNs of each sign
+  integer(int64), parameter :: specials(10) = [0_int64, -huge(1_int64) - 1_int64, &
+       9218868437227405312_int64, -4503599627370496_int64, 1_int64, 4503599627370496_int64, &
+       9218868437227405311_int64, 9221120237041090560_int64, -2251799813685248_int64, &
+       9218868437227405313_int64]
   bad = 0
   call same_bits("+inf", lite_value(1.0_real64, lite_positive_inf), ieee_value(1.0_real64, ieee_positive_inf))
   call same_bits("-inf", lite_value(1.0_real64, lite_negative_inf), ieee_value(1.0_real64, ieee_negative_inf))
   if (.not. (lite_is_nan(lite_value(1.0_real64, lite_quiet_nan)) .and. &
        ieee_is_nan(lite_value(1.0_real64, lite_quiet_nan)))) call fail_at("quiet nan", 0_int64)
+  do i = 1, size(specials)
+     x = transfer(specials(i), x)
+     do b = 1, size(specials)
+        y = transfer(specials(b), y)
+        if (lite_is_nan(x) .neqv. ieee_is_nan(x)) call fail_at("is_nan", specials(i))
+        if (lite_is_finite(x) .neqv. ieee_is_finite(x)) call fail_at("is_finite", specials(i))
+        if (.not. ieee_is_nan(x)) then
+           if (transfer(lite_copy_sign(x, y), b) /= transfer(ieee_copy_sign(x, y), b)) call fail_at("copy_sign", specials(i))
+        end if
+     end do
+  end do
   s = 88172645463325252_int64
   do i = 1, N
      b = next(s)
      c = next(s)
-     ! every eighth pattern given an all-ones exponent, so infinities and
-     ! NaNs are not left to chance
+     ! every eighth pattern given an all-ones exponent, so NaNs are many
+     ! (an infinity needs a zero fraction too: the specials above)
      if (mod(i, 8) == 0) b = ior(b, 9218868437227405312_int64)
      x = transfer(b, x)
      y = transfer(c, y)

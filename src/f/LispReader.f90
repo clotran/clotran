@@ -2734,9 +2734,9 @@ contains
   function to_real(s) result(r)
     character(len=*), intent(in) :: s
     real(gc_dp) :: r
-    integer :: ios
-    read(s, *, iostat=ios) r
-    if (ios /= 0) r = 0.0_gc_dp
+    logical :: ok
+    call text_double(s, r, ok)
+    if (.not. ok) r = 0.0_gc_dp
   end function to_real
 
   function with(roots, v) result(out)

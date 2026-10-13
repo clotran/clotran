@@ -113,13 +113,15 @@
        args_reusable = .true.
     case (B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING)
        args_reusable = .true.
-    case (B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC, B_UFLOATCAST, B_UINC)
+    case (B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC, B_UFLOATCAST, B_UIADD)
        args_reusable = .true.
-    case (B_UPCASE, B_USHR, B_UTF8BYTES, B_UTF8STRING, B_UUIDOF, B_VAL)
+    case (B_UIDEC, B_UIDIV, B_UIINC, B_UIMUL, B_UINC, B_UINEG)
        args_reusable = .true.
-    case (B_VALS, B_VARCREATE, B_VARINTERN, B_VARNS, B_VARSYM, B_VEC)
+    case (B_UIREM, B_UISUB, B_UPCASE, B_USHR, B_UTF8BYTES, B_UTF8STRING)
        args_reusable = .true.
-    case (B_WITHMETA, B_WRITE, B_WRITEBYTES, B_ZERO)
+    case (B_UUIDOF, B_VAL, B_VALS, B_VARCREATE, B_VARINTERN, B_VARNS)
+       args_reusable = .true.
+    case (B_VARSYM, B_VEC, B_WITHMETA, B_WRITE, B_WRITEBYTES, B_ZERO)
        args_reusable = .true.
     case default
        args_reusable = .false.

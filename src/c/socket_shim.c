@@ -118,6 +118,12 @@ int64_t cs_listen(const char *host, int32_t port, int32_t backlog, char *err, in
         if (s == BAD_SOCK) { code = last_err(); continue; }
         int one = 1;
         setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
+        /* dual stack: Windows makes an IPv6 socket v6-only, so a server on
+         * [::] refused 127.0.0.1; Linux and macOS default to this already */
+        if (a->ai_family == AF_INET6) {
+            int zero = 0;
+            setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&zero, sizeof zero);
+        }
         if (bind(s, a->ai_addr, (int)a->ai_addrlen) == 0 && listen(s, backlog > 0 ? backlog : 50) == 0) {
             freeaddrinfo(res);
             return (int64_t)s;

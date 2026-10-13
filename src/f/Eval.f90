@@ -257,6 +257,9 @@ module Eval
   integer, parameter :: B_HOSTBOX = 436, B_IMPORT = 437, B_ARRAYGET = 438
   integer, parameter :: B_FILESIZE = 439, B_READBYTES = 440, B_WRITEBYTES = 441
   integer, parameter :: B_IDROP = 442
+  ! clj's unchecked int arithmetic, wrapping at 32 bits (Numbers.unchecked_int_*)
+  integer, parameter :: B_UIADD = 443, B_UISUB = 444, B_UIMUL = 445, B_UIDIV = 446, B_UIREM = 447, &
+       B_UINEG = 448, B_UIINC = 449, B_UIDEC = 450
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1111,16 +1114,27 @@ contains
   end subroutine gce_set_site
 
   ! The value stack never moves (compiled code holds a view of it), so it
-  ! cannot grow: a call made with less than its last 65,536 slots free is
-  ! a stack overflow, raised as clj raises StackOverflowError, and the
-  ! frames already running finish on the slots left. Without it a deep
-  ! recursion through frames of many temporaries filled the stack before
-  ! the frame limit tripped and stopped the process (scripts/fuzz-spec, a
-  ! nested s/* conforming; DEVIATIONS 7).
+  ! cannot grow: a call made with less than its reserve free -- the last
+  ! 65,536 slots, or a quarter of a smaller stack -- is a stack overflow,
+  ! raised as clj raises StackOverflowError. Once: the catch and finally
+  ! bodies the error unwinds into run in the reserve, calls and all (a
+  ! binding's pop-thread-bindings among them), until the stack is back
+  ! below it -- a handler is let run, as clj's own runtime does. Without it a
+  ! deep recursion through frames of many temporaries filled the stack
+  ! before the frame limit tripped and stopped the process (scripts/
+  ! fuzz-spec, a nested s/* conforming; DEVIATIONS 7).
   logical function stack_low(tctx)
     type(eval_ctx), pointer, intent(in) :: tctx
     integer, parameter :: VS_RESERVE = 65536
-    stack_low = tctx%stk%vs_top > size(tctx%stk%vstack) - VS_RESERVE
+    integer :: limit
+    limit = size(tctx%stk%vstack) - min(VS_RESERVE, size(tctx%stk%vstack) / 4)
+    if (tctx%stk%vs_top <= limit) then
+       tctx%stk%vs_low_raised = .false.
+       stack_low = .false.
+    else
+       stack_low = .not. tctx%stk%vs_low_raised
+       tctx%stk%vs_low_raised = .true.
+    end if
   end function stack_low
 
   ! tctx passed, not fetched: a thread-key lookup per call, and every
@@ -4359,6 +4373,7 @@ contains
     character(len=:), allocatable :: t
     integer(gc_ip) :: iv
     real(gc_dp) :: dv
+    logical :: ok_dv
     integer :: st
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -4391,8 +4406,8 @@ contains
              call gc_ref_text(v%ref, s=dlt_1)
              t = dlt_1
           end block
-          read(t, *, iostat=st) dv
-          if (st == 0) then
+          call text_double(t, dv, ok_dv)
+          if (ok_dv) then
              out = gc_real(dv)
           else
              call fail("For input string: " // t)
@@ -5351,7 +5366,6 @@ contains
     case (4); call raise_class("clotran.host.negative_array_size_exception", msg, none)
     case (5); call raise_class("clotran.host.arity_exception", msg, none)
     case (6); call raise_class("clotran.host.string_index_out_of_bounds_exception", msg, none)
-    case (7); call raise_class("clotran.host.stack_overflow_error", msg, none)
     case default; call raise_class("clotran.host.exception", msg, none)
     end select
   end subroutine gce_raise_coded
@@ -7522,8 +7536,10 @@ contains
           out = gc_real(nearest(x, y - x))
        end if
     case (33)
-       ! Math.round(double) is floor(x + 0.5) and answers a long.
-       out = gc_int(int(floor_dbl(x + 0.5_gc_dp), gc_ip))
+       ! Math.round(double) is floor(x + 0.5) and answers a long: NaN 0,
+       ! past the range its end -- saturating as Math.round does, where
+       ! Fortran's int() is undefined (x86_64 answered the least long)
+       out = gc_int(long_of_double(floor_dbl(x + 0.5_gc_dp)))
     case (34)
        ! clj's unbiased exponent has the mantissa in [1,2);
        ! Fortran's has it in [0.5,1).
@@ -8985,6 +9001,12 @@ contains
        ! the wrapper is still on the call stack, as it is in clj's
        call vs_set(vst, base + 1, fn)
        call push_frame(ctx_self(), vs_get(vst, base + 1), 0)
+       ! a push refused (the frame limit, the stack's reserve) pushed nothing
+       if (gce_has_error()) then
+          out = gc_nil()
+          call vs_leave(vst, base)
+          return
+       end if
        out = gce_apply_slots(vst, av, argbase, nargs)
        call pop_frame(ctx_self())
        call vs_leave(vst, base)
@@ -9202,8 +9224,13 @@ contains
             ! the wrapper stays on the call stack
             call push_frame(tctx, vs_get(vst, base + 1), tctx%pending_site)
             tctx%pending_site = 0
-            out = call_builtin(gc_i1(wb), argl)
-            call pop_frame(tctx)
+            ! a push refused pushed nothing, so nothing is popped
+            if (tctx%has_error) then
+               out = gc_nil()
+            else
+               out = call_builtin(gc_i1(wb), argl)
+               call pop_frame(tctx)
+            end if
          else
             out = invoke_closure(vs_get(vst, base + 1), argl)
          end if
@@ -10569,6 +10596,17 @@ contains
           end if
        else if (b%ival == 0) then
           call raise_class("clotran.host.arithmetic_exception", "Divide by zero", [gc_nil()])
+       else if (b%ival == -1_gc_ip) then
+          ! by -1 apart: the least long over -1 overflows, which x86_64's
+          ! divide traps on (the process died); clj wraps, the least long
+          ! again, and its remainder is 0
+          if (id == B_QUOT .and. a%ival == -huge(0_gc_ip) - 1_gc_ip) then
+             out = a
+          else if (id == B_QUOT) then
+             out = gc_int(-a%ival)
+          else
+             out = gc_int(0_gc_ip)
+          end if
        else if (id == B_QUOT) then
           out = gc_int(a%ival / b%ival)
        else
@@ -11650,6 +11688,45 @@ contains
     ! vector's or its seq's view n further on (PersistentVector.drop,
     ! ChunkedSeq.drop), a long range n further on (LongRange.drop), nil
     ! past the end
+    case (B_UIADD, B_UISUB, B_UIMUL, B_UIDIV, B_UIREM, B_UINEG, B_UIINC, B_UIDEC)
+       ! clj's unchecked int arithmetic (Numbers.unchecked_int_*): each
+       ! argument an int as RT.intCast makes it -- "integer overflow" past
+       ! one -- and the answer wrapped at 32 bits. Done in 64 bits first,
+       ! where every one of them fits, the least int over -1 among them.
+       block
+         integer(gc_ip) :: x, y, r
+         type(gc_value) :: ix
+         call nth_index(gcv_nth(args, 0), ix, [gc_nil()])
+         if (gce_has_error()) return
+         x = ix%ival
+         y = 0
+         if (n >= 2) then
+            call nth_index(gcv_nth(args, 1), ix, [gc_nil()])
+            if (gce_has_error()) return
+            y = ix%ival
+         end if
+         select case (id)
+         case (B_UIADD); r = x + y
+         case (B_UISUB); r = x - y
+         case (B_UIMUL); r = x * y
+         case (B_UINEG); r = -x
+         case (B_UIINC); r = x + 1
+         case (B_UIDEC); r = x - 1
+         case default
+            if (y == 0) then
+               call raise_class("clotran.host.arithmetic_exception", "/ by zero", [gc_nil()])
+               return
+            end if
+            if (id == B_UIDIV) then
+               r = x / y
+            else
+               r = mod(x, y)
+            end if
+         end select
+         r = iand(r, 4294967295_gc_ip)
+         if (r > 2147483647_gc_ip) r = r - 4294967296_gc_ip
+         out = gc_int(r)
+       end block
     case (B_IDROP)
        block
          type(gc_value) :: c, lo, hi, st
@@ -12038,6 +12115,7 @@ contains
          type(gc_value) :: a0
          character(len=:), allocatable :: t
          real(gc_dp) :: dv
+         logical :: ok_dv
          integer :: st
          a0 = strip_meta(gcv_nth(args, 0))
          if (a0%tag == GCT_REAL) then
@@ -12049,8 +12127,8 @@ contains
                call text_of(a0, s=dlt_1)
                t = trim(adjustl(dlt_1))
             end block
-            read(t, *, iostat=st) dv
-            if (st /= 0) then
+            call text_double(t, dv, ok_dv)
+            if (.not. ok_dv) then
                call fail_as("clotran.host.number_format_exception", "valueOf: not a number: " // t, &
                     [vs_get(vst, base + 1)])
             else
