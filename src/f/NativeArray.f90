@@ -64,6 +64,10 @@ module NativeArray
   ! other end allocates no clotran arrays.
   type(na_node), allocatable, save, target :: reg(:)
   integer, save :: reg_used = 0
+  ! every slot below this one is in use: claim() searches from here, as
+  ! from 1 it was O(live arrays) a claim, and a case holding 10^4 arrays
+  ! (fuzz-spec, torture) ran past its deadline
+  integer, save :: reg_free = 1
 
   public :: gcna_new, gcna_release, gcna_reset, gcna_is, gcna_kind, gcna_rank, gcna_class, gcna_set_class, &
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
@@ -220,6 +224,7 @@ contains
     if (allocated(reg(handle)%elem_kind)) deallocate(reg(handle)%elem_kind)
     if (allocated(reg(handle)%elem_class)) deallocate(reg(handle)%elem_class)
     reg(handle)%used = .false.
+    reg_free = min(reg_free, handle)
   end subroutine gcna_release
 
   ! Drops EVERY entry. gc_init wipes the whole heap, so every
@@ -236,6 +241,7 @@ contains
        call gcna_release(i)
     end do
     reg_used = 0
+    reg_free = 1
   end subroutine gcna_reset
 
   logical function gcna_is(handle)
@@ -551,6 +557,7 @@ contains
     if (allocated(reg)) deallocate(reg)
     allocate(reg(max(n, 16)))
     reg_used = n
+    reg_free = 1
     do i = 1, n
        read(u) reg(i)%used
        if (.not. reg(i)%used) cycle
@@ -605,10 +612,11 @@ contains
           allocate(reg(16))
           reg_used = 0
        end if
-       do i = 1, reg_used
+       do i = reg_free, reg_used
           if (.not. reg(i)%used) then
              reg(i)%used = .true.
              claim = i
+             reg_free = i + 1
              call gc_state_unlock()
              return
           end if
@@ -617,6 +625,7 @@ contains
           reg_used = reg_used + 1
           reg(reg_used)%used = .true.
           claim = reg_used
+          reg_free = reg_used + 1
           call gc_state_unlock()
           return
        end if

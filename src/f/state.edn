@@ -256,6 +256,7 @@
  "Namespace.f90/registry_root" {:class :shared, :note "a registry: additions under a lock"}
  "NativeArray.f90/reg" {:class :shared, :note "a registry: additions under a lock"}
  "NativeArray.f90/reg_used" {:class :shared, :note "a registry: additions under a lock"}
+ "NativeArray.f90/reg_free" {:class :shared, :note "a hint below which every slot is used: moved by claim under the lock, lowered by the sweep; a lost lowering costs a slot, not a value"}
  "PersistentList.f90/empty_root" {:class :fixed, :note "the empty list, made once"}
  "PersistentList.f90/empty_val" {:class :fixed, :note "the empty list read lock-free: filled at its first use, during core's load before a second thread exists, and again only after gc_init or an image, both single-threaded"}
  "PersistentList.f90/empty_for" {:class :fixed, :note "the root handle empty_val was read through, which a new heap or an image no longer matches"}

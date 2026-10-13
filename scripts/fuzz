@@ -761,8 +761,13 @@
     ;; chunk at a time, each with the full deadline. --chunk: fewer for
     ;; bigger cases -- fuzz-threads' take 1 s each, and 250 outran 300 s
     ;; on one Linux core
+    ;; torture collects every few allocations, quadratic over a deep
+    ;; stack: a case clj overflowed on ran past 10 min there, and the
+    ;; other modes already check clotran survives it, so it is not run
     (let [chunk (if (= m "compiled") (:chunk opts) (max n 1))
-          rs (mapv #(run-finding-hangs (partial run-clotran m) forms (vec %) (count %)) (partition-all chunk (range n)))
+          skip (if (str/starts-with? m "torture") @overflowed #{})
+          _ (when (seq skip) (println m "does not run" (count skip) "case(s) clj overflowed its stack on"))
+          rs (mapv #(run-finding-hangs (partial run-clotran m) forms (vec %) (count %)) (partition-all chunk (remove skip (range n))))
           {got :out h :hangs} {:out (apply merge {} (map :out rs)) :hangs (vec (mapcat :hangs rs))}
           _ (doseq [[i k err] h :when (or (contains? want i) (and (= k :crash) (@overflowed i)))]
               (swap! hangs conj [m i k])

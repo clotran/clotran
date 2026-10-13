@@ -51,6 +51,14 @@ program native_array_test
   call gcna_real8_ptr(h, p, ok)
   call check("and is not a real8 one", .not. ok)
 
+  ! a freed slot is taken again, the lowest first: claim() searches from
+  ! a hint, not from 1, and a release must move the hint back down
+  call gcna_release(other - 100)
+  call gcna_release(other - 150)
+  call check("a freed slot is reused, the lowest first", gcna_new("real8", [1], [0], err) == other - 150)
+  call check("then the next freed one", gcna_new("real8", [1], [0], err) == other - 100)
+  call check("then a new one past the last", gcna_new("real8", [1], [0], err) == h + 1)
+
   if (failures == 0) then
      print *, "NATIVE ARRAY TESTS PASSED"
   else
