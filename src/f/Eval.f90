@@ -6406,8 +6406,11 @@ contains
     v = strip_meta(form)
     call vs_set(vst, base + 2, v)
     if (v%tag == GCT_SYM) then
+       ! a symbol syntaxQuote leaves as it is -- a special form, a name
+       ! qualified already or with a . in it, .method -- is quoted as read,
+       ! metadata and all; one it resolves or gensyms is a new symbol, bare
        if (is_special(v)) then
-          out = sq_list2("quote", v, [vs_get(vst, base + 1)])
+          out = sq_list2("quote", vs_get(vst, base + 1), [vs_get(vst, base + 1)])
        else
           ! x# is made a fresh name INSTEAD of resolved, as syntaxQuote's
           ! branches go; anything else is resolved -- a name an inner
@@ -6419,6 +6422,13 @@ contains
                call vs_set(vst, base + 2, auto_gensym(vs_get(vst, base + 2)))
             else
                call vs_set(vst, base + 2, qq_alias(vs_get(vst, base + 2), gc_nil()))
+               ! x. is rebuilt, though its text come back the same
+               block
+                 character(len=:), allocatable :: rn
+                 v = vs_get(vst, base + 2)
+                 call gc_ref_text(v%ref, s=rn)
+                 if (rn == sn .and. sn(len(sn):len(sn)) /= ".") call vs_set(vst, base + 2, vs_get(vst, base + 1))
+               end block
             end if
           end block
           out = sq_list2("quote", vs_get(vst, base + 2), [vs_get(vst, base + 1)])

@@ -3,6 +3,10 @@
 ;; modes (make test, check-fuzz), and the VM's (CLOTRAN_VM=1). Add a
 ;; shrunk form here with each fix.
 [
+ ;; syntax-quote keeps the metadata of a symbol it leaves as read -- a
+ ;; special form, a qualified name, a.b -- and drops it from one it
+ ;; resolves or rebuilds, as LispReader.syntaxQuote (scripts/fuzz-read)
+ (binding [*print-meta* true] (mapv #(pr-str (read-string %)) ["`^:t if" "`^:t Foo." "`^:t a.b" "`^:t clojure.core/map" "`^:t user/x" "`^:t x"]))
  ;; (rationalize ##-Inf) answered a bigint -InfinityN: the sign passed a
  ;; first-character check (scripts/fuzz-num, seed 2277406879)
  (try (rationalize ##-Inf) (catch clotran.host.number_format_exception e :nan))
