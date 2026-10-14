@@ -32,7 +32,12 @@
 (wsl {:in run-sh} "bash" "-c" "\"tr -d '\\r' > /root/gate-wsl.sh\"")
 (let [tar (p/process {:dir repo} "sh" "-c" "git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf -")]
   (wsl {:in (:out tar)} "bash" "-c" "\"rm -rf /root/clotran && mkdir -p /root/clotran && tar xf - -C /root/clotran\""))
-(wsl {:continue true :out :inherit} "bash" "/root/gate-wsl.sh")
-(fs/create-dirs (fs/parent log))
-(spit log (:out (wsl {:out :string :continue true} "cat" "/root/gate-wsl.log")))
+;; the last run's log goes first, and must: a run that never started (WSL
+;; answers "Server execution failed" when its service is wedged) once
+;; read back the run before's EXIT 0
+(wsl {} "rm" "-f" "/root/gate-wsl.log")
+(let [r (wsl {:continue true :out :inherit} "bash" "/root/gate-wsl.sh")
+      l (wsl {:out :string :continue true} "cat" "/root/gate-wsl.log")]
+  (fs/create-dirs (fs/parent log))
+  (spit log (if (and (zero? (:exit r)) (zero? (:exit l))) (:out l) (str "gate-wsl: the run did not finish: " (:err r) (:err l) "\nEXIT 1\n"))))
 (println "gate-wsl:" (or (last (str/split-lines (slurp log))) "no log") "--" log)
