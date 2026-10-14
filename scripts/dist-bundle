@@ -69,6 +69,11 @@
   (doseq [f (cons bin (map str (fs/list-dir libdir)))]
     (doseq [[ref _] (deps-of f) :when (str/starts-with? ref "/")]
       (p/shell "install_name_tool" "-change" ref (str "@rpath/" (fs/file-name ref)) f)))
+  ;; the build's own rpaths, Homebrew's gcc among them, would be searched
+  ;; first, and a Mac with that gcc would run on it, not on what we carry
+  (doseq [f (cons bin (map str (fs/list-dir libdir)))
+          [_ rp] (re-seq #"(?m)^\s+path (/\S+) \(" (sh "otool" "-l" f))]
+    (p/shell "install_name_tool" "-delete_rpath" rp f))
   ;; each looks beside itself; a library may say so already
   (p/shell {:continue true :err :string} "install_name_tool" "-add_rpath" "@executable_path/lib" bin)
   (doseq [f (map str (fs/list-dir libdir))] (p/shell {:continue true :err :string} "install_name_tool" "-add_rpath" "@loader_path" f))
