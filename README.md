@@ -664,7 +664,7 @@ the payoff is at the interop boundary, which is not.
 
 ## Versions
 
-clotran is `1.0.0-rc.1`: the release candidate of 1.0, which is the
+clotran is `1.0.0-rc.2`: the release candidate of 1.0, which is the
 language and nothing else -- the binary, its image, core and the
 libraries vendored from Clojure, the launcher and, beside it,
 `clotran-deps` (`PLAN.md` step 35). It runs Clojure **1.12.6**: the
