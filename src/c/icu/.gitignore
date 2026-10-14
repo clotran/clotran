@@ -12,13 +12,13 @@ Makefile
 *.1
 lib/
 bin/
-data/out/
-data/build-local
-data/packagedata
-data/icupkg.inc
-data/rules.mk
-data/tmp/
-test/testdata/rules.mk
+source/data/out/
+source/data/build-local
+source/data/packagedata
+source/data/icupkg.inc
+source/data/rules.mk
+source/data/tmp/
+source/test/testdata/rules.mk
 
 # Per-directory build outputs (stubdata/libicudata.a,
 # tools/ctestfw/libicutest.a and similar) -- *.a anywhere in this tree
@@ -28,3 +28,11 @@ test/testdata/rules.mk
 # The Makefile's stamp that ICU is built: committed once, it told every
 # fresh checkout ICU was built when its libraries were not there
 source/.built
+
+# configure's outputs from their .in templates, and Windows's (MinGW)
+# shared libraries and tools -- these six were committed with the tree
+# once, so a build anywhere they came out differently read as a change
+source/config/Makefile.inc
+source/config/icu.pc
+*.dll
+*.exe

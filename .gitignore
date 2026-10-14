@@ -3,6 +3,7 @@
 .\#*
 /build/
 /clotran-bin
+/clotran-bin.exe
 /.claude/
 /packages/*/lib*.dylib
 /packages/*/lib*.so
