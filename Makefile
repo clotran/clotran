@@ -862,6 +862,10 @@ dist: clotran-bin $(B)/fc
 	rm -rf $(B)/dist
 	$(MAKE) install PREFIX=$(CURDIR)/$(B)/dist/$(DIST_NAME)
 	scripts/dist-bundle $(B)/dist/$(DIST_NAME)
+	@# what built it: a release rebuilt later is checked against this
+	{ echo "clotran $$(cat VERSION)"; echo "commit $(or $(DIST_COMMIT),$$(git describe --always --abbrev=40 --dirty=+tree --exclude="*" 2>/dev/null))"; \
+	  echo "compiler $$($(FC) --version | head -1)"; echo "machine $$(uname -sm)"; \
+	  [ -z "$(DIST_BASE)" ] || echo "image $(DIST_BASE)"; } > $(B)/dist/$(DIST_NAME)/lib/clotran/BUILDINFO
 	cd $(B)/dist && $(DIST_PACK)
 	@echo "dist: $(B)/dist/$(DIST_NAME)"
 

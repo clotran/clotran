@@ -24,6 +24,16 @@
 (def work (str (fs/create-temp-dir {:prefix "dist-linux"})))
 (def platform ({"aarch64" "linux/arm64" "x86_64" "linux/amd64"} arch))
 (def image (str "clotran-dist-" arch (when (= libc "musl") "-musl")))
+;; the build machines, by digest: a release rebuilt later starts from
+;; the same image (the musl one's FROM carries its own)
+(def base ({["aarch64" "glibc"] "quay.io/pypa/manylinux_2_28_aarch64@sha256:abd1230aa9e4058a74b89d27cd14ba18c0db036d7bfe6e6f219a29ea63c24eb6"
+            ["x86_64" "glibc"] "quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae"
+            ["aarch64" "musl"] "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
+            ["x86_64" "musl"] "alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"}
+           [arch libc]))
+;; what BUILDINFO names: the commit, and whether the working tree's files were built instead
+(def commit (str (str/trim (:out (p/shell {:dir repo :out :string} "git" "rev-parse" "HEAD")))
+                 (when (and tree? (seq (str/trim (:out (p/shell {:dir repo :out :string} "git" "status" "--porcelain"))))) "+tree")))
 (when-not (and platform (#{"glibc" "musl"} libc))
   (println "usage: scripts/dist-linux [--tree] [aarch64|x86_64] [glibc|musl] -- not" arch libc)
   (System/exit 2))
@@ -40,7 +50,7 @@
                                               ["-cf" out "-T" lst]))))
 
 (apply p/shell "docker" "build" "-q" "--platform" platform "-t" image
-         (concat (when (= libc "glibc") ["--build-arg" (str "BASE=quay.io/pypa/manylinux_2_28_" arch)])
+         (concat (when (= libc "glibc") ["--build-arg" (str "BASE=" base)])
                  ["-f" (str repo "/packaging/linux/Dockerfile" (when (= libc "musl") ".musl")) (str repo "/packaging/linux")]))
 (if tree?
   (tree-tar repo (str work "/src.tar"))
@@ -48,7 +58,7 @@
 (p/shell {:dir deps} "sh" "-c" (str "git archive --format=tar --prefix=clotran-deps/ HEAD > " work "/deps.tar"))
 (p/shell "docker" "run" "--rm" "--platform" platform "-v" (str work ":/w") image "bash" "-c"
          (str "cd / && tar xf /w/deps.tar && cd /src && tar xf /w/src.tar "
-              "&& make -j$(nproc) dist CLOTRAN_DEPS=/clotran-deps > /w/build.log 2>&1 "
+              "&& make -j$(nproc) dist CLOTRAN_DEPS=/clotran-deps DIST_COMMIT=" commit " DIST_BASE=" base " > /w/build.log 2>&1 "
               "|| { tail -40 /w/build.log; exit 1; }; cp build/dist/*.tar.gz /w/"))
 (fs/create-dirs (str repo "/build/dist"))
 (doseq [t (fs/glob work "*.tar.gz")]

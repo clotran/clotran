@@ -8,7 +8,7 @@
 # flang-19 initializes every gc_value local through its runtime, which
 # made clotran 5x slower than under 23 and lost compiler-check's race on
 # x86_64. The Clojure CLI is the macOS gate's too, 1.12.0.1479.
-FROM debian:trixie
+FROM debian:trixie@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 ARG ARCH=aarch64
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 PATH=/opt/jdk/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
