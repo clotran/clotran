@@ -17,7 +17,8 @@
 ;; with a double (70, the quotient Fortran takes); the smallest
 ;; subnormal (27, its printing); a BigDecimal with a 30-digit BigInt, or
 ;; bigdec of a ratio (43 again); a ratio, BigInt or BigDecimal
-;; unchecked-subtract the smallest long (72, clj wraps its negation).
+;; unchecked-subtract the smallest long (72, clj wraps its negation); min
+;; or max of two double zeros (76, clj's primitive overload orders them).
 (require '[clojure.test.check.generators :as g]
          '[clojure.string :as str]
          '[babashka.fs :as fs]
@@ -70,7 +71,8 @@
                                                            (and (dbl? a) (ratio? b)) (and (ratio? a) (dbl? b))
                                                            (and (dec? a) (wide? b)) (and (wide? a) (dec? b))
                                                            (and (= o '/) (or (dec? a) (dec? b)))
-                                                           (and (= o 'unchecked-subtract) (instance? Lit a) (= b -9223372036854775808))))))
+                                                           (and (= o 'unchecked-subtract) (instance? Lit a) (= b -9223372036854775808))
+                                                           (and (#{'min 'max} o) (dbl? a) (dbl? b) (zero? a) (zero? b))))))
                                   (g/tuple (g/elements binary) g-num g-num) 100))
              (g/fmap (fn [[o a b]] (list o a b)) (g/tuple (g/elements binary-int) g-int-num (g/choose 0 63)))
              (g/fmap (fn [[o a]] (list o a))
