@@ -3,6 +3,13 @@
 ;; modes (make test, check-fuzz), and the VM's (CLOTRAN_VM=1). Add a
 ;; shrunk form here with each fix.
 [
+ ;; reader conditionals read as LispReader.read reads them (scripts/fuzz-read,
+ ;; seeds 1, 10000 and 40000): what follows the chosen branch is read past
+ ;; unchecked, a #?@ where one form is wanted gives its first and leaves
+ ;; the rest pending, a map pairs what a splice gave it, and a feature that
+ ;; is not a keyword is named by its toString (a message less the position
+ ;; tree and compiled modes add, as scripts/fuzz-read compares it)
+ (mapv #(try (read-string {:read-cond :allow :features #{:zz}} %) (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))) ["[#?@(:yy (0) :zz [1 \" \"]λ :default ())]" "[#?(:zz \"\" ':cljs #js {} :default 2)]" "[@#?@(:zz [a b])]" "[#?(yy 1)]" "[#?(:yy #?@(:zz [1 #\"[^\\s]\"]))]" "{:a #?@(:zz [1 :b 2])}" "[#_ #?@(:zz [a b]) c]" "['#?(:cljs 1) x]" "[#?(:else 2)]"])
  ;; syntax-quote keeps the metadata of a symbol it leaves as read -- a
  ;; special form, a qualified name, a.b -- and drops it from one it
  ;; resolves or rebuilds, as LispReader.syntaxQuote (scripts/fuzz-read)

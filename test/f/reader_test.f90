@@ -181,10 +181,16 @@ contains
     call ok("7k. ...and a good number clears the error: ", .not. gcr_has_error())
   end subroutine check_invalid_numbers
 
-  ! #? and #?@. The feature is :cljf; :clj is clj. DEVIATIONS 33.
+  ! #? and #?@. The feature is :cljf; :clj is clj. Read only where
+  ! allowed: a .cljc, or read-string's {:read-cond :allow}.
   subroutine check_reader_conditionals()
     type(gc_value) :: v
+    logical :: was
+    character(len=:), allocatable :: wasf
     call gc_init(512)
+    v = gcr_read("#?(:cljf 2)", no_roots)
+    call ok("9-. not allowed unless asked for: ", gcr_has_error())
+    call gcr_set_read_cond(.true., "", was, wasf)
     call round("9a. #? keeps the :cljf branch: ", "#?(:clj 1 :cljf 2)", "2")
     call round("9b. ...or :default: ", "#?(:clj 1 :default 3)", "3")
     call round("9c. :clj is clj's branch, not ours: ", "(a #?(:clj 1) b)", "(a b)")
@@ -206,6 +212,9 @@ contains
     v = gcr_read("#?@(:cljf 1)", no_roots)
     call ok("9o. a splice needs a collection: ", gcr_has_error())
     call round("9p. ...and a good form clears the error: ", "#?(:cljf 7)", "7")
+    call gcr_set_read_cond(.true., "zz", was, wasf)
+    call round("9q. a claimed :features name is selected: ", "#?(:clj 1 :zz 8)", "8")
+    call gcr_set_read_cond(.false., "", was, wasf)
   end subroutine check_reader_conditionals
 
   subroutine check_errors()

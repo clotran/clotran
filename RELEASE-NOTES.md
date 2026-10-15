@@ -17,7 +17,7 @@ change.
   load beside it, and `clojure.spec.alpha` is consulted before every
   macro expansion, as Clojure's compiler does.
 - **Measured against Clojure itself.** `clj` 1.12.6 is the oracle for
-  every behaviour: 1,331 forms run through both, 1,309 agreeing and 22
+  every behaviour: 1,332 forms run through both, 1,310 agreeing and 22
   differing as their DEVIATIONS entries say they must, none otherwise. Clojure's own test suite, derived
   to the language that clj and ClojureScript share: 39 namespaces, 312
   tests, 2,719 assertions, every one passing and every namespace run.
@@ -28,10 +28,10 @@ change.
   and is a DEVIATIONS entry.
 - **Every place it differs is written down.** `DEVIATIONS.md` names each
   difference, why, and what removing it would take, with its kind:
-  81 entries, 41 resolved and kept as the record, 29 by design, 6 forced
-  by the host, 4 staying through 1.0 by decision (48, 51, 54, 74). One
-  is open for a decision: entry 33, reader
-  conditionals read in every file rather than only in `.cljc`.
+  81 entries, 41 resolved and kept as the record, 30 by design, 6 forced
+  by the host, 4 staying through 1.0 by decision (48, 51, 54, 74), and
+  none open. Reader conditionals are read as clj reads them: only in a
+  `.cljc` file, or by `read-string` given `{:read-cond :allow}` (entry 33).
 - **Fortran underneath, on purpose.** Arrays are Fortran arrays a
   library takes as they are; a package is a shared library opened at run
   time, its shims written by `scripts/bind-fortran` from the library's

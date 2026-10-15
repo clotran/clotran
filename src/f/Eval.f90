@@ -15897,16 +15897,48 @@ contains
          end if
        end block
     case (B_READSTRING)
+       ! (RT/readString s opts): #? only under {:read-cond :allow}, its
+       ! :features claimed beside :cljf (LispReader.checkConditionalAllowed,
+       ! hasFeature). :preserve is not here (DEVIATIONS 33).
        block
-         type(gc_value) :: sv
+         type(gc_value) :: sv, opts, rc, fv, item
+         logical :: allow, was_allow, preserve
+         character(len=:), allocatable :: feats, was_feats, kt
+         integer :: i
          sv = strip_meta(gcv_nth(args, 0))
+         allow = .false.
+         preserve = .false.
+         feats = ""
+         if (gcv_count(args) > 1) then
+            opts = strip_meta(gcv_nth(args, 1))
+            rc = gca_get(opts, gc_key("read-cond", [vs_get(vst, base + 1)]))
+            if (rc%tag == GCT_KEY) then
+               allow = gc_ref_is(rc%ref, "allow")
+               preserve = gc_ref_is(rc%ref, "preserve")
+            end if
+            fv = gca_get(opts, gc_key("features", [vs_get(vst, base + 1)]))
+            if (fv%tag /= GCT_NIL) then
+               fv = coll_to_vector(fv, [vs_get(vst, base + 1)])
+               do i = 1, gcv_count(fv)
+                  item = gcv_nth(fv, i - 1)
+                  if (item%tag == GCT_KEY) then
+                     call gc_ref_text(item%ref, s=kt)
+                     feats = feats // " " // kt
+                  end if
+               end do
+            end if
+         end if
          if (sv%tag /= GCT_STR) then
             call fail("read-string wants a string")
+         else if (preserve) then
+            call fail("read-string: :read-cond :preserve is not supported (DEVIATIONS 33)")
          else
+            call gcr_set_read_cond(allow, feats, was_allow, was_feats)
             block
                call gc_ref_text(sv%ref, s=dlt_1)
                out = gcr_read(dlt_1, [vs_get(vst, base + 1)])
             end block
+            call gcr_set_read_cond(was_allow, was_feats, allow, feats)
             if (gcr_has_error()) then
                block
                   call fail_read()

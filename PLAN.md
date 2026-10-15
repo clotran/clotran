@@ -5319,7 +5319,8 @@ hash fields read as immutable) and item 2's residual, both fixed. What
 remains before 1.0.0, in order:
 
 - the ledger's table names every entry's kind -- DONE 2026-10-12:
-  host, design, 1.x, or resolved; 33 is open for James.
+  host, design, 1.x, or resolved; 33, open for James, was decided
+  2026-10-15: reader conditionals only in `.cljc`, as clj.
 - **Linux** -- DONE 2026-10-12 for aarch64: `scripts/gate-linux` runs the
   gate in Debian 13 (EXIT 0, both compilers), and `scripts/dist-linux`
   builds a relocatable tarball on glibc 2.28 (manylinux_2_28) with

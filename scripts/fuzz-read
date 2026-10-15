@@ -81,7 +81,14 @@
                   (g/fmap (fn [[m n x]] (str "^" m " ^" n " " x)) (g/tuple (g/one-of [g-kw g-sym (g/return "{:a 1}")]) (g/one-of [g-kw g-sym (g/return "{:a 2 :b 3}")]) inner))
                   (g/fmap #(str "#(" % " %1 %&)") items)
                   (g/fmap #(str "#uuid \"" % "\"") (g/elements ["6a2f41a3-c54c-fce8-32d2-0324e1c32e22" "zz"]))
-                  (g/fmap #(str % " ; a comment\n") inner)])))
+                  (g/fmap #(str % " ; a comment\n") inner)
+                  ;; reader conditionals, read under {:read-cond :allow} with :zz
+                  ;; claimed, and :clj and :cljf so that both sides claim the same
+                  ;; set: the first branch whose feature is claimed wins, an
+                  ;; unselected one is read past, #js and all, #?@ splices
+                  (g/fmap (fn [[a b]] (str "#?(:zz " a " :cljs #js {} :default " b ")")) (g/tuple inner inner))
+                  (g/fmap (fn [[k x]] (str "#?(" k " " x ")")) (g/tuple (g/elements [":default" ":zz" ":cljs" ":yy"]) inner))
+                  (g/fmap #(str "#?@(:yy (0) :zz [" % "] :default ())") items)])))
    g-atom))
 
 ;; ---- mutations ----------------------------------------------------------------
@@ -118,7 +125,7 @@
         :else (pr-str x))))
 (defn fz-read [i s]
   (println (str \"FZ \" i \" \"
-    (try (fz-canon (binding [*read-eval* false] (read-string (str \"[\" s \"\\n]\"))))
+    (try (fz-canon (binding [*read-eval* false] (read-string {:read-cond :allow :features #{:zz :clj :cljf}} (str \"[\" s \"\\n]\"))))
          (catch Throwable t
            (let [m (str (.getMessage t)) k (.indexOf m \"  at \")]
              (str \"!error \" (.getName (class t)) \": \" (if (neg? k) m (subs m 0 k)))))))))
@@ -180,9 +187,6 @@
     (go (vec (range n)))
     (let [uuid-refused? (fn [i w gv] (or (and (re-find #"#\s*uuid" (nth texts i))
                                               (some #(str/starts-with? (str %) "!error") [w gv]))
-                                         ;; DEVIATIONS 33: a reader conditional is read in every
-                                         ;; file here; clj refuses one outside a .cljc file
-                                         (str/includes? (str w) "Conditional read not allowed")
                                          ;; DEVIATIONS 14: ICU's dialect refuses or takes
                                          ;; a pattern clj's host does not
                                          (some #(str/includes? (str %) "pattern_syntax_exception") [w gv])

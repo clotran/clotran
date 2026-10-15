@@ -59,7 +59,7 @@ Categories:
 | 30 | RESOLVED -- BigDecimal, except for rounding | -- | -- |
 | 31 | RESOLVED -- stack traces | -- | -- |
 | 32 | RESOLVED for a user's code -- a qualified symbol that does not resolve is refused when analysed | -- | -- |
-| 33 | Reader conditionals are read in every file, and `.cljf` is a source extension | open (James) | -- |
+| 33 | `.cljf` is a source extension, found before `.cljc` and `.clj`; reader conditionals RESOLVED, only in `.cljc` | design | `src/f/LispReader.f90` |
 | 34 | RESOLVED -- a class is a value of its own kind | -- | -- |
 | 35 | RESOLVED -- an unrealised seq hashed by identity, so it was not found as a map key | -- | -- |
 | 36 | RESOLVED -- `binding` refuses a Var not declared `^:dynamic` | -- | -- |
@@ -1343,38 +1343,42 @@ context". (`resolve_var` no longer creates a namespace to look in.)
 accept the form as-is; the honest end state is that `slurp` is defined
 in terms of a host reader clotran supplies.
 
-## 33. Reader conditionals are read in every file, and `.cljf` is a source extension
+## 33. `.cljf` is a source extension, found before `.cljc` and `.clj`
 
-Clojure reads `#?(...)` and `#?@(...)` only from a `.cljc` file, or
-when `read` is handed `{:read-cond :allow}`; in a `.clj` file the form
-is an error, "Conditional read not allowed". clotran reads them in
-every file.
+**Reader conditionals: RESOLVED 2026-10-15.** They were read in every
+file; now, as in clj, `#?(...)` and `#?@(...)` are read only from a
+`.cljc` file, or by `read` and `read-string` given `{:read-cond
+:allow}` -- anywhere else, the REPL included, they are "Conditional
+read not allowed" (LispReader.checkConditionalAllowed). ClojureScript
+draws the same line (`cljs.analyzer/forms-seq*` allows them only when
+the extension is `cljc`), so a `.cljf` file, clotran's own, does not
+read them either: the conditional is for a file meant to run on more
+than one host.
 
-The feature it claims is `:cljf`, after the extension, alongside
-`:default`. `:clj` is clj and is not claimed, so a `.cljc` library
-ported here gets a `:cljf` branch wherever it had a `:clj` one, and
-that is the whole port. A branch nobody selects is read under the
-equivalent of `*suppress-read*` and dropped, so a `:cljs` branch may
-hold `#js {}`; a selected branch has no data readers and an unknown
-tag there fails by name, as before. `:read-cond :preserve` does not
-exist here.
+The feature claimed is `:cljf`, after the extension, alongside
+`:default` and whatever `:features` adds. `:clj` is clj and is not
+claimed, so a `.cljc` library ported here gets a `:cljf` branch wherever
+it had a `:clj` one, and that is the whole port. The reading itself is
+LispReader's, found out by `scripts/fuzz-read` and checked against clj
+case by case: once a branch is chosen, everything after it is read past
+unchecked; a feature that is not a keyword is "Feature should be a
+keyword", and `:else` and `:none` are reserved; a branch nobody selects
+is read under the equivalent of `*suppress-read*`, so a `:cljs` branch
+may hold `#js {}`; and a `#?@` where one form is wanted -- after `'`,
+`@`, `^`, `#_` -- gives its first form and leaves the rest pending for
+whatever reads next, as LispReader's pendingForms do, so `[@#?@(:x [a
+b])]` is `[(deref a) b]`.
 
-`require` and `load` look for `name.cljf`, then `name.cljc`, then
-`name.clj`, on each classpath root in turn. `RT.load` prefers `.clj`
-to `.cljc`; here the portable file is the one with a chance of
-loading, so it wins.
+What still differs:
 
-**Removal**: tie the allowance to the extension as Clojure does, so
-`#?` in a `.clj` errors. Nothing depends on the leniency; it exists so
-a `.clj` being ported can be edited in place before it is renamed.
-
-**Open, for James (2026-10-12):** keep the leniency by design, or
-remove it for 1.0. Removing it touches three readers -- the Fortran
-reader's every entry (`read-string` and `read` honouring `:read-cond`,
-a file's by its extension, the REPL allowing), and `clotran.io`'s
-stream reader, which reads `#?` in Clojure -- and `:read-cond
-:preserve` (ReaderConditional values) would be its own piece. It only
-ever accepts text clj refuses; no program clj runs reads differently.
+- `require` and `load` look for `name.cljf`, then `name.cljc`, then
+  `name.clj`, on each classpath root in turn. `RT.load` prefers `.clj`
+  to `.cljc`; here the portable file is the one with a chance of
+  loading, so it wins. By design.
+- `:read-cond :preserve`, which reads a conditional as a
+  ReaderConditional value instead of choosing a branch, is refused by
+  name rather than read. **Removal**: a `reader-conditional` value from
+  the reader, which `core_print.cljf` already knows how to print.
 
 ## 34. RESOLVED -- a class is a value of its own kind
 

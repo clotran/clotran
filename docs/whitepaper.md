@@ -294,7 +294,7 @@ beside it in one binary, which `clotran build` makes.
 | measure | value |
 |---|---|
 | core.clj | 719 of 719 top-level forms load, from the `clojure-1.12.6` release |
-| our tests | 100% on gfortran and flang, the commit gate; 1331 forms run through `clj` and clotran and their values compared: 1309 agree, 22 differ as their DEVIATIONS entries say they must, 0 otherwise |
+| our tests | 100% on gfortran and flang, the commit gate; 1332 forms run through `clj` and clotran and their values compared: 1310 agree, 22 differ as their DEVIATIONS entries say they must, 0 otherwise |
 | derived language suite | 312 tests in 39 namespaces: 2719 assertions pass, 0 fail, 0 error |
 | Clojure's own library tests | set, walk, string, math, pprint verbatim: 1009 assertions, 1001 pass, 8 fail as expected (each tests clj's host) |
 | libraries loading | 25 of the 30 library namespaces Clojure ships |

@@ -144,13 +144,16 @@
 
 ;;; ---- reader conditionals ------------------------------------------
 
-;; The feature is :cljf. A branch nobody selects is read and dropped, so
-;; the :cljs one may hold #js. This file is .clj and the conditional is
-;; still read: clotran reads #? in every file (DEVIATIONS 33).
+;; Only a .cljc reads them, as in clj, and the feature there is :cljf.
+;; read-string's {:read-cond :allow} is in the oracle, against clj.
 
-(check "reader conditional" #?(:clj :clj-side :cljs #js {} :cljf :fortran) :fortran)
-(check "reader conditional splice" [1 #?@(:cljf [2 3]) 4] [1 2 3 4])
-#?(:cljs (this-form-is-never-read))
+(load-file "test/clj/reader_cond_sample.cljc")
+(check "reader conditional" rc-pick :fortran)
+(check "reader conditional splice" rc-splice [1 2 3 4])
+(check "a .clj may not read one"
+       (try (load-string "#?(:cljf 1)") (catch clotran.host.throwable e
+                                           (some? (re-find #"Conditional read not allowed" (ex-message e)))))
+       true)
 
 ;;; ---- deftype ----------------------------------------------------
 

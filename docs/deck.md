@@ -145,7 +145,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 |---|---|
 | core.clj | 719 / 719 forms load |
 | our tests | 100% on gfortran **and** flang -- the gate |
-| oracle vs real Clojure | 1331 forms: 1309 agree, 22 differ as recorded, 0 unexpected |
+| oracle vs real Clojure | 1332 forms: 1310 agree, 22 differ as recorded, 0 unexpected |
 | derived language suite | 2719 / 2719 assertions |
 | clojuredocs.org examples | 1233 / 1264 portable agree (97.5%, scored 2026-09-27) |
 | deviations | 81 recorded, 41 resolved, none unrecorded |

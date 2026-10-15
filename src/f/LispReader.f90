@@ -38,7 +38,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error, gcr_error_class
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
-  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_current_file, gcr_set_sq_expander, gcr_set_eval_reader
+  public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_set_read_cond, gcr_current_file, gcr_set_sq_expander, gcr_set_eval_reader
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 
   ! ::x is resolved at READ time against the current namespace, and
@@ -102,6 +102,7 @@ module LispReader
   type :: src_file
      character(len=512) :: name = ""
      integer, allocatable :: line_starts(:)
+     logical :: read_cond = .false.   ! a .cljc: #? is read (Compiler.load)
   end type src_file
   type(src_file), save :: files(MAX_FILES)
   integer, save :: n_files = 0
@@ -130,6 +131,14 @@ module LispReader
      ! tagged literal there is read past rather than resolved, which is
      ! what *suppress-read* does, so a :cljs branch may hold #js {}.
      logical :: suppress_read = .false.
+     ! Whether #? may be read at all -- LispReader.checkConditionalAllowed.
+     ! rc_file is the file's (a .cljc), rc_allow read-string's {:read-cond
+     ! :allow}, and rc_features its :features, blank-separated.
+     logical :: rc_file = .false., rc_allow = .false.
+     character(len=:), allocatable :: rc_features
+     ! the forms a #?@ left where one form was wanted (pending_push)
+     integer :: n_pending = 0
+     type(gc_root) :: pending
      ! When on, #tag form READS as a marker map instead of failing --
      ! {:clotran/tagged-literal true :tag t :form f}, the same shape
      ! `tagged-literal` builds. The reader cannot apply a data reader
@@ -287,6 +296,9 @@ contains
        files(n_files)%name = rel
        rdx%cur_file = n_files
     end if
+    rdx%rc_file = len(rel) >= 5
+    if (rdx%rc_file) rdx%rc_file = rel(len(rel) - 4:) == ".cljc"
+    if (rdx%cur_file > 0) files(rdx%cur_file)%read_cond = rdx%rc_file
     call gc_state_unlock()
     fid = rdx%cur_file
     if (rdx%cur_file == 0) return
@@ -320,18 +332,26 @@ contains
     type(gc_value) :: v
     rdx => rd_self()
     rdx%cur_file = fid
+    if (fid > 0) rdx%rc_file = files(fid)%read_cond
     rdx%has_error = .false.
     rdx%in_anon = .false.
     rdx%last_error = ""
     eof = .false.
     v = gc_nil()
+    call pending_clear()
     do
        call skip_ignorables(text, pos, roots)
+       if (rdx%has_error) return
+       if (rdx%n_pending > 0) then
+          v = pending_pop()
+          return
+       end if
        if (pos > len(text)) then
           eof = .true.
           return
        end if
-       v = read_form(text, pos, roots)
+       v = read_form1(text, pos, roots)
+       call pending_clear()
        if (rdx%has_error) return
        if (rdx%rc_splice) then
           rdx%rc_splice = .false.
@@ -405,9 +425,18 @@ contains
     rdx%in_anon = .false.
     rdx%last_error = ""
     rdx%cur_file = 0
+    rdx%rc_file = .false.
     pos = 1
+    call pending_clear()
     do
-       v = read_form(text, pos, roots)
+       call skip_ignorables(text, pos, roots)
+       if (rdx%has_error) return
+       if (rdx%n_pending > 0) then
+          v = pending_pop()
+          return
+       end if
+       v = read_form1(text, pos, roots)
+       call pending_clear()
        if (rdx%has_error) return
        if (rdx%rc_splice) then
           rdx%rc_splice = .false.
@@ -444,10 +473,17 @@ contains
     base = vs_enter(1)
     v = gcv_empty(roots)
     call vs_set(base + 1, v)
+    call pending_clear()
     do
        call skip_ignorables(text, pos, [vs_get(base + 1)])
+       if (rdx%has_error) exit
+       if (rdx%n_pending > 0) then
+          call vs_set(base + 1, gcv_conj(vs_get(base + 1), pending_pop(), roots))
+          cycle
+       end if
        if (pos > len(text)) exit
-       form = read_form(text, pos, [vs_get(base + 1)])
+       form = read_form1(text, pos, [vs_get(base + 1)])
+       call pending_clear()
        if (rdx%has_error) exit
        if (rdx%rc_splice) then
           rdx%rc_splice = .false.
@@ -634,7 +670,110 @@ contains
 
   ! ---- forms ----
 
+  ! The next form, as LispReader.read hands it over: a form a splice left
+  ! pending first, then the text's, a conditional that chose nothing
+  ! skipped and a splice's forms queued. done when the text reaches
+  ! closer instead; achar(0) is none, and an unmatched closer is then
+  ! read_form1's error.
+  recursive function read_next(text, pos, closer, roots, done) result(v)
+    type(rd_state), pointer :: rdx
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    character, intent(in) :: closer
+    type(gc_value), intent(in) :: roots(:)
+    logical, intent(out) :: done
+    type(gc_value) :: v
+    rdx => rd_self()
+    done = .false.
+    v = gc_nil()
+    do
+       if (rdx%n_pending > 0) then
+          v = pending_pop()
+          return
+       end if
+       call skip_ignorables(text, pos, roots)
+       if (rdx%has_error) return
+       if (rdx%n_pending > 0) cycle
+       if (pos > len(text)) then
+          call fail("EOF while reading")
+          return
+       end if
+       if (text(pos:pos) == closer) then
+          pos = pos + 1
+          done = .true.
+          return
+       end if
+       v = read_form1(text, pos, roots)
+       if (rdx%has_error) return
+       if (rdx%rc_nothing) then
+          rdx%rc_nothing = .false.
+       else if (rdx%rc_splice) then
+          rdx%rc_splice = .false.
+          call pending_push(v, roots)
+       else
+          return
+       end if
+    end do
+  end function read_next
+
+  ! One form where exactly one is wanted -- after ', ^, @, #' and the
+  ! rest, and what #_ discards.
   recursive function read_form(text, pos, roots) result(v)
+    character(len=*), intent(in) :: text
+    integer, intent(inout) :: pos
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    logical :: done
+    v = read_next(text, pos, achar(0), roots, done)
+  end function read_form
+
+  ! The forms a #?@ left over where one form was wanted, for whatever
+  ! reads next (LispReader's pendingForms): a list in a global root,
+  ! emptied at each top-level read.
+  subroutine pending_push(coll, roots)
+    type(rd_state), pointer :: rdx
+    type(gc_value), intent(in) :: coll
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: p
+    integer :: base, i
+    rdx => rd_self()
+    base = vs_enter(2)
+    call vs_set(base + 1, splice_into(gcv_empty([roots, coll]), coll, [roots, coll]))
+    p = gc_nil()
+    if (rdx%n_pending > 0) p = gc_root_get(rdx%pending)
+    call vs_set(base + 2, p)
+    do i = gcv_count(vs_get(base + 1)) - 1, 0, -1
+       p = gcl_cons(gcv_nth(vs_get(base + 1), i), vs_get(base + 2), [roots, vs_get(base + 1), vs_get(base + 2)])
+       call vs_set(base + 2, p)
+    end do
+    call gc_global_keep(rdx%pending, vs_get(base + 2))
+    rdx%n_pending = rdx%n_pending + gcv_count(vs_get(base + 1))
+    call vs_leave(base)
+  end subroutine pending_push
+
+  function pending_pop() result(v)
+    type(rd_state), pointer :: rdx
+    type(gc_value) :: v, p
+    integer :: base
+    rdx => rd_self()
+    p = gc_root_get(rdx%pending)
+    base = vs_enter(1)
+    call vs_set(base + 1, gcl_first(p))
+    call gc_global_keep(rdx%pending, gcl_rest(p, [vs_get(base + 1)]))
+    rdx%n_pending = rdx%n_pending - 1
+    v = vs_get(base + 1)
+    call vs_leave(base)
+  end function pending_pop
+
+  subroutine pending_clear()
+    type(rd_state), pointer :: rdx
+    rdx => rd_self()
+    if (rdx%n_pending == 0) return
+    rdx%n_pending = 0
+    call gc_global_keep(rdx%pending, gc_nil())
+  end subroutine pending_clear
+
+  recursive function read_form1(text, pos, roots) result(v)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
@@ -716,7 +855,7 @@ contains
           v = read_atom(text, pos, roots)
        end if
     end select
-  end function read_form
+  end function read_form1
 
   ! Like a string, but backslashes stay literal: a pattern writes
   ! \\d meaning the two characters, not an escape.
@@ -1192,6 +1331,23 @@ contains
 
   ! Turns #tag markers on or off, and answers what it was, so the
   ! caller can restore it.
+  ! read-string's :read-cond and :features, set around its read and put
+  ! back after: allow is {:read-cond :allow}, features the extra feature
+  ! names blank-separated. Answers what they were.
+  subroutine gcr_set_read_cond(allow, features, was_allow, was_features)
+    type(rd_state), pointer :: rdx
+    logical, intent(in) :: allow
+    character(len=*), intent(in) :: features
+    logical, intent(out) :: was_allow
+    character(len=:), allocatable, intent(out) :: was_features
+    rdx => rd_self()
+    was_allow = rdx%rc_allow
+    was_features = ""
+    if (allocated(rdx%rc_features)) was_features = rdx%rc_features
+    rdx%rc_allow = allow
+    rdx%rc_features = features
+  end subroutine gcr_set_read_cond
+
   logical function gcr_set_tag_markers(on) result(was)
     type(rd_state), pointer :: rdx
     logical, intent(in) :: on
@@ -1208,18 +1364,24 @@ contains
   ! and that is the port. Branches are read in order, the first whose
   ! feature matches is kept, and every other branch is read under
   ! suppress_read and dropped -- LispReader.readCondDelimited, without
-  ! the :preserve mode. DEVIATIONS 33.
+  ! the :preserve mode (DEVIATIONS 33). Only a .cljc file, or read-string
+  ! given {:read-cond :allow}, may read one at all.
   recursive function read_cond(text, pos, roots) result(v)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text
     integer, intent(inout) :: pos
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, k, val
-    logical :: splicing, chosen, match, saved, chosen_nothing
+    logical :: splicing, chosen, match, saved, done
     integer :: base
+    character(len=:), allocatable :: kt
 
     rdx => rd_self()
     v = gc_nil()
+    if (.not. (rdx%rc_file .or. rdx%rc_allow)) then
+       call fail("Conditional read not allowed")
+       return
+    end if
     rdx%rc_nothing = .false.
     rdx%rc_splice = .false.
     splicing = .false.
@@ -1242,51 +1404,52 @@ contains
     base = vs_enter(1)
     call vs_set(base + 1, gc_nil())
     chosen = .false.
-    chosen_nothing = .false.
+    ! readCondDelimited's loop: a feature, and its form when the feature
+    ! is claimed; then one form read past. Once a branch is chosen, every
+    ! form after it is read past with nothing checked.
     do
-       call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
-       if (rdx%has_error) exit
-       if (pos > len(text)) then
-          call fail("EOF while reading")
-          exit
+       if (.not. chosen) then
+          k = read_next(text, pos, ")", [roots, vs_get(base + 1)], done)
+          if (rdx%has_error .or. done) exit
+          if (k%tag /= GCT_KEY) then
+             ! its toString, as clj's message has it: a pattern's is its source
+             if (gc_kind(k) == OBJ_REGEX) then
+                call gcp_str(gc_slot(k, 1), .false., s=kt)
+             else
+                call gcp_str(k, .false., s=kt)
+             end if
+             call fail("Feature should be a keyword: " // kt)
+             exit
+          end if
+          if (gc_ref_is(k%ref, "else") .or. gc_ref_is(k%ref, "none")) then
+             call gc_ref_text(k%ref, s=kt)
+             call fail("Feature name :" // kt // " is reserved.")
+             exit
+          end if
+          match = gc_ref_is(k%ref, "cljf") .or. gc_ref_is(k%ref, "default")
+          if (.not. match .and. allocated(rdx%rc_features)) then
+             call gc_ref_text(k%ref, s=kt)
+             match = index(" " // rdx%rc_features // " ", " " // kt // " ") > 0
+          end if
+          if (match) then
+             val = read_next(text, pos, ")", [roots, vs_get(base + 1)], done)
+             if (rdx%has_error) exit
+             if (done) then
+                call fail("read-cond requires an even number of forms.")
+                exit
+             end if
+             chosen = .true.
+             call vs_set(base + 1, val)
+          end if
        end if
-       if (text(pos:pos) == ")") then
-          pos = pos + 1
-          exit
-       end if
-       k = read_form(text, pos, [roots, vs_get(base + 1)])
-       if (rdx%has_error) exit
-       if (k%tag /= GCT_KEY) then
-          call fail("read-cond: feature must be a keyword")
-          exit
-       end if
-       call skip_ignorables(text, pos, [roots, vs_get(base + 1)])
-       if (rdx%has_error) exit
-       if (pos > len(text)) then
-          call fail("EOF while reading")
-          exit
-       end if
-       if (text(pos:pos) == ")") then
-          call fail("read-cond requires an even number of forms")
-          exit
-       end if
-       match = (.not. chosen) .and. &
-            (gc_ref_is(k%ref, "cljf") .or. gc_ref_is(k%ref, "default"))
        saved = rdx%suppress_read
-       rdx%suppress_read = saved .or. .not. match
-       val = read_form(text, pos, [roots, vs_get(base + 1)])
+       rdx%suppress_read = .true.
+       val = read_next(text, pos, ")", [roots, vs_get(base + 1)], done)
        rdx%suppress_read = saved
-       if (rdx%has_error) exit
-       if (match) then
-          chosen = .true.
-          chosen_nothing = rdx%rc_nothing
-          if (.not. rdx%rc_nothing) call vs_set(base + 1, val)
-       end if
-       rdx%rc_nothing = .false.
-       rdx%rc_splice = .false.
+       if (rdx%has_error .or. done) exit
     end do
     if (.not. rdx%has_error) then
-       if (.not. chosen .or. chosen_nothing) then
+       if (.not. chosen) then
           rdx%rc_nothing = .true.
        else
           v = vs_get(base + 1)
@@ -1325,42 +1488,6 @@ contains
     out = vs_get(base + 1)
     call vs_leave(base)
   end function splice_into
-
-  ! #?@ inside a map literal: the spliced collection is key value pairs.
-  function splice_pairs(m, coll, roots) result(out)
-    type(gc_value), intent(in) :: m, coll
-    type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, items
-    integer :: base, i
-    out = m
-    base = vs_enter(2)
-    call vs_set(base + 1, m)
-    items = splice_into(gcv_empty(roots), coll, [roots, vs_get(base + 1)])
-    call vs_set(base + 2, items)
-    if (mod(gcv_count(vs_get(base + 2)), 2) /= 0) then
-       call fail("Map literal must contain an even number of forms")
-    else
-       do i = 0, gcv_count(vs_get(base + 2)) - 1, 2
-          call vs_set(base + 1, gca_assoc(vs_get(base + 1), gcv_nth(vs_get(base + 2), i), &
-               gcv_nth(vs_get(base + 2), i + 1), roots))
-       end do
-       out = vs_get(base + 1)
-    end if
-    call vs_leave(base)
-  end function splice_pairs
-
-  ! A conditional that produced no form, or a splice, where exactly one
-  ! form is required -- after ', ^, @, #' and the rest.
-  logical function cond_leaked()
-    type(rd_state), pointer :: rdx
-    rdx => rd_self()
-    cond_leaked = rdx%rc_nothing .or. rdx%rc_splice
-    if (cond_leaked) then
-       rdx%rc_nothing = .false.
-       rdx%rc_splice = .false.
-       call fail("reader conditional did not produce a form here")
-    end if
-  end function cond_leaked
 
 
   ! ##Inf, ##-Inf and ##NaN -- the symbolic values. They have no
@@ -1461,9 +1588,6 @@ contains
     if (rdx%has_error) then
        call vs_leave(base); return
     end if
-    if (cond_leaked()) then
-       call vs_leave(base); return
-    end if
     ! metadata on the metadata (^^:a x y) is the inner form's own: x is
     ! still a symbol, so a :tag -- whose value is x as read, its own
     ! metadata kept, as MetaReader keeps it
@@ -1506,9 +1630,6 @@ contains
 
     form = read_form(text, pos, roots)
     if (rdx%has_error) then
-       call vs_leave(base); return
-    end if
-    if (cond_leaked()) then
        call vs_leave(base); return
     end if
     call vs_set(base + 2, form)
@@ -1589,7 +1710,6 @@ contains
     end if
     inner = read_form(text, pos, roots)
     if (rdx%has_error) return
-    if (cond_leaked()) return
     if (rdx%suppress_read) return
     call eval_reader(.false., inner, with(roots, inner), v, err, cls)
     if (len(err) > 0) then
@@ -1610,7 +1730,6 @@ contains
     v = gc_nil()
     inner = read_form(text, pos, roots)
     if (rdx%has_error) return
-    if (cond_leaked()) return
     call sq_expander(inner, with(roots, inner), v, err, cls)
     if (len(err) > 0) then
        call fail(err, cls)
@@ -1631,7 +1750,6 @@ contains
     v = gc_nil()
     inner = read_form(text, pos, roots)
     if (rdx%has_error) return
-    if (cond_leaked()) return
     r2 = with(roots, inner)
     sym = gc_sym(name, r2)
     r2 = with(r2, sym)
@@ -1654,32 +1772,16 @@ contains
     type(gc_value) :: v, acc, item
     type(gc_value), allocatable :: r2(:)
     integer :: i
+    logical :: done
 
     rdx => rd_self()
     v = gc_nil()
     acc = gcv_empty(roots)
     do
        r2 = with(roots, acc)
-       call skip_ignorables(text, pos, r2)
-       if (pos > len(text)) then
-          call fail("EOF while reading")
-          return
-       end if
-       if (text(pos:pos) == closer) then
-          pos = pos + 1
-          exit
-       end if
-       item = read_form(text, pos, r2)
+       item = read_next(text, pos, closer, r2, done)
        if (rdx%has_error) return
-       if (rdx%rc_nothing) then
-          rdx%rc_nothing = .false.
-          cycle
-       end if
-       if (rdx%rc_splice) then
-          rdx%rc_splice = .false.
-          acc = splice_into(acc, item, roots)
-          cycle
-       end if
+       if (done) exit
        acc = gcv_conj(acc, item, with(r2, item))
     end do
 
@@ -1704,7 +1806,7 @@ contains
     type(gc_value), allocatable :: r2(:)
     integer :: kp, ke
     character(len=:), allocatable :: odd, dup
-    logical :: has_dup
+    logical :: has_dup, done
 
     rdx => rd_self()
     odd = "Map literal must contain an even number of forms"
@@ -1715,48 +1817,22 @@ contains
     v = gca_empty(roots)
     do
        r2 = with(roots, v)
-       call skip_ignorables(text, pos, r2)
-       if (pos > len(text)) then
-          call fail("EOF while reading")
-          return
-       end if
-       if (text(pos:pos) == "}") then
-          pos = pos + 1
+       if (rdx%n_pending == 0) call skip_ignorables(text, pos, r2)
+       if (rdx%has_error) return
+       kp = pos
+       k = read_next(text, pos, "}", r2, done)
+       if (rdx%has_error) return
+       if (done) then
           ! a key twice is refused once the map is read through, as clj
           ! reads every form before createWithCheck: an error after it
           ! in the map comes first
           if (has_dup) call fail("Duplicate key: " // dup, "clotran.host.illegal_argument_exception")
           return
        end if
-       kp = pos
-       k = read_form(text, pos, r2)
-       if (rdx%has_error) return
        ke = pos - 1
-       if (rdx%rc_nothing) then
-          rdx%rc_nothing = .false.
-          cycle
-       end if
-       if (rdx%rc_splice) then
-          rdx%rc_splice = .false.
-          v = splice_pairs(v, k, r2)
-          if (rdx%has_error) return
-          cycle
-       end if
-       call skip_ignorables(text, pos, r2)
-       if (pos > len(text)) then
-          ! the end before the } is the end, not an odd count
-          call fail("EOF while reading")
-          return
-       end if
-       if (text(pos:pos) == "}") then
-          call fail(odd)
-          return
-       end if
-       val = read_form(text, pos, with(r2, k))
+       val = read_next(text, pos, "}", with(r2, k), done)
        if (rdx%has_error) return
-       if (rdx%rc_nothing .or. rdx%rc_splice) then
-          rdx%rc_nothing = .false.
-          rdx%rc_splice = .false.
+       if (done) then
           call fail(odd)
           return
        end if
