@@ -9,7 +9,7 @@ belongs in SEAMS.md instead.
 
 **Reference**: `~/jborden/clojure` -- a clone of `clojure/clojure` at
 `clojure-1.12.6` (`31a3138a`) -- the SAME release as the vendored core.clj (see
-src/clj/clojure/PROVENANCE.md). Paths below are relative to it. Cite the file and the method;
+upstream/clojure/src/clj/clojure/PROVENANCE.md). Paths below are relative to it. Cite the file and the method;
 do not cite memory. That is the whole point of having the clone.
 
 Categories:
@@ -44,7 +44,7 @@ Categories:
 | 15 | RESOLVED -- `gc_hash` is Util.hasheq, bit for bit | -- | `src/f/GC.f90` |
 | 16 | RESOLVED -- names resolve while analysing | -- | `src/f/analyze.inc` |
 | 17 | RESOLVED -- a deftype's short name is imported per namespace | -- | -- |
-| 18 | A deftype instance prints with clotran's identity and text | design | -- |
+| 18 | A host object -- a deftype instance, a fn, a namespace -- prints with clotran's identity and text | design | -- |
 | 19 | RESOLVED -- `recur` in a deftype method leaves out `this` | -- | -- |
 | 20 | RESOLVED -- mutable deftype fields are honoured | -- | -- |
 | 21 | RESOLVED -- `pr` of a namespace shows its name, not an `#object[...]` form | -- | -- |
@@ -740,7 +740,7 @@ fully-qualified name is never ambiguous. Measured:
 It goes away when namespaces carry an import table, which is the same
 place `clojure.core/import` would have to write.
 
-## 18. A deftype instance prints with clotran's identity and text
+## 18. A host object -- a deftype instance, a fn, a namespace -- prints with clotran's identity and text
 
 Clojure prints one as `#object[user.Point 0x4a2e1f "user.Point@4a2e1f"]`.
 clotran prints `#object[user.Point 0x3b214 "#object[user.Point]"]`
@@ -750,6 +750,13 @@ inside, which in clj is `Object.toString`'s `class@hash` and here is
 the printer's own form. By design: the text of a host object is the
 host's, and nothing reads it back. Two distinct instances print
 distinctly, which is what this entry once lacked.
+
+The same for every host object: a function prints as
+`#object[user$fn 0xf6a8 "#<fn>"]` where clj prints
+`#object[user$eval1$fn__135 0x49d98dc5 "user$eval1$fn__135@49d98dc5"]`,
+and a namespace as `#object[clotran.host.namespace 0x8 "clojure.core"]`
+(measured 2026-10-14). `scripts/oracle` records these as expected
+differences under this entry.
 
 ## 19. RESOLVED -- `recur` in a deftype method leaves out `this`
 
@@ -837,8 +844,8 @@ the collector does not move). `(pr-str *ns*)` is now
 `#object[Namespace 0x3 "user"]`, an atom prints as
 `#object[Atom 0x.. {:status :ready, :val 1}]`, and the
 number after `0x` is the one thing that still differs from clj.
-A function still prints as `#<fn>`: deviation 23. The original entry
-follows.
+A function prints as `#object[user$fn 0x.. "#<fn>"]`; what differs
+is the text inside, entry 18. The original entry follows.
 
 Clojure separates two things about a Namespace, and clotran can only
 reproduce one of them:
@@ -874,12 +881,9 @@ that `(pr-str *ns*)` does not round-trip through `read`, which the
 (2026-10-10: `(pr-str (P. 1))` is `#object[user.P 0x3b214 ...]`);
 what stays is the text inside the form, the host's, as entry 18 says.
 
-The same holds for every other host object: a function prints as
-`#<fn>`, a namespace as `#<ns user>`, where Clojure prints
-`#object[user$eval1$fn__2 0x1a2b "user$eval1$fn__2@1a2b"]`. There is
-no class name to report and no stable address (deviation 18), and
-nothing reads the form back. `scripts/oracle` records these as
-expected differences.
+The same held for every other host object; since 2026-10-10 each
+prints as an `#object[...]` with an identity, and only the text inside
+differs (entry 18).
 
 ## 22. RESOLVED -- collections as keys hash and compare structurally
 
@@ -2014,7 +2018,8 @@ In clj `(vec an-object-array)` shares the array
 (`LazilyPersistentVector.createOwning`), so an `aset` afterwards shows
 in the vector; `(sort an-array)` and `(sort-by f an-array)` sort the
 array in place; `(to-array an-object-array)` is the array itself,
-`identical?` to it. Here each makes a copy, as ClojureScript does.
+`identical?` to it. Here each makes a copy -- as ClojureScript does for `sort` and
+`to-array`; its `vec` aliases an array, as clj's does (entry 63).
 Checked with clj 2026-09-28 (clojuredocs `vec#example1`,
 `sort-by#example5`, `to-array#example1`).
 

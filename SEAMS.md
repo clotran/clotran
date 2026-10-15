@@ -9,7 +9,7 @@ ledgers is how you end up defending an accident.
 **References**, both pinned clones, both to be cited rather than recalled:
 
 - `~/jborden/clojure` at `clojure-1.12.6` -- the same commit as our vendored
-  core.clj (src/clj/clojure/PROVENANCE.md). This is what we must satisfy.
+  core.clj (upstream/clojure/src/clj/clojure/PROVENANCE.md). This is what we must satisfy.
 - `~/jborden/clojurescript` at `r1.12.145` -- a second implementation of the
   same language on a completely different host. This is what tells us which
   parts of the first one were ever really the language.
@@ -22,18 +22,18 @@ Two implementations of one language, counted:
 
 |                          | core.clj | core.cljs |
 |--------------------------|---------:|----------:|
-| lines                    |    8,371 |    13,193 |
-| host references          |      578 clj's runtime classes + 115 clj's host library | 208 `js/` |
-| ...of which are throws   |        - | 131 `js/Error` |
+| lines                    |    8,233 |    13,148 |
+| host references          |      578 clj's runtime classes + 115 clj's host library | 206 `js/` |
+| ...of which are throws   |        - | 129 `js/Error` |
 | distinct host classes    |       81 |       ~20 |
 | `deftype`                |        1 |        87 |
-| `defprotocol`            |        1 |        60 |
+| `defprotocol`            |        1 |        59 |
 
-core.cljs is 58% larger while touching its host roughly three times less.
+core.cljs is 60% larger while touching its host roughly three times less.
 
 (The `deftype` and `defprotocol` rows read 1, not 0: `(deftype Eduction
-...)` at core.clj:8016 -- the form that was the wall -- and
-`(defprotocol Inst)` at core.clj:7038 are both real. The point the rows
+...)` at core.clj:7878 -- the form that was the wall -- and
+`(defprotocol Inst)` at core.clj:6913 are both real. The point the rows
 make is unchanged, two against 147, but see bucket A-bis below for why
 the ratio does not mean what it looks like.)
 
@@ -234,14 +234,19 @@ form, including one typed at a REPL prompt, goes
     read -> Compiler.analyze -> emit clj bytecode -> load class -> invoke
 
 `Compiler.eval` does exactly that and nothing else. ClojureScript is a
-compiler too, to JavaScript, and `cljs.analyzer` is 5,185 lines of Clojure
+compiler too, to JavaScript, and `cljs.analyzer` is 5,165 lines of Clojure
 doing the same job.
 
-clotran is a tree-walking interpreter. It is the odd one out, and that is
+clotran began as a tree-walking interpreter (it has a bytecode VM and
+an ahead-of-time compiler now). It was the odd one out, and that is
 the deepest seam in the project -- deeper than Fortran-versus-clj, because
 it changes *when* things are known, not just what they are written in.
 
 ### What that costs, concretely
+
+*The record of 2026-09-18. Resolved 2026-09-19: `analyze.inc` resolves
+names lexically, at analysis time, in the writing namespace (DEVIATIONS
+16). Kept for the reasoning.*
 
 Both real implementations resolve names **lexically, at analysis time**:
 
@@ -287,6 +292,10 @@ asking at the wrong time.**
 ---
 
 ## The vocabulary problem: we speak clj, and we are not clj
+
+*Resolved: clj's names now appear only in `upstream/`, and
+`upstream/check-names`, in the gate, keeps them out of everything else
+(DEVIATIONS 67). The counts below are the 2026-09 record.*
 
 Counted in `src/f`: **59 distinct clj's runtime classes names and 29 distinct
 clj's host library names**, as string literals in Fortran. `is_host_class` is a
@@ -390,8 +399,8 @@ lower bounds are per dimension, and the buffer they produce can be
 handed to `dgemm`. Borrowing Clojure's names would have said they were
 the same thing.
 
-Clojure's own `aget`/`alength` remain unimplemented over these, which is
-a separate decision: those route through `RT/alength` and
+Clojure's own `make-array`/`aget`/`alength` now run over the same
+representation (README; DEVIATIONS 24, 25). That was a separate decision: those route through `RT/alength` and
 `Reflector/prepRet`, and making them work is compatibility, not
 interop. Worth 23 errors in Clojure's suite -- `RT/alength` (14) and
 `RT/seqToTypedArray` (9) -- and not the same job as this.

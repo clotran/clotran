@@ -137,7 +137,7 @@
 (str (the-ns (quote clojure.core)))
 
 ;; str of a namespace nested
-(expect-diff "DEVIATIONS 21: a host object prints as #<kind ...>, not #object[...]")
+(expect-diff "DEVIATIONS 18: a host object's class name and the text inside #object[...] are clotran's")
 (str [(the-ns (quote clojure.core))])
 
 ;; lazy seq = vector
@@ -664,15 +664,15 @@
 [(aget cdbl 0) (aget cdbl 1)]
 
 ;; print a function
-(expect-diff "DEVIATIONS 21: a function prints as #<fn>")
+(expect-diff "DEVIATIONS 18: a function's class name and the text inside #object[...] are clotran's")
 (pr-str (fn [x] x))
 
 ;; a function in a vector
-(expect-diff "DEVIATIONS 21: a function prints as #<fn>")
+(expect-diff "DEVIATIONS 18: a function's class name and the text inside #object[...] are clotran's")
 (pr-str [1 (fn [x] x) 2])
 
 ;; str of a function
-(expect-diff "DEVIATIONS 21: a function prints as #<fn>")
+(expect-diff "DEVIATIONS 18: a function's class name and the text inside #object[...] are clotran's")
 (str (fn [x] x))
 
 ;; heterogeneous vector
@@ -1213,7 +1213,7 @@
 (vec (into-array clotran.host.string ["a" "b"]))
 
 ;; an empty stack trace
-(expect-diff "DEVIATIONS 31: stack traces are empty until PLAN.md step 5 gives the evaluator frames")
+(expect-diff "DEVIATIONS 31: no frames for builtins or the host, so a throwable made at top level has none")
 (alength (.getStackTrace (clotran.host.exception. "x")))
 
 ;; Throwable->map
@@ -2262,7 +2262,7 @@
 (loop [i 0 acc 1N] (if (< i 25) (recur (inc i) (* acc (inc i))) acc))
 ;; a BigInt remainder makes a Ratio of BigInts (DEVIATIONS 26, closed 2026-10-01)
 (try (/ 99999999999999999999N 7) (catch clotran.host.arithmetic_exception e :no-big-ratio))
-(expect-diff "DEVIATIONS 30: one big integer type, so biginteger answers a BigInt and prints 1N")
+(expect-diff "DEVIATIONS 26: one big integer type, so biginteger answers a BigInt and prints 1N")
 (pr-str (biginteger 1))
 [(nth [10 20 30] 1N) (get [10 20 30] 1N) (subs "abcd" 1N 3N) (take 2N [1 2 3 4]) (repeat 2N :x) (nthrest [1 2 3] 1N) (abs -123N) (abs 5N) (= (range 1N 4N) (range 1 4))]
 [(try (bit-and 3N 1) (catch clotran.host.illegal_argument_exception e :not-supported)) (try (bit-shift-left 1N 2) (catch clotran.host.illegal_argument_exception e :not-supported)) (bit-and 3 1)]
