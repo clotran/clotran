@@ -1,21 +1,24 @@
 ---
 title: "clotran: Clojure, hosted on Fortran"
 subtitle: "White paper and north star"
-date: 2026-09-27
+date: 2026-10-14
 ---
 
 ## The one-sentence version
 
-clotran runs Rich Hickey's `clojure/core.clj` -- the file, unmodified --
-on a host written in Fortran, where the JVM normally stands. Clojure's
-data structures, macros, protocols, lazy sequences and transducers come
-from Clojure's own source; the host supplies memory, arrays, the reader,
-the evaluator and the door to Fortran libraries. There is one binary,
-no JVM, no Python, and a Fortran routine is an ordinary call.
+clotran runs Rich Hickey's `clojure/core.clj` -- the file from the
+`clojure-1.12.6` release, every class written in clotran's name by a
+mechanical rewrite -- on a host written in Fortran, where the JVM
+normally stands. Clojure's data structures, macros, protocols, lazy
+sequences and transducers come from Clojure's own source; the host
+supplies memory, arrays, the reader, the evaluator and the door to
+Fortran libraries. There is one binary, no JVM, no Python, and a
+Fortran routine is an ordinary call.
 
 Everything in this paper is either measured or marked as not yet built.
-The measured numbers are from `scripts/bench`, `scripts/oracle`,
-`scripts/clojuredocs` and the derived language suite, on 2026-09-27.
+The numbers are those of the 1.0 release candidate, from `scripts/oracle`,
+`scripts/bench` and the derived language suite (README, RELEASE-NOTES);
+where one is older, its date is given.
 
 ## Why this exists
 
@@ -31,7 +34,7 @@ locks. On the JVM it cannot reach a Fortran array without a foreign
 function layer and a copy. On a Fortran host, a clotran array *is* a
 Fortran array, and calling `dgemm` on it is a function call.
 
-## Where we started
+## The four goals
 
 Before the scenarios there were four goals, in order, and they still
 decide what work counts:
@@ -41,19 +44,22 @@ decide what work counts:
    line was ChemSol, a computational-chemistry program whose Fortran
    main is replaced by clotran code and reproduces its output byte for
    byte -- done.
-2. **A better way to debug Fortran.** Frame-based stack analysis and
-   live inspection of Fortran values, over a representation the host
-   defines. gdb cannot do this: an allocatable's bounds, status and
-   dynamic type live in a compiler-private descriptor DWARF describes
-   only indirectly and late.
+2. **A better way to debug Fortran.** Live inspection of values over a
+   representation the host defines -- what gdb cannot give, since an
+   allocatable's bounds, status and dynamic type live in a
+   compiler-private descriptor. Today: `(clotran-break)` pauses and
+   hands over the paused state as data, a map of frames and their
+   locals by name, with step-in, step-over and step-out.
 3. **A multi-threaded story.** Clojure's model: immutable values,
-   atoms, refs, agents, STM.
-4. **Compilation**, ahead of time and per namespace, to Fortran --
-   which is also what lets clotran code be transpiled.
+   atoms, refs, agents, STM -- on real OS threads.
+4. **Compilation**, ahead of time and per namespace, to Fortran:
+   `clotran compile` for a namespace, `--pure` for a Fortran module that
+   needs no runtime at all, and `clotran build` for one executable.
 
 The principle under them: the pure Clojure language is reproduced in
 full; the JVM is an implementation detail this implementation does not
-have. No `java.*` is modelled beyond what core.clj itself reaches for.
+have. No class of the JVM's is modelled beyond what core.clj itself
+reaches for, and those carry clotran's own names.
 
 ### Why host on Fortran rather than bridge to it
 
@@ -74,14 +80,14 @@ the callee at the same address.
 - **HPC** -- one shape at every scale: split the data, compute each
   piece locally, combine with an associative function. `do concurrent`
   in one loop, threads in one process, coarrays across machines
-  (parked until it earns its keep across machines; PACKAGES.md).
+  (parked until it earns its keep; PACKAGES.md).
 - **Binary data** -- real byte, short and char arrays with Clojure's
   signed semantics and bit operations, for instrument data, encryption
-  and protocols. "Binary analysis is key to scientific software."
-- **Reproducible numerics** -- `repro`: binned summation after Demmel
-  and Nguyen, as in ReproBLAS, so a sum is the same bits on one thread
-  or four hundred. Explicit by design; plain `reduce` stays serial and
-  bit-identical to Clojure.
+  and protocols.
+- **Reproducible numerics** -- `repro`, planned: binned summation after
+  Demmel and Nguyen, as in ReproBLAS, so a sum is the same bits on one
+  thread or four hundred. Explicit by design; plain `reduce` stays
+  serial and bit-identical to Clojure (PACKAGES.md).
 - **Linear algebra** -- `packages/blas`, `dgemm` on clotran arrays
   without a copy.
 
@@ -106,26 +112,26 @@ no copy and no bridge.
 - Fortran libraries are **packages**: shared libraries the unchanged
   binary opens at run time (`packages/blas`, `packages/chemsol`).
   `scripts/bind-fortran` writes the binding from a library's own
-  signatures. `examples/chemsol.cljf` replaces a Fortran main program
-  and reproduces its output byte for byte on three reference inputs.
+  signatures, free-form or F77. `examples/chemsol.cljf` replaces a
+  Fortran main program and reproduces its output byte for byte.
 - Arrays are Fortran arrays: `double`, `long`, `int`, `float`, `boolean`,
   `byte`, `short`, `char` and object arrays, multi-dimensional through
   `make-array`, with Clojure's `aget`/`aset` semantics checked value by
-  value against Clojure (`test/clj/oracle.clj`). Byte and short arrays
-  are one and two bytes an element, for binary data.
+  value against Clojure.
 - Immutable data, the seq library and transducers are core.clj's, so
-  they are Clojure's -- 2880 of 2880 assertions in the derived language
-  suite, 97.5% of clojuredocs.org's portable examples agreeing with
-  real Clojure.
-- Threads: a future runs on a thread of its own beside its maker
-  (PLAN.md 14f, 2026-09-26); an agent's actions run in order on a
-  thread of the agent's own; `dosync` is a transaction -- a log, a
-  commit that validates then writes, watches notified -- with
-  transactions serialized under one lock, which is a valid STM
-  schedule without the retries (DEVIATIONS 10); a send inside an
-  action or a transaction is held until it ends, as the JVM holds it.
-  Not yet: a thread pool for agents, parallel marking in the collector.
-- Not there: sockets and streaming network input.
+  they are Clojure's: 2719 of 2719 assertions in the derived language
+  suite pass.
+- Projects are Clojure projects: a `deps.edn`, `clotran new`, `clotran
+  test`, and `clotran-deps` to fetch libraries pinned by git sha.
+- Threads: a future runs on an OS thread of its own; an agent's actions
+  run in order on a pool of worker threads with work stealing, designed
+  and proved in ACL2 before it was written (`model/agents.lisp`);
+  `dosync` is a transaction with a log and a commit, transactions
+  serialized under one lock -- a valid STM schedule without the retries
+  (DEVIATIONS 10).
+- The network: TCP sockets (`clotran.net`) and a socket REPL
+  (`clotran.server`).
+- Not there: parallel marking in the collector.
 
 ### B. Dynamic scripting for legacy solvers
 
@@ -140,21 +146,19 @@ Fortran runtime.
 
 - The REPL drives package routines directly: load a library, call its
   routines with clotran arrays, inspect the results, change a value,
-  call again. ChemSol is exactly this shape today.
-- The runtime has a C ABI (`src/f/ClotranABI.f90`) through which
-  compiled code and packages reach the heap, and `examples/embed` is a
-  Fortran program embedding it: a heat solver that owns `main` and its
-  time loop, links the runtime in, loads core.clj and takes its control
-  strategy from Clojure -- the initial condition, a source switched on
-  mid-run, the stopping rule -- on the solver's own grid. Fortran
-  integrates `u(:)` in place and Clojure's `aget`/`aset` read and write
-  the same buffer; nothing is copied. `make test` runs it under both
-  compilers and diffs its output.
-- Text files: `slurp`, `spit`, `line-seq`, `clojure.java.io` for text;
-  a namelist reader would be a small library on top.
-- Not there: a REPL socket into the running program, so the strategy
-  can be changed from outside while it runs; today the program
-  evaluates the forms it is given.
+  call again. ChemSol is exactly this shape.
+- The runtime has a C ABI (`src/f/ClotranABI.f90`), and `examples/embed`
+  is a Fortran program embedding it: a heat solver that owns `main` and
+  its time loop, links the runtime in, and takes its control strategy
+  from Clojure -- the initial condition, a source switched on mid-run,
+  the stopping rule -- on the solver's own grid. Fortran integrates
+  `u(:)` in place and Clojure's `aget`/`aset` read and write the same
+  buffer; nothing is copied.
+- A REPL into the running solver: the same program serves a socket
+  REPL, and a connection made mid-run reads the live grid, writes into
+  it and stops the run (`scripts/embed-repl-check`, in the gate).
+- Text files: `slurp`, `spit`, `line-seq`, readers and writers; a
+  namelist reader would be a small library on top.
 
 ### C. High-throughput financial modelling
 
@@ -168,19 +172,22 @@ numerical engines: lean, fast, deterministic binaries.
 *Where we stand.*
 
 - Compilation is ahead of time, per namespace, on request (`clotran
-  compile`): 528 of core.clj's 529 defns compile; compiled calls are
-  faster than interpreted ones (a small-fn loop 182 to 19 ms). What the
-  generator does not yet emit -- closures, `lazy-seq`, `try`, `case`,
-  protocol dispatch -- is handed to the interpreter (PLAN.md step 12).
+  compile`). A numeric function -- loops, arithmetic, arrays, fused
+  `map`/`filter`/`reduce` chains -- lowers to pure Fortran: the loops
+  `scripts/bench` times run in 1.0 to 3.7 ms compiled, where a warmed
+  clj takes 13 to 17.
+- `clotran build` makes one executable of a program: no clotran
+  installed and no sources where it runs, starting in about 0.2 s.
 - One binary, no runtime dependency: ICU is vendored and built from
   source; packages are pinned by sha256; no system package manager.
+  Release builds come from builder images pinned by digest, and each
+  carries a record of what built it.
 - Determinism: `packages/repro`, reproducible floating-point
   reductions, is planned (PACKAGES.md).
-- Speed today, interpreted: 23x to 514x slower than a warmed JVM
-  depending on the form (`scripts/bench`), the honest number for an
-  AST interpreter; the compiler is how that closes.
-- Not there: standalone linked binaries (step 12's direction), Kafka
-  or any network client.
+- Speed of general code, interpreted: 2x to 17x slower than a warmed
+  clj (`scripts/bench`, 2026-10-12) -- core itself still runs
+  interpreted, and compiling it is the work that closes the gap.
+- Not there: Kafka or any message-queue client.
 
 ### D. Domain-specific languages for scientists
 
@@ -194,15 +201,16 @@ compiles down to clean, vectorizable Fortran.
 *Where we stand.*
 
 - The macro system is Clojure's own -- `defmacro`, syntax-quote,
-  `clojure.spec` consulted at every expansion, as the JVM Compiler does.
-  A DSL written for Clojure runs here unchanged.
-- The compiler's pure-Fortran tier (PLAN.md step 13) is the path from a
-  typed form to Fortran that has no heap value in it, with warnings
-  that say what stopped a form reaching that tier.
+  `clojure.spec` consulted at every expansion, as Clojure's compiler
+  does. A DSL written for Clojure runs here unchanged.
+- The pure-Fortran tier is the path from a typed form to Fortran with
+  no heap value in it: `clotran compile --pure` writes an ordinary
+  Fortran module any Fortran program can `use`, and `--report` says
+  what stopped a form reaching that tier. `scripts/pure-check` runs
+  every case through `clj`, gfortran and flang and compares.
 - `fortran/make-array` and typed array hints exist; a matrix DSL over
   them would be a library.
-- Not there: the vectorizable tier itself, and `do concurrent`
-  emission (step 11's first stage).
+- Not there: `do concurrent` emission.
 
 ## The landscape: Fortran software by domain, and how it is driven
 
@@ -271,8 +279,7 @@ rather than a parser over text; the code becomes a package whose arrays
 cross at the same address; the constitutive model is developed at a REPL
 against real arrays and compiled to Fortran for the solver; the legacy
 financial model stays where it is with a compiled Clojure namespace
-beside it in one binary. What is not there yet -- sockets, standalone
-linked binaries -- is on the road in PLAN.md.
+beside it in one binary, which `clotran build` makes.
 
 ### Sources
 
@@ -286,36 +293,39 @@ linked binaries -- is on the road in PLAN.md.
 
 | measure | value |
 |---|---|
-| core.clj | 724 of 724 forms load, unmodified, pinned to `71b4623d` |
-| our tests | 100% on gfortran and flang, the commit gate; 1039 oracle forms value-compared against `clj`, 0 unexpected differences |
-| derived language suite | 2880 pass / 0 fail / 0 error over 321 tests |
-| clojuredocs.org examples | 1233 of 1264 portable examples agree with real Clojure (97.5%) |
-| Clojure's own library tests | set, walk, string, math, pprint verbatim: 859 assertions, 0 failures |
-| libraries loading | 35 of 40 vendored namespaces `require` |
-| deviations | 57 recorded in DEVIATIONS.md, 18 resolved; every known difference has an entry |
-| startup | 0.2 s from the heap image (`make image`); 1.4 s from source; 125 MB resident |
-| speed | 23x to 514x the JVM's time, interpreted |
+| core.clj | 719 of 719 top-level forms load, from the `clojure-1.12.6` release |
+| our tests | 100% on gfortran and flang, the commit gate; 1331 forms run through `clj` and clotran and their values compared: 1309 agree, 22 differ as their DEVIATIONS entries say they must, 0 otherwise |
+| derived language suite | 312 tests in 39 namespaces: 2719 assertions pass, 0 fail, 0 error |
+| Clojure's own library tests | set, walk, string, math, pprint verbatim: 1009 assertions, 1001 pass, 8 fail as expected (each tests clj's host) |
+| libraries loading | 25 of the 30 library namespaces Clojure ships |
+| clojuredocs.org examples | 1233 of 1264 portable examples agree with real Clojure (97.5%; scored 2026-09-27, not since) |
+| deviations | 81 entries in DEVIATIONS.md, 41 resolved; every known difference has one |
+| platforms | macOS arm64; Linux aarch64 and x86_64, glibc 2.28 and on, and musl; Windows 10 and on, x86_64 -- each release tarball tested where nothing else is installed |
+| startup | 0.17 s from the heap image; about 0.9 s from source; 140 MB resident |
+| speed | interpreted, 2x to 17x a warmed clj on general code and 35x to 209x on numeric loops; those loops compiled to pure Fortran, 1.0 to 3.7 ms against clj's 13 to 17 |
 
-The denominators matter: "portable" excludes examples that name a Java
-class; the language suite is the clojure.core/cljs.core intersection;
-a pass rate is over assertions that executed.
+The denominators matter: the language suite is the clojure.core/cljs.core
+intersection, a pass rate is over assertions that executed, and
+"portable" excludes examples that name a clj class.
 
 ## The road
 
-1. **The test suites.** The clojuredocs suite to 100% of portable
-   examples: known deviations, then performance (constant-space lazy
-   walks, `count` of a range in O(1)), then the long tail.
-2. **Threads.** Futures, agents and transactions run as Clojure means
-   them (PLAN.md step 14, landed 2026-09-26 and 2026-09-28). What is
-   left is speed: parallel marking in the collector, a thread pool
-   for agents, and the collector's pauses measured with many threads.
-3. **Everything else works.** The compiler's remaining node kinds, the
-   pure-Fortran tier, standalone binaries, sockets, a REPL socket into an embedding
-   example -- each weighed against the four scenarios.
+1.0 is the language as the smallest package -- the binary, its image,
+core and the libraries Clojure vendors, the launcher and `clotran-deps`
+-- and from here each step is weighed against the four scenarios:
+
+1. **Interop beyond the F77 subset.** Derived types, `optional` and
+   pointer dummies are listed by `bind-fortran` today, not bound.
+2. **Speed.** Compiling core itself, so general code stops paying the
+   interpreter's price; parallel marking in the collector.
+3. **Tooling.** Editor support -- an LSP, VS Code -- and installers for
+   each platform's package manager.
+4. **The packages.** `repro` for reproducible reductions, a matrix DSL,
+   plotting and a GUI as Clojure libraries over the host.
 
 ## What clotran is not
 
 Not a Clojure-like language: the language is Clojure's source. Not a
-Fortran-to-Clojure translator. Not a JVM emulator: matching Java's
-classes is not the goal, and `SEAMS.md` records which parts of
-`clojure.lang.*` are the language and which are Java showing through.
+Fortran-to-Clojure translator. Not a JVM emulator: matching the JVM's
+classes is not the goal, and `SEAMS.md` records which parts of Clojure's
+runtime are the language and which are its host showing through.
