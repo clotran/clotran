@@ -2,7 +2,7 @@
 ;; Runs examples/chemsol.cljf on ChemSol's three reference inputs and
 ;; diffs the output against the original program's, byte for byte.
 ;;
-;;   scripts/chemsol-check [chemsol-tests-dir]   default ~/jborden/chemsol/tests
+;;   scripts/chemsol-check [chemsol-tests-dir]   default ../chemsol/tests
 ;;
 ;; Each input runs in its own clotran process (the library's random
 ;; generator is module state), from the repo root. solvout appends to cs.arc in the
@@ -16,7 +16,7 @@
 
 (def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
 (def tests (fs/file (or (first *command-line-args*)
-                        (str (System/getProperty "user.home") "/jborden/chemsol/tests"))))
+                        (str (babashka.fs/parent (babashka.fs/parent (babashka.fs/parent (babashka.fs/canonicalize *file*)))) "/chemsol/tests"))))
 
 (defn run-one [n]
   (let [driver (fs/create-temp-file {:prefix "chemsol-check" :suffix ".clj"})

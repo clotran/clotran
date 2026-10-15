@@ -24,7 +24,7 @@
          "-f" (str repo "/packaging/linux/Dockerfile.gate") (str repo "/packaging/linux"))
 (p/shell {:dir repo} "sh" "-c" (str "git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf " work "/src.tar"))
 ;; clotran-deps beside it, read-only, where scripts/fuzz-deps looks
-(def deps (or (System/getenv "CLOTRAN_DEPS") (str (fs/home) "/jborden/clotran-deps")))
+(def deps (or (System/getenv "CLOTRAN_DEPS") (str (babashka.fs/parent (babashka.fs/parent (babashka.fs/parent (babashka.fs/canonicalize *file*)))) "/clotran-deps")))
 (apply p/shell {:continue true} "docker" "run" "--rm" "-v" (str work ":/w") "-v" "clotran-m2:/root/.m2"
        (concat (when (fs/exists? deps) ["-v" (str deps ":/root/jborden/clotran-deps:ro")])
                ["clotran-gate" "bash" "-c"

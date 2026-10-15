@@ -4,8 +4,8 @@
 library (Arieh Warshel, Jan Florian, James Borden), copied verbatim on
 2026-09-19 from
 
-    ~/jborden/chemsol/src/chemsol.f90
-    ~/jborden/chemsol/src/push_array.f90
+    ../chemsol/src/chemsol.f90
+    ../chemsol/src/push_array.f90
 
 Do not edit them. `main.f90` from the same directory is deliberately
 NOT here: replacing it with clotran code is the point (PLAN.md step 7),
@@ -13,7 +13,7 @@ and `examples/chemsol.cljf` is that replacement. `src/f/ChemSolBind.f90` is
 the binding, ours.
 
 The reference outputs the driver is checked against are
-`~/jborden/chemsol/tests/test{1,2,3}_main.out`, produced by the
+`../chemsol/tests/test{1,2,3}_main.out`, produced by the
 original program. On this machine the original program only builds
 with `gfortran -std=legacy` (a FORMAT in main.f90 lacks a comma and
 libgfortran 16 rejects it at run time) and then reproduces those files

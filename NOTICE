@@ -42,5 +42,5 @@ unmodified; see src/f/blas/PROVENANCE.md.
 ## ChemSol -- src/f/chemsol/
 
 chemsol.f90 and push_array.f90 are ChemSol 2.1 (Arieh Warshel, Jan
-Florian, James Borden), vendored unmodified from ~/jborden/chemsol;
+Florian, James Borden), vendored unmodified from the ChemSol sources;
 see src/f/chemsol/PROVENANCE.md.

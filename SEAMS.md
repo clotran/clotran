@@ -8,9 +8,9 @@ ledgers is how you end up defending an accident.
 
 **References**, both pinned clones, both to be cited rather than recalled:
 
-- `~/jborden/clojure` at `clojure-1.12.6` -- the same commit as our vendored
+- `../clojure` at `clojure-1.12.6` -- the same commit as our vendored
   core.clj (upstream/clojure/src/clj/clojure/PROVENANCE.md). This is what we must satisfy.
-- `~/jborden/clojurescript` at `r1.12.145` -- a second implementation of the
+- `../clojurescript` at `r1.12.145` -- a second implementation of the
   same language on a completely different host. This is what tells us which
   parts of the first one were ever really the language.
 

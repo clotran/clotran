@@ -99,7 +99,7 @@
 
 ;; ---- the model's verdicts ----------------------------------------------
 
-(def acl2 (or (System/getenv "ACL2") (str (System/getenv "HOME") "/jborden/acl2/saved_acl2")))
+(def acl2 (or (System/getenv "ACL2") (str (babashka.fs/parent (babashka.fs/parent (babashka.fs/parent (babashka.fs/canonicalize *file*)))) "/acl2/saved_acl2")))
 
 (defn model-verdicts []
   (let [forms (str "(include-book \"boundary\")\n"

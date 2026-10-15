@@ -168,7 +168,7 @@ one thing: a list of source roots, `CLOTRAN_PATH` (as clj knows
 (DEVIATIONS 33). Everything else -- reading a project's file, fetching
 what it names, pinning it, walking its dependencies' own files, working
 out the path -- is a separate program in its own repository,
-`~/jborden/clotran-deps`, written in Clojure and run BY clotran, as
+`../clotran-deps`, written in Clojure and run BY clotran, as
 tools.deps is run by clj.
 
 **The project file is `deps.edn`, the same file, with the same keys:**
@@ -210,11 +210,11 @@ unchanged project starts with no resolution at all. The `clotran`
 launcher, run in a directory holding a `deps.edn`, asks
 `clotran-deps` for the path (cached) and sets `CLOTRAN_PATH`.
 
-**First users.** `~/jborden/clotran-nrepl`, the nREPL server (PLAN step
+**First users.** `../clotran-nrepl`, the nREPL server (PLAN step
 21 d), as a `:local/root`, then over git.
 
 **Status (2026-09-29).** clotran has `CLOTRAN_PATH` (check-path in the
-gate) and exits 1 when a script fails to load. `~/jborden/clotran-deps`
+gate) and exits 1 when a script fails to load. `../clotran-deps`
 resolves `:paths`, `:local/root`, `:git/url` + full `:git/sha` (cached
 under `~/.cache/clotran/gitlibs`), aliases, the provided Clojure
 libraries and refused jars, transitively, with conflicts an error unless

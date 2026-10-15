@@ -85,7 +85,7 @@ Scenario D's remaining work is the rest of step 13.
 
 1. **Complete Clojure/Fortran interoperability.** A clotran array is a
    Fortran array; a Fortran routine is an ordinary call. The finish
-   line is ChemSol: `~/jborden/chemsol/src/main.f90` replaced by
+   line is ChemSol: `../chemsol/src/main.f90` replaced by
    clotran code driving `chemsol.f90` and `push_array.f90`, run on
    `tests/test1.cs` .. `test3.cs` with `vdw.par`, producing the same
    outputs.
@@ -2289,7 +2289,7 @@ c. *`clotran.server`*: a socket REPL (done 2026-09-29: `start-server`,
    Bytes for binary protocols (done 2026-09-29): `clotran.net/read-bytes`
    and `write-bytes` into and out of a byte array, nothing allocated, and
    `clotran.io/utf8-bytes` / `utf8-string`, what bencode needs.
-d. *nREPL, as a package* (serving 2026-09-29, `~/jborden/clotran-nrepl`:
+d. *nREPL, as a package* (serving 2026-09-29, `../clotran-nrepl`:
    the eleven ops below, tested against its own client and the reference
    client nrepl/nrepl 1.3.0, and the real CIDER headless in Emacs by its
    test/cider-test.el): what CIDER speaks (bencode, eval, load-file,
@@ -2302,7 +2302,7 @@ e. *The debugger in the editor -- superseded by step 31a (2026-10-06):
    cider-nrepl. clotran-nrepl answering that protocol from clotran's own
    break protocol (`clotran-break`, frames with locals) puts CIDER's
    debugger over clotran with no fork. Emacs support is its own tool,
-   `~/jborden/clotran-mode` (`.cljf` in clojure-mode, `clotran-jack-in`).
+   `../clotran-mode` (`.cljf` in clojure-mode, `clotran-jack-in`).
 
 Windows is built with a mingw-w64 cross toolchain and run under Wine for
 quick checks; a real Windows runner is the authority, as flang is for
@@ -2904,7 +2904,7 @@ exceptions never cross: they are fused away into loops (tier A, B001)
 or stay in the VM.
 
 **The model.** `model/boundary.lisp`, certified by ACL2 8.7
-(`~/jborden/acl2`, built on SBCL 2.4.9), proves what is not a choice:
+(`../acl2`, built on SBCL 2.4.9), proves what is not a choice:
 
 - the column-major layout is a bijection -- every in-bounds subscript
   of any rank lands inside the buffer (`cm-offset-in-buffer`) and no

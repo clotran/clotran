@@ -29,7 +29,7 @@
 ;   7. EQUALITY is by value, and the hash is by type and shape: equal
 ;      values hash alike, and writing in place never moves the hash.
 ;
-; Certify: ~/jborden/acl2/saved_acl2 then (certify-book "boundary").
+; Certify: ../acl2/saved_acl2 then (certify-book "boundary").
 
 (in-package "ACL2")
 

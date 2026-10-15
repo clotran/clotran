@@ -7,7 +7,7 @@ Not everything native is a deviation. Where we merely *chose* Fortran over
 pure Clojure for something Clojure could express, that is a seam, and it
 belongs in SEAMS.md instead.
 
-**Reference**: `~/jborden/clojure` -- a clone of `clojure/clojure` at
+**Reference**: `../clojure` -- a clone of `clojure/clojure` at
 `clojure-1.12.6` (`31a3138a`) -- the SAME release as the vendored core.clj (see
 upstream/clojure/src/clj/clojure/PROVENANCE.md). Paths below are relative to it. Cite the file and the method;
 do not cite memory. That is the whole point of having the clone.
@@ -115,7 +115,7 @@ Categories:
 
 `Compiler.load` interleaves: it reads one form, evaluates it, and only
 then reads the next (upstream's `Compiler`, in the clone at
-`~/jborden/clojure`).
+`../clojure`).
 
 We call `gcr_read_all` first. This is observably wrong wherever reading
 depends on state that evaluation sets -- `::kw` resolves against `*ns*`,

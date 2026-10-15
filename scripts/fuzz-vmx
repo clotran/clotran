@@ -103,7 +103,7 @@
        "(fuzz-all '(" (str/join "\n" (map lisp exprs)) ") 0)\n"
        "(good-bye)\n"))
 
-(def acl2 (or (System/getenv "ACL2") (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2")))
+(def acl2 (or (System/getenv "ACL2") (str (babashka.fs/parent (babashka.fs/parent (babashka.fs/parent (babashka.fs/canonicalize *file*)))) "/acl2/saved_acl2")))
 (def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
 (def results (into {} (for [[_ i wf ok kind] (re-seq #"FUZZ (\d+) \((T|NIL) (T|NIL|:OUT) (\S+)\)" out)]
                         [(parse-long i) {:wf wf :ok ok :kind kind}])))

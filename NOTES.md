@@ -23,7 +23,7 @@ scientific codes (e.g. ChemSol, a solvation-energy program he co-wrote)
 are usually one big loop where it's hard to tell what's actually
 happening.
 
-`ChemSol` (`~/jborden/ChemSol/src/chemsol.f90`) is the concrete first
+`ChemSol` (`../ChemSol/src/chemsol.f90`) is the concrete first
 target: it's a good example because the computation is *already*
 factored into separate callable units (`readopt`, `dg_ld`, `solvout`,
 `entropy`) -- the pipeline shape already exists. What makes it
@@ -257,7 +257,7 @@ one: document it here and move on, unless the fix is free.
 *Built since: see "ChemSol: main.f90 as a pipeline" below.*
 
 Spiked as a proof of concept mid-session: a `ChemsolAdapter.f90`
-wrapping `entropy` from ChemSol (`~/jborden/ChemSol/src/chemsol.f90`,
+wrapping `entropy` from ChemSol (`../ChemSol/src/chemsol.f90`,
 compiled by path) as an ordinary callable builtin, unmodified.
 `(entropy 18.0)` called the real Fortran function and returned `8.43`
 (kcal/mol), identically on both compilers -- so the core idea is
