@@ -230,4 +230,9 @@
  ;; unwinds, its own calls in the reserve, so the var is unbound again
  ;; (review of stack_low, 2026-10-12)
  (let [f (fn f [n] (binding [*print-length* n] (f (inc n))))] [(try (f 0) (catch clotran.host.stack_overflow_error e :so)) *print-length*])
+ ;; = handed its arguments the context's one scratch vector, and an equals
+ ;; that is Clojure -- UUID's runs (= s (.toString o)) -- took it again, so
+ ;; a map compared against a fresh one lost its root and was collected
+ ;; mid-compare (scripts/fuzz-print, torture, a map of uuids)
+ (let [q (fn [s] (reify clotran.host.value (equals [_ o] (and (= s (str o)) (pos? (count (vec (range 20000)))))) (toString [_] s))) m (fn [] (into {} (map (fn [i] [i (q (str i))])) (range 6)))] (mapv (fn [_] (= (m) (m))) (range 5)))
 ]

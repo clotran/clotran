@@ -995,11 +995,15 @@
   ! The builtins a call may hand a REUSED argument vector: numeric, and
   ! none of them keeps its arguments or calls back into Clojure. That
   ! is the whole condition, and the reason `vector` or `list` can
-  ! never be here.
+  ! never be here. Nor `=`: a deftype's equals or equiv, and a lazy seq
+  ! it realises, are Clojure, and a `=` inside one -- UUID's equals is
+  ! (= s (.toString o)) -- took the same scratch vector and left the
+  ! outer call's arguments unrooted for the collector. It takes a spare
+  ! (args_take), one per nested call.
   logical function scalar_builtin(id)
     integer, intent(in) :: id
     select case (id)
-    case (B_ADD, B_SUB, B_MUL, B_DIV, B_LT, B_GT, B_LTE, B_GTE, B_NUMEQ, B_EQ, &
+    case (B_ADD, B_SUB, B_MUL, B_DIV, B_LT, B_GT, B_LTE, B_GTE, B_NUMEQ, &
          B_INC, B_DEC, B_ZERO, B_POS, B_NEG, B_REM, B_QUOT, B_MAX, B_MIN, B_ABS, B_IDENTICAL)
        scalar_builtin = .true.
     case default
