@@ -1,6 +1,9 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 2 of 1.0.0: `1.0.0-rc.2`.
+This is release candidate 3 of 1.0.0: `1.0.0-rc.3`. Since rc.2: reader
+conditionals are read only where clj reads them (a `.cljc`, or
+`{:read-cond :allow}`), and `=` no longer loses its arguments to the
+collector when an `equals` written in Clojure calls `=` itself.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
@@ -106,12 +109,12 @@ change.
 
 ## Install
 
-    tar xzf clotran-1.0.0-rc.2-<os>-<arch>[-musl].tar.gz
-    clotran-1.0.0-rc.2-<os>-<arch>[-musl]/bin/clotran
+    tar xzf clotran-1.0.0-rc.3-<os>-<arch>[-musl].tar.gz
+    clotran-1.0.0-rc.3-<os>-<arch>[-musl]/bin/clotran
 
 and on Windows, the zip unpacked anywhere:
 
-    clotran-1.0.0-rc.2-windows-x86_64\bin\clotran.cmd
+    clotran-1.0.0-rc.3-windows-x86_64\bin\clotran.cmd
 
 `SHA256SUMS` beside them lists each archive's sha256.
 
