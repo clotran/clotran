@@ -54,7 +54,7 @@
 
 (defn skip-reason [needs]
   (case needs
-    :acl2 (when-not (fs/exists? (str (fs/home) "/jborden/acl2/saved_acl2")) "no ACL2 (make model)")
+    :acl2 (when-not (fs/exists? (or (System/getenv "ACL2") (str (fs/home) "/jborden/acl2/saved_acl2"))) "no ACL2 (make model)")
     ;; as scripts/fuzz-deps finds it; a skip there exited 0 and read as a pass
     :deps (when-not (fs/exists? (or (System/getenv "CLOTRAN_DEPS") (str (fs/home) "/jborden/clotran-deps"))) "no clotran-deps")
     nil))

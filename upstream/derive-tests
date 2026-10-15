@@ -37,8 +37,8 @@
 ;; print-method live in the siblings, not in core.clj itself.
 (def core-clj-files (map #(io/file repo "upstream/clojure/src/clj/clojure" %)
                          ["core.clj" "core_deftype.clj" "core_print.clj" "core/protocols.clj"]))
-(def core-cljs (io/file home "jborden/clojurescript/src/main/cljs/cljs/core.cljs"))
-(def core-cljc (io/file home "jborden/clojurescript/src/main/clojure/cljs/core.cljc"))
+(def core-cljs (io/file (or (System/getenv "CLOJURESCRIPT") (str home "/jborden/clojurescript")) "src/main/cljs/cljs/core.cljs"))
+(def core-cljc (io/file (or (System/getenv "CLOJURESCRIPT") (str home "/jborden/clojurescript")) "src/main/clojure/cljs/core.cljc"))
 (def suite-dir (io/file repo "upstream/clojure/test/clojure/test_clojure"))
 (def out-dir   (io/file repo "test/clj/derived"))
 

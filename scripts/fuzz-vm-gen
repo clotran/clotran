@@ -106,7 +106,7 @@
        "(all '(" (str/join "\n" (map lisp exprs)) ") 0 vmi)\n"
        "(good-bye)\n"))
 
-(def acl2 (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2"))
+(def acl2 (or (System/getenv "ACL2") (str (System/getProperty "user.home") "/jborden/acl2/saved_acl2")))
 (def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
 
 (def progs (into {} (for [[_ i body] (re-seq #"(?s)\nBEGIN-PROG (\d+)\n(.*?)END-PROG" out)] [(parse-long i) body])))
