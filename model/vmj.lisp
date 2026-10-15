@@ -20,8 +20,8 @@
 ; stack is nil, a write past it is an overflow). So a native store or
 ; load is never out of the stack's memory.
 ;
-; THE NATIVE OPS, each a few arm64 instructions (scripts/fuzz-vm-jit's
-; encoder; the machine's registers hold pc, the frame base and sp):
+; THE NATIVE OPS, each a few arm64 instructions (src/f/vmjit.inc's
+; encoder, fuzzed by scripts/fuzz -m vm,jit; the machine's registers hold pc, the frame base and sp):
 ;
 ;   (:chk-ix b k)       on to the next op if slot base(b)+k is in the
 ;                       stack, else the step; b one of :fb :sp

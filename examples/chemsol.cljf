@@ -1,7 +1,7 @@
 ;; ChemSol's main.f90, as clotran.
 ;;
 ;; The library -- chemsol.f90, unmodified, vendored under src/f/chemsol --
-;; is reached through three functions in the `fortran` namespace, each
+;; is reached through three functions of the `chemsol` package, each
 ;; taking and answering ONE MAP whose keys are the routine's own argument
 ;; names: readopt, dg-ld, solvout. Everything main.f90 did around those
 ;; calls -- read the input, type the atoms, check the charges, print the

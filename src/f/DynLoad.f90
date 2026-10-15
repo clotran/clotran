@@ -17,10 +17,9 @@
 ! character arrays -- is Eval.f90's business (B_PKGLOAD, B_PKGCALL);
 ! this module knows the loader and the calling convention, nothing else.
 !
-! POSIX only for now: dlopen lives in libSystem on macOS and libdl on
-! Linux. Windows is LoadLibrary and GetProcAddress under the same two
-! wrappers, a second implementation of this module, not a change to
-! its callers.
+! dlopen lives in libSystem on macOS and libdl on Linux; on Windows
+! src/c/win_shim.c writes dlopen and dlsym over LoadLibrary and
+! GetProcAddress, so this module is the same everywhere.
 module DynLoad
   use iso_c_binding
   use GC, only: gc_state_lock, gc_state_unlock

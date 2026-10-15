@@ -37,7 +37,7 @@
 ;; revisiting, because those 476 seconds are still there.
 ;;
 ;;   scripts/run-clojure-tests-parallel [dir]   default test/clj/clojure/test_clojure;
-;;        test/clj/derived runs the derived LANGUAGE suite (scripts/derive-tests)
+;;        test/clj/derived runs the derived LANGUAGE suite (upstream/derive-tests)
 ;;   CLOTRAN_TEST_JOBS      processes at once (default 4)
 ;;   CLOTRAN_TEST_TIMEOUT   seconds per namespace (default 600)
 

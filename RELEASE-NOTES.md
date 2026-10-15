@@ -1,5 +1,7 @@
 # clotran 1.0.0 -- release notes
 
+This is release candidate 2 of 1.0.0: `1.0.0-rc.2`.
+
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
 language as the smallest package: the binary, its heap image, the
@@ -65,14 +67,14 @@ change.
 
 - **macOS** (arm64): built and gated with gfortran and flang.
 - **Linux**: built and gated in a container (Debian 13, gfortran and
-  flang, aarch64). The release is a tarball built on glibc 2.28
+  flang 23.1.1) on aarch64, and on real x86_64 through `scripts/gate-wsl`. The release is a tarball built on glibc 2.28
   (manylinux_2_28) carrying the libraries the binary needs beyond the
   C library -- libgfortran, libquadmath, libstdc++, libgcc_s -- beside
   it, so it runs on any glibc as new or newer: Debian 10, Ubuntu 18.10,
   RHEL 8 and on. It is not a static binary: packages and compiled
   namespaces are opened into the running binary and resolve its
   symbols, which a static glibc or musl binary cannot do. `clotran
-  compile` needs a gfortran on the machine. The aarch64 tarball was run
+  compile` needs a gfortran on the machine. The aarch64 and x86_64 tarballs were run
   on Debian 10, Ubuntu 20.04 and 24.04, Fedora (glibc 2.43) and Rocky 9:
   a program, a `deps.edn` project, a future, a Unicode regex
   (`scripts/dist-check`). Alpine has a tarball of its own, `-musl`,
@@ -80,14 +82,16 @@ change.
   dynamically linked, so packages open as on glibc; musl's gfortran on
   aarch64 has no `ieee_arithmetic`, and clotran's own bit-level version
   stands in (`src/f/ieee_lite.f90`, checked against the intrinsic one on
-  every gate). x86_64 is built the same way (`scripts/dist-linux
-  x86_64`, emulated on an arm64 machine), and the gate runs on real
-  x86_64 Linux (`scripts/gate-wsl`); the tarball itself is checked in
-  clean images on aarch64 only.
+  every gate). x86_64 is built the same way
+  (`scripts/dist-linux x86_64`), natively on an x86_64 machine, and
+  checked in the same clean images. Each archive carries
+  `lib/clotran/BUILDINFO` -- version, commit, compiler, machine and the
+  builder image, pinned by digest.
 - **Windows** (x86_64, Windows 10 and on): built natively under MSYS2's
   UCRT64 gfortran and tested on a Windows 10 machine -- `make test`
   passing whole, every fuzzer at full size, the oracle's forms agreeing
-  with clj there, a line ending CR LF as clj's does.
+  with clj there, a line ending CR LF as clj's does -- and the release
+  zip checked in a fresh Windows Sandbox (`packaging/windows/check.ps1`).
   The release is a zip: `bin\clotran.cmd`, which runs the launcher under
   the busybox-w32 `sh.exe` beside it (GPLv2, pinned by sha256), and
   `clotran-bin.exe` with gfortran's runtimes linked in. `clotran compile`
@@ -102,12 +106,14 @@ change.
 
 ## Install
 
-    tar xzf clotran-1.0.0-<os>-<arch>.tar.gz
-    clotran-1.0.0-<os>-<arch>/bin/clotran
+    tar xzf clotran-1.0.0-rc.2-<os>-<arch>[-musl].tar.gz
+    clotran-1.0.0-rc.2-<os>-<arch>[-musl]/bin/clotran
 
 and on Windows, the zip unpacked anywhere:
 
-    clotran-1.0.0-windows-x86_64\bin\clotran.cmd
+    clotran-1.0.0-rc.2-windows-x86_64\bin\clotran.cmd
+
+`SHA256SUMS` beside them lists each archive's sha256.
 
 or from a checkout, `make install` (README, "Build"; `PREFIX=` names
 where). `make dist` builds the tarball (the zip on Windows) for the machine it runs on, and

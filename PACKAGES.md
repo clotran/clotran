@@ -7,7 +7,7 @@ depend on. PLAN.md step 9 has the decision record; this is the ledger.
 ## What a package is
 
 One clotran binary, and everything else loaded at run time. A package is
-a shared library (`.dylib`, `.so`) that clotran opens with `dlopen`
+a shared library (`.dylib`, `.so`, `.dll`) that clotran opens with `dlopen`
 (src/f/DynLoad.f90) and never links. It exports:
 
 - `clotran_manifest`: a C string of EDN naming the package and each
@@ -183,14 +183,14 @@ One file for both hosts, as a Clojure project already has it. What a
 `deps.edn` can name that clotran cannot load is handled by name, not
 ignored: `org.clojure/clojure`, `org.clojure/spec.alpha` and
 `org.clojure/core.specs.alpha` are PROVIDED -- clotran is the Clojure,
-and ships those (src/clj/clojure/PROVENANCE.md) -- so this repository's
+and ships those (upstream/clojure/src/clj/clojure/PROVENANCE.md) -- so this repository's
 own `deps.edn`, which pins the oracle's `clj`, reads as having no
 dependencies at all.
 
 **Coordinates.**
 - `:local/root` -- a directory with its own `deps.edn`.
 - `:git/url` + `:git/sha` -- the full sha is REQUIRED (vendoring rule 1:
-  pinned), `:git/tag` optional and checked against it. Checked out once
+  pinned); `:git/tag` is not read yet (1.x), the sha alone pins. Checked out once
   into `~/.cache/clotran/gitlibs/<lib>/<sha>`, never modified after.
 - `:mvn/version` -- refused, naming the library, unless it is one of
   the three provided above: a jar is clj bytecode. A project that needs
@@ -222,9 +222,7 @@ the project settles them; its `test/run.sh` checks each. It resolves and
 loads `clotran-nrepl` both ways, and the `clotran` launcher runs it
 itself in a directory with a `deps.edn`, the answer cached in
 `.clotran-cache/` while no `deps.edn` it read has changed.
-`clotran-nrepl` serves (PLAN step 21 d). Not yet: `:git/tag`, native packages with a build recipe, and `-main`
-with `*command-line-args*` (PLAN step 22), which replaces the one-line
-driver its `bin/clotran-deps` writes.
+`clotran-nrepl` serves (PLAN step 21 d). Not yet: `:git/tag`, and native packages with a build recipe.
 
 What the rules above add up to. The decisions made earlier (PLAN.md
 step 9), which this keeps:

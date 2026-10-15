@@ -5,8 +5,8 @@ live in conversation history. Update this as new decisions get made.
 
 ## What this actually is
 
-A Clojure for Fortran. The `mal` (Make-A-Lisp) test suite is scaffolding
-to bootstrap and validate correctness incrementally -- it is not the
+A Clojure for Fortran. The `mal` (Make-A-Lisp) test suite was scaffolding
+(removed since; README, Status) to bootstrap and validate correctness incrementally -- it is not the
 project's identity. Nothing should be named or described as "mal";
 naming mirrors real Clojure instead (see below).
 
@@ -253,6 +253,8 @@ one: document it here and move on, unless the fix is free.
   same pattern the reader's `read_items` already used).
 
 ## ChemSol interop: confirmed feasible, deliberately not built yet
+
+*Built since: see "ChemSol: main.f90 as a pipeline" below.*
 
 Spiked as a proof of concept mid-session: a `ChemsolAdapter.f90`
 wrapping `entropy` from ChemSol (`~/jborden/ChemSol/src/chemsol.f90`,

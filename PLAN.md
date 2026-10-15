@@ -5,6 +5,11 @@ records how things came to be; this records where they are going.
 Rewritten 2026-09-19 after a review of the whole tree; the previous
 plan's decision records that still hold are kept at the bottom.
 
+**Status, 2026-10-14: 1.0.0-rc.2.** The sections from here through
+"The diagnosis" are the record of 2026-09-19 to 09-29; scenarios A--D
+now stand as README and `docs/whitepaper.md` describe, and step 35 is
+where the release is.
+
 ## The north star (James, 2026-09-27)
 
 Four consulting scenarios, kept as a white paper and a pitch deck in
@@ -5334,10 +5339,12 @@ remains before 1.0.0, in order:
   its header gfortran 14 refused; the newest Clojure CLI reads a -Sdeps
   value as a path. x86_64 builds the same way; the gate runs there on
   real x86_64 since 2026-10-13 (`scripts/gate-wsl`: gate-linux in WSL on
-  the Windows box), its tarball not yet through `scripts/dist-check`.
+  the Windows box), and its tarballs, glibc and musl, pass
+  `scripts/dist-check` in the same images as aarch64's (2026-10-14).
   Debian's flang-19 lost compiler-check's race there -- it initializes
   every gc_value local through its runtime, clotran 5x slower than under
-  23 -- so the gate image takes flang 23 from apt.llvm.org, as macOS's.
+  23 -- so the gate image takes flang 23.1.1, as macOS's, from LLVM's release
+  pinned by sha256.
 - **Windows** -- DONE 2026-10-12 for x86_64: built natively under
   MSYS2's UCRT64 gfortran on a Windows 10 machine, `make test` passing
   whole there, and the release a zip that runs the launcher under a
@@ -5363,7 +5370,7 @@ remains before 1.0.0, in order:
   `scripts/readme-check` in the gate; its numbers re-measured.
 - the scorecards re-measured -- DONE 2026-10-12: derived suite 2719 of
   2719, libraries 1001 and 8 expected (test/clj/library-expected.edn),
-  oracle 1328 forms, 25 of 30 library namespaces loading. Re-measuring
+  oracle 1328 forms (1331 by rc.2, 22 expected), 25 of 30 library namespaces loading. Re-measuring
   them found and fixed: bound? false for protocol Vars, a lower-case
   deftype name unresolved, a reify's class with no supers, clojure.main
   not loading, and PersistentQueue missing altogether.
@@ -5371,8 +5378,8 @@ remains before 1.0.0, in order:
   on macOS (22 of 22), Linux (21, fuzz-door without ACL2 there) and
   Windows (21, the same); it found a quadratic search in NativeArray's
   claim and a deadline torture mode could not meet.
-- then James tags, and decides the branch: feat/threads is ahead of main
-  by every commit since 2026-09.
+- 1.0.0-rc.2 tagged 2026-10-14 on main (feat/threads merged); then James
+  tags v1.0.0.
 
 **Said plainly in the release notes:** the speed as the README states
 it; the debugger as it is (calls, one level); interop as

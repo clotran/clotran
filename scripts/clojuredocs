@@ -67,7 +67,7 @@
 
 (defn cljs-names
   "The public names of cljs.core, read from the pinned clone as
-  scripts/derive-tests reads them."
+  upstream/derive-tests reads them."
   []
   (let [read (fn [f] (e/parse-string-all (slurp f) {:all true :read-cond :allow :features #{:clj}
                                                      :auto-resolve name
@@ -82,8 +82,8 @@
                                           (and (seq? f) (= 'import-macros (first f)))
                                           (map name (filter symbol? (nth f 2 nil)))))
                               forms)))]
-    (into (names (read (fs/file home "jborden/clojurescript/src/main/cljs/cljs/core.cljs")))
-          (names (read (fs/file home "jborden/clojurescript/src/main/clojure/cljs/core.cljc"))))))
+    (into (names (read (fs/file (or (System/getenv "CLOJURESCRIPT") (str home "/jborden/clojurescript")) "src/main/cljs/cljs/core.cljs")))
+          (names (read (fs/file (or (System/getenv "CLOJURESCRIPT") (str home "/jborden/clojurescript")) "src/main/clojure/cljs/core.cljc"))))))
 
 (defn form-end
   "The index just past the first complete form in s from i, or nil:

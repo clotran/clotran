@@ -1,5 +1,5 @@
 ! The runtime the generated VM (src/f/gen/vm_gen.f90) runs on, FOR THE
-! CHECK against ACL2 (scripts/check-vm-gen): a small value heap that
+! CHECK against ACL2 (make check-vm-gen): a small value heap that
 ! mirrors model/vmx2.lisp's values exactly -- nil, t, integers, keywords
 ! (:false among them) and conses, a closure being the list (:clo f caps)
 ! as it is there -- and the operations on values the model leaves to the

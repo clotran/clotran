@@ -38,7 +38,7 @@ Object identity hashes are removed. A case agrees when every line does.
 ## Tags
 
 - `:portable` -- the var is in the clojure.core/cljs.core intersection
-  (scripts/derive-tests' rule) and the code names no Java class, static,
+  (upstream/derive-tests' rule) and the code names no Java class, static,
   method or constructor. The headline number.
 - `:interop` -- names Java. Counted apart and not chased: matching the
   JVM's classes is not the goal.

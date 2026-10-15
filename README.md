@@ -74,9 +74,10 @@ packages, and the optional tools (`clotran-nrepl`, `clotran-mode`) --
 comes from a project's `deps.edn` as a `:local/root` or a `:git/url`
 pinned by its full `:git/sha` (`PACKAGES.md`).
 
-For Emacs, `~/jborden/clotran-mode` opens `.cljf` files in clojure-mode
-and has `M-x clotran-jack-in`, which starts clotran with the nREPL server
-from `~/jborden/clotran-nrepl` and connects the stock CIDER to it.
+For Emacs, `clotran-mode` opens `.cljf` files in clojure-mode and has
+`M-x clotran-jack-in`, which starts clotran with the nREPL server from
+`clotran-nrepl` and connects the stock CIDER to it. Both are separate
+libraries, not yet published.
 
 ## What works
 
@@ -456,7 +457,7 @@ design.
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is under "What works" |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's `send` actions run in order on a pool of worker threads with a run queue each, work stealing and a batch cap, designed in ACL2 (`model/agents.lisp`, PLAN.md 24) and `send-off` actions on a thread of the agent's own, a send inside an action or a transaction held until it ends and a failed agent's queue kept for `restart-agent` (DEVIATIONS 29); `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
-| the five host-bound sibling libs | bytecode generation; see `src/clj/clojure/PROVENANCE.md` |
+| the five host-bound sibling libs | bytecode generation; see `upstream/clojure/src/clj/clojure/PROVENANCE.md` |
 | regex | ICU over UTF-8; its `\w` and `(?i)` are Unicode where clj's are ASCII |
 | `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` turns `s/assert` on, as in clj (DEVIATIONS 42, resolved) |
 | calling a Fortran library | a package per library: `scripts/bind-fortran` writes its shims and manifest from the library's own signatures, free-form or F77 (`packages/blas`, `packages/chemsol`); derived types, optional and pointer dummies are listed, not bound (PLAN.md step 9). A package built by another compiler than clotran's brings a second Fortran runtime into the process: built by clotran's own is the supported case |
@@ -471,19 +472,25 @@ native, using ClojureScript as the control group.
 
 - `src/f` -- the Fortran host: value representation, a tracing GC,
   persistent list/vector/map, namespaces, reader, evaluator.
-- `src/c` -- vendored ICU, built from source for regex. No Homebrew,
-  no system library, no runtime dependency.
+- `src/c` -- vendored ICU, built from source for regex (no Homebrew,
+  no system library, no runtime dependency), and the small C shims the
+  host needs: sockets, the filesystem, the JIT's memory, Windows.
 - `upstream/` -- Clojure's own source and test suite, vendored and
   unmodified, and `derive`, which writes them into `src/clj/clojure`
   and `test/clj/clojure` in clotran's class names.
 - `src/clj` -- that derived source, and clotran's own (`src/clj/clotran`).
 - `test/f` -- unit tests for the Fortran host, one file per module.
-- `test/clj` -- Clojure's own test suite, derived the same way. The
-  conformance measure; `scripts/run-clojure-tests` drives it.
+- `test/clj` -- Clojure's own test suite, derived the same way, and
+  clotran's own checks (`oracle.clj`, `language_test.clj`). The
+  conformance measure is `test/clj/derived/`, run by
+  `scripts/run-clojure-tests-parallel test/clj/derived`.
 - `clotran` -- the launcher, and `clotran-bin` the binary it runs
   (see below).
 
 ## Build
+
+clotran builds and passes on macOS arm64, Linux aarch64 and x86_64
+(glibc and musl), and Windows x86_64 (MSYS2 UCRT64).
 
 ```
 make            # builds ./clotran-bin and the test binaries under build/
@@ -598,8 +605,8 @@ the question is right. Two things are:
 Both failures -- C can't call it, gdb can't see it -- are the same
 missing thing: no ABI for anything Fortran gained after F77.
 
-This is also why clotran's debugger is planned in clotran itself
-(see `PLAN.md`). A debugger written in the language, over a value
+This is also why clotran's debugger is written in clotran itself
+(`clotran-break`, above). A debugger written in the language, over a value
 representation the host defines, has no descriptor to decode and no
 DWARF to depend on.
 
