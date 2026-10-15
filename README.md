@@ -55,7 +55,21 @@ $ clotran build -m my-app.core -o my-app
 $ ./my-app a b                        # (my-app.core/-main "a" "b")
 ```
 
-To have `clotran` on your PATH:
+To install a release (`RELEASE-NOTES.md`; the packages are written by
+`scripts/release-manifests` and `scripts/dist-pkg`):
+
+```
+$ brew install jborden/clotran/clotran                    # macOS arm64, Linux
+$ curl -fsSL https://raw.githubusercontent.com/jborden/clotran/main/install.sh | sh
+                                                          # macOS, Linux glibc or musl, into ~/.local
+$ sudo apt install ./clotran_1.0.0~rc.3_amd64.deb         # Debian, Ubuntu (arm64 too)
+$ sudo dnf install ./clotran-1.0.0~rc.3-1.x86_64.rpm      # Fedora, RHEL (aarch64 too)
+> scoop bucket add clotran https://github.com/jborden/scoop-clotran
+> scoop install clotran                                   # Windows
+```
+
+The .deb and .rpm are on the release page. Or, from this checkout, to
+have `clotran` on your PATH:
 
 ```
 $ make install                        # into ~/.local: ~/.local/bin/clotran

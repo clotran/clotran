@@ -1,0 +1,23 @@
+{
+    "version": "1.0.0-rc.3",
+    "description": "Clojure, hosted on Fortran",
+    "homepage": "https://github.com/jborden/clotran",
+    "license": "EPL-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/jborden/clotran/releases/download/v1.0.0-rc.3/clotran-1.0.0-rc.3-windows-x86_64.zip",
+            "hash": "52eef076be25cc5d8a57c045c17c93b2fa60c25845cdc4d6ed0195f95d8ed61f",
+            "extract_dir": "clotran-1.0.0-rc.3-windows-x86_64"
+        }
+    },
+    "bin": ["bin\\clotran.cmd", "bin\\clotran-deps.cmd"],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/jborden/clotran/releases/download/v$version/clotran-$version-windows-x86_64.zip",
+                "extract_dir": "clotran-$version-windows-x86_64"
+            }
+        }
+    }
+}
