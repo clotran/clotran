@@ -1413,7 +1413,10 @@ contains
           if (rdx%has_error .or. done) exit
           if (k%tag /= GCT_KEY) then
              ! its toString, as clj's message has it: a pattern's is its source
-             if (gc_kind(k) == OBJ_REGEX) then
+             ! (String concatenation makes a nil "null")
+             if (k%tag == GCT_NIL) then
+                kt = "null"
+             else if (gc_kind(k) == OBJ_REGEX) then
                 call gcp_str(gc_slot(k, 1), .false., s=kt)
              else
                 call gcp_str(k, .false., s=kt)

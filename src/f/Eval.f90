@@ -5247,6 +5247,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, k, text
     integer :: base
+    character(len=:), allocatable :: m
 
     ! An exception object, of class RuntimeException -- what most of
     ! clj's own runtime failures are -- so (.getMessage e),
@@ -5256,7 +5257,9 @@ contains
     base = vs_enter(vst, 3)
     k = gc_sym("clotran.host.runtime_exception", roots)
     call vs_set(vst, base + 2, k)
-    text = gc_str(msg, [roots, vs_get(vst, base + 2)])
+    m = msg
+    call bare_message(m)
+    text = gc_str(m, [roots, vs_get(vst, base + 2)])
     call vs_set(vst, base + 3, text)
     v = gc_obj(OBJ_ERR, [vs_get(vst, base + 2), vs_get(vst, base + 3), gc_nil()], &
          [roots, vs_get(vst, base + 2), vs_get(vst, base + 3)])

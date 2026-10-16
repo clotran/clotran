@@ -2083,6 +2083,21 @@
     end block
   end subroutine note_position
 
+  ! The message a caught error's exception carries: without the
+  ! "  at file:line:col" that note_position (or the analyzer) appended
+  ! for the report, which clj's ex-message never has (error_value).
+  subroutine bare_message(s)
+    character(len=:), allocatable, intent(inout) :: s
+    integer :: p, c
+    p = index(s, "  at ", back=.true.)
+    if (p == 0) return
+    c = index(s(p + 5:), ":", back=.true.)
+    if (c < 2) return
+    if (len(s) - p - 4 == c) return
+    if (verify(s(p + 4 + c + 1:), "0123456789") /= 0) return
+    s = s(1:p - 1)
+  end subroutine bare_message
+
   ! Alternating keys and values, as a map literal's children come.
   function vec_to_map(vals, roots) result(out)
     type(gc_stack), pointer :: vst
