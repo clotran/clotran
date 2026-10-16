@@ -1,7 +1,7 @@
 #!/usr/bin/env bb
-;; readme-check: README.md's examples are verified output, so run them.
+;; readme-check: the docs' examples are verified output, so run them.
 ;;
-;;   scripts/readme-check [README.md]
+;;   scripts/readme-check [FILE.md ...]     (default: README.md)
 ;;
 ;; Two kinds of block are checked, each in a fresh ./clotran:
 ;;
@@ -21,7 +21,7 @@
          '[edamame.core :as e])
 
 (def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
-(def readme (or (first *command-line-args*) (str repo "/README.md")))
+(def files (or (seq *command-line-args*) ["README.md"]))
 
 (defn blocks [text]
   (loop [ls (map-indexed vector (str/split-lines text)) cur nil out []]
@@ -38,7 +38,7 @@
     (str/join "\n" (remove #(re-find #"^note: " %) (str/split-lines (str (:out r) (:err r)))))))
 
 ;; a ```clojure block: each form, and what its last line says it is
-(defn check-eval [{:keys [line lines]}]
+(defn check-eval [{:keys [file line lines]}]
   (let [src (str/join "\n" lines)
         forms (e/parse-string-all src {:all true :row-key :row :col-key :col :end-row-key :end-row :end-col-key :end-col :auto-resolve name :read-cond :allow :features #{:cljf}})
         expect (fn [f] (let [l (nth lines (dec (:end-row (meta f))))]
@@ -58,24 +58,24 @@
       (for [[i fm] (map-indexed vector forms)
             :let [want (expect fm)]
             :when (and want (not= want (get got i)))]
-        {:line (+ line (:end-row (meta fm))) :want want :got (or (get got i) (last (str/split-lines out)))}))))
+        {:file file :line (+ line (:end-row (meta fm))) :want want :got (or (get got i) (last (str/split-lines out)))}))))
 
 ;; a REPL session: input after the prompts, the rest is output
-(defn check-repl [{:keys [line lines]}]
+(defn check-repl [{:keys [file line lines]}]
   (let [input (str/join "\n" (keep #(or (second (re-find #"^(?:\[\d+\] )?user=> (.*)$" %)) (second (re-find #"^  #_=> (.*)$" %))) lines))
         want (remove #(re-find #"^((\[\d+\] )?user=> |  #_=> |\$ )" %) lines)
         out (run-clotran (str input "\n"))
         got (->> (str/split-lines out) (map #(str/replace % #"^(((\[\d+\] )?user|#_)=> )+" "")) (remove str/blank?))]
     (when (not= (vec want) (vec got))
-      [{:line line :want (str/join " | " want) :got (str/join " | " got)}])))
+      [{:file file :line line :want (str/join " | " want) :got (str/join " | " got)}])))
 
-(let [bs (blocks (slurp readme))
+(let [bs (mapcat (fn [file] (map #(assoc % :file file) (blocks (slurp (str (fs/path repo file)))))) files)
       evals (filter #(and (= "clojure" (:lang %)) (some (fn [l] (str/includes? l ";=>")) (:lines %))) bs)
       repls (filter #(and (= "" (:lang %)) (some (fn [l] (str/starts-with? l "user=> ")) (:lines %))) bs)
       bad (concat (mapcat check-eval evals) (mapcat check-repl repls))]
-  (doseq [{:keys [line want got]} bad]
-    (println (str "README.md:" line))
-    (println "  README: " want)
+  (doseq [{:keys [file line want got]} bad]
+    (println (str file ":" line))
+    (println "  doc:    " want)
     (println "  clotran:" got))
   (println (format "readme-check: %d blocks run (%d evaluated, %d REPL sessions) of %d, %d differ"
                    (+ (count evals) (count repls)) (count evals) (count repls) (count bs) (count bad)))

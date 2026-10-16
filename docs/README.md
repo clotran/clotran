@@ -1,4 +1,16 @@
-# docs/ -- the north star
+# docs/
+
+- `guide.md` -- using clotran: programs, projects, Fortran arrays and
+  packages, embedding, compiling, the debugger, threads.
+- `status.md` -- what works, measured, what does not, and the version
+  policy.
+- `building.md` -- building from source; the repository's layout.
+- `rationale.md` -- why host Clojure on Fortran rather than bridge to it.
+
+`scripts/readme-check` runs the examples in `../README.md` and
+`guide.md` (`make test`), so their output stays verified.
+
+## The north star
 
 - `whitepaper.md` -- what clotran is, the four consulting scenarios it
   is aimed at, where each stands today (measured), and the road.

@@ -637,8 +637,13 @@ check-break:
 	printf '((fn [x] (clotran-break)) 1)\n(clotran-resume {:continue (* 42 (get (:env (first (:frames (clotran-last-break)))) (quote x)))})\n' \
 	  | ./clotran-bin src/clj/clojure/core.clj > $(B)/break_check.out 2>&1; grep -q '42$$' $(B)/break_check.out
 check-readme:
-	@echo "--- README.md's examples, run: its verified output stays verified ---"
-	scripts/readme-check
+	@echo "--- README.md's and docs/guide.md's examples, run: their verified output stays verified; examples/mylib bound, built and called ---"
+	scripts/readme-check README.md docs/guide.md
+	rm -rf $(B)/mylib && mkdir -p $(B)/mylib/mylib
+	scripts/bind-fortran --package mylib --out $(B)/mylib/mylib_bind.f90 examples/mylib/mylib.f90
+	cd $(B)/mylib && $(FC) -J. -shared -fPIC -o mylib/libmylib.$(SOEXT) $(CURDIR)/examples/mylib/mylib.f90 mylib_bind.f90
+	cd $(B)/mylib && sh $(CURDIR)/clotran $(CURDIR)/examples/mylib/demo.cljf </dev/null 2>&1 | grep -v '^note: ' > out.txt
+	printf '[2.0 4.0 6.0]\n56.0\n' | diff - $(B)/mylib/out.txt
 check-libraries:
 	@echo "--- the portable libraries, on Clojure's OWN tests, verbatim ---"
 	scripts/run-library-tests

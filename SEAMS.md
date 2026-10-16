@@ -400,7 +400,7 @@ handed to `dgemm`. Borrowing Clojure's names would have said they were
 the same thing.
 
 Clojure's own `make-array`/`aget`/`alength` now run over the same
-representation (README; DEVIATIONS 24, 25). That was a separate decision: those route through `RT/alength` and
+representation (docs/guide.md; DEVIATIONS 24, 25). That was a separate decision: those route through `RT/alength` and
 `Reflector/prepRet`, and making them work is compatibility, not
 interop. Worth 23 errors in Clojure's suite -- `RT/alength` (14) and
 `RT/seqToTypedArray` (9) -- and not the same job as this.

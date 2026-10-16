@@ -1,0 +1,5 @@
+(fortran/load-package "mylib")        ; ./mylib/libmylib.dylib
+(def x (double-array [1 2 3]))
+(mylib.raw/scale 3 2.0 x)             ; x is :inout -- scaled in place, no copy
+(println (vec x))
+(println (mylib.raw/norm2sq 3 x))

@@ -17,7 +17,7 @@ Fortran routine is an ordinary call.
 
 Everything in this paper is either measured or marked as not yet built.
 The numbers are those of the 1.0 release candidate, from `scripts/oracle`,
-`scripts/bench` and the derived language suite (README, RELEASE-NOTES);
+`scripts/bench` and the derived language suite (docs/status.md, RELEASE-NOTES);
 where one is older, its date is given.
 
 ## Why this exists
