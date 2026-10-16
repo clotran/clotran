@@ -25,7 +25,7 @@ B = build
 # 2.55E-15 (scripts/fuzz-num). Both compilers, and clotran compile too.
 FCFLAGS = -g -O2 -ffp-contract=off -I$(B) -Isrc/f -J$(B) $(FCFLAGS_$(notdir $(FC)))
 # OS_OBJECTS (win_shim on Windows) on every link line, once
-LDFLAGS = $(FCFLAGS_$(notdir $(FC))) $(OS_OBJECTS) $(OS_LDFLAGS)
+LDFLAGS = $(FCFLAGS_$(notdir $(FC))) $(OS_OBJECTS) $(OS_LDFLAGS) $(STATIC_RT_$(notdir $(FC)))
 TESTLDFLAGS = $(TESTLDFLAGS_$(notdir $(FC))) $(OS_OBJECTS) $(OS_LIBS) $(OS_LDFLAGS)
 
 # Fortran 2018 made every procedure recursive by default. flang follows
@@ -178,6 +178,13 @@ ICU_CFLAGS = -DU_STATIC_IMPLEMENTATION
 else ifeq ($(OS_TARGET),Darwin)
 ICU_PLATFORM = macOS
 LIBCXX = -lc++
+# gfortran's runtimes linked into the binary, not carried beside it:
+# a release then needs nothing but the system's own libraries, a
+# program `clotran build` writes runs anywhere, and a package built
+# by a newer gfortran loads its own libgfortran rather than meeting
+# ours. They are GPLv3 with the GCC Runtime Library Exception, which
+# lets an EPL program link them so. Windows links everything (-static).
+STATIC_RT_gfortran = -static-libgfortran -static-libgcc -static-libquadmath
 SOEXT = dylib
 PKGMOD = $(B)/pkgmod
 LIBDL =
@@ -193,7 +200,10 @@ SC_NPROCESSORS_ONLN = 58
 PTHREAD_KEY_KIND = c_long
 else
 ICU_PLATFORM = Linux
-LIBCXX = -lstdc++
+# libstdc++ (ICU's) and gfortran's runtimes linked in, as on macOS
+# above: the one shared library a release needs is the C library
+LIBCXX = -Wl,-Bstatic -lstdc++ -Wl,-Bdynamic
+STATIC_RT_gfortran = -static-libgfortran -static-libgcc -static-libquadmath
 SOEXT = so
 PKGMOD = $(B)/pkgmod
 LIBDL = -ldl
