@@ -65,7 +65,7 @@ class Clotran < Formula
     # home from where it is, so it stays together under libexec and bin
     # gets wrappers, not symlinks
     libexec.install Dir[\"*\"]
-    %w[clotran clotran-deps].each { |c| (bin/c).write_exec_script libexec/\"bin\"/c }
+    bin.write_exec_script libexec/\"bin\"/\"clotran\", libexec/\"bin\"/\"clotran-deps\"
   end
 
   test do

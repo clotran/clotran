@@ -64,6 +64,7 @@ $ curl -fsSL https://raw.githubusercontent.com/jborden/clotran/main/install.sh |
                                                           # macOS, Linux glibc or musl, into ~/.local
 $ sudo apt install ./clotran_1.0.0~rc.3_amd64.deb         # Debian, Ubuntu (arm64 too)
 $ sudo dnf install ./clotran-1.0.0~rc.3-1.x86_64.rpm      # Fedora, RHEL (aarch64 too)
+> scoop install git                                       # a bucket is a git repository
 > scoop bucket add clotran https://github.com/jborden/scoop-clotran
 > scoop install clotran                                   # Windows
 ```
