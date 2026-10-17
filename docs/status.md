@@ -76,7 +76,7 @@ native, using ClojureScript as the control group.
 
 ## Versions
 
-clotran is `1.0.0-rc.3`: the release candidate of 1.0, which is the
+clotran is `1.0.0-rc.4`: the release candidate of 1.0, which is the
 language and nothing else -- the binary, its image, core and the
 libraries vendored from Clojure, the launcher and, beside it,
 `clotran-deps` (`PLAN.md` step 35). It runs Clojure **1.12.6**: the

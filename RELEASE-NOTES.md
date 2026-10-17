@@ -1,9 +1,17 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 3 of 1.0.0: `1.0.0-rc.3`. Since rc.2: reader
-conditionals are read only where clj reads them (a `.cljc`, or
-`{:read-cond :allow}`), and `=` no longer loses its arguments to the
-collector when an `equals` written in Clojure calls `=` itself.
+This is release candidate 4 of 1.0.0: `1.0.0-rc.4`. rc.3 was withdrawn:
+following the README on a clean install found its Linux build crashing
+on any double -- the gcc 8 Fortran runtime it carried could not read the
+formats gfortran 14 writes. Since rc.3: gfortran's runtimes are linked
+into the binary, so a release needs only the system's C library, a
+program `clotran build` makes runs anywhere, and a package built by any
+current gfortran loads; the `clotran` command is clotran's own Clojure
+(`clotran-bin --launch`), running what it needs from an argument list
+with no shell, so the Windows zip carries no busybox and nothing under
+the GPL; install is `install.sh` or `install.ps1`; `requiring-resolve`
+works; and each run has its own random seed (a flang build answered the
+same `rand` every run).
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
@@ -110,12 +118,12 @@ change.
 
 ## Install
 
-    tar xzf clotran-1.0.0-rc.3-<os>-<arch>[-musl].tar.gz
-    clotran-1.0.0-rc.3-<os>-<arch>[-musl]/bin/clotran
+    tar xzf clotran-1.0.0-rc.4-<os>-<arch>[-musl].tar.gz
+    clotran-1.0.0-rc.4-<os>-<arch>[-musl]/bin/clotran
 
 and on Windows, the zip unpacked anywhere:
 
-    clotran-1.0.0-rc.3-windows-x86_64\bin\clotran.cmd
+    clotran-1.0.0-rc.4-windows-x86_64\bin\clotran.cmd
 
 `SHA256SUMS` beside them lists each archive's sha256.
 
