@@ -1890,7 +1890,9 @@ the standard fixes its layout, so gfortran and flang write the same text.
 
 The same holds wherever pure code turns a value into text -- `str`,
 `print`, `println`: a long is `I0`, a double `ES24.16E3`, a boolean
-Fortran's `T` or `F` where Clojure writes `true` or `false`. So a
+Fortran's `T` or `F` where Clojure writes `true` or `false`; an infinity
+or NaN is Fortran's `Infinity`, `-Infinity`, `NaN` where clj prints `##Inf`,
+`##-Inf`, `##NaN` (`scripts/fuzz-build-pure` compares by value). So a
 string that holds a number differs too: `(str 2.5)` is `"2.5"`
 interpreted and `"2.5000000000000000E+000"` as pure Fortran, and
 `(count (str 2.5))` differs with it.

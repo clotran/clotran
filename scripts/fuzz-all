@@ -51,6 +51,7 @@
    ["fuzz-deps" "fuzz-deps"     ["-n" "20"]               ["-n" "200"]               60 :deps]
    ["fuzz-bind" "fuzz-bind"     ["-n" "12"]               ["-n" "120"]               60]
    ["fuzz-run" "fuzz-run"      ["-n" "100"]              ["-n" "2000"]              60]
+   ["fuzz-build-pure" "fuzz-build-pure" ["-n" "12"]       ["-n" "120"]               60]
    ["fuzz-door" "fuzz-door"     ["-n" "500"]              ["-n" "20000"]             60 :acl2]])
 
 (defn skip-reason [needs]

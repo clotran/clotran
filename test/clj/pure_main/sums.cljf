@@ -1,0 +1,9 @@
+(ns sums
+  "A whole program in tier A, for make check-build-pure: clotran build
+  --pure makes it one small executable with no clotran in it.")
+
+(defn sum-to ^long [^long n] (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s i)) s)))
+
+(defn -main [^long n ^double scale]
+  (println "sum" (sum-to n))
+  (println "scaled" (* scale (double (sum-to n)))))

@@ -1,0 +1,229 @@
+#!/usr/bin/env bb
+;; fuzz-build-pure: `clotran build --pure`, generated (PLAN step 13).
+;;
+;;   scripts/fuzz-build-pure [-n N] [-s SEED]
+;;
+;; N programs, each a namespace of a few typed tier-A functions -- long
+;; and double arithmetic (+ - * quot rem mod inc dec min max abs, /),
+;; comparisons and if, let, loop/recur, casts between the two -- and a
+;; -main whose parameters are hinted ^long or ^double and which prints
+;; what the functions answer. Each is built with `clotran build --pure`
+;; and run on a few generated argument lists.
+;;
+;; The oracles: for arguments of the right types, clj running the same
+;; -main on them, parsed -- the same lines, a long exactly and a double
+;; to the bit (the binary writes 17 digits, which read back to the same
+;; double), or the same error message where clj throws; for a wrong
+;; count or an argument that is not its type, the generator, which knows
+;; the program must print its usage or name the argument and end with
+;; status 2. A program the generator meant to be tier A that does not
+;; build is a finding too. Counts by kind, the first few of each shown;
+;; exit 1 on any finding.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.test.check.random :as r]
+         '[clojure.test.check.rose-tree :as rose]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 12 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-build-pure [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def windows? (fs/windows?))
+(def bin (str repo "/clotran-bin" (when windows? ".exe")))
+
+;; ---- expressions -----------------------------------------------------------
+;; (gen-expr t vars fns d): an expression of type t (:long or :double) over
+;; vars {sym type} and earlier functions fns [[name ret [param types]]]
+
+(def g-long-lit (g/frequency [[8 (g/choose -20 20)] [1 (g/elements [9223372036854775807 -9223372036854775807 4611686018427387904 1000000007])]]))
+(def g-double-lit (g/elements [0.0 -0.0 0.5 -2.25 3.0 1.0E10 -7.75 1.0E-300 1.0E300 0.1]))
+
+(defn gen-expr [t vars fns d]
+  (let [leaf (let [vs (for [[v vt] vars :when (= vt t)] v)]
+               (if (seq vs)
+                 (g/frequency [[3 (g/elements vs)] [2 (if (= t :long) g-long-lit g-double-lit)]])
+                 (if (= t :long) g-long-lit g-double-lit)))]
+    (if (<= d 0)
+      leaf
+      (let [sub (fn [tt] (gen-expr tt vars fns (dec d)))
+            calls (filter #(= t (second %)) fns)]
+        (g/frequency
+         (concat
+          [[3 leaf]
+           [3 (g/fmap (fn [[op a b]] (list op a b)) (g/tuple (g/elements '[+ - * min max]) (sub t) (sub t)))]
+           [1 (g/fmap (fn [[c1 c2 a b]] (list 'if (list '< c1 c2) a b)) (g/tuple (sub t) (sub t) (sub t) (sub t)))]
+           [1 (g/fmap (fn [[n e]] (list 'let [n e] n)) (g/tuple (g/elements '[x y z]) (sub t)))]]
+          (if (= t :long)
+            [[2 (g/fmap (fn [[op a k]] (list op a k)) (g/tuple (g/elements '[quot rem mod]) (sub :long) (g/elements [3 -4 7 1 -1])))]
+             [1 (g/fmap (fn [[op a]] (list op a)) (g/tuple (g/elements '[inc dec abs]) (sub :long)))]
+             [1 (g/fmap (fn [e] (list 'long e)) (sub :double))]
+             [1 (g/fmap (fn [[k init step]] (list 'loop ['i 0 's init] (list 'if (list '< 'i k) (list 'recur (list 'inc 'i) (list step 's 'i)) 's)))
+                        (g/tuple (g/choose 0 6) (sub :long) (g/elements '[+ - *])))]]
+            [[2 (g/fmap (fn [[a b]] (list '/ a b)) (g/tuple (sub :double) (sub :double)))]
+             [1 (g/fmap (fn [e] (list 'double e)) (sub :long))]
+             [1 (g/fmap (fn [e] (list 'abs e)) (sub :double))]])
+          (when (seq calls)
+            [[2 (g/bind (g/elements calls)
+                        (fn [[f _ pts]] (g/fmap #(apply list f %) (apply g/tuple (map sub pts)))))]])))))))
+
+(def g-type (g/elements [:long :double]))
+(defn hinted [ps] (vec (for [[p t] ps] (with-meta p {:tag (symbol (name t))}))))
+
+;; a program: helpers h0.., each over its own typed parameters, then -main
+(def gen-program
+  (g/bind (g/choose 0 3)
+          (fn [k]
+            (g/bind (g/vector (g/tuple g-type (g/vector g-type 1 3)) k)
+                    (fn [sigs]
+                      (let [fns (vec (map-indexed (fn [i [rt pts]] [(symbol (str "h" i)) rt pts]) sigs))]
+                        (g/bind (g/vector g-type 1 3)
+                                (fn [mts]
+                                  (g/fmap
+                                   (fn [[bodies outs]]
+                                     {:fns fns :bodies bodies :main-types mts :outs outs})
+                                   (g/tuple
+                                    (apply g/tuple (map-indexed
+                                                    (fn [i [_ rt pts]]
+                                                      (gen-expr rt (zipmap (map #(symbol (str "a" %)) (range)) pts) (subvec fns 0 i) 2))
+                                                    fns))
+                                    (g/vector (g/bind g-type (fn [t] (g/fmap (fn [e] [t e]) (gen-expr t (zipmap (map #(symbol (str "p" %)) (range)) mts) fns 3))))
+                                              1 3)))))))))))
+
+;; arguments of the right types, as text the binary and clj both read
+(defn g-args [ts]
+  (apply g/tuple (for [t ts]
+                   (if (= t :long)
+                     (g/fmap str (g/frequency [[6 (g/choose -50 50)] [1 (g/elements [9223372036854775807 -9223372036854775808 0])]]))
+                     (g/fmap str (g/elements [0.0 -0.0 2.5 -1.25 1.0E10 3.0E-5 100.0 -7.0]))))))
+
+;; arguments that are not: a wrong count, or one that is not its type
+(defn g-bad-args [ts]
+  (g/one-of [(g/return (vec (repeat (inc (count ts)) "1")))
+             (g/return (vec (repeat (dec (count ts)) "1")))
+             (g/fmap (fn [[i s]] (assoc (vec (repeat (count ts) "1")) (mod i (count ts)) s))
+                     (g/tuple (g/choose 0 2) (g/elements ["abc" "" "1.5x" "--1" "1,2"])))]))
+
+(defn program-text [ns {:keys [fns bodies main-types outs]}]
+  (with-out-str
+    (println (list 'ns ns))
+    (doseq [[[f rt pts] body] (map vector fns bodies)]
+      (binding [*print-meta* true]
+        (prn (list 'defn f (with-meta (hinted (map vector (map #(symbol (str "a" %)) (range)) pts)) {:tag (symbol (name rt))})
+                   body))))
+    (binding [*print-meta* true]
+      (prn (apply list 'defn '-main (hinted (map vector (map #(symbol (str "p" %)) (range)) main-types))
+                  (for [[i [_ e]] (map-indexed vector outs)] (list 'println (str "r" i) e)))))))
+
+(def cases
+  (let [rnd (r/make-random (:seed opts))]
+    (vec (for [[i rk] (map vector (range (:n opts)) (r/split-n rnd (:n opts)))]
+           (let [[k1 k2 k3] (r/split-n rk 3)
+                 prog (rose/root (g/call-gen gen-program k1 20))
+                 ts (:main-types prog)]
+             {:i i :prog prog :ns (symbol (str "fzbp.p" i))
+              :good (rose/root (g/call-gen (g/vector (g-args ts) 2 3) k2 20))
+              :bad (rose/root (g/call-gen (g-bad-args ts) k3 20))})))))
+
+(def work (str (fs/create-temp-dir {:prefix "fuzz-build-pure"})))
+(doseq [{:keys [i ns prog]} cases]
+  (spit (str work "/p" i ".cljf") (program-text ns prog)))
+
+;; ---- clj: each -main on its parsed arguments --------------------------------
+;; written in clotran's names and translated for clj, as scripts/fuzz does
+;; (upstream/names.clj): no name of clj's host here
+(load-file (str repo "/upstream/names.clj"))
+(spit (str work "/clj-driver.clj")
+      (names/to-upstream
+       (str "(require (quote clojure.edn))\n"
+            (pr-str
+             `(doseq [[file# ns# ts# argss#] (clojure.edn/read-string (slurp ~(str work "/clj-cases.edn")))]
+                (load-file file#)
+                (doseq [args# argss#]
+                  (let [main# (resolve (symbol (str ns#) "-main"))
+                        parsed# (map (fn [t# a#] (if (= t# :long) (parse-long a#) (parse-double a#))) ts# args#)
+                        err# (atom nil)
+                        out# (with-out-str
+                               (try (apply main# parsed#)
+                                    (catch clotran.host.throwable e# (reset! err# (or (ex-message e#) "error")))))]
+                    (prn [(str ns#) args# out# (deref err#)]))))))))
+(spit (str work "/clj-cases.edn")
+      (pr-str (vec (for [{:keys [i ns prog good]} cases]
+                     [(str work "/p" i ".cljf") (str ns) (:main-types prog) good]))))
+(def clj-out (:out (p/shell {:out :string :err :string :continue true :dir repo}
+                            "clj" "-M" (str work "/clj-driver.clj"))))
+(def clj-results (into {} (for [l (str/split-lines clj-out) :when (str/starts-with? l "[\"fzbp")
+                                :let [[ns args out e] (read-string (names/from-clj l))]]
+                            [[ns args] {:out out :err e}])))
+
+;; ---- clotran: build each, run it --------------------------------------------
+(defn run [exe args]
+  (let [r (apply p/shell {:out :string :err :string :continue true} exe args)]
+    {:exit (:exit r) :out (:out r) :err (:err r)}))
+
+(defn double-text? [s] (boolean (re-find #"[.eE]|NaN|Infinity" s)))
+(def clj-names {"##Inf" "Infinity" "##-Inf" "-Infinity" "##NaN" "NaN"})
+(defn same-token? [a b]
+  (or (= a b)
+      (= (clj-names a a) (clj-names b b))
+      (and (double-text? a) (double-text? b)
+           (let [x (parse-double (str/replace a #"^\+" "")) y (parse-double (str/replace b #"^\+" ""))]
+             (and x y (= (Double/doubleToLongBits x) (Double/doubleToLongBits y)))))))
+(defn same-output? [want got]
+  (let [wl (str/split-lines want) gl (str/split-lines got)]
+    (and (= (count wl) (count gl))
+         (every? (fn [[w g]] (let [wt (str/split (str/trim w) #"\s+") gt (str/split (str/trim g) #"\s+")]
+                               (and (= (count wt) (count gt)) (every? true? (map same-token? wt gt)))))
+                 (map vector wl gl)))))
+
+;; an error stop's message without its compiler's prefix (gfortran ERROR
+;; STOP, flang Fortran ERROR STOP:); a double in it is Fortran's text,
+;; compared by value as output is (DEVIATIONS 50)
+(defn stop-message [err]
+  (-> (str/trim err) (str/replace #"^(Fortran )?ERROR STOP:? *" "") str/split-lines first str))
+
+(defn findings [{:keys [i ns prog good bad]}]
+  (let [exe (str work "/p" i (when windows? ".exe"))
+        b (p/shell {:out :string :err :string :continue true :dir work}
+                   bin "--launch" "build" "--pure" (str work "/p" i ".cljf") "-o" exe)
+        ts (:main-types prog)]
+    (if (not (fs/exists? exe))
+      [[:not-built {:case i :why (str/trim (str (:err b) (:out b)))}]]
+      (concat
+       (for [args good
+             :let [want (clj-results [(str ns) args]) got (run exe args)]
+             f [(cond
+                  (nil? want) [:no-clj-answer {:case i :args args}]
+                  (:err want) (when-not (and (= 1 (:exit got)) (same-output? (:err want) (stop-message (:err got)))
+                                             (same-output? (:out want) (:out got)))
+                                [:error-differs {:case i :args args :clj (:err want) :got (str/trim (:err got)) :exit (:exit got)}])
+                  (not= 0 (:exit got)) [:failed {:case i :args args :exit (:exit got) :err (str/trim (:err got))}]
+                  (not (same-output? (:out want) (:out got))) [:output-differs {:case i :args args :clj (:out want) :got (:out got)}])]
+             :when f]
+         f)
+       (let [got (run exe bad)
+             name (re-find #"[^/\\]+$" (str/replace exe #"\.exe$" ""))
+             want-line (if (not= (count bad) (count ts))
+                         (str "usage: " name (apply str (map #(str " p" %) (range (count ts)))))
+                         (let [j (first (keep-indexed (fn [j t] (when (or (and (= t :long) (not (re-matches #"[+-]?\d+" (nth bad j))))
+                                                                          (and (= t :double) (nil? (parse-double (nth bad j)))))
+                                                                  j)) ts))]
+                           (when j (str name ": p" j " is not a " (clojure.core/name (nth ts j)) ": " (nth bad j)))))]
+         (when (and want-line (not (and (= 2 (:exit got)) (str/starts-with? (str/trim (:err got)) (str/trim want-line)))))
+           [[:bad-args {:case i :args bad :want want-line :got (str/trim (:err got)) :exit (:exit got)}]]))))))
+
+(def found (vec (mapcat findings cases)))
+(println (format "fuzz-build-pure: %d programs, %d argument lists, seed %d"
+                 (count cases) (reduce + (map #(inc (count (:good %))) cases)) (:seed opts)))
+(doseq [[kind fs] (group-by first found)]
+  (println (format "  %-16s %d" (name kind) (count fs)))
+  (doseq [[_ d] (take 3 fs)] (println "    " (pr-str d))))
+(println (if (empty? found) "fuzz-build-pure: 0 findings" (str "fuzz-build-pure: " (count found) " findings")))
+(when (empty? found) (fs/delete-tree work))
+(when (seq found) (println "programs kept in" work))
+(System/exit (if (empty? found) 0 1))

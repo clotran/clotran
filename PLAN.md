@@ -1498,6 +1498,18 @@ as a record is, named from its keys. Anything that lets one escape --
 `conj`, `assoc`, a call outside the file -- keeps it on the heap and
 the function in tier B, with the warning saying which use did it.
 
+**A whole program (2026-10-17).** `clotran build --pure` lowers a
+namespace whose `-main` is tier A, wraps it in a Fortran `program` that
+reads `-main`'s hinted parameters (^long, ^double, a string) from the
+command line -- a wrong count or type is a usage line and status 2 --
+and links it with the runtimes static and libquadmath's entry points
+stubbed (as clotran-bin, cf36cf2): one executable of a few hundred KB
+with no clotran in it. James, 2026-10-17: experiments as tiny pinned
+binaries, sent to the machines that run them. `make check-build-pure`;
+`scripts/fuzz-build-pure` against clj (nightly). Next on this road: a
+required package's Fortran used from pure code, and the build's
+provenance -- dependency hashes, compiler and flags -- in the binary.
+
 
 ### 14. Stage 3: plain Clojure on several threads at once (planned 2026-09-25)
 

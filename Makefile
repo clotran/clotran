@@ -547,10 +547,10 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-no-libquadmath check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
-TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run
+TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -641,6 +641,13 @@ check-seed-per-process:
 check-no-libquadmath:
 	@echo "--- no libquadmath code in clotran-bin: LGPL, which the GCC runtime exception does not cover (src/c/quad_stub.c) ---"
 	! nm clotran-bin$(EXE) | grep quadmath | grep -v '[_ ]quadmath_snprintf$$'
+check-build-pure:
+	@echo "--- clotran build --pure: a tier-A program as one small executable with no clotran in it (test/clj/pure_main/sums.cljf) ---"
+	rm -f $(B)/sums$(EXE)
+	./clotran-bin$(EXE) --launch build --pure test/clj/pure_main/sums.cljf -o $(B)/sums$(EXE) </dev/null >/dev/null
+	$(B)/sums$(EXE) 10 2.5 | tr -d '\r' | grep -qx 'sum 45'
+	$(B)/sums$(EXE) 10 2>/dev/null; test $$? = 2
+	! nm $(B)/sums$(EXE) | grep quadmath | grep -v '[_ ]quadmath_snprintf$$'
 check-overflow-binding:
 	@echo "--- an overflow caught outside a binding unwinds it, on a small value stack (test/clj/overflow_binding.clj) ---"
 	CLOTRAN_STACK_SLOTS=262144 ./clotran-bin src/clj/clojure/core.clj test/clj/overflow_binding.clj </dev/null 2>&1 | grep -qx '\[:so nil\]'
@@ -744,6 +751,9 @@ check-fuzz-deps:
 check-fuzz-run:
 	@echo "--- running a program with no shell (clotran-run): generated argv, env, directory and status, each received exactly ---"
 	scripts/fuzz-run -n 100 -s $(SEED) > $(B)/fuzz-run.out 2>&1; s=$$?; cat $(B)/fuzz-run.out; exit $$s
+check-fuzz-build-pure:
+	@echo "--- clotran build --pure (PLAN 13): generated tier-A programs built and run, against clj; bad arguments against the generator ---"
+	scripts/fuzz-build-pure -n 12 -s $(SEED) > $(B)/fuzz-build-pure.out 2>&1; s=$$?; cat $(B)/fuzz-build-pure.out; exit $$s
 check-fuzz-bind:
 	@echo "--- packages from generated Fortran (PLAN 29): bind-fortran, gfortran and flang, every routine called through the door ---"
 	scripts/fuzz-bind -n 12 -s $(SEED) > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s

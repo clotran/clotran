@@ -347,7 +347,11 @@ end module " mod "
 
 (defn- record-type? [t] (and (keyword? t) (= "record" (namespace t))))
 
-(defn- fort-ident* [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
+;; A Fortran name: letters, digits and _, starting with a letter -- so -main
+;; and *limit* take an fn prefix (fn_main, fn__limit_)
+(defn- fort-ident* [s]
+  (let [t (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_"))]
+    (if (re-find #"^[a-z]" t) t (str "fn" (when-not (str/starts-with? t "_") "_") t))))
 
 (defn- type-name
   "A record's Fortran derived type: name_t, since Fortran is
@@ -386,7 +390,7 @@ end module " mod "
 
 (defn- decline [why] (throw (ex-info why {::decline why})))
 
-(defn- fort-ident [s] (str/lower-case (str/replace (str s) #"[^A-Za-z0-9]" "_")))
+(defn- fort-ident [s] (fort-ident* s))
 
 ;;; ---- emitting: one version of one function ---------------------------
 ;;

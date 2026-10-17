@@ -374,3 +374,42 @@ chains, strings and `println` lower today; `scripts/pure-check` runs
 every case through `clj`, gfortran and flang and compares. Numbers
 become text the Fortran way (DEVIATIONS 50). PLAN.md step 13 has the
 design.
+
+## A whole program as pure Fortran
+
+When a program's `-main` and everything it calls are tier A, `clotran
+build --pure` makes it one small executable with no clotran in it: the
+namespace is lowered to pure Fortran, wrapped in a Fortran `program`,
+and linked with the compiler's runtimes built in.
+
+    (ns sums)
+
+    (defn sum-to ^long [^long n] (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s i)) s)))
+
+    (defn -main [^long n ^double scale]
+      (println "sum" (sum-to n))
+      (println "scaled" (* scale (double (sum-to n)))))
+
+    $ clotran build --pure sums.cljf
+    $ ./sums 10 2.5
+    sum 45
+    scaled 1.1250000000000000E+002
+    $ ./sums 10
+    usage: sums n scale
+
+The executable is a few hundred KB, where `clotran build` copies the
+whole of clotran and its image into one. `-main`'s parameters are its
+command line: hint each `^long`, `^double` or `^clotran.host.string`,
+and the program reads its arguments as those types -- a wrong count, or
+an argument that is not its type, prints the usage or names the
+argument and ends with status 2. An error Clojure would throw, a long
+overflow say, ends the program with Clojure's message and status 1.
+`-m ns` builds a namespace on the source path instead of a file, and
+`-o` names the executable.
+
+If `-main` is not tier A, nothing is built: the message says why, and
+`clotran compile --report` shows each call site that keeps a function
+out. Doubles print the Fortran way (DEVIATIONS 50). `make
+check-build-pure` builds this example; `scripts/fuzz-build-pure`
+generates programs, builds and runs them, and compares their output
+with `clj` running the same `-main`.
