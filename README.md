@@ -14,14 +14,14 @@ On macOS (arm64) or Linux (aarch64 or x86_64, glibc or musl), into
 `~/.local`:
 
 ```
-$ curl -fsSL https://raw.githubusercontent.com/jborden/clotran/main/install.sh | sh
+$ curl -fsSL https://raw.githubusercontent.com/clotran/clotran/main/install.sh | sh
 ```
 
 On Windows (x86_64), from PowerShell, into
 `%LOCALAPPDATA%\Programs\clotran` with its `bin` on your PATH:
 
 ```
-> irm https://raw.githubusercontent.com/jborden/clotran/main/install.ps1 | iex
+> irm https://raw.githubusercontent.com/clotran/clotran/main/install.ps1 | iex
 ```
 
 Each checks the download against the release's `SHA256SUMS`

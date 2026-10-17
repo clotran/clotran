@@ -174,7 +174,7 @@ tools.deps is run by clj.
 **The project file is `deps.edn`, the same file, with the same keys:**
 
     {:paths ["src"]
-     :deps  {jborden/clotran-nrepl {:local/root "../clotran-nrepl"}
+     :deps  {clotran/clotran-nrepl {:local/root "../clotran-nrepl"}
              some/lib {:git/url "https://github.com/some/lib"
                        :git/sha "4a1b2c3d..."}}
      :aliases {:test {:extra-paths ["test"]}}}

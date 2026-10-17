@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install a clotran release on macOS or Linux:
 #
-#   curl -fsSL https://raw.githubusercontent.com/jborden/clotran/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/clotran/clotran/main/install.sh | sh
 #
 # It picks the tarball for this machine (darwin-arm64; linux aarch64 or
 # x86_64, glibc or musl), checks it against the release's SHA256SUMS,
@@ -12,7 +12,7 @@ set -eu
 
 version=${CLOTRAN_VERSION:-1.0.0-rc.4}
 prefix=${PREFIX:-$HOME/.local}
-base=${CLOTRAN_BASE_URL:-https://github.com/jborden/clotran/releases/download/v$version}
+base=${CLOTRAN_BASE_URL:-https://github.com/clotran/clotran/releases/download/v$version}
 
 die() { echo "install.sh: $*" >&2; exit 1; }
 

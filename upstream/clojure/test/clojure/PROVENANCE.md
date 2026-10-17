@@ -11,7 +11,7 @@ ours. A test that fails is clotran's bug, not the test's.
 
 To confirm they still match:
 
-    diff -r ~/jborden/clojure/test/clojure test/clj/clojure
+    diff -r ../clojure/test/clojure test/clj/clojure
 
 `scripts/run-clojure-tests` drives them, one namespace per run so a hard
 failure in one file cannot hide the others.

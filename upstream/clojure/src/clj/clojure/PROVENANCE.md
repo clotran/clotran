@@ -17,7 +17,7 @@ test tree, the spec jars, and the clone.
 Do not edit them. If clotran cannot load one, that is clotran's bug --
 the whole point of the project is that these files run as written.
 
-The reference clone at `~/jborden/clojure` is checked out at the SAME
+The reference clone at `../clojure` is checked out at the SAME
 commit, and DEVIATIONS.md cites its Java. Keep the two in step. Reading
 the Java of one version while running the core.clj of another is the same
 mistake as citing memory, and it nearly bit us: the clone was first taken
@@ -28,7 +28,7 @@ these files -- so the clone moved instead.
 
 To confirm they still match:
 
-    diff -r ~/jborden/clojure/src/clj/clojure src/clj/clojure
+    diff -r ../clojure/src/clj/clojure src/clj/clojure
 
 ## What is deliberately NOT vendored
 
@@ -81,7 +81,7 @@ core.clj's form 656 reads it off the classloader and parses it with
 core.clj is re-vendored from a different tag, or `(clojure-version)`
 starts lying about what is actually running.
 
-Note this makes `diff -r ~/jborden/clojure/src/clj/clojure src/clj/clojure`
+Note this makes `diff -r ../clojure/src/clj/clojure src/clj/clojure`
 report it as an extra file. The spec trees below are the other expected
 extras.
 

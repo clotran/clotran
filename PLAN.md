@@ -4581,7 +4581,7 @@ LANDED 2026-10-07, both:
 whatever machinery should be a separate library we write."** The pool
 -- contexts over SSH, Slurm and Kubernetes, mixed pools, retry, file
 transport -- is its own library, local-only like clotran-deps and
-named jborden/<repo>, not part of clotran's core and not on clotran's
+named clotran/<repo>, not part of clotran's core and not on clotran's
 critical path.
 
 What clotran itself owes that library is only what any program would
@@ -5425,7 +5425,7 @@ needed the release's dylibs. James chose, in order:
   program ends, as the shell's background job did. `./clotran` on macOS
   and Linux is only the rlwrap decision; `bin\clotran.cmd` runs the
   binary. `scripts/fuzz-run` fuzzes the argument passing (nightly).
-- *clotran-deps its own public repository* (github.com/jborden/clotran-deps),
+- *clotran-deps its own public repository* (github.com/clotran/clotran-deps),
   its `.clotran-cache` check moved from its sh script into
   `clotran.deps/cached-path`, which the launcher calls in-process.
 - Install by script only (`install.sh`, `install.ps1`); package
