@@ -6,6 +6,8 @@
   policy.
 - `building.md` -- building from source; the repository's layout.
 - `rationale.md` -- why host Clojure on Fortran rather than bridge to it.
+- `model-coverage.md` -- which parts are proved in ACL2 (`model/`),
+  which are generated from the proof, and which are not and why.
 
 `scripts/readme-check` runs the examples in `../README.md` and
 `guide.md` (`make test`), so their output stays verified.
