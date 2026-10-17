@@ -1,0 +1,9 @@
+# GitHub's language bar (linguist): count what clotran wrote, not what it vendors or generates
+src/c/icu/** linguist-vendored
+upstream/** linguist-vendored
+src/clj/clojure/** linguist-generated
+test/clj/clojure/** linguist-generated
+test/clj/derived/** linguist-generated
+*.cljf linguist-language=Clojure
+src/f/*.inc linguist-language=Fortran
+model/*.lisp linguist-language=Common-Lisp
