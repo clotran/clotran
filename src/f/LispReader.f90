@@ -1484,14 +1484,16 @@ contains
           end if
           if (k%tag /= GCT_KEY) then
              ! its toString, as clj's message has it: a pattern's is its source
-             ! (String concatenation makes a nil "null"), a string or character
-             ! itself, and a collection's is pr's, \s and "a" inside readable
+             ! (String concatenation makes a nil "null"), a number, string or
+             ! character its str, and a collection pr's, \s and "a" inside readable
              if (k%tag == GCT_NIL) then
                 kt = "null"
              else if (gc_kind(k) == OBJ_REGEX) then
                 call gcp_str(gc_slot(k, 1), .false., s=kt)
+             else if (k%tag == GCT_VEC .or. k%tag == GCT_OBJ) then
+                call gcp_str(k, .true., s=kt)
              else
-                call gcp_str(k, k%tag /= GCT_STR .and. k%tag /= GCT_CHAR, s=kt)
+                call key_text(k, "", kt)
              end if
              call fail("Feature should be a keyword: " // kt)
              exit

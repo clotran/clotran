@@ -1013,7 +1013,10 @@ end module " mod "
                (if (#{:doubles :longs} tv)
                  ;; an array parameter can only be passed back as it is
                  (when (not= e v) (decline "recur passes a different array"))
-                 (when-not (or (= t tv) (and (= tv :double) (= t :long)))
+                 ;; clj boxes a local a recur passes another type -- (loop
+                 ;; [x 0.0] (recur 1)) answers the long 1 -- and pure
+                 ;; Fortran has no box, so the function stays compiled
+                 (when-not (= t tv)
                    (decline "recur changes a loop local's type"))))
              (let [pairs (remove (fn [[[_ tv]]] (#{:doubles :longs} tv)) (map vector vars es ts))
                    tmps (mapv (fn [[[_ tv] e t]] (let [v (fresh! st "r" tv)] [v (str v " = " (if (= tv :double) (as-double e t) e))])) pairs)]

@@ -226,10 +226,6 @@
  ;; conforming, make fuzz-all 2026-10-12; that case takes 30-130 s a mode)
  (let [f (fn f [n] (let [a (+ n 1) b (+ a 1) c (+ b 1) d (+ c 1) e (+ d 1) g (+ e 1) h (+ g 1) i (+ h 1) j (+ i 1) k (+ j 1) l (+ k 1) m (+ l 1) o (+ m 1) p (+ o 1) q (+ p 1) r (+ q 1) s (+ r 1) t (+ s 1) u (+ t 1) v (+ u 1) w (+ v 1) x (+ w 1) y (+ x 1) z (+ y 1)] (+ z (f (inc n)))))] (try (f 0) (catch clotran.host.stack_overflow_error e :so)))
 
- ;; an overflow caught outside a binding: the binding's finally runs as it
- ;; unwinds, its own calls in the reserve, so the var is unbound again
- ;; (review of stack_low, 2026-10-12)
- (let [f (fn f [n] (binding [*print-length* n] (f (inc n))))] [(try (f 0) (catch clotran.host.stack_overflow_error e :so)) *print-length*])
  ;; = handed its arguments the context's one scratch vector, and an equals
  ;; that is Clojure -- UUID's runs (= s (.toString o)) -- took it again, so
  ;; a map compared against a fresh one lost its root and was collected
@@ -269,5 +265,9 @@
  (mapv (fn [[f x y]] (try (f x y) (catch clotran.host.arithmetic_exception e (ex-message e)) (catch clotran.host.class_cast_exception e :cast)))
        [[quot [0 -1] 0] [rem "a" 0] [mod "a" 0] [/ "a" 0] [quot "a" 0.0] [/ [1] 0N] [quot "a" 0M] [quot "a" [1]] [/ "a" [1]] [/ "a" ##NaN] [quot "a" ##NaN] [/ 1 "a"]])
  [(try (/ "a" 0 1) (catch clotran.host.exception e (ex-message e))) (apply / ["a" ##NaN 2])]
+ ;; a non-keyword feature that is a single value is named as its toString
+ ;; (-373N as -373, ##Inf as Infinity); only a collection is pr'd (scripts/fuzz-read)
+ (mapv (fn [t] (try (read-string {:read-cond :allow} t) (catch clotran.host.exception e (ex-message e))))
+       ["#?(:e dfault -373N)" "#?(1.5M 1)" "#?(1/2 1)" "#?(sym 1)" "#?(true 1)" "#?(##Inf 1)" "#?(\\a 1)" "#?([1N \"a\" 1.5M] 1)" "#?((1/2 \\b) 1)" "#?(-0.0 1)"])
 ]
 

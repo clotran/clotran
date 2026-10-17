@@ -630,6 +630,10 @@
         ;; integer (DEVIATIONS 71), and a message names the class
         (str/replace "clotran.host.int4" "clotran.host.int8"))))
 
+(def fixture-src
+  "The --fixture's own definitions, which the cases call (DEVIATIONS 72 above)."
+  (or (some-> (:fixture opts) slurp) ""))
+
 (defn differs
   "Whether clotran's answer is not clj's. One allowance, DEVIATIONS 70: a
   ratio becomes a double by Fortran's IEEE quotient, clj's by a 16-digit
@@ -637,19 +641,21 @@
   last place apart agree. And DEVIATIONS 72: a ratio, or a boxed long,
   less the smallest long is exact here, where clj's host overflows
   negating it -- so with the smallest long in the form, clj's long
-  overflow and a number here agree. Errors
+  overflow and a number here agree -- in the form, or in the --fixture's
+  definitions it calls (scripts/fuzz-fn passes the smallest long to an
+  unhinted parameter there, and clj's boxed minus overflows). Errors
   compare by class and message (error-text)."
   ([want got] (differs want got nil))
   ([want got form]
    (and (some? want) (not= (error-text want) (error-text got))
         (not (and form (str/includes? (pr-str form) "/")
                   (when-let [a (dbl want)] (when-let [b (dbl got)] (<= (abs (- a b)) (Math/ulp (double a)))))))
-        (not (and form (str/includes? (pr-str form) "-9223372036854775808")
+        (not (and form (str/includes? (str (pr-str form) fixture-src) "-9223372036854775808")
                   (str/ends-with? (str want) "arithmetic_exception: long overflow")
                   (re-find #"^\[?-?\d+(/\d+)?" (str got))))
         ;; ...and a BigInt less it: clj's wrapped negation answers the
         ;; BigInt PLUS the smallest long, 2^64 from the exact difference
-        (not (and form (str/includes? (pr-str form) "-9223372036854775808")
+        (not (and form (str/includes? (str (pr-str form) fixture-src) "-9223372036854775808")
                   (let [lead #(some-> (re-find #"^\[?(-?\d+)N?[ \]]" (str %)) second bigint)
                         a (lead want) b (lead got)]
                     (and a b (= (abs (- a b)) 18446744073709551616N))))))))

@@ -538,7 +538,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run
@@ -629,6 +629,9 @@ check-seed-per-process:
 	a=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
 	  b=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
 	  [ -n "$$a" ] && [ "$$a" != "$$b" ]
+check-overflow-binding:
+	@echo "--- an overflow caught outside a binding unwinds it, on a small value stack (test/clj/overflow_binding.clj) ---"
+	CLOTRAN_STACK_SLOTS=262144 ./clotran-bin src/clj/clojure/core.clj test/clj/overflow_binding.clj </dev/null 2>&1 | grep -qx '\[:so nil\]'
 check-torture:
 	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
 	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null > $(B)/torture_check.out 2>&1; grep -q "^TORTURE CHECK PASSED" $(B)/torture_check.out
@@ -688,7 +691,8 @@ check-seed:
 	@echo "--- the fuzz checks' seed: $(SEED) (make test SEED=$(SEED) runs the same cases) ---"
 check-fuzz-regressions:
 	@echo "--- every case a fuzzer has found (test/clj/fuzz-regressions.edn), through clj and clotran's flat, tree, compiled and VM modes ---"
-	scripts/fuzz -f test/clj/fuzz-regressions.edn -m flat,tree,compiled,vm > $(B)/fuzz-regressions.out 2>&1; s=$$?; cat $(B)/fuzz-regressions.out; exit $$s
+	scripts/fuzz -f test/clj/fuzz-regressions.edn -m flat,tree,compiled,vm > $(B)/fuzz-regressions.out 2>&1; s=$$?; cat $(B)/fuzz-regressions.out; [ $$s = 0 ] || exit $$s; \
+	  scripts/fuzz -f test/clj/fuzz-fn-regressions.edn --fixture test/clj/fuzz-fn-regressions.clj -m flat,tree,compiled,vm > $(B)/fuzz-fn-regressions.out 2>&1; s=$$?; cat $(B)/fuzz-fn-regressions.out; exit $$s
 check-fuzz:
 	@echo "--- the fuzzer (PLAN 26.9): 300 generated programs and 4 calls of each spec'd function, each through clj and clotran's flat, tree and compiled modes ---"
 	scripts/fuzz -n 300 -s $(SEED) --shrink-budget 60 > $(B)/fuzz.out 2>&1 && scripts/fuzz --fns 4 -s $(SEED) >> $(B)/fuzz.out 2>&1; s=$$?; cat $(B)/fuzz.out; exit $$s
