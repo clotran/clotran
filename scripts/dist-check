@@ -20,7 +20,7 @@
 
 (def script
   (str "set -e; cd /tmp && tar xzf /d/" (fs/file-name tarball) " && c=/tmp/" top "/bin/clotran\n"
-       "printf '(println (+ 1 2))\\n(println @(future (reduce + (range 1000))))\\n(println (re-seq #\"\\\\p{L}+\" \"h\\303\\251llo w\\303\\266rld\"))\\n(shutdown-agents)\\n' > /tmp/p.cljf\n"
+       "printf '(println (+ 1 2))\\n(prn 3.5 (/ 1.0 3) 1e300 (Math/sqrt 2))\\n(println @(future (reduce + (range 1000))))\\n(println (re-seq #\"\\\\p{L}+\" \"h\\303\\251llo w\\303\\266rld\"))\\n(shutdown-agents)\\n' > /tmp/p.cljf\n"
        "$c /tmp/p.cljf\n"
        "mkdir -p /tmp/lib/src/lib /tmp/app/src/app\n"
        "printf '(ns lib.core)\\n(defn twice [x] (* 2 x))\\n' > /tmp/lib/src/lib/core.cljf\n"
@@ -29,7 +29,9 @@
        "printf '{:paths [\"src\"] :deps {local/lib {:local/root \"/tmp/lib\"}}}\\n' > /tmp/app/deps.edn\n"
        "cd /tmp/app && $c -m app.main\n"))
 
-(def want ["3" "499500" "(héllo wörld)" "42"])
+;; a double printed, and read back: rc.3's Linux build crashed on the first
+;; (its gcc 8 Fortran runtime could not read the formats gfortran 14 writes)
+(def want ["3" "3.5 0.3333333333333333 1.0E300 1.4142135623730951" "499500" "(héllo wörld)" "42"])
 
 (def bad
   (doall
