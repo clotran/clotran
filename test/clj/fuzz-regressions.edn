@@ -261,4 +261,13 @@
  (mapv (fn [t] (try (let [x (read-string t)] (if (symbol? x) [(namespace x) (name x) (hash x)] x)) (catch clotran.host.throwable e (ex-message e))))
        ["clojure.core//7" "foo//7" "a/b/7" "a/b/c" "foo//" "``(clojure.core//7 \"x\")" "`clojure.core//7" "`foo/7"])
  [(namespace (symbol "a/b" "7")) (= (read-string "a/b/7") (symbol "a/b" "7")) (compare (read-string "a/b/7") 'a/c)]
+ ;; quot, rem, mod and / read the divisor first, as Numbers.quotient and
+ ;; divide do: a zero divisor is "Divide by zero" whatever the dividend
+ ;; is, a non-number divisor is named before the dividend, and / answers
+ ;; a NaN on either side before any of it (scripts/fuzz)
+ (try (quot (or (first (sequence (map-indexed vector (list -1 19 4)))) 9) 0) (catch clotran.host.arithmetic_exception e :divide-by-zero))
+ (mapv (fn [[f x y]] (try (f x y) (catch clotran.host.arithmetic_exception e (ex-message e)) (catch clotran.host.class_cast_exception e :cast)))
+       [[quot [0 -1] 0] [rem "a" 0] [mod "a" 0] [/ "a" 0] [quot "a" 0.0] [/ [1] 0N] [quot "a" 0M] [quot "a" [1]] [/ "a" [1]] [/ "a" ##NaN] [quot "a" ##NaN] [/ 1 "a"]])
+ [(try (/ "a" 0 1) (catch clotran.host.exception e (ex-message e))) (apply / ["a" ##NaN 2])]
 ]
+

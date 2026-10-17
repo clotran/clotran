@@ -1919,6 +1919,13 @@ longs compiles to clj's primitive `x / y`, whose message is clj's own
 path's answer, which is also what a function of unhinted parameters
 gets in clj. Pure Fortran does the same.
 
+The overload clj picks decides more than the message. With a literal
+double, `(/ "a" ##NaN)` compiles to `divide(Object, double)`, which
+casts the string and throws; through `apply`, or an unhinted function,
+it is `divide(Object, Object)`, whose NaN check answers `##NaN` first.
+clotran answers as the boxed path does: `##NaN` (scripts/fuzz,
+2026-10-17).
+
 **Removal**: track, per value, whether clj would have it primitive
 (the compiler's type inference already follows Clojure's rules), and
 choose the message by that.

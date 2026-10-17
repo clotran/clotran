@@ -2,7 +2,7 @@
 ;; Which builtins may be handed a REUSED argument vector: those whose case in
 ;; call_builtin (Eval.f90) touches its argument vector only to read an element
 ;; (gcv_nth), count it, root allocations with it ([...] lists), check it
-;; (numbers_ok) or copy its tail (rest_args). Anything else -- the vector
+;; (numbers_ok, divisor_first) or copy its tail (rest_args). Anything else -- the vector
 ;; passed on, returned, stored -- might keep it, and keeps allocating.
 ;;
 ;; usage: scripts/argsafe          writes src/f/argsafe.inc
@@ -33,6 +33,7 @@
       (str/replace #"gcv_nth\((args|vs_get\(vst, base \+ 1\)),\s*" "gcv_nth(ARG, ")
       (str/replace #"gcv_count\((args|vs_get\(vst, base \+ 1\))\)" "COUNT")
       (str/replace #"numbers_ok\((args|vs_get\(vst, base \+ 1\))," "numbers_ok(ARG,")
+      (str/replace #"divisor_first\((args|vs_get\(vst, base \+ 1\))," "divisor_first(ARG,")
       (str/replace #"rest_args\((args|vs_get\(vst, base \+ 1\))," "rest_args(ARG,")))
 
 ;; blocks: top-level `case (...)` lines of the procedure's own select

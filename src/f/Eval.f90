@@ -10563,6 +10563,10 @@ contains
        ! rather than 3.0 -- the same silent discard that + - * had.
        ! A zero divisor was not checked either: Clojure raises
        ! "Divide by zero" here for doubles as well as integers,
+       if (divisor_first(args, n, .false., [vs_get(vst, base + 1)], out)) then
+          call vs_leave(vst, base)
+          return
+       end if
        if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
           call vs_leave(vst, base)
           return
@@ -16438,6 +16442,10 @@ contains
          out = gc_bool(ok)
        end block
     case (B_DIV)
+       if (divisor_first(args, n, .true., [vs_get(vst, base + 1)], out)) then
+          call vs_leave(vst, base)
+          return
+       end if
        if (.not. numbers_ok(args, n, [vs_get(vst, base + 1)])) then
           call vs_leave(vst, base)
           return
@@ -21289,6 +21297,56 @@ contains
     is_number = (v%tag == GCT_INT .or. v%tag == GCT_REAL .or. v%tag == GCT_RATIO .or. v%tag == GCT_BIGRATIO &
          .or. v%tag == GCT_BIG .or. v%tag == GCT_DEC)
   end function is_number
+
+  ! quot, rem and / read the divisor before the dividend, as
+  ! Numbers.quotient, remainder and divide do: ops(y), (Number) y, then
+  ! its zero, and only then x -- (quot "a" 0) is "Divide by zero" and
+  ! (quot "a" [1]) names the vector. `/` answers a NaN on either side
+  ! before that (isNaN(x), isNaN(y)): (/ "a" ##NaN) is ##NaN, and so is
+  ! every later step. Done when it raised or answered (out); a numeric
+  ! dividend over a zero divisor is the caller's, as (/ 1.0 0) is ##Inf
+  ! (DEVIATIONS 51).
+  logical function divisor_first(args, n, nan_answers, roots, out) result(done)
+    type(gc_value), intent(in) :: args
+    integer, intent(in) :: n
+    logical, intent(in) :: nan_answers
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), intent(out) :: out
+    type(gc_value) :: x, y, z
+    ! temporaries for the deferred-length calls below (share.clj)
+    character(len=:), allocatable :: dlt_1
+    done = .false.
+    out = gc_nil()
+    if (n < 2) return
+    x = strip_meta(gcv_nth(args, 0)); y = strip_meta(gcv_nth(args, 1))
+    if (nan_answers) then
+       if (x%tag == GCT_REAL) then
+          if (ieee_is_nan(gc_rval(x))) out = x
+       end if
+       if (out%tag == GCT_NIL .and. y%tag == GCT_REAL) then
+          if (ieee_is_nan(gc_rval(y))) out = y
+       end if
+       done = out%tag /= GCT_NIL
+       if (done) return
+    end if
+    if (y%tag == GCT_NIL) then
+       call raise_class("clotran.host.null_pointer_exception", "", roots)
+       done = .true.
+    else if (.not. is_number(y)) then
+       call class_name_of(y, s=dlt_1)
+       call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // " cannot be cast to class clotran.host.number", roots)
+       done = .true.
+    else if (.not. is_number(x)) then
+       z = gc_int(0)
+       if (y%tag == GCT_REAL) then
+          if (ieee_is_nan(gc_rval(y))) return
+       end if
+       if (.not. (num_lt(y, z) .or. num_lt(z, y))) then
+          call raise_class("clotran.host.arithmetic_exception", "Divide by zero", roots)
+          done = .true.
+       end if
+    end if
+  end function divisor_first
 
   ! The host supertypes of a class, one per call. `supers` walks them
   ! through .getInterfaces, and multimethod dispatch and
