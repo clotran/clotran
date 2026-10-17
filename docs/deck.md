@@ -36,7 +36,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 
 - Every FFI reaches **F77**: scalars by reference, explicit-shape arrays, no allocatables, no derived types. BLAS is that subset -- which is why BLAS bindings are easy
 - Above F77 there is **no ABI**: assumed-shape arrays, `allocatable`, `optional`, `class(*)` travel as compiler-private descriptors, mangled per compiler
-- `bind(c)` is a promise *not* to use Fortran written after 1990
+- `bind(c)` limits a routine's *arguments* to what C can describe -- the code inside is any Fortran, but every routine needs a wrapper; Fortran 2018's standard descriptor helps only an FFI that builds it
 - The same descriptor is why **gdb cannot show you a Fortran object**
 - Hosting *on* Fortran removes the boundary: no descriptor to fabricate, no mangling, no copy -- verified at the same address
 

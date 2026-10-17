@@ -131,8 +131,11 @@ explicit-shape arrays, no modules. Above that there is no Fortran ABI:
 an assumed-shape array, an `allocatable`, an `optional` argument are
 passed as a compiler-private descriptor that differs between gfortran,
 flang and ifx, and module names are mangled per compiler. `bind(c)`
-gets around it by promising not to use the parts of Fortran written
-after 1990.
+gets around it by limiting a routine's *arguments* to what C can
+describe -- the code inside can be any Fortran, but a library must be
+written or wrapped that way, routine by routine. (Fortran 2018 can pass
+assumed-shape and allocatable arrays through `bind(c)` with a standard
+descriptor, but an FFI then has to build those descriptors, and few do.)
 
 Hosting *on* Fortran removes the boundary instead of crossing it. A
 clotran array is a Fortran array, so handing it to a library is an

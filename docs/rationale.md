@@ -39,11 +39,14 @@ implemented.
 [clojure-fortran](https://github.com/memmett/clojure-fortran) shows
 the shape of the workaround honestly: mark each routine `bind(c)`,
 write a C header for it, run `jextract`, call the generated clj from
-Clojure. That works -- but `bind(c)` is precisely a promise *not* to
-use assumed-shape arrays, allocatable or optional arguments, derived
-types with allocatable components, generic interfaces, or polymorphism.
-You get Fortran back only by giving up the parts of Fortran written
-after 1990, and you hand-write a wrapper per routine to do it.
+Clojure. That works -- but `bind(c)` limits a routine's *interface* to
+what C can describe: no derived types with allocatable components, no
+generic interfaces, no polymorphism. The code inside can be any Fortran;
+the arguments cannot. Fortran 2018 added assumed-shape, allocatable and
+optional arguments to `bind(c)` through a standard descriptor
+(`CFI_cdesc_t`, `ISO_Fortran_binding.h`), but the caller must build that
+descriptor, and few FFIs do. Either way you hand-write a wrapper per
+routine.
 
 Hosting *on* Fortran removes the boundary instead of crossing it.
 A clotran array is a Fortran array; handing it to a library is an

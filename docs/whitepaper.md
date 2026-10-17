@@ -68,8 +68,11 @@ bridge reaches the F77 subset: scalars by reference, explicit-shape
 arrays, external procedures. Above that there is no ABI: assumed-shape
 arrays, `allocatable`, `optional`, `character(len=:)` and `class(*)`
 are passed as compiler-private descriptors, and module procedures are
-mangled per compiler (`__m_MOD_p`, `m_p_`, `m_mp_p_`). `bind(c)` is
-precisely a promise not to use Fortran written after 1990. Hosting *on*
+mangled per compiler (`__m_MOD_p`, `m_p_`, `m_mp_p_`). `bind(c)` limits
+a routine's arguments to what C can describe -- the code inside can be
+any Fortran, but each routine must be written or wrapped that way, and
+Fortran 2018's standard descriptor for arrays helps only an FFI that
+builds it. Hosting *on*
 Fortran removes the boundary instead of crossing it: no descriptor to
 fabricate, no mangling to guess, no copy -- a contiguous buffer reaches
 the callee at the same address.
