@@ -7,6 +7,9 @@ library (Arieh Warshel, Jan Florian, James Borden), copied verbatim on
     ../chemsol/src/chemsol.f90
     ../chemsol/src/push_array.f90
 
+Licensed BSD 3-clause (LICENSE here), with Arieh Warshel's permission
+to release it (James, 2026-10-17); the sources carried no header.
+
 Do not edit them. `main.f90` from the same directory is deliberately
 NOT here: replacing it with clotran code is the point (PLAN.md step 7),
 and `examples/chemsol.cljf` is that replacement. `src/f/ChemSolBind.f90` is

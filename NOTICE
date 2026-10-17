@@ -51,9 +51,11 @@ unmodified; see src/f/blas/PROVENANCE.md.
 
 ## ChemSol -- src/f/chemsol/
 
-chemsol.f90 and push_array.f90 are ChemSol 2.1 (Arieh Warshel, Jan
-Florian, James Borden), vendored unmodified from the ChemSol sources;
-see src/f/chemsol/PROVENANCE.md.
+chemsol.f90 and push_array.f90 are ChemSol 2.1, copyright 1999 Arieh
+Warshel and Jan Florian and James Borden (the Fortran 90 version),
+distributed under the BSD 3-clause license in src/f/chemsol/LICENSE,
+with Arieh Warshel's permission. Vendored unmodified; see
+src/f/chemsol/PROVENANCE.md.
 
 ## Runtime libraries linked into clotran-bin
 
