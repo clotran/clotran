@@ -142,3 +142,13 @@ it; and function pointers, sanitizers, and libffi are all first-class.
 That's the trade, and it's the right way round: the friction is in the
 value representation, which is a solved problem in any language, and
 the payoff is at the interop boundary, which is not.
+
+## The logo
+
+The logo says the same thing. A disc in two purples is split down an
+*f*: the lighter purple is taken from the Fortran logo, the deep indigo
+from the cover of *Structure and Interpretation of Computer Programs* --
+the language underneath and the Lisp on top, divided by one letter. The
+*f* is cut out of the disc, so it takes the page's colour: white on a
+light page, and on a dark one the two halves and the *f* between them
+read as a yin and yang.
