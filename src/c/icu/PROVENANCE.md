@@ -44,7 +44,8 @@ order (`source/Makefile.in`'s `SUBDIRS`):
     make -C common
     make -C i18n
     make -C tools
-    make -C data
+    icupkg -r <every item but the Makefile's ICU_KEEP> in/icudt78l.dat tmp/icudt78l.dat
+    make -C data ICUDATA_SOURCE_ARCHIVE=tmp/icudt78l.dat
 
 producing `source/lib/lib{icuuc,icui18n,icudata}.a` -- static, so the
 final `clotran-gc` binary needs no ICU install, no dylib/so, no data
@@ -52,6 +53,11 @@ file, and no locale directory on the machine that runs it. Everything
 `make` produces (the `.a` files, `.o`/`.ao` objects, generated
 `Makefile`s, `config.status`) is gitignored; only source is vendored,
 same rule as `core.clj`.
+
+The data baked in is trimmed to what regex and case mapping read: the
+property tables, character names and break rules. The vendored `.dat`
+is not touched; ICU's own `icupkg` copies it without the locale,
+collation and converter items (Makefile, `ICU_KEEP`).
 
 `layoutex`, `icuio`, `extra`, `samples` and `test` are never built --
 none of it is reachable from `uregex_*`, and `test`/`samples` alone

@@ -1412,6 +1412,15 @@ charsets and English; `jdk.localedata` and `jdk.charsets` are optional
 modules `jlink` can drop). ICU supports it: `--with-data-packaging=archive`
 and the Data Build Tool's feature filters.
 
+**Trimmed, 2026-10-17.** The build bakes in only the property tables,
+names and break rules (the Makefile's ICU_KEEP, cut by ICU's own icupkg
+from a copy of the vendored .dat): ICU's data 32.3 MB to 4.8 MB, of
+which the break dictionaries the root break table names are 3 MB, and
+`clotran-bin` 38.0 MB to 9.5 MB on macOS. A probe of `\X`, `\b`,
+scripts, emoji, `\N{...}`, case-insensitive matching and case maps
+answered byte for byte as before. The optional full-data package was
+not needed.
+
 A tier-A function written as the generator would emit it -- `stats/total`
 -- is 1.1 KB of object code and a 35 KB program (`/usr/bin/grep` is
 153 KB here).

@@ -36,3 +36,8 @@ source/config/Makefile.inc
 source/config/icu.pc
 *.dll
 *.exe
+
+# two tools ICU builds in place, not into bin/ -- macOS executables were
+# committed once
+source/tools/icuinfo/icuinfo
+source/tools/gentest/gentest

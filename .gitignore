@@ -24,3 +24,4 @@
 /model/*.cert.out
 /model/*.fasl
 /model/*.port
+.DS_Store

@@ -272,11 +272,29 @@ ICU_INC = -I$(ICU_SRC)/common -I$(ICU_SRC)/i18n
 # (source/data/in/icudt78l.dat, already compiled -- no genrb/CLDR
 # build needed) directly into libicudata.a, so the built binary needs
 # no data file and no locale directory at runtime, anywhere.
+#
+# Only the part of that data clotran reaches is baked in. Regex and case
+# mapping read the property tables (*.icu, *.nrm) and the character and
+# word break rules (\X, \b), with every break table the root one names
+# (icupkg will not leave a dangling reference). Every locale's
+# currencies, zones, names, collation and number rules, and the charset
+# converters -- 27.5 of its 32 MB -- are never opened. ICU's own icupkg
+# takes them out of a copy (data/tmp, a build product), so the vendored
+# .dat stays as downloaded; ICU's data build reads the copy instead
+# (ICUDATA_SOURCE_ARCHIVE).
+ICU_DAT = $(ICU_SRC)/data/in/icudt78l.dat
+ICU_TRIMMED = $(abspath $(ICU_SRC))/data/tmp/icudt78l.dat
+# on Windows ICU builds its tools against its own DLLs, in lib/ (ICU's INVOKE)
+ICU_RUN = PATH="$(abspath $(ICU_SRC))/lib:$(abspath $(ICU_SRC))/stubdata:$$PATH"
+ICU_KEEP = ^([^/]+\.(icu|nrm)|(brkitr/)?(root|res_index|pool)\.res|brkitr/[^/]+\.(brk|dict))$$
 $(ICU_STAMP):
 	cd $(ICU_SRC) && ./runConfigureICU $(ICU_PLATFORM) --enable-static $(ICU_SHARED) \
 		--disable-extras --disable-icuio --with-data-packaging=static
-	mkdir -p $(ICU_SRC)/bin $(ICU_SRC)/lib
-	for d in stubdata common i18n tools data; do $(MAKE) -C $(ICU_SRC)/$$d || exit 1; done
+	mkdir -p $(ICU_SRC)/bin $(ICU_SRC)/lib $(ICU_SRC)/data/tmp
+	for d in stubdata common i18n tools; do $(MAKE) -C $(ICU_SRC)/$$d || exit 1; done
+	$(ICU_RUN) $(ICU_SRC)/bin/icupkg -l $(ICU_DAT) | tr -d '\r' | grep -Ev '$(ICU_KEEP)' > $(ICU_SRC)/data/tmp/drop.lst
+	$(ICU_RUN) $(ICU_SRC)/bin/icupkg -r $(abspath $(ICU_SRC))/data/tmp/drop.lst $(ICU_DAT) $(ICU_TRIMMED)
+	$(MAKE) -C $(ICU_SRC)/data ICUDATA_SOURCE_ARCHIVE=$(ICU_TRIMMED)
 	touch $(ICU_STAMP)
 
 $(ICU_LIBS): $(ICU_STAMP)
