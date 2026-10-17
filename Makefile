@@ -170,6 +170,9 @@ STACK_BY_LINK = .true.
 # where no MSYS2 is (a program is one file; its DLLs would not travel)
 OS_LDFLAGS = -Wl,--stack,1073741824 -static
 OS_OBJECTS = $(B)/win_shim.o $(B)/win_utf8.o
+# libquadmath's five entry points as stubs, so -static takes none of its
+# LGPL code (src/c/quad_stub.c, check-no-libquadmath)
+QUAD_STUB = $(B)/quad_stub.o
 OS_LIBS = -lws2_32
 WINDRES ?= windres
 # the linker names an executable .exe; clotran-bin is the target still
@@ -185,6 +188,9 @@ LIBCXX = -lc++
 # ours. They are GPLv3 with the GCC Runtime Library Exception, which
 # lets an EPL program link them so. Windows links everything (-static).
 STATIC_RT_gfortran = -static-libgfortran -static-libgcc -static-libquadmath
+# libquadmath is LGPL, not under the exception: its five entry points are
+# stubs, so none of its code is linked (src/c/quad_stub.c)
+QUAD_STUB = $(B)/quad_stub.o
 SOEXT = dylib
 PKGMOD = $(B)/pkgmod
 LIBDL =
@@ -285,6 +291,9 @@ $(B)/fs_shim.o: src/c/fs_shim.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
 $(B)/proc_shim.o: src/c/proc_shim.c | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
+
+$(B)/quad_stub.o: src/c/quad_stub.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
 $(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B) $(FCSTAMP)
@@ -428,14 +437,14 @@ LINK_ICU = $(ICU_LIBS) $(LIBCXX) -lpthread $(OS_LIBS)
 # The build's identity, for main.f90: a stamp an image is tied to, and
 # what the REPL's banner says -- VERSION, the pins the deriver recorded
 # (test/clj/derived/PROVENANCE.md), and the machine.
-clotran-bin: $(eval-objects) $(OS_OBJECTS) $(S)/main.f90 $(ICU_LIBS) VERSION test/clj/derived/PROVENANCE.md
+clotran-bin: $(eval-objects) $(OS_OBJECTS) $(QUAD_STUB) $(S)/main.f90 $(ICU_LIBS) VERSION test/clj/derived/PROVENANCE.md
 	printf 'character(len=*), parameter :: BUILD_STAMP = "%s"\n' "$$(date +%s)-$$$$" > $(B)/stamp.inc
 	printf 'character(len=*), parameter :: CLOTRAN_VERSION = "%s"\n' "$$(cat VERSION)" >> $(B)/stamp.inc
 	printf 'character(len=*), parameter :: CLOJURE_PIN = "%s"\n' "$$(sed -n 's/^clojure //p' test/clj/derived/PROVENANCE.md)" >> $(B)/stamp.inc
 	printf 'character(len=*), parameter :: CLJS_PIN = "%s"\n' "$$(sed -n 's/^clojurescript //p' test/clj/derived/PROVENANCE.md)" >> $(B)/stamp.inc
 	printf 'character(len=*), parameter :: BUILD_ARCH = "%s"\n' "$$(uname -m)-$$(uname -s | tr A-Z a-z)" >> $(B)/stamp.inc
 	$(FC) $(FCFLAGS) -c $(S)/main.f90 -o $(B)/main.o
-	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@$(EXE) $(eval-objects) $(B)/main.o $(LINK_ICU) $(LIBDL)
+	$(FC) $(LDFLAGS) $(EXPORTDYN) -o $@$(EXE) $(eval-objects) $(QUAD_STUB) $(B)/main.o $(LINK_ICU) $(LIBDL)
 	$(WIN_IMPLIB)
 
 # Test binaries: each links exactly the modules it exercises, so a
@@ -538,7 +547,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-no-libquadmath check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run
@@ -629,6 +638,9 @@ check-seed-per-process:
 	a=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
 	  b=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
 	  [ -n "$$a" ] && [ "$$a" != "$$b" ]
+check-no-libquadmath:
+	@echo "--- no libquadmath code in clotran-bin: LGPL, which the GCC runtime exception does not cover (src/c/quad_stub.c) ---"
+	! nm clotran-bin$(EXE) | grep quadmath | grep -v '[_ ]quadmath_snprintf$$'
 check-overflow-binding:
 	@echo "--- an overflow caught outside a binding unwinds it, on a small value stack (test/clj/overflow_binding.clj) ---"
 	CLOTRAN_STACK_SLOTS=262144 ./clotran-bin src/clj/clojure/core.clj test/clj/overflow_binding.clj </dev/null 2>&1 | grep -qx '\[:so nil\]'
