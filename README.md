@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.svg" width="200" height="200" alt="clotran logo"></p>
+<img src="docs/logo.svg" width="100" height="100" align="left" alt="clotran logo">
 
 # clotran
 
