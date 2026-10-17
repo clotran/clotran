@@ -576,6 +576,8 @@ check-install:
 	@echo "--- make install into a scratch prefix, run from outside the tree, make uninstall ---"
 	@rm -rf $(B)/inst $(B)/outside && mkdir -p $(B)/outside
 	@$(MAKE) -s install PREFIX=$(CURDIR)/$(B)/inst >/dev/null
+	@# the licenses travel with it: EPL-1.0 for Clojure, ICU's, and on Windows the static runtime's
+	cd $(B)/inst/lib/clotran && ls LICENSE NOTICE epl-v10.html LICENSE-ICU $(if $(EXE),winpthreads-COPYING mingw-w64-runtime-COPYING.txt) >/dev/null
 	@echo "(require (quote [clojure.set :as set])) (println :installed-says (set/union #{1} #{2}) (clojure-version))" > $(B)/outside/t.cljf
 	cd $(B)/outside && $(CURDIR)/$(B)/inst/bin/clotran t.cljf </dev/null 2>&1 | grep -q ":installed-says #{1 2}"
 	@# a project: its deps.edn read by the clotran-deps installed beside clotran,
@@ -885,6 +887,9 @@ install: clotran-bin $(B)/fc
 	rm -rf "$(CLOTRAN_LIB).new"
 	mkdir -p "$(CLOTRAN_LIB).new/src" "$(CLOTRAN_LIB).new/build" "$(CLOTRAN_BIN)"
 	cp clotran-bin$(EXE) clotran "$(CLOTRAN_LIB).new/"
+	cp LICENSE NOTICE epl-v10.html "$(CLOTRAN_LIB).new/"
+	cp src/c/icu/LICENSE "$(CLOTRAN_LIB).new/LICENSE-ICU"
+	[ -z "$(EXE)" ] || cp packaging/windows/licenses/* "$(CLOTRAN_LIB).new/"
 	cp -R src/clj "$(CLOTRAN_LIB).new/src/"
 	cp $(B)/fc "$(CLOTRAN_LIB).new/build/fc"
 	[ -z "$(EXE)" ] || cp $(B)/libclotran-bin.dll.a "$(CLOTRAN_LIB).new/build/"
