@@ -95,9 +95,10 @@ change.
   passing whole, every fuzzer at full size, the oracle's forms agreeing
   with clj there, a line ending CR LF as clj's does -- and the release
   zip checked in a fresh Windows Sandbox (`packaging/windows/check.ps1`).
-  The release is a zip: `bin\clotran.cmd`, which runs the launcher under
-  the busybox-w32 `sh.exe` beside it (GPLv2, pinned by sha256), and
-  `clotran-bin.exe` with gfortran's runtimes linked in. `clotran compile`
+  The release is a zip: `bin\clotran.cmd`, which runs
+  `clotran-bin.exe --launch` -- the command is clotran's own Clojure, so
+  no shell is carried -- and `clotran-bin.exe` with gfortran's runtimes
+  linked in. `clotran compile`
   needs MSYS2's gfortran; a program `clotran build` makes there runs
   interpreted, as its compiled libraries would import from a module
   named `clotran-bin.exe`. Found and fixed on the way, for every system:

@@ -1,0 +1,114 @@
+#!/usr/bin/env bb
+;; fuzz-run: clotran-run, the host's way of running a program with no
+;; shell between (src/c/proc_shim.c) -- what the clotran command, the
+;; loader's background builds and clotran-deps run everything through.
+;;
+;;   scripts/fuzz-run [-n N] [-s SEED]
+;;
+;; Each case is an argv of generated strings -- spaces, tabs, quotes, runs
+;; of backslashes before a quote and at the end, the characters cmd.exe and
+;; sh give meaning to ($ % ^ & | < > * ? ! ; ( ) =), newlines, non-ASCII,
+;; empty strings -- environment variables with generated values, a working
+;; directory whose name is generated too, and an exit status. One clotran
+;; runs them all: for each it runs a child clotran with that argv, env and
+;; directory, which writes back what it received and exits with the
+;; status. The oracle is the generator: the child must have exactly the
+;; argv, each variable's value, the directory and the status it was given.
+;; On Windows this is the quoting CommandLineToArgvW reads back; elsewhere
+;; it is the argv, untouched. Counts by kind, the first few of each shown;
+;; exit 1 on any finding. A generated env value is never empty: Windows
+;; has no empty variable to set.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.test.check.random :as r]
+         '[clojure.test.check.rose-tree :as rose]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 100 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-run [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def windows? (fs/windows?))
+(def bin (str repo "/clotran-bin" (when windows? ".exe")))
+
+(def specials (vec "\"'\\ \t$%^&|<>*?!;()=`~#{}[],-"))
+(def ascii (vec "abcxyzABC0189_./:@+"))
+(def wide ["é" "λ" "日" "ß" "ø" "🙂"])
+
+(def gen-char
+  (g/frequency [[5 (g/elements ascii)] [5 (g/elements specials)] [1 (g/elements wide)]
+                [1 (g/return \newline)] [2 (g/return \\)] [2 (g/return \")]]))
+(def gen-str (g/fmap #(apply str %) (g/vector gen-char 0 12)))
+;; backslashes right before a quote, and at the end: the quoting rule's edges
+(def gen-edge (g/fmap (fn [[a k q b]] (str a (apply str (repeat k \\)) (if q "\"" "") b))
+                      (g/tuple gen-str (g/choose 0 5) g/boolean (g/elements ["" "x" " "]))))
+(def gen-arg (g/frequency [[6 gen-str] [3 gen-edge] [1 (g/return "")]]))
+;; a directory name: no separators, nothing Windows forbids in a name
+(def gen-dirname (g/fmap #(str "d " (str/replace % #"[\\/:*?\"<>|\t\n]" "_") " é")
+                         (g/fmap #(apply str %) (g/vector gen-char 0 6))))
+(def gen-case
+  (g/hash-map :argv (g/vector gen-arg 0 6)
+              :env (g/fmap #(into {} (map-indexed (fn [i v] [(str "FZRUN" i) (if (= "" v) "v" v)]) %))
+                           (g/vector (g/such-that #(not (str/includes? % "\n")) gen-arg) 0 3))
+              :dir gen-dirname
+              :exit (g/frequency [[4 (g/return 0)] [2 (g/choose 1 9)] [1 (g/choose 100 125)]])))
+
+(def cases
+  (let [rnd (r/make-random (:seed opts))]
+    (mapv (fn [i rk] (assoc (rose/root (g/call-gen gen-case rk (min 30 (+ 2 i)))) :i i))
+          (range (:n opts)) (r/split-n rnd (:n opts)))))
+
+(def work (str (fs/create-temp-dir {:prefix "fuzz-run"})))
+(doseq [{:keys [i dir]} cases] (fs/create-dirs (str work "/" i "/" dir)))
+(spit (str work "/cases.edn") (pr-str (mapv #(assoc % :dir (str work "/" (:i %) "/" (:dir %))) cases)))
+;; the child: what it got, and the status it was told to end with
+(spit (str work "/child.cljf")
+      (str "(clotran-spit (first *command-line-args*)\n"
+           "  (pr-str {:argv (vec (rest *command-line-args*))\n"
+           "           :env (into {} (for [i (range 3) :let [k (str \"FZRUN\" i)]] [k (clotran.host.system/getenv k)]))\n"
+           "           :dir (clotran.host.system/getProperty \"user.dir\")}))\n"
+           "(clotran.host.system/exit (parse-long (clotran.host.system/getenv \"FZRUN_EXIT\")))\n"))
+(spit (str work "/driver.cljf")
+      (str "(def bin " (pr-str bin) ")\n"
+           "(def core " (pr-str (str repo "/src/clj/clojure/core.clj")) ")\n"
+           "(def work " (pr-str work) ")\n"
+           "(doseq [c (read-string (clotran-slurp (str work \"/cases.edn\")))]\n"
+           "  (let [got (str work \"/\" (:i c) \".got\")\n"
+           "        st (clotran-run (into [bin core \"--run\" (str work \"/child.cljf\") got] (:argv c))\n"
+           "                        (:dir c) (str work \"/\" (:i c) \".out\")\n"
+           "                        (into [(str \"FZRUN_EXIT=\" (:exit c))] (for [[k v] (:env c)] (str k \"=\" v))) true)]\n"
+           "    (println (pr-str {:i (:i c) :status st\n"
+           "                      :got (when (clotran-file-exists? got) (read-string (clotran-slurp got)))\n"
+           "                      :real-dir (clotran-real-path (:dir c))}))))\n"))
+
+(def r (p/shell {:out :string :err :string :continue true}
+                bin (str repo "/src/clj/clojure/core.clj") "--run" (str work "/driver.cljf")))
+(def results (into {} (for [l (str/split-lines (:out r)) :when (str/starts-with? l "{:i ")]
+                        (let [m (read-string l)] [(:i m) m]))))
+
+(defn verdicts [{:keys [i argv env exit]}]
+  (let [{:keys [status got real-dir]} (results i)
+        want-env (into {} (for [k (map #(str "FZRUN" %) (range 3))] [k (get env k)]))]
+    (cond
+      (nil? (results i)) [[:no-result {}]]
+      (nil? got) [[:child-did-not-run {:status status :out (str/trim (str (fs/exists? (str work "/" i ".out"))))}]]
+      :else (remove nil?
+                    [(when (not= argv (:argv got)) [:argv {:want argv :got (:argv got)}])
+                     (when (not= want-env (:env got)) [:env {:want want-env :got (:env got)}])
+                     (when (not= real-dir (:dir got)) [:dir {:want real-dir :got (:dir got)}])
+                     (when (not= exit status) [:exit-status {:want exit :got status}])]))))
+
+(def found (for [c cases, [kind detail] (verdicts c)] {:kind kind :case (:i c) :detail detail}))
+(println (format "fuzz-run: %d cases, %d argument strings, seed %d" (count cases) (reduce + (map (comp count :argv) cases)) (:seed opts)))
+(when (seq (str/trim (:err r))) (println "driver stderr:" (subs (:err r) 0 (min 400 (count (:err r))))))
+(doseq [[kind fs] (group-by :kind found)]
+  (println (format "  %-20s %d" (name kind) (count fs)))
+  (doseq [f (take 3 fs)] (println "    case" (:case f) (pr-str (:detail f)))))
+(println (if (empty? found) "fuzz-run: 0 findings" (str "fuzz-run: " (count found) " findings")))
+(fs/delete-tree work)
+(System/exit (if (empty? found) 0 1))

@@ -5382,6 +5382,43 @@ remains before 1.0.0, in order:
 - 1.0.0-rc.2 tagged 2026-10-14 on main (feat/threads merged); then James
   tags v1.0.0.
 
+**rc.3 pulled, 2026-10-16.** Following the README on a clean install of
+every artifact (a script per OS) found what the dist checks had not:
+the Linux glibc build crashed printing any double -- gfortran 14's
+code (`ES0.d` formats) on the gcc 8 libgfortran the tarball carried --
+a package built by a current gfortran could not load beside that
+runtime (`GFORTRAN_10`), and a program `clotran build` made on macOS
+needed the release's dylibs. James chose, in order:
+
+- *Static runtimes, not carried ones* ("why not just create static
+  binaries?"; no prebuilt runtimes from a package ecosystem): gfortran's
+  libgfortran, libgcc, libquadmath and libstdc++ link into clotran-bin
+  on macOS and Linux (`STATIC_RT_gfortran`), as Windows already did; the
+  one shared library left is the C library, since packages are dlopen'd.
+  The binary is 0.4 MB (macOS) to 1.9 MB (Linux arm64) larger and the
+  tarball smaller, with no `lib/` beside it. The GCC Runtime Library
+  Exception lets an EPL program link them so.
+- *No GPL in a download.* The Windows zip carried busybox-w32 (GPLv2)
+  as `sh.exe` for the launcher. James: "use clotran slurp and spit and
+  replace the shell calls with our own code". The command is now
+  `clotran-bin --launch` (main.f90): core loads, `clotran.launcher` reads
+  the arguments -- new, explain, compile, build, test, a project's
+  deps.edn -- and answers the host's part (a program, `-m`, the REPL, a
+  status). What it runs -- the Fortran compiler, a clotran of its own,
+  git -- it runs from an argument list (`clotran-run`, src/c/proc_shim.c),
+  never a command line a shell parses; files are made, moved and
+  removed by the host (`clotran-mkdirs`, `clotran-rename`,
+  `clotran-delete`). The loader's background build is a clotran
+  process too (`compile --cache`), which finishes the cache after its
+  program ends, as the shell's background job did. `./clotran` on macOS
+  and Linux is only the rlwrap decision; `bin\clotran.cmd` runs the
+  binary. `scripts/fuzz-run` fuzzes the argument passing (nightly).
+- *clotran-deps its own public repository* (github.com/jborden/clotran-deps),
+  its `.clotran-cache` check moved from its sh script into
+  `clotran.deps/cached-path`, which the launcher calls in-process.
+- Install by script only (`install.sh`, `install.ps1`); package
+  managers were judged overkill.
+
 **Said plainly in the release notes:** the speed as the README states
 it; the debugger as it is (calls, one level); interop as
 `call-package*` over the shims `scripts/bind-fortran` generates (step

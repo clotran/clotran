@@ -284,6 +284,9 @@ $(B)/socket_shim.o: src/c/socket_shim.c src/c/socket_shim.h | $(B) $(FCSTAMP)
 $(B)/fs_shim.o: src/c/fs_shim.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
+$(B)/proc_shim.o: src/c/proc_shim.c | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
+
 $(B)/regex_shim.o: src/c/regex_shim.c src/c/regex_shim.h | $(B) $(FCSTAMP)
 	$(CC) -c $(ICU_CFLAGS) $(ICU_INC) $< -o $@
 
@@ -416,7 +419,7 @@ compiled-objects = $(B)/CompiledFn.o
 $(B)/DynLoad.o: $(B)/GC.o
 $(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/DynLoad.o
 # TCP sockets: the shim holds what differs between POSIX and Winsock
-socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o
+socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o $(B)/proc_shim.o
 $(B)/Socket.o: $(B)/GC.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(vm-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
@@ -538,7 +541,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
-TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
+TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -621,14 +624,14 @@ check-tree:
 check-banner:
 	@echo "--- the REPL's banner is for a terminal only: a pipe must never see it ---"
 	! (printf '(+ 1 2)\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -q 'based on Clojure')
-check-torture:
-	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
-	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null > $(B)/torture_check.out 2>&1; grep -q "^TORTURE CHECK PASSED" $(B)/torture_check.out
 check-seed-per-process:
 	@echo "--- every run its own random seed (random_init): two runs, two random-uuids, as clj's ---"
 	a=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
 	  b=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
 	  [ -n "$$a" ] && [ "$$a" != "$$b" ]
+check-torture:
+	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
+	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null > $(B)/torture_check.out 2>&1; grep -q "^TORTURE CHECK PASSED" $(B)/torture_check.out
 check-threads:
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
 	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null > $(B)/threads_heap.out 2>&1; \
@@ -722,6 +725,9 @@ check-fuzz-gc:
 check-fuzz-deps:
 	@echo "--- the package manager (PLAN 29): generated dependency graphs, local and git, conflicts and jars, through clotran-deps against a model of its rules, and loaded ---"
 	scripts/fuzz-deps -n 20 -s $(SEED) > $(B)/fuzz-deps.out 2>&1; s=$$?; cat $(B)/fuzz-deps.out; exit $$s
+check-fuzz-run:
+	@echo "--- running a program with no shell (clotran-run): generated argv, env, directory and status, each received exactly ---"
+	scripts/fuzz-run -n 100 -s $(SEED) > $(B)/fuzz-run.out 2>&1; s=$$?; cat $(B)/fuzz-run.out; exit $$s
 check-fuzz-bind:
 	@echo "--- packages from generated Fortran (PLAN 29): bind-fortran, gfortran and flang, every routine called through the door ---"
 	scripts/fuzz-bind -n 12 -s $(SEED) > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s

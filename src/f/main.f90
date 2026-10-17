@@ -55,7 +55,8 @@ contains
     type(gc_value) :: env
     type(gc_value) :: none(0)
     integer :: base, i, arglen, st, nargs, first_prog
-    logical :: imaged
+    logical :: imaged, launch
+    character(len=:), allocatable :: home
     integer(8) :: image_id
     character(len=1024) :: argbuf
     character(len=8) :: statbuf, tortbuf
@@ -65,6 +66,7 @@ contains
        character(len=:), allocatable :: dlr_1
        call home_dir(d=dlr_1)
        call gce_set_home(dlr_1)
+       home = dlr_1
     end block
     ! A BUILT PROGRAM: this file carries its image and entry, and every
     ! argument is the program's
@@ -124,7 +126,13 @@ contains
     ! as clj -M runs one -- the args are *command-line-args*, and there is
     ! no REPL after it. Files before the marker load first, as always.
     nargs = command_argument_count()
+    launch = .false.
+    if (nargs >= 1) then
+       call get_command_argument(1, argbuf, arglen)
+       launch = argbuf(1:arglen) == "--launch"
+    end if
     first_prog = nargs + 1
+    if (.not. launch) then
     do i = 2, nargs
        call get_command_argument(i, argbuf, arglen)
        if (argbuf(1:arglen) == "--run" .or. argbuf(1:arglen) == "-m") then
@@ -132,48 +140,63 @@ contains
           exit
        end if
     end do
-    do i = 1, first_prog - 1
-       call get_command_argument(i, argbuf, arglen)
-       ! Every file after core.clj starts in user, as a script run by
-       ! clojure.main does. Inheriting core.clj's own (ns clojure.core)
-       ! put a script's defs INTO clojure.core -- (def map ...) in a
-       ! script replaced map for everything.
-       if (i > 1) call gce_enter_user()
-       if (imaged .and. i == 1 .and. index(argbuf(1:arglen), "clojure/core.clj") > 0) then
-          ! core.clj is in the image, and so is everything the first
-          ! file's load switches on; torture is this process's own
-          call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
-          gc_torture = (trim(tortbuf) == "1")
-          call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
-          if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
-          ! the image holds the heap, not this thread's binding frame
-          call gce_main_bindings()
-          cycle
-       end if
-       call load_file(argbuf(1:arglen), vs_get(base + 1))
-       ! clojure.main binds the REPL's *1 *2 *3 *e to nil around a
-       ! script (with-bindings), so a script that reads *1 sees nil,
-       ! not an unbound Var
-       if (i == 1) call gce_bind_repl_vars()
-       ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
-       ! every macro call is checked against clojure.core.specs.alpha,
-       ! unless CLOTRAN_SPEC_SKIP_MACROS is set (clojure.spec.skip-macros)
-       if (i == 1) then
-          call gce_main_bindings()
-          ! CLOTRAN_GC_TORTURE=1 collects at EVERY allocation from here on --
-          ! what test/f's torture pass does, and the only way a rooting bug
-          ! shows reliably: a value that is not on the shadow stack is
-          ! collected the moment the next allocation happens. It starts
-          ! AFTER the first file (core.clj takes minutes under it), so the
-          ! form under suspicion runs tortured and the bootstrap does not.
-          call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
-          gc_torture = (trim(tortbuf) == "1")
-          call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
-          if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
-          call get_environment_variable("CLOTRAN_SPEC_SKIP_MACROS", status=st)
-          call gce_set_spec_check(st /= 0)
-       end if
-    end do
+    end if
+    if (launch) then
+       call load_arg(1, home // "/src/clj/clojure/core.clj")
+    else
+       do i = 1, first_prog - 1
+          call get_command_argument(i, argbuf, arglen)
+          call load_arg(i, argbuf(1:arglen))
+       end do
+    end if
+
+    ! `clotran-bin --launch ARGS`: the clotran command itself. core.clj is
+    ! loaded (the image) and clotran.launcher reads ARGS -- new, compile,
+    ! build, test, a project's deps.edn -- doing what is its own and
+    ! answering what is the host's: a program, a namespace's -main, the
+    ! REPL, or an exit status. No shell is involved, on any system.
+    if (launch) then
+       block
+         character(len=4096), allocatable :: largs(:), acts(:)
+         integer, allocatable :: llens(:), alens(:)
+         integer :: na, ec
+         allocate(largs(nargs - 1), llens(nargs - 1))
+         do i = 2, nargs
+            call get_command_argument(i, largs(i - 1), llens(i - 1))
+         end do
+         call gce_enter_user()
+         call gce_set_command_line_args(largs, llens)
+         err_unit = 0
+         call load_text("(clojure.core/require (quote clotran.launcher))" // achar(10) // &
+              "(clotran.launcher/main clojure.core/*command-line-args*)", "clotran", vs_get(base + 1))
+         call gce_launch_action(acts, alens, na)
+         if (load_failed .or. na == 0) then
+            flush(6)
+            stop 1, quiet=.true.
+         end if
+         select case (acts(1)(1:alens(1)))
+         case ("--exit")
+            ec = 1
+            if (na >= 2) read(acts(2)(1:alens(2)), *, iostat=st) ec
+            flush(6)
+            if (ec /= 0) stop ec, quiet=.true.
+            return
+         case ("--run", "-m")
+            if (na < 2) then
+               write(0, '(A,A,A)') "clotran: ", acts(1)(1:alens(1)), " needs a file or a namespace"
+               stop 2, quiet=.true.
+            end if
+            call run_prog(acts(1)(1:alens(1)), acts(2)(1:alens(2)), acts(3:na), alens(3:na), vs_get(base + 1))
+            flush(6)
+            if (load_failed) stop 1, quiet=.true.
+            return
+         case default
+            ! the REPL: its *command-line-args* are nil, as clj's are
+            err_unit = 6
+            call gce_set_command_line_args(largs(1:0), llens(1:0))
+         end select
+       end block
+    end if
 
     if (first_prog <= nargs) then
        call run_program(first_prog, nargs, vs_get(base + 1))
@@ -236,6 +259,54 @@ contains
        flush(6)
        stop 1, quiet=.true.
     end if
+  contains
+
+  ! One file of the command line, the i-th: core.clj first, which an
+  ! image stands in for, then each after it in user.
+  subroutine load_arg(i, path)
+    integer, intent(in) :: i
+    character(len=*), intent(in) :: path
+    ! Every file after core.clj starts in user, as a script run by
+    ! clojure.main does. Inheriting core.clj's own (ns clojure.core)
+    ! put a script's defs INTO clojure.core -- (def map ...) in a
+    ! script replaced map for everything.
+    if (i > 1) call gce_enter_user()
+    if (imaged .and. i == 1 .and. index(path, "clojure/core.clj") > 0) then
+       ! core.clj is in the image, and so is everything the first
+       ! file's load switches on; torture is this process's own
+       call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
+       gc_torture = (trim(tortbuf) == "1")
+       call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
+       if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
+       ! the image holds the heap, not this thread's binding frame
+       call gce_main_bindings()
+       return
+    end if
+    call load_file(path, vs_get(base + 1))
+    ! clojure.main binds the REPL's *1 *2 *3 *e to nil around a
+    ! script (with-bindings), so a script that reads *1 sees nil,
+    ! not an unbound Var
+    if (i == 1) call gce_bind_repl_vars()
+    ! RT.CHECK_SPECS: once core.clj -- the first file -- has loaded,
+    ! every macro call is checked against clojure.core.specs.alpha,
+    ! unless CLOTRAN_SPEC_SKIP_MACROS is set (clojure.spec.skip-macros)
+    if (i == 1) then
+       call gce_main_bindings()
+       ! CLOTRAN_GC_TORTURE=1 collects at EVERY allocation from here on --
+       ! what test/f's torture pass does, and the only way a rooting bug
+       ! shows reliably: a value that is not on the shadow stack is
+       ! collected the moment the next allocation happens. It starts
+       ! AFTER the first file (core.clj takes minutes under it), so the
+       ! form under suspicion runs tortured and the bootstrap does not.
+       call get_environment_variable("CLOTRAN_GC_TORTURE", tortbuf)
+       gc_torture = (trim(tortbuf) == "1")
+       call get_environment_variable("CLOTRAN_GC_EVERY", tortbuf)
+       if (len_trim(tortbuf) > 0) read(tortbuf, *) gc_every
+       call get_environment_variable("CLOTRAN_SPEC_SKIP_MACROS", status=st)
+       call gce_set_spec_check(st /= 0)
+    end if
+  end subroutine load_arg
+
   end subroutine main_body
 
   ! Reads a whole file and evaluates every form in it.
@@ -569,6 +640,19 @@ contains
     do j = k + 2, nargs
        call get_command_argument(j, args(j - k - 1), lens(j - k - 1))
     end do
+    call run_prog(marker(1:ml), target(1:tl), args, lens, env)
+  end subroutine run_program
+
+  ! The program itself: marker is --run (target a file) or -m (target a
+  ! namespace, whose -main is called), and args its *command-line-args*.
+  subroutine run_prog(marker, target, args, lens, env)
+    character(len=*), intent(in) :: marker, target
+    character(len=*), intent(in) :: args(:)
+    integer, intent(in) :: lens(:)
+    type(gc_value), intent(in) :: env
+    integer :: ml, tl
+    ml = len(marker)
+    tl = len(target)
     err_unit = 0
     call gce_enter_user()
     call gce_set_command_line_args(args, lens)
@@ -583,7 +667,7 @@ contains
             "(clojure.core/apply " // target(1:tl) // "/-main clojure.core/*command-line-args*)", &
             "-m " // target(1:tl), env)
     end if
-  end subroutine run_program
+  end subroutine run_prog
 
   ! Just enough of a form to identify it in a report.
   subroutine first_line(t, out)

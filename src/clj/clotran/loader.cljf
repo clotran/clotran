@@ -197,13 +197,8 @@
   (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (clotran.host.system/getenv "HOME") "/.cache/clotran")))
 
 (def ^:private ext
-  (delay (case (clotran-sh "case \"$(uname -s)\" in Darwin) exit 0;; MINGW*|MSYS*|Windows_NT) exit 2;; *) exit 1;; esac")
-           0 "dylib" 2 "dll" "so")))
-
-(defn- q
-  "`s` quoted for /bin/sh."
-  [s]
-  (str "'" (str/replace s "'" "'\\''") "'"))
+  (delay (let [os (str (clotran.host.system/getProperty "os.name"))]
+           (cond (str/starts-with? os "Mac") "dylib" (str/starts-with? os "Windows") "dll" :else "so"))))
 
 (defn- key-of [src] (str/replace src #"[^A-Za-z0-9._-]" "_"))
 
@@ -233,17 +228,20 @@
         lib (str dir "/" k "-" h "-" (clotran.host.system/nanoTime) "." @ext)
         log (str dir "/" k "-" h ".log")
         ptr (ptr-path src h)
-        cmd (str "mkdir -p " (q dir) " && "
-                 "CLOTRAN_AUTOCOMPILE=use " (q (str (clotran.host.system/getProperty "clotran.home") "/clotran"))
-                 " compile " (q src) " " (q lib) " > " (q log) " 2>&1; "
-                 "if [ -f " (q lib) " ]; then "
-                 "printf %s " (q lib) " > " (q (str ptr ".part")) " && mv -f " (q (str ptr ".part")) " " (q ptr) "; "
-                 "for f in " (q dir) "/" (q k) "-*; do "
-                 "[ \"$f\" = " (q lib) " ] || [ \"$f\" = " (q ptr) " ] || [ \"$f\" = " (q log) " ] || rm -f \"$f\"; done; "
-                 "elif grep -q 'no Fortran was written' " (q log) "; then printf none > " (q ptr) "; fi; "
-                 ": > " (q (str lib ".done")))]
+        home (clotran.host.system/getProperty "clotran.home")
+        bin (if (= "dll" @ext) (str home "/clotran-bin.exe") (str home "/clotran-bin"))]
+    (clotran-mkdirs dir)
     (swap! builds assoc src {:state :compiling :lib lib :hash h :log log})
-    (clotran-sh cmd (boolean wait?))
+    ;; the build is its own process (clotran.launcher, compile --cache),
+    ;; which records the library itself, so the cache is filled even when
+    ;; this program ends first. lib.done is written here, once it has
+    ;; ended however it ended: a build that crashed is :failed, not a
+    ;; wait that never ends
+    (let [run (fn []
+                (clotran-run [bin "--launch" "compile" "--cache" src lib ptr k log] nil log
+                             ["CLOTRAN_AUTOCOMPILE=use"] true)
+                (when-not (clotran-file-exists? (str lib ".done")) (clotran-spit (str lib ".done") "")))]
+      (if wait? (run) (future (run))))
     lib))
 
 (defn- one-name
@@ -281,7 +279,7 @@
   []
   (doseq [[src {:keys [state lib log] h :hash}] @builds
           :when (and (= :compiling state) (clotran-file-exists? (str lib ".done")))]
-    (clotran-sh (str "rm -f " (q (str lib ".done"))))
+    (clotran-delete (str lib ".done"))
     (cond
       (not (clotran-file-exists? lib))
       (if (= :none (current src h))

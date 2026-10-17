@@ -1,14 +1,12 @@
 @echo off
-rem clotran-deps, from a clotran release for Windows: its sh script, run by
-rem the sh clotran carries (see clotran.cmd).
+rem clotran-deps, from a clotran release for Windows: clotran.deps/-main on
+rem the clotran beside it, with no shell.
 setlocal
-rem clotran reads and writes UTF-8: the console's code page too, while it
-rem runs, put back as it was after
 for /f "tokens=2 delims=:" %%a in ('chcp') do set "CLOTRAN_CP=%%a"
 chcp 65001 >nul
-set "CLOTRAN_SH=%~dp0..\lib\clotran\sh.exe"
 if not defined HOME set "HOME=%USERPROFILE%"
-"%CLOTRAN_SH%" "%~dp0..\lib\clotran-deps\bin\clotran-deps" %*
+set "CLOTRAN_PATH=%~dp0..\lib\clotran-deps\src"
+"%~dp0..\lib\clotran\clotran-bin.exe" --launch -m clotran.deps %*
 set "CLOTRAN_RC=%ERRORLEVEL%"
 if defined CLOTRAN_CP chcp %CLOTRAN_CP% >nul
 exit /b %CLOTRAN_RC%

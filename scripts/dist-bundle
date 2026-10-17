@@ -81,23 +81,14 @@
   (doseq [f (cons bin (map str (fs/list-dir libdir)))] (p/shell {:err :string} "codesign" "-s" "-" "-f" f)))
 
 ;; Windows (MSYS2): the DLLs the binary needs that MSYS2 provides, beside
-;; it, where Windows looks first; busybox-w32's sh.exe, which runs the
-;; launcher and clotran-sh, pinned by its sha256 as PACKAGES.md asks; and
-;; the commands as .cmd files (packaging/windows)
-(def busybox {:url "https://frippery.org/files/busybox/busybox-w64-FRP-6075-g169694ebd.exe"
-              :sha256 "07bb1e5b095b00d68a695481f9240879f33c5724b40aa2308f999d54ed78f075"})
+;; it, where Windows looks first, and the commands as .cmd files
+;; (packaging/windows), which run clotran-bin.exe --launch: no shell is
+;; carried, since the command is clotran's own (clotran.launcher)
 
 (defn windows []
   (doseq [[_ name path] (re-seq #"(?m)^\s*(\S+) => (/(?:ucrt64|mingw64|clang64)/\S+)" (sh "ldd" bin))]
     (fs/copy path (str home "/" name) {:replace-existing true})
     (println "carried" name))
-  (let [f (str home "/sh.exe")]
-    (p/shell "curl" "-sfL" "-o" f (:url busybox))
-    ;; on stdin: sha256sum puts a \ before the sum of a name with one in it
-    (let [got (first (str/split (:out (p/shell {:in (fs/file f) :out :string} "sha256sum")) #"\s"))]
-      (when (not= got (:sha256 busybox))
-        (println "dist-bundle: busybox-w32's sha256 is" got "not" (:sha256 busybox))
-        (System/exit 1))))
   (doseq [cmd ["clotran" "clotran-deps"]]
     (fs/delete-if-exists (str stage "/bin/" cmd))
     (fs/copy (str (fs/parent (fs/parent (fs/absolutize *file*))) "/packaging/windows/" cmd ".cmd")

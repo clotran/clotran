@@ -202,14 +202,13 @@
   (let [p (path-of (apply file f more))
         i (clojure.string/last-index-of p "/")]
     (when (and i (pos? i))
-      (zero? (clotran-sh (str "mkdir -p '" (clojure.string/replace (subs p 0 i) "'" "'\\''") "'"))))))
+      (clotran-mkdirs (subs p 0 i)))))
 
 (defn delete-file
   "Deletes the file; throws if it cannot, unless silently."
   [f & [silently]]
   (let [p (path-of f)]
-    (if (and (clotran-file-exists? p)
-             (zero? (clotran-sh (str "rm -f '" (clojure.string/replace p "'" "'\\''") "'"))))
+    (if (and (clotran-file-exists? p) (clotran-delete p))
       true
       (or silently (throw (clotran.host.io_exception. (str "Couldn't delete " p)))))))
 

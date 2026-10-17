@@ -1,0 +1,401 @@
+(ns clotran.launcher
+  "The clotran command: `clotran-bin --launch ARGS` (main.f90) loads core
+  and calls main, which does what is its own -- new, explain, compile,
+  build, a project's deps.edn -- and leaves in `action` what is the
+  host's: a program, a namespace's -main, the REPL, or an exit status.
+
+  It is Clojure, not a shell script, so the command is the same program on
+  every system and needs no shell where none is (Windows): programs run
+  from an argument list (clotran-run), and files are made, moved and
+  removed by the host (clotran-mkdirs, clotran-rename, clotran-delete)."
+  (:require [clojure.string :as str]))
+
+(def action
+  "What main.f90 runs once main returns: [\"--run\" file arg...], [\"-m\" ns
+  arg...], [\"--repl\"] or [\"--exit\" n]."
+  ["--repl"])
+
+(defn- answer! [a] (alter-var-root #'action (constantly a)) nil)
+(defn- exit! [n] (answer! ["--exit" (str n)]))
+
+(def ^:private home (clotran.host.system/getProperty "clotran.home"))
+(def ^:private windows? (str/starts-with? (str (clotran.host.system/getProperty "os.name")) "Windows"))
+(def ^:private sep (clotran.host.system/getProperty "path.separator"))
+(defn- getenv [k] (let [v (clotran.host.system/getenv k)] (when-not (str/blank? v) v)))
+
+(def ^:private bin
+  (let [b (str home "/clotran-bin")]
+    (if (and windows? (clotran-file-exists? (str b ".exe"))) (str b ".exe") b)))
+(def ^:private core (str home "/src/clj/clojure/core.clj"))
+(defn- clotran-src [f] (str home "/src/clj/clotran/" f))
+
+(defn- err [& xs] (binding [*out* *err*] (apply println xs)))
+
+(defn- absolute? [p] (boolean (re-find #"^(/|[A-Za-z]:[/\\])" p)))
+(defn- cwd [] (clotran.host.system/getProperty "user.dir"))
+(defn- absolute [p] (if (absolute? p) p (str (cwd) "/" p)))
+;; a path going into a Clojure string a driver reads: \ would be an escape
+(defn- slashes [p] (if windows? (str/replace p "\\" "/") p))
+
+(defn- rm-rf [p]
+  (when (= :directory (clotran-file-kind p))
+    (doseq [n (clotran-list-dir p)] (rm-rf (str p "/" n))))
+  (clotran-delete p))
+
+(defn- temp-dir
+  "A directory of this process's own: two clotrans started at once never
+  share one (clotran-temp-dir is mkdtemp)."
+  []
+  (let [base (or (getenv "TMPDIR") (getenv "TEMP") (getenv "TMP") "/tmp")]
+    (or (clotran-temp-dir (str/replace base #"[/\\]$" ""))
+        (throw (ex-info (str "clotran: cannot make a directory under " base) {})))))
+
+(defmacro ^:private with-temp [[d] & body]
+  `(let [~d (temp-dir)] (try ~@body (finally (rm-rf ~d)))))
+
+(def ^:private noise #"^note: skipping|^user=>|WARNING: ->Eduction")
+
+(defn- run-quiet
+  "argv run, waited for, with its output -- stdout and stderr -- printed
+  once it ends, less the noise of a clotran loading; its exit status and
+  the lines it printed."
+  [w argv env]
+  (let [out (str w "/run.out")
+        st (clotran-run (vec argv) nil out env true)
+        lines (remove #(re-find noise %) (str/split-lines (if (clotran-file-exists? out) (clotran-slurp out) "")))]
+    (doseq [l lines] (println l))
+    [st lines]))
+
+(defn- clotran-child
+  "A clotran over core.clj and files, run as its own process."
+  [w files env]
+  (run-quiet w (into [bin core] (remove nil? files)) env))
+
+;; --- clotran new NAME -----------------------------------------------------
+
+(defn- new-project [args]
+  (if (not= 1 (count args))
+    (do (err "usage: clotran new NAME") (exit! 2))
+    (let [name (first args)
+          dir (str/replace name "-" "_")]
+      (cond
+        (not (re-find #"^[a-z]" name))
+        (do (err (str "clotran new: a name starts with a lower-case letter: " name)) (exit! 2))
+        (not (re-matches #"[a-z0-9-]+" name))
+        (do (err (str "clotran new: a name is lower-case letters, digits and dashes: " name)) (exit! 2))
+        (clotran-file-kind name)
+        (do (err (str "clotran new: " name " is there already")) (exit! 1))
+        :else
+        (do
+          (clotran-mkdirs (str name "/src/" dir))
+          (clotran-mkdirs (str name "/test/" dir))
+          (clotran-spit (str name "/deps.edn")
+                        (str ";; clotran reads this as tools.deps does (clotran-deps): :paths, :deps and\n"
+                             ";; :aliases. Name a library with :local/root or :git/url + :git/sha.\n"
+                             "{:paths [\"src\"]\n :deps {}\n :aliases {:test {:extra-paths [\"test\"]}}}\n"))
+          (clotran-spit (str name "/src/" dir "/core.cljf")
+                        (str "(ns " name ".core\n  \"" name ", on clotran.\")\n\n"
+                             "(defn greet\n  \"A greeting for who.\"\n  [who]\n  (str \"hello, \" who))\n"))
+          (clotran-spit (str name "/test/" dir "/core_test.cljf")
+                        (str "(ns " name ".core-test\n  (:require [clojure.test :refer [deftest is]]\n"
+                             "            [" name ".core :as core]))\n\n"
+                             "(deftest greet-test\n  (is (= \"hello, world\" (core/greet \"world\"))))\n"))
+          (clotran-spit (str name "/.gitignore") ".clotran-cache/\n")
+          (clotran-spit (str name "/README.md")
+                        (str "# " name "\n\nA clotran project: Clojure, hosted on Fortran.\n\n"
+                             "    clotran                       # a REPL with src on the path\n"
+                             "    clotran -A:test               # with test too\n\n"
+                             "In Emacs with clotran-mode, open src/" dir "/core.cljf and M-x cider-jack-in.\n"))
+          (println (str "made " name ": src/" dir "/core.cljf, test/" dir "/core_test.cljf, deps.edn"))
+          (exit! 0))))))
+
+;; --- clotran explain CODE, compile --report / --pure ------------------------
+
+(defn- in-process
+  "text evaluated here, with the namespaces it needs: this clotran has
+  core loaded already, and a second one beside it was a second heap --
+  which, building in the background under a loaded machine, the kernel
+  killed for memory. An error is printed; the answer, or nil."
+  [nss text]
+  (try (apply require nss)
+       (load-string text)
+       (catch clotran.host.exception e
+         (err (ex-message e))
+         nil)))
+
+(defn- tiers-run [driver]
+  (in-process (cond-> '[clotran.loader clotran.tiers]
+                (str/includes? driver "purefort") (conj 'clotran.purefort))
+              driver)
+  (exit! 0))
+
+(defn- explain [args]
+  (if (not= 1 (count args))
+    (do (err "usage: clotran explain CODE") (exit! 2))
+    (tiers-run (str "(clotran.tiers/explain " (pr-str (first args)) ")\n"))))
+
+(defn- compile-report [args]
+  (if (not= 1 (count args))
+    (do (err "usage: clotran compile --report file.cljf") (exit! 2))
+    (tiers-run (str "(clotran.tiers/report " (pr-str (slashes (first args))) ")\n"))))
+
+(defn- compile-pure [args]
+  (if-not (#{1 2} (count args))
+    (do (err "usage: clotran compile --pure file.cljf [out.f90]") (exit! 2))
+    (let [src (slashes (first args))
+          out (slashes (absolute (or (second args) (str (str/replace src #"\.[^./]*$" "") "_pure.f90"))))]
+      (tiers-run
+       (str "(let [r (clotran.purefort/generate " (pr-str src) ")]\n"
+            "  (clotran-spit " (pr-str out) " (:text r))\n"
+            "  (println \"module\" (:module r) \"->\" " (pr-str out) ")\n"
+            "  (doseq [[s vs] (sort-by key (:emitted r))] (println \"  pure       \" s (str \"(\" (count vs) \" version\" (when (> (count vs) 1) \"s\") \")\")))\n"
+            "  (doseq [[s why] (sort-by key (:skipped r))] (println \"  not lowered\" s \"--\" why)))\n")))))
+
+;; --- clotran compile file.cljf [library] ----------------------------------
+
+(defn- on-path?
+  "The name a command has where PATH finds it, or nil."
+  [cmd]
+  (some (fn [d] (some #(when (= :file (clotran-file-kind %)) %)
+                      (if windows? [(str d "/" cmd ".exe") (str d "/" cmd)] [(str d "/" cmd)])))
+        (str/split (or (getenv "PATH") "") (re-pattern (str "\\" sep)))))
+
+(defn- fortran-compiler
+  "FC if set; else gfortran on PATH; else the compiler this clotran was
+  built with, by absolute path (build/fc) -- a PATH without Homebrew's
+  directory, as an Emacs started from the Dock has, finds no gfortran."
+  []
+  (or (getenv "FC")
+      (when (on-path? "gfortran") "gfortran")
+      (let [f (str home "/build/fc")]
+        (when (clotran-file-exists? f)
+          (let [fc (str/trim (clotran-slurp f))] (when (clotran-file-exists? fc) fc))))
+      "gfortran"))
+
+(defn- compile-lib
+  "The library: :wrote, :no-fortran when there was nothing to compile, or
+  :failed -- and the exit status set to match."
+  [args]
+  (if-not (#{1 2} (count args))
+    (do (err "usage: clotran compile file.cljf [library]") (exit! 2) :failed)
+    (let [src (slashes (first args))
+          stem (str/replace src #"\.[^./]*$" "")
+          os (clotran.host.system/getProperty "os.name")
+          [ext undef] (cond windows? ["dll" (str home "/build/libclotran-bin.dll.a")]
+                            (str/starts-with? os "Mac") ["dylib" "-Wl,-undefined,dynamic_lookup"]
+                            :else ["so" nil])
+          lib (or (second args) (str stem "." ext))
+          out (absolute lib)
+          fc (fortran-compiler)
+          long (when-not (str/starts-with? (last (str/split fc #"[/\\]")) "flang") "-ffree-line-length-none")]
+      (with-temp [w]
+        (let [generate (fn [pure?]
+                         (clotran-delete (str w "/out.f90"))
+                         (when-let [r (in-process '[clotran.compiler]
+                                        (str "(clotran.compiler/compile-file " (pr-str src) " " (pr-str (str w "/out.f90")) " {:pure " pure? "})"))]
+                           ;; each function's road: declined, compiled, or pure Fortran
+                           (let [lines (concat (for [[n why] (:declined r)] (str "declined: " n " -- " why))
+                                               (for [[n k] (sort (:pure r))] (str "pure Fortran: " n " (" k " version" (if (= k 1) "" "s") ")"))
+                                               [(str "compiled: " (count (:compiled r)) " functions; " (count (:pure r)) " pure Fortran")])]
+                             (doseq [l lines] (println l))
+                             (when (clotran-file-exists? (str w "/out.f90")) lines))))
+              ;; the compiler runs INSIDE the work directory: a stale
+              ;; clotran_rt_decl.mod in the caller's once shadowed this one's
+              build (fn []
+                      (zero? (clotran-run (vec (concat [fc "-O2" "-ffp-contract=off" "-shared" "-fPIC"]
+                                                       (when long [long])
+                                                       ["-o" (str out ".part") "out.f90"]
+                                                       (when undef [undef])))
+                                          w (str w "/build.err") nil true)))
+              build-err (fn [] (clotran-slurp (str w "/build.err")))
+              lines (generate (not= "0" (getenv "CLOTRAN_COMPILE_PURE")))]
+          (cond
+            (nil? lines) (do (err "clotran compile: no Fortran was written") (exit! 1) :no-fortran)
+            (build) (do (clotran-rename (str out ".part") out) (println (str "wrote " lib)) (exit! 0) :wrote)
+            ;; the pure module is generated code too: a shape a compiler
+            ;; refuses must not cost the namespace its library
+            (some #(str/starts-with? % "pure Fortran:") lines)
+            (do (err (str "note: the pure Fortran did not build ("
+                          (let [l (or (first (filter #(re-find #"(?i)error" %) (str/split-lines (build-err)))) "")]
+                            (subs l 0 (min 120 (count l))))
+                          "); compiled through the runtime instead"))
+                (generate false)
+                (if (build)
+                  (do (clotran-rename (str out ".part") out) (println (str "wrote " lib)) (exit! 0) :wrote)
+                  (do (err (build-err)) (exit! 1) :failed)))
+            :else (do (err (build-err)) (exit! 1) :failed)))))))
+
+(defn- compile-cached
+  "`clotran compile --cache src lib ptr k log`: clotran.loader's background
+  build of src into its cache. The library, then the pointer naming it (or
+  none, when there was nothing to compile), the file's older libraries
+  removed, and lib.done last, which the loader polls for. It runs as its
+  own process, so a program that ends first still leaves the cache filled."
+  [[src lib ptr k log]]
+  (let [r (compile-lib [src lib])
+        dir (str/replace lib #"[/\\][^/\\]*$" "")]
+    (case r
+      :wrote (do (clotran-spit (str ptr ".part") lib)
+                 (clotran-rename (str ptr ".part") ptr)
+                 (doseq [n (clotran-list-dir dir)
+                         :let [p (str dir "/" n)]
+                         :when (and (str/starts-with? n (str k "-")) (not= p lib) (not= p ptr) (not= p log))]
+                   (clotran-delete p)))
+      :no-fortran (clotran-spit ptr "none")
+      nil)
+    (clotran-spit (str lib ".done") "")
+    (exit! 0)))
+
+;; --- clotran build -m NS [-o out] | clotran build app.cljf [-o out] -------
+
+(defn- append-file! [to from]
+  (let [n (clotran-file-size from)
+        a (byte-array n)]
+    (clotran-read-bytes! from a)
+    (clotran-write-bytes to a 0 n true)))
+
+(defn- build-program
+  "One executable: this binary with an image of the heap once the
+  program's namespace has loaded, its entry, and -- compiled -- the
+  libraries of what it loaded, appended (main.f90, APP_MAGIC). It runs
+  NS's -main with every argument as *command-line-args*, needing no
+  clotran installed and no sources; --interpreted leaves the libraries out.
+  On Windows a program is NAME.exe, and runs interpreted: a compiled
+  library there imports from clotran-bin.exe, which a program is not."
+  [args]
+  (let [{:keys [ns file out compiled]}
+        (loop [as args o {:compiled (not windows?)}]
+          (case (first as)
+            nil o
+            "-m" (recur (drop 2 as) (assoc o :ns (second as)))
+            "--interpreted" (recur (rest as) (assoc o :compiled false))
+            "-o" (recur (drop 2 as) (assoc o :out (second as)))
+            (recur (rest as) (assoc o :file (first as)))))]
+    (if-not (or ns file)
+      (do (err "usage: clotran build -m NS [-o out] | clotran build app.cljf [-o out]") (exit! 2))
+      (let [out (or out (if ns (last (str/split ns #"\.")) (str/replace (last (str/split file #"[/\\]")) #"\.[^.]*$" "")))
+            out (absolute (if (and windows? (not (str/ends-with? out ".exe"))) (str out ".exe") out))]
+        (with-temp [w]
+          (let [driver (str w "/driver.clj")
+                need (str "(require (quote clotran.rt) (quote clotran.io) (quote clotran.files) (quote clotran.uuid) (quote clotran.reader) (quote clotran.multifn) (quote clotran.thread) (quote clotran.net) (quote clotran.data))\n"
+                          (if ns
+                            (str "(require (quote " ns "))\n(def clotran-build-ns (quote " ns "))\n")
+                            (let [f (slashes (absolute file))]
+                              (str "(def clotran-build-ns (let [f (read-string (slurp " (pr-str f) "))] (when (and (seq? f) (= (quote ns) (first f))) (second f))))\n"
+                                   "(when-not clotran-build-ns (throw (ex-info \"clotran build: the file must start with (ns ...)\" {})))\n"
+                                   "(load-file " (pr-str f) ")\n")))
+                          "(when-not (ns-resolve clotran-build-ns (quote -main)) (throw (ex-info (str \"clotran build: \" clotran-build-ns \" has no -main\") {})))\n")
+                libs (str w "/libs") entry (str w "/entry") image (str w "/app.image")]
+            (when compiled
+              ;; first, everything the program loads built into the cache:
+              ;; the load starts the builds (autocompile), this waits for them
+              (clotran-spit (str w "/warm.clj")
+                            (str need "(loop [n 0] (when (and (< n 6000) (some #{:compiling} (vals (clotran.loader/compile-status)))) (clotran.host.thread/sleep 100) (recur (inc n))))\n"))
+              (clotran-child w [(str w "/warm.clj")] ["CLOTRAN_IMAGE=0" "CLOTRAN_AUTOCOMPILE=1"]))
+            ;; then the image, from a load that installs them all from the
+            ;; cache and builds nothing: what it installed, the program carries
+            (clotran-spit driver
+                          (str need
+                               (when compiled (str "(clotran-spit " (pr-str libs) " (apply str (map #(str % \"\\n\") (clotran-installed-libraries))))\n"))
+                               "(clotran-spit " (pr-str entry) " (str \"m \" clotran-build-ns \"\\n\"))\n"))
+            (clotran-child w [driver]
+                           [(str "CLOTRAN_IMAGE=" (if compiled "0" (or (getenv "CLOTRAN_IMAGE") "")))
+                            (str "CLOTRAN_AUTOCOMPILE=" (if compiled "use" "0"))
+                            (str "CLOTRAN_IMAGE_COMPILED=" (if compiled "1" "0"))
+                            (str "CLOTRAN_IMAGE_SAVE=" image)])
+            (if-not (and (pos? (or (clotran-file-size entry) 0)) (pos? (or (clotran-file-size image) 0)))
+              (do (err "clotran build: the program did not load") (exit! 1))
+              (let [part (str out ".part")]
+                (clotran-write-bytes part (byte-array 0) 0 0 false)
+                (append-file! part bin)
+                (let [ioff (clotran-file-size part)
+                      ilen (clotran-file-size image)]
+                  (append-file! part image)
+                  ;; the libraries, each a line of the entry: where it lies in the file
+                  (when (clotran-file-exists? libs)
+                    (doseq [lib (remove str/blank? (str/split-lines (clotran-slurp libs)))]
+                      (let [loff (clotran-file-size part) llen (clotran-file-size lib)]
+                        (append-file! part lib)
+                        (clotran-spit entry (str (clotran-slurp entry) "lib " loff " " llen "\n")))))
+                  (let [eoff (clotran-file-size part) elen (clotran-file-size entry)]
+                    (append-file! part entry)
+                    (let [t ((do (require 'clotran.io) (resolve 'clotran.io/utf8-bytes))
+                             (format "%-16s%020d%020d%020d%020d" "CLOTRAN APP 1" ioff ilen eoff elen))]
+                      (clotran-write-bytes part t 0 (alength t) true))))
+                (clotran-make-executable part)
+                (clotran-rename part out)
+                (println (str "wrote " out))
+                (exit! 0)))))))))
+
+;; --- a project: deps.edn, and clotran test ---------------------------------
+
+(defn- deps-home
+  "clotran-deps' sources: CLOTRAN_DEPS, else beside this clotran -- the
+  checkout next to this one, or PREFIX/lib/clotran-deps beside
+  PREFIX/lib/clotran in an install."
+  []
+  (some #(when (clotran-file-exists? (str % "/src/clotran/deps.cljf")) (str % "/src"))
+        (remove nil? [(getenv "CLOTRAN_DEPS") (str home "/../clotran-deps")])))
+
+(defn- project-path!
+  "In a directory with a deps.edn, CLOTRAN_PATH from it (clotran-deps,
+  PACKAGES.md), as clj asks tools.deps for a classpath -- not when
+  CLOTRAN_PATH is set already, and not in a clotran source tree, whose
+  deps.edn pins the oracle's clj. True, or false when it cannot be read."
+  [aliases]
+  (if (or (getenv "CLOTRAN_PATH") (not (clotran-file-exists? "deps.edn"))
+          (clotran-file-exists? "src/clj/clotran/rt.cljf"))
+    true
+    (if-let [src (deps-home)]
+      (do (clotran-setenv "CLOTRAN_PATH" src)
+          (try (require 'clotran.deps)
+               (clotran-setenv "CLOTRAN_PATH" ((resolve 'clotran.deps/cached-path) (cwd) aliases))
+               true
+               (catch clotran.host.exception e
+                 (clotran-setenv "CLOTRAN_PATH" "")
+                 (err (ex-message e))
+                 false)))
+      (do (when (re-find #":local/root|:git/url|:paths|:extra-paths" (clotran-slurp "deps.edn"))
+            (err "clotran: this deps.edn names sources, but there is no clotran-deps to read it (PACKAGES.md)"))
+          true))))
+
+(defn- aliases-of [a] (mapv keyword (remove str/blank? (str/split (subs a 2) #":"))))
+
+(defn main
+  "ARGS as the clotran command takes them (the README, docs/guide.md)."
+  [args]
+  (let [args (vec args)]
+    (case (first args)
+      "new" (new-project (rest args))
+      "explain" (explain (rest args))
+      "compile" (case (second args)
+                  "--pure" (compile-pure (drop 2 args))
+                  "--report" (compile-report (drop 2 args))
+                  "--cache" (compile-cached (drop 2 args))
+                  (compile-lib (rest args)))
+      ;; after the project's path, as a program's run is: it loads the program
+      "build" (if (project-path! []) (build-program (rest args)) (exit! 1))
+      (let [test? (= "test" (first args))
+            args (if test? (vec (rest args)) args)
+            [aliases args] (if (some-> (first args) (str/starts-with? "-A"))
+                             [(aliases-of (first args)) (vec (rest args))]
+                             [nil args])
+            aliases (or aliases
+                        (when (and test? (clotran-file-exists? "deps.edn")
+                                   (str/includes? (clotran-slurp "deps.edn") ":test"))
+                          [:test])
+                        [])]
+        ;; clotran test with no deps.edn: src and test are the path
+        (when (and test? (not (getenv "CLOTRAN_PATH")) (not (clotran-file-exists? "deps.edn")))
+          (clotran-setenv "CLOTRAN_PATH" (str "src" sep "test")))
+        ;; CLOTRAN_AUTOCOMPILE=1 compiles what loads in the background; off
+        ;; by default since 2026-10-07 (seq code ran slower compiled)
+        (when-not (getenv "CLOTRAN_AUTOCOMPILE") (clotran-setenv "CLOTRAN_AUTOCOMPILE" "0"))
+        (cond
+          (not (project-path! aliases)) (exit! 1)
+          test? (answer! (into ["-m" "clotran.test-runner"] args))
+          (= "-m" (first args)) (answer! args)
+          (some-> (first args) (str/starts-with? "-"))
+          (do (err (str "clotran: unknown option " (first args) " (a file, -m NS, or new/compile/test/build)")) (exit! 2))
+          (seq args) (answer! (into ["--run"] args))
+          :else (answer! ["--repl"]))))))

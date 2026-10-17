@@ -260,6 +260,7 @@ module Eval
   ! clj's unchecked int arithmetic, wrapping at 32 bits (Numbers.unchecked_int_*)
   integer, parameter :: B_UIADD = 443, B_UISUB = 444, B_UIMUL = 445, B_UIDIV = 446, B_UIREM = 447, &
        B_UINEG = 448, B_UIINC = 449, B_UIDEC = 450
+  integer, parameter :: B_RUN = 451, B_SETENV = 452, B_MKDIRS = 453, B_DELETE = 454, B_RENAME = 455, B_MKEXEC = 456, B_TEMPDIR = 457
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -466,7 +467,7 @@ module Eval
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
   public :: gce_program_report
-  public :: gce_bind_repl_vars, gce_set_command_line_args
+  public :: gce_bind_repl_vars, gce_set_command_line_args, gce_launch_action
   public :: gce_main_bindings, gce_push_load_frame, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
   public :: gce_enter_user, gce_refer_core
   public :: gce_native_begin, gce_native_end
@@ -1313,6 +1314,13 @@ contains
     call bind_builtin(core, "clotran-real-path", B_REALPATH)
     call bind_builtin(core, "clotran-file-kind", B_FSKIND)
     call bind_builtin(core, "clotran-list-dir", B_FSLIST)
+    call bind_builtin(core, "clotran-run", B_RUN)
+    call bind_builtin(core, "clotran-setenv", B_SETENV)
+    call bind_builtin(core, "clotran-mkdirs", B_MKDIRS)
+    call bind_builtin(core, "clotran-delete", B_DELETE)
+    call bind_builtin(core, "clotran-rename", B_RENAME)
+    call bind_builtin(core, "clotran-make-executable", B_MKEXEC)
+    call bind_builtin(core, "clotran-temp-dir", B_TEMPDIR)
     call bind_builtin(core, "clotran-installed-libraries", B_INSTALLED)
     call bind_builtin(core, "clotran-library-manifest", B_LIBMANIFEST)
     call bind_builtin(core, "count", B_COUNT)
@@ -2262,6 +2270,37 @@ contains
     call bind_var(core, "*3", gc_nil())
     call bind_var(core, "*e", gc_nil())
   end subroutine gce_bind_repl_vars
+
+  ! What `clotran --launch` runs next (main.f90): clotran.launcher/action,
+  ! the vector of strings clotran.launcher/main leaves there -- ["--run"
+  ! file arg...], ["-m" ns arg...], ["--repl"] or ["--exit" n]. n is 0
+  ! when the Var is not a vector of strings.
+  subroutine gce_launch_action(acts, alens, n)
+    character(len=4096), allocatable, intent(out) :: acts(:)
+    integer, allocatable, intent(out) :: alens(:)
+    integer, intent(out) :: n
+    type(gc_value) :: ns, var, v, e
+    character(len=:), allocatable :: s
+    integer :: i
+    n = 0
+    allocate(acts(0), alens(0))
+    ns = gcn_find("clotran.launcher")
+    if (gc_kind(ns) /= OBJ_NS) return
+    var = gcn_lookup(ns, gc_sym("action", [ns]))
+    if (.not. gcn_is_var(var)) return
+    v = gcn_var_value(var)
+    if (gc_kind(v) /= OBJ_VECTOR) return
+    deallocate(acts, alens)
+    allocate(acts(gcv_count(v)), alens(gcv_count(v)))
+    do i = 1, gcv_count(v)
+       e = gcv_nth(v, i - 1)
+       if (e%tag /= GCT_STR) return
+       call text_of(e, s=s)
+       acts(i) = s
+       alens(i) = min(len(s), len(acts(i)))
+    end do
+    n = gcv_count(v)
+  end subroutine gce_launch_action
 
   ! *command-line-args*: the arguments after the program, a seq of
   ! strings, or nil when there are none -- as clojure.main binds it.
@@ -11678,6 +11717,167 @@ contains
             out = vs_get(vst, base + 2)
          end if
        end block
+    case (B_RUN)
+       ! (clotran-run argv dir out env wait?): the program argv names -- a
+       ! vector of strings -- run with no shell between (proc_shim.c), so
+       ! no argument is split or expanded: in dir (nil: here), stdin empty,
+       ! stdout and stderr to the file out (nil: this process's own), with
+       ! env's "NAME=VALUE" strings over this process's environment (nil:
+       ! as it is). Waiting, its exit status; not, 0 once it has started;
+       ! -1 when it could not be started. Out of the running mutators while
+       ! it waits: a collection must not wait for it.
+       block
+         interface
+            function c_run(a, na, d, o, e, ne, w) bind(C, name="clotran_run") result(r)
+              import :: c_char, c_long, c_int
+              character(kind=c_char), intent(in) :: a(*), d(*), o(*), e(*)
+              integer(c_long), value :: na, ne
+              integer(c_int), value :: w
+              integer(c_long) :: r
+            end function c_run
+         end interface
+         character(len=:), allocatable :: packed, penv, dir, outf, s
+         integer(c_long) :: na, ne, r
+         integer(c_int) :: w
+         integer :: i
+         type(gc_value) :: v
+         packed = ""
+         penv = ""
+         dir = ""
+         outf = ""
+         v = gcv_nth(args, 0)
+         na = gcv_count(v)
+         do i = 0, int(na) - 1
+            call text_of(gcv_nth(v, i), s=s)
+            packed = packed // s // c_null_char
+         end do
+         if (n >= 2) then
+            v = gcv_nth(args, 1)
+            if (v%tag /= GCT_NIL) call text_of(v, s=dir)
+         end if
+         if (n >= 3) then
+            v = gcv_nth(args, 2)
+            if (v%tag /= GCT_NIL) call text_of(v, s=outf)
+         end if
+         ne = 0
+         if (n >= 4) then
+            v = gcv_nth(args, 3)
+            if (v%tag /= GCT_NIL) then
+               ne = gcv_count(v)
+               do i = 0, int(ne) - 1
+                  call text_of(gcv_nth(v, i), s=s)
+                  penv = penv // s // c_null_char
+               end do
+            end if
+         end if
+         w = 1
+         if (n >= 5) then
+            if (.not. truthy(gcv_nth(args, 4))) w = 0
+         end if
+         if (na == 0) then
+            call fail("clotran-run: no program named")
+            return
+         end if
+         call gc_mutator_leave()
+         r = c_run(packed // c_null_char, na, dir // c_null_char, outf // c_null_char, &
+              penv // c_null_char, ne, w)
+         call gc_mutator_enter()
+         out = gc_int(int(r, gc_ip))
+       end block
+    case (B_SETENV)
+       ! (clotran-setenv name value): this process's environment, which
+       ! what it runs inherits and CLOTRAN_PATH is read from at each lookup
+       block
+         interface
+            function c_setenv(nm, val) bind(C, name="clotran_setenv") result(r)
+              import :: c_char, c_int
+              character(kind=c_char), intent(in) :: nm(*), val(*)
+              integer(c_int) :: r
+            end function c_setenv
+         end interface
+         character(len=:), allocatable :: nm, val
+         call text_of(gcv_nth(args, 0), s=nm)
+         call text_of(gcv_nth(args, 1), s=val)
+         out = gc_bool(c_setenv(nm // c_null_char, val // c_null_char) == 0)
+       end block
+    case (B_MKDIRS, B_DELETE, B_MKEXEC)
+       ! (clotran-mkdirs p): p and every parent it needs, as mkdir -p;
+       ! (clotran-delete p): a file, or an empty directory;
+       ! (clotran-make-executable p): runnable, as chmod +x (Windows: as it
+       ! is). Each true when it did, false when not (proc_shim.c).
+       block
+         interface
+            function c_mkdirs(p) bind(C, name="clotran_mkdirs") result(r)
+              import :: c_char, c_int
+              character(kind=c_char), intent(in) :: p(*)
+              integer(c_int) :: r
+            end function c_mkdirs
+            function c_delete(p) bind(C, name="clotran_delete") result(r)
+              import :: c_char, c_int
+              character(kind=c_char), intent(in) :: p(*)
+              integer(c_int) :: r
+            end function c_delete
+            function c_mkexec(p) bind(C, name="clotran_make_executable") result(r)
+              import :: c_char, c_int
+              character(kind=c_char), intent(in) :: p(*)
+              integer(c_int) :: r
+            end function c_mkexec
+         end interface
+         character(len=:), allocatable :: p
+         call text_of(gcv_nth(args, 0), s=p)
+         if (id == B_MKDIRS) then
+            out = gc_bool(c_mkdirs(p // c_null_char) == 0)
+         else if (id == B_MKEXEC) then
+            out = gc_bool(c_mkexec(p // c_null_char) == 0)
+         else
+            out = gc_bool(c_delete(p // c_null_char) == 0)
+         end if
+       end block
+    case (B_TEMPDIR)
+       ! (clotran-temp-dir base): a new directory under base whose name no
+       ! other process has or will be given (mkdtemp) -- its path, or nil
+       block
+         interface
+            function c_temp_dir(b, buf, cap) bind(C, name="clotran_temp_dir") result(r)
+              import :: c_char, c_long
+              character(kind=c_char), intent(in) :: b(*)
+              character(kind=c_char), intent(out) :: buf(*)
+              integer(c_long), value :: cap
+              integer(c_long) :: r
+            end function c_temp_dir
+         end interface
+         character(kind=c_char) :: buf(4096)
+         character(len=4096) :: d
+         character(len=:), allocatable :: b
+         integer(c_long) :: k
+         integer :: j
+         call text_of(gcv_nth(args, 0), s=b)
+         k = c_temp_dir(b // c_null_char, buf, 4096_c_long)
+         out = gc_nil()
+         if (k > 0) then
+            d = ""
+            do j = 1, int(k)
+               d(j:j) = buf(j)
+            end do
+            out = gc_str(d(1:int(k)), [vs_get(vst, base + 1)])
+         end if
+       end block
+    case (B_RENAME)
+       ! (clotran-rename from to): moved, replacing a file at to, in one
+       ! step where the system has one -- true, or false
+       block
+         interface
+            function c_rename(f, t) bind(C, name="clotran_rename") result(r)
+              import :: c_char, c_int
+              character(kind=c_char), intent(in) :: f(*), t(*)
+              integer(c_int) :: r
+            end function c_rename
+         end interface
+         character(len=:), allocatable :: f, t
+         call text_of(gcv_nth(args, 0), s=f)
+         call text_of(gcv_nth(args, 1), s=t)
+         out = gc_bool(c_rename(f // c_null_char, t // c_null_char) == 0)
+       end block
     case (B_UTF8BYTES)
        ! A string's UTF-8 bytes as a fresh byte array: a clotran string is
        ! stored as UTF-8, so this is a copy (clotran.io/utf8-bytes).
@@ -15027,6 +15227,54 @@ contains
           ! where this clotran lives: the launcher, src/clj, build/
           if (gc_ref_is(a%ref, "clotran.home") .and. allocated(clotran_home)) &
                out = gc_str(clotran_home, [vs_get(vst, base + 1)])
+          ! the working directory, / between its parts on every system
+          if (gc_ref_is(a%ref, "user.dir")) then
+             block
+               interface
+                  function c_cwd(buf, cap) bind(C, name="clotran_cwd") result(r)
+                    import :: c_char, c_long
+                    character(kind=c_char), intent(out) :: buf(*)
+                    integer(c_long), value :: cap
+                    integer(c_long) :: r
+                  end function c_cwd
+               end interface
+               character(kind=c_char) :: buf(4096)
+               character(len=4096) :: d
+               integer(c_long) :: k
+               integer :: j
+               k = c_cwd(buf, 4096_c_long)
+               if (k > 0) then
+                  d = ""
+                  do j = 1, int(k)
+                     d(j:j) = buf(j)
+                  end do
+                  out = gc_str(d(1:int(k)), [vs_get(vst, base + 1)])
+               end if
+             end block
+          end if
+          ! the system, as clj's host names it: Mac OS X, Linux, Windows
+          if (gc_ref_is(a%ref, "os.name")) then
+             block
+               interface
+                  function c_os_name(buf, cap) bind(C, name="clotran_os_name") result(r)
+                    import :: c_char, c_long
+                    character(kind=c_char), intent(out) :: buf(*)
+                    integer(c_long), value :: cap
+                    integer(c_long) :: r
+                  end function c_os_name
+               end interface
+               character(kind=c_char) :: buf(64)
+               character(len=64) :: nm
+               integer(c_long) :: k
+               integer :: j
+               k = c_os_name(buf, 64_c_long)
+               nm = ""
+               do j = 1, int(k)
+                  nm(j:j) = buf(j)
+               end do
+               out = gc_str(nm(1:int(k)), [vs_get(vst, base + 1)])
+             end block
+          end if
        end if
     case (B_GETENV)
        ! System.getenv: the variable's value, or nil when it is not set

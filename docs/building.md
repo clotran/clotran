@@ -31,8 +31,14 @@ gfortran, gcc, make and git: `pacman -S mingw-w64-ucrt-x86_64-gcc-fortran
 mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-libgomp make git`), with the
 same commands. The binary is `clotran-bin.exe`, its runtimes linked in, so
 it and a program `clotran build` makes run where there is no MSYS2. A
-release (`make dist`) is a zip: `bin\clotran.cmd` runs the launcher
-under the busybox-w32 `sh.exe` it carries.
+release (`make dist`) is a zip: `bin\clotran.cmd` runs
+`clotran-bin.exe --launch`, the command itself, with no shell.
+
+On every system the command is `clotran-bin --launch`: the binary loads
+core and `clotran.launcher` reads the arguments (`new`, `compile`,
+`build`, `test`, a project's `deps.edn`), running whatever it needs --
+the Fortran compiler, a clotran of its own -- from an argument list
+(`clotran-run`), never through a shell.
 
 `./clotran` is the entry point, a shell script: it hands `clotran-bin`
 core.clj and wraps the REPL in `rlwrap` when there is a terminal and
