@@ -269,5 +269,12 @@
  ;; (-373N as -373, ##Inf as Infinity); only a collection is pr'd (scripts/fuzz-read)
  (mapv (fn [t] (try (read-string {:read-cond :allow} t) (catch clotran.host.exception e (ex-message e))))
        ["#?(:e dfault -373N)" "#?(1.5M 1)" "#?(1/2 1)" "#?(sym 1)" "#?(true 1)" "#?(##Inf 1)" "#?(\\a 1)" "#?([1N \"a\" 1.5M] 1)" "#?((1/2 \\b) 1)" "#?(-0.0 1)"])
+ ;; (?U) asks for the Unicode classes ICU always has, so it is accepted and
+ ;; dropped, in a group and a flag run; a quantified \b or \B, which ICU
+ ;; refuses, is quantified as a group (scripts/fuzz-str, seed 7)
+ [(re-seq #"(?U)\w+" "héllo wörld") (re-seq #"(?U:\d)+" "1٣2") (re-find #"(?iU)ж" "Ж") (re-find #"(?U-i)a" "A")
+  (re-find #"(?i-U)x" "X") (re-find #"[(?U)]+" "(?U)") (re-find #"\Q(?U)\E" "(?U)") (re-find #"(?<U>a)" "a")
+  (re-seq #"\b+" "ab cd") (re-seq #"\b?" "ab") (re-seq #"\B*x" "axb") (re-seq #"\b{2}" "ab") (re-find #"\b{2,3}x" "x")
+  (clojure.string/replace "_$ λ_cЖ\tc0c." #"((?iU)(?:\b?)?)" "<$1>")]
 ]
 

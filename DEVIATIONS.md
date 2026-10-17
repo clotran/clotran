@@ -514,6 +514,14 @@ made). Three real gaps come with it:
   unless `(?u)` is; ICU's are Unicode always. So `(re-find #"\w+"
   "héllo")` is `"héllo"` here and `"h"` in clj, and `#"(?i)É"`
   finds `é` here and nothing there. The oracle marks both.
+
+  This stays (James, 2026-10-17): regex is Unicode, and clj's
+  ASCII default is not matched. `(?U)` -- clj's way to ask for the Unicode
+  classes -- is accepted and dropped, alone, in a flag run or as `(?U:...)`,
+  so code written for clj that asks for Unicode reads the same here. ICU
+  refuses a quantified `\b` or `\B` (`\b+`) where clj takes it; it is
+  compiled as `(?:\b)+`, which means the same (`src/c/regex_shim.c`,
+  icu_spelling).
 - **~~A Matcher's subject-text buffer leaks~~ -- FIXED, and it was worse
   than this entry said.** It described the text buffer only. In fact
   `cre_close` was declared in `Regex.f90`'s interface block and called

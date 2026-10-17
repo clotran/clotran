@@ -10,7 +10,8 @@
 ;;
 ;; Not generated, as DEVIATIONS records them: characters off the Basic
 ;; Multilingual Plane (41, clj counts UTF-16 units), \w \d \s \b and (?i)
-;; (14, ICU's classes are Unicode), and characters whose case map is
+;; outside (?U) (14, ICU's classes are Unicode; under (?U), clj's are too,
+;; so there they are generated), and characters whose case map is
 ;; more than one character, like the sharp s (41).
 (require '[clojure.test.check.generators :as g]
          '[clojure.string :as str]
@@ -35,7 +36,7 @@
 ;; a regex as text, from what both engines read alike
 (def g-atom (g/one-of [(g/elements ["a" "b" "A" "0" " " "\\." "\\$" "é" "λ" "-"])
                        (g/elements ["." "[ab]" "[^a ]" "[a-c]" "[0-9]" "[éñ]"])]))
-(def g-re
+(defn re-gen [g-atom]
   (g/recursive-gen
    (fn [inner]
      (g/one-of [(g/fmap str/join (g/vector inner 1 3))
@@ -44,6 +45,13 @@
                 (g/fmap (fn [[x y]] (str x "|" y)) (g/tuple inner inner))
                 (g/fmap (fn [[a x q]] (str a x q)) (g/tuple (g/elements ["" "^"]) inner (g/elements ["" "$"])))]))
    (g/fmap (fn [[a q]] (str a q)) (g/tuple g-atom (g/elements ["" "*" "+" "?"])))))
+
+;; under (?U), clj's \w \d \s \b and (?i) are Unicode, as ICU's always are
+(def g-atom-u (g/one-of [g-atom (g/elements ["\\w" "\\d" "\\s" "\\b" "\\W" "\\S"])]))
+(def g-re
+  (g/one-of [(re-gen g-atom)
+             (g/fmap (fn [[f x]] (str "(?" f ")" x)) (g/tuple (g/elements ["U" "iU" "Ui" "U-i"]) (re-gen g-atom-u)))
+             (g/fmap (fn [[f x y]] (str y "(?" f ":" x ")")) (g/tuple (g/elements ["U" "iU"]) (re-gen g-atom-u) (re-gen g-atom)))]))
 
 (defrecord Re [text])
 (defmethod print-method Re [r w] (.write w (str "#\"" (:text r) "\"")))

@@ -45,9 +45,11 @@ static UChar *widen(const char *bytes, int32_t len, int32_t *ulen) {
  * clj answers nil). The counted form, {0,}? and {1,}?, has the
  * zero-length check and means the same, so the pattern is compiled in
  * that spelling. Outside a quantifier nothing changes: an escaped
- * character, a \Q..\E run and a [set] are copied as they are. The
- * caller frees what this returns. */
-static UChar *lazy_counted(const UChar *in, int32_t n, int32_t *outn) {
+ * character, a \Q..\E run and a [set] are copied as they are. An
+ * inline flag group loses its U, and a quantified \b becomes a group,
+ * below. The caller frees what this
+ * returns. */
+static UChar *icu_spelling(const UChar *in, int32_t n, int32_t *outn) {
   UChar *out = (UChar *)malloc((size_t)(3 * n + 1) * sizeof(UChar));
   int32_t i = 0, k = 0, depth = 0;
   if (!out) return NULL;
@@ -59,8 +61,38 @@ static UChar *lazy_counted(const UChar *in, int32_t n, int32_t *outn) {
         while (i < n && !(in[i] == '\\' && i + 1 < n && in[i + 1] == 'E')) out[k++] = in[i++];
         continue;
       }
+      if (depth == 0 && (in[i + 1] == 'b' || in[i + 1] == 'B') && i + 2 < n &&
+          (in[i + 2] == '?' || in[i + 2] == '*' || in[i + 2] == '+' ||
+           (in[i + 2] == '{' && i + 3 < n && in[i + 3] >= '0' && in[i + 3] <= '9'))) {
+        /* a quantified \b or \B, which ICU refuses and clj takes: the same
+         * boundary as a group, (?:\b), which ICU quantifies */
+        out[k++] = '('; out[k++] = '?'; out[k++] = ':';
+        out[k++] = in[i++]; out[k++] = in[i++];
+        out[k++] = ')';
+        continue;
+      }
       out[k++] = in[i++]; out[k++] = in[i++];
       continue;
+    }
+    if (depth == 0 && c == '(' && i + 1 < n && in[i + 1] == '?') {
+      /* (?flags) or (?flags:...): ICU accepts clj's flags but U, which asks
+       * for the Unicode classes ICU always has (DEVIATIONS 14), so U is
+       * left out -- and a group of nothing but U with it */
+      int32_t j = i + 2, f = 0;
+      UChar flags[32];
+      while (j < n && j - i < 32 && ((in[j] >= 'a' && in[j] <= 'z') || (in[j] >= 'A' && in[j] <= 'Z') || in[j] == '-')) {
+        if (in[j] != 'U') flags[f++] = in[j];
+        j++;
+      }
+      if (j < n && j > i + 2 && (in[j] == ')' || in[j] == ':')) {
+        if (f > 0 && flags[f - 1] == '-') f--;
+        if (f == 0 && in[j] == ')') { i = j + 1; continue; }
+        out[k++] = '('; out[k++] = '?';
+        for (int32_t m = 0; m < f; m++) out[k++] = flags[m];
+        out[k++] = in[j];
+        i = j + 1;
+        continue;
+      }
     }
     if (c == '[') depth++;
     else if (c == ']' && depth > 0) depth--;
@@ -93,7 +125,7 @@ void *cre_compile(const char *pattern, int32_t pattern_len,
   }
   {
     int32_t clen;
-    UChar *counted = lazy_counted(upattern, ulen, &clen);
+    UChar *counted = icu_spelling(upattern, ulen, &clen);
     if (counted) { free(upattern); upattern = counted; ulen = clen; }
   }
   re = uregex_open(upattern, ulen, 0, &pe, &status);
