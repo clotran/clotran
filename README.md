@@ -1,6 +1,4 @@
-<img src="docs/logo.svg" width="100" height="100" align="left" alt="clotran logo">
-
-# clotran
+<h1><img src="docs/logo.svg" width="100" height="100" align="middle" alt="clotran logo"> clotran</h1>
 
 Clojure, hosted on Fortran.
 
