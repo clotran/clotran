@@ -2214,7 +2214,7 @@ contains
     integer :: sl, d
     logical :: loaded
     if (.not. core_loaded) return
-    sl = index(t, "/")
+    sl = sym_slash(t)
     if (sl < 2) return
     q = t(1:sl - 1)
     if (index(q, "clotran.") /= 1 .or. index(q, "clotran.host.") == 1) return
@@ -4052,7 +4052,7 @@ contains
        call gc_ref_text(sym%ref, s=dlt_1)
        t = dlt_1
     end block
-    slash = index(t, "/")
+    slash = sym_slash(t)
     if (slash <= 1 .or. slash >= len(t)) return
     qual = gc_sym(t(1:slash-1), [sym])
     is_static_call = is_class_name(qual)
@@ -4803,7 +4803,7 @@ contains
          type(gc_value) :: none(0)
          integer :: sl
          q = trim(row%name)
-         sl = index(q, "/")
+         sl = sym_slash(q)
          if (load_clotran_ns(q(1:sl-1)) .or. gc_kind(gcn_find(q(1:sl-1))) == OBJ_NS) then
             out = gcn_lookup(gcn_find(q(1:sl-1)), gc_sym(q(sl+1:), none))
             if (gcn_is_var(out)) then
@@ -4876,7 +4876,7 @@ contains
     integer :: slash, i
     if (sym%tag /= GCT_SYM) return
     call gc_ref_text(sym%ref, s=t)
-    slash = index(t, "/")
+    slash = sym_slash(t)
     if (slash <= 1 .or. slash >= len(t)) return
     call canon_class(t(1:slash-1), c=c)
     do i = 1, size(HOST_STATICS)
@@ -4999,7 +4999,7 @@ contains
        call gc_ref_text(sym%ref, s=dlt_1)
        t = dlt_1
     end block
-    slash = index(t, "/")
+    slash = sym_slash(t)
     if (slash > 1 .and. slash < len(t)) then
        bare = gc_sym(t(slash+1:), [roots])
        ans = alias_target(t(1:slash-1), [roots, bare])
@@ -6768,7 +6768,7 @@ contains
              ! RT.var(ns, name): the Var, made if need be
              v = strip_meta(gcl_first(gcl_rest(f, [roots, vs_get(vst, base + 1)])))
              call gc_ref_text(v%ref, s=t)
-             i = index(t, "/")
+             i = sym_slash(t)
              if (i > 1) then
                 ! the Var, made unbound if there was none -- never re-rooted
                 out = intern_unbound(v, [roots, vs_get(vst, base + 1)])
@@ -6776,10 +6776,10 @@ contains
                 err = "Can't resolve " // t
                 cls = "clotran.host.runtime_exception"
              end if
-          else if ((n > 1 .and. t(n:n) == ".") .or. index(t, "/") > 1) then
+          else if ((n > 1 .and. t(n:n) == ".") .or. sym_slash(t) > 1) then
              ! (Ctor. args) or (Class/member args): evaluated with each
              ! argument quoted, so they arrive as read
-             if (index(t, "/") > 1 .and. .not. known_class_name(t(1:index(t, "/") - 1))) then
+             if (sym_slash(t) > 1 .and. .not. known_class_name(t(1:sym_slash(t) - 1))) then
                 v = resolve_var(fs, gc_nil())
                 if (gcn_is_var(v)) then
                    out = apply(v, args_vector(gcl_rest(f, [roots, vs_get(vst, base + 1)]), [roots, vs_get(vst, base + 1)]))
@@ -6960,7 +6960,7 @@ contains
     if (n == 0) return
     nsv = gcn_current([sym])
 
-    slash = index(t, "/")
+    slash = sym_slash(t)
     if (slash > 1 .and. slash < n) then
        ! a name with a dot in it stays as written (resolveSymbol's first test)
        if (index(t(slash+1:), ".") > 1) return
@@ -14364,7 +14364,7 @@ contains
                call gc_ref_text(sym2%ref, s=dlt_1)
                t = dlt_1
             end block
-            slash = index(t, "/")
+            slash = sym_slash(t)
             call array_class_key(t, dlt_1, ok_arr)
             if (ok_arr) then
                out = gc_class(dlt_1, [vs_get(vst, base + 1)])
@@ -14479,7 +14479,7 @@ contains
                call gc_ref_text(a%ref, s=dlt_1)
                t = dlt_1
             end block
-            sl = index(t, "/")
+            sl = sym_slash(t)
             if (sl > 1) out = gc_str(t(1:sl-1), [vs_get(vst, base + 1)])
          end if
        end block
@@ -17263,7 +17263,7 @@ contains
           ! Symbol.compareTo: no namespace first, then namespace, then name
           block
             integer :: pa, pb
-            pa = index(sa, "/"); pb = index(sb, "/")
+            pa = sym_slash(sa); pb = sym_slash(sb)
             if (len(sa) == 1) pa = 0
             if (len(sb) == 1) pb = 0
             if (pa <= 1 .and. pb > 1) then
@@ -23199,7 +23199,7 @@ contains
        call gc_ref_text(v%ref, s=dlt_1)
        t = dlt_1
     end block
-    sl = index(t, "/")
+    sl = sym_slash(t)
     if (sl > 1 .and. sl < len(t)) then
        s = t(sl+1:)
     else
@@ -23228,7 +23228,7 @@ contains
        call gc_ref_text(sym%ref, s=dlt_1)
        s = dlt_1
     end block
-    sl = index(s, "/")
+    sl = sym_slash(s)
     if (sl > 1 .and. sl < len(s)) then
        block
           character(len=:), allocatable :: dlw

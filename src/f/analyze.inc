@@ -1793,7 +1793,7 @@
           call gc_ref_text(sym%ref, s=dlt_1)
           t = dlt_1
        end block
-       sl = index(t, "/")
+       sl = sym_slash(t)
        ! the one static whose value changes (RT/checkSpecAsserts, a box):
        ! read when run, not folded
        if (static_is_box(t(1:sl-1), t(sl+1:))) then
@@ -1818,7 +1818,7 @@
        ! reachable by its qualified name; #'ns/x still is
        block
           call gc_ref_text(sym%ref, s=dlt_1)
-       if (index(dlt_1, "/") > 1) then
+       if (sym_slash(dlt_1) > 1) then
           if (var_not_public(var)) then
              block
                 call gc_ref_text(sym%ref, s=dlt_2)
@@ -1877,7 +1877,7 @@
     end if
     block
        call gc_ref_text(sym%ref, s=dlt_1)
-    if (index(dlt_1, "/") > 1) then
+    if (sym_slash(dlt_1) > 1) then
        ! A QUALIFIED symbol that does not resolve. In the vendored tree,
        ! clotran's own files and Clojure's own tests it is deferred to run
        ! time (N_LATEVAR): core.clj names clotran.io/text-reader before
@@ -1888,7 +1888,7 @@
           block
              integer :: slash
              type(gc_value) :: nsv
-             slash = index(dlt_1, "/")
+             slash = sym_slash(dlt_1)
              nsv = alias_target(dlt_1(1:slash - 1), [vs_get(vst, base + 1)])
              if (gc_kind(nsv) /= OBJ_NS) nsv = gcn_find(dlt_1(1:slash - 1))
              if (gc_kind(nsv) == OBJ_NS) then
@@ -2251,7 +2251,7 @@
        call gc_ref_text(head%ref, s=dlt_1)
        t = dlt_1
     end block
-    slash = index(t, "/")
+    slash = sym_slash(t)
     call vs_set(vst, base + 2, gc_sym(t(slash+1:), [vs_get(vst, base + 1)]))
     call vs_set(vst, base + 3, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
     args = gcl_cons(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
@@ -2355,8 +2355,8 @@
     ! defmethod's template says addMethod and the reader makes it
     ! clojure.core/addMethod. HostExpr.Parser reads sym.name only, and
     ! so does this.
-    if (index(mname, "/") > 1) then
-       mname = mname(index(mname, "/") + 1:)
+    if (sym_slash(mname) > 1) then
+       mname = mname(sym_slash(mname) + 1:)
        member = gc_sym(mname, [vs_get(vst, base + 1), vs_get(vst, base + 5)])
        call vs_set(vst, base + 5, member)
     end if
@@ -2805,7 +2805,7 @@
          call gc_ref_text(nm%ref, s=dlt_1)
          t = dlt_1
       end block
-      sl = index(t, "/")
+      sl = sym_slash(t)
       if (sl > 1 .and. sl < len(t)) then
          block
             call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=dlt_1)
@@ -2993,7 +2993,7 @@
             call gc_ref_text(k%ref, s=dlt_1)
             kt = dlt_1
          end block
-         slash = index(kt, "/")
+         slash = sym_slash(kt)
          if (slash > 1 .and. slash < len(kt)) then
             call fail("Can't let qualified name: " // kt)
             call vs_leave(vst, base)
@@ -3660,7 +3660,7 @@
        call gc_ref_text(sym%ref, s=dlt_1)
        t = dlt_1
     end block
-    sl = index(t, "/")
+    sl = sym_slash(t)
     if (sl <= 1 .or. sl >= len(t)) return
     base = vs_enter(vst, 2)
     ns = gcn_find(t(1:sl-1))
@@ -3714,7 +3714,7 @@
           integer :: slash
           type(gc_value) :: nsv
           call gc_ref_text(sym%ref, s=dlt_1)
-          slash = index(dlt_1, "/")
+          slash = sym_slash(dlt_1)
           if (slash > 1 .and. slash < len(dlt_1)) then
              nsv = gcn_find(dlt_1(1:slash - 1))
              if (gc_kind(nsv) == OBJ_NS) then

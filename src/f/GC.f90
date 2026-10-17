@@ -770,6 +770,7 @@ module GC
   public :: gc_image_write, gc_image_read, gc_obj_kind_at
   integer, parameter, public :: GC_IMAGE_VERSION = 1
   public :: gc_nil, gc_bool, gc_int, gc_real, gc_char, gc_str, gc_sym, gc_key
+  public :: sym_slash
   public :: gc_char_cp, u8_count, u8_off, u8_cpidx, u8_slice, u8_dec, u8_at, u8_enc
   public :: gc_str_count, gc_str_at, gc_str_slice
 
@@ -1751,6 +1752,23 @@ contains
     type(gc_value) :: v
     v = new_text(text, roots, GCT_STR)
   end function gc_str
+
+  ! Where a symbol's or keyword's text divides into namespace and name:
+  ! its first slash, as Symbol.intern(String) divides it -- except an
+  ! array class, NS/1 to NS/9, whose namespace may hold slashes of its
+  ! own: the reader (arraySymbolPat, CLJ-2807) makes foo//7 the
+  ! namespace foo/ and the name 7, and a/b/7 a/b and 7, as
+  ! (symbol "a/b" "7") does. The text alone decides, so
+  ! (symbol "a" "b/7") divides as a/b and 7 too (DEVIATIONS 82).
+  pure integer function sym_slash(t) result(sl)
+    character(len=*), intent(in) :: t
+    integer :: n
+    n = len(t)
+    sl = index(t, "/")
+    if (n >= 3 .and. sl > 0 .and. sl < n - 1) then
+       if (t(n-1:n-1) == "/" .and. index("123456789", t(n:n)) > 0) sl = n - 1
+    end if
+  end function sym_slash
 
   function gc_sym(text, roots) result(v)
     character(len=*), intent(in) :: text
@@ -3590,7 +3608,7 @@ contains
   function sym_hasheq(t) result(h)
     character(len=*), intent(in) :: t
     integer :: h, sl
-    sl = index(t, "/")
+    sl = sym_slash(t)
     if (len(t) > 1 .and. sl > 1) then
        h = hash_combine(m3_hash_chars(t(sl + 1:)), string_hash_code(t(1:sl - 1)))
     else

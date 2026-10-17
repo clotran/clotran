@@ -108,6 +108,7 @@ Categories:
 | 79 | The names clj imports into every namespace are not names here | design | -- |
 | 80 | An input stream's `skip` stops at the end, a file's as an array's | design | -- |
 | 81 | `.hashCode` of a core value is not a member | design | -- |
+| 82 | A symbol's text alone decides its namespace: `(symbol "a" "b/7")` is a/b and 7 | design | `src/f/GC.f90` |
 
 ---
 
@@ -2583,3 +2584,26 @@ language's (no-clj-emulation).
 **Removal**: none intended. Writing clj's host's string, number and
 collection hashCode formulas into this host would emulate that host for
 a number no Clojure function asks for.
+
+## 82. A symbol's text alone decides its namespace: `(symbol "a" "b/7")` is a/b and 7
+
+A symbol here is its text, `ns/name`, and the namespace is found from
+it (`sym_slash`, GC.f90): the first slash, as `Symbol.intern(String)`
+divides one -- except a text ending in a slash and a digit 1 to 9, an
+array class (CLJ-2807), which divides at that last slash, as clj's
+reader does (`arraySymbolPat`): `foo//7` is the namespace `foo/` and
+the name `7`, `a/b/7` is `a/b` and `7`, as are `(symbol "a/b" "7")`.
+clj keeps the two parts apart, so two texts it can tell apart are one
+here:
+
+    [(namespace (symbol "a" "b/7")) (namespace (symbol "a/b/7"))]
+    ;; clj     ["a" "a"]
+    ;; clotran ["a/b" "a/b"]
+
+Both shapes need a name holding a slash, or a namespace holding one,
+which the reader refuses for every symbol but an array class; only
+`symbol` called with such parts reaches them.
+
+**Removal**: the division kept in the symbol (its namespace length,
+beside the interned text) and read wherever `sym_slash` is now. Not
+planned: no code found writes these.

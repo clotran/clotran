@@ -2016,8 +2016,8 @@
        if (.not. gcn_is_var(v)) then
           ! clotran.io/text-reader before clotran.io is loaded
           call sym_text(gc_slot(vs_get(vst, base + 1), 2), s=dlt_1)
-          if (index(dlt_1, "/") > 1) then
-             if (load_clotran_ns(dlt_1(1:index(dlt_1, "/") - 1))) &
+          if (sym_slash(dlt_1) > 1) then
+             if (load_clotran_ns(dlt_1(1:sym_slash(dlt_1) - 1))) &
                   v = resolve_var(gc_slot(vs_get(vst, base + 1), 2), gc_nil())
           end if
        end if

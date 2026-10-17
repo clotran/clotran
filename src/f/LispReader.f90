@@ -1484,13 +1484,14 @@ contains
           end if
           if (k%tag /= GCT_KEY) then
              ! its toString, as clj's message has it: a pattern's is its source
-             ! (String concatenation makes a nil "null")
+             ! (String concatenation makes a nil "null"), a string or character
+             ! itself, and a collection's is pr's, \s and "a" inside readable
              if (k%tag == GCT_NIL) then
                 kt = "null"
              else if (gc_kind(k) == OBJ_REGEX) then
                 call gcp_str(gc_slot(k, 1), .false., s=kt)
              else
-                call gcp_str(k, .false., s=kt)
+                call gcp_str(k, k%tag /= GCT_STR .and. k%tag /= GCT_CHAR, s=kt)
              end if
              call fail("Feature should be a keyword: " // kt)
              exit
@@ -2053,7 +2054,7 @@ contains
        call gc_ref_text(k%ref, s=dlt_1)
        t = dlt_1
     end block
-    slash = index(t, "/")
+    slash = sym_slash(t)
     if (slash == 0) then
        t = ns // "/" // t
     else if (t(1:slash-1) == "_") then
@@ -2367,7 +2368,7 @@ contains
        block
          character(len=:), allocatable :: ns
          integer :: slash
-         slash = index(tok, "/")
+         slash = sym_slash(tok)
          if (slash > 0) then
             block
                call ns_resolver(tok(3:slash-1), ns=dlt_1)

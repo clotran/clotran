@@ -251,4 +251,14 @@
        ["\"\\uλ\"" "\"\\ué}\"" "#?(:cljs #js {} :default 1)" "#?((:a #js {}) 1)"
         "[#?(:zz @true :cljs #js {} :default #?@(:yy ?(:zz true :cljs #js {} :default #?@(:yy (0) :zz [true] :default ())) %1 %&)\n]"])
  (binding [*suppress-read* true] (pr-str (read-string "#js {}")))
+ ;; a feature that is not a keyword (scripts/fuzz-read): clj's message is
+ ;; its toString, a character itself and a collection pr's, \s inside it
+ (mapv (fn [t] (try (read-string {:read-cond :allow} t) (catch clotran.host.exception e (ex-message e))))
+       ["#?(:c ljs '\\s '\\space)" "#?(\\s 1)" "#?([\"a\" \\s] 1)" "#?({\"k\" \\b} 1)" "#?(#{\"z\"} 1)"])
+ ;; an array class symbol (CLJ-2807) divides at its LAST slash, as clj's
+ ;; reader's arraySymbolPat does: foo//7 is foo/ and 7, so syntax-quote
+ ;; looks for the class foo/ (scripts/fuzz-read)
+ (mapv (fn [t] (try (let [x (read-string t)] (if (symbol? x) [(namespace x) (name x) (hash x)] x)) (catch clotran.host.throwable e (ex-message e))))
+       ["clojure.core//7" "foo//7" "a/b/7" "a/b/c" "foo//" "``(clojure.core//7 \"x\")" "`clojure.core//7" "`foo/7"])
+ [(namespace (symbol "a/b" "7")) (= (read-string "a/b/7") (symbol "a/b" "7")) (compare (read-string "a/b/7") 'a/c)]
 ]
