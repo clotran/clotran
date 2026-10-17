@@ -1043,6 +1043,13 @@ contains
     integer :: n
     n = 256
     if (present(initial)) n = max(initial, 8)
+    ! rand, random-uuid and shuffle start from a seed of this process's
+    ! own, as clj's do -- wherever clotran starts (main.f90, an embedding
+    ! program's clotran_init). A compiler's default is its own choice:
+    ! flang's is one fixed seed, so every run answered the same rand-int
+    ! and random-uuid, and two clotrans started together named the same
+    ! temporary files. Fortran 2018's random_init says it for both.
+    call random_init(repeatable=.false., image_distinct=.true.)
 
     if (allocated(obj_pool)) deallocate(obj_pool, obj_mark, obj_free, obj_free_next)
     allocate(obj_pool(n), obj_mark(n), obj_free(n), obj_free_next(n))

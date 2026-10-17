@@ -38,6 +38,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error, gcr_error_class
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
+  public :: gcr_set_suppress_read, gcr_set_tag_resolver
   public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_set_read_cond, gcr_current_file, gcr_set_sq_expander, gcr_set_eval_reader
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 
@@ -82,6 +83,13 @@ module LispReader
      end subroutine eval_reader_i
   end interface
   procedure(eval_reader_i), pointer, save :: eval_reader => null()
+
+  ! A form's #tag literals resolved now, by their data readers -- the
+  ! evaluator's (Eval's tag_resolver_hook). The reader leaves them as
+  ! markers to be resolved after the read (DEVIATIONS 46); where the
+  ! read itself must judge the value -- a reader conditional's feature --
+  ! it asks first, so an unknown tag is the error clj's reader gives.
+  procedure(sq_expander_i), pointer, save :: tag_resolver => null()
 
   ! SOURCE POSITIONS. A list form records where it was read from:
   ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
@@ -557,6 +565,33 @@ contains
     read(t(s0:rp-1), *) r
     yes = r < 2 .or. r > 36
   end function radix_out_of_range
+
+  ! (tagged-literal tag form), as Eval's tagged-literal makes one: what
+  ! #tag form reads as where reading is suppressed, as clj's LispReader
+  ! answers TaggedLiteral.create under *suppress-read*
+  function make_tagged(tag, form, roots) result(m)
+    type(gc_value), intent(in) :: tag, form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    integer :: base
+    base = vs_enter(4)
+    call vs_set(base + 1, tag)
+    call vs_set(base + 2, form)
+    m = gca_empty([roots, vs_get(base + 1), vs_get(base + 2)])
+    call vs_set(base + 3, m)
+    call vs_set(base + 4, gc_key("clotran/tagged-literal", [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 4), gc_bool(.true.), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 3, m)
+    call vs_set(base + 4, gc_key("tag", [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 1), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    call vs_set(base + 3, m)
+    call vs_set(base + 4, gc_key("form", [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
+    m = gca_assoc(vs_get(base + 3), vs_get(base + 4), vs_get(base + 2), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+    call vs_leave(base)
+  end function make_tagged
 
   ! How many bytes the UTF-8 character led by c takes
   pure function u8_len(c) result(n)
@@ -1209,14 +1244,26 @@ contains
        call fail("Unreadable form")
     case default
        if (rdx%suppress_read .and. ((c >= "a" .and. c <= "z") .or. (c >= "A" .and. c <= "Z"))) then
-          ! #tag form in a branch nobody selected: read past the tag and
-          ! the form. A selected branch still has no data readers, and
-          ! fails below by tag as before.
+          ! #tag form in a branch nobody selected, or under *suppress-read*:
+          ! a tagged literal of the two, as clj's is (TaggedLiteral.create), so
+          ! a :cljs branch may hold #js {}. A selected branch still has no
+          ! data readers, and fails below by tag as before.
           pos = pos + 1
-          v = read_form(text, pos, roots)
-          if (rdx%has_error) return
-          v = read_form(text, pos, roots)
-          v = gc_nil()
+          block
+            integer :: tb
+            tb = vs_enter(2)
+            v = read_form(text, pos, roots)
+            if (.not. rdx%has_error) then
+               call vs_set(tb + 1, v)
+               v = read_form(text, pos, [roots, vs_get(tb + 1)])
+               if (.not. rdx%has_error) then
+                  call vs_set(tb + 2, v)
+                  v = make_tagged(vs_get(tb + 1), vs_get(tb + 2), roots)
+               end if
+            end if
+            call vs_leave(tb)
+            if (rdx%has_error) return
+          end block
        else if (rdx%tag_markers .and. ((c >= "a" .and. c <= "z") .or. &
             (c >= "A" .and. c <= "Z"))) then
           pos = pos + 1
@@ -1356,6 +1403,16 @@ contains
     rdx%tag_markers = on
   end function gcr_set_tag_markers
 
+  ! *suppress-read*, as read-string finds it bound: a #tag form is a
+  ! tagged literal, not a call to a data reader. The old setting.
+  logical function gcr_set_suppress_read(on) result(was)
+    type(rd_state), pointer :: rdx
+    logical, intent(in) :: on
+    rdx => rd_self()
+    was = rdx%suppress_read
+    rdx%suppress_read = on
+  end function gcr_set_suppress_read
+
   ! ---- reader conditionals ----
   !
   ! #?(:feature form ...) and #?@(...). The features claimed here are
@@ -1411,6 +1468,20 @@ contains
        if (.not. chosen) then
           k = read_next(text, pos, ")", [roots, vs_get(base + 1)], done)
           if (rdx%has_error .or. done) exit
+          if (k%tag /= GCT_KEY .and. associated(tag_resolver)) then
+             ! a #tag in it resolved first, as clj's reader read it: an
+             ! unknown one is the error
+             block
+               character(len=:), allocatable :: err, cls
+               type(gc_value) :: rk
+               call tag_resolver(k, with(roots, k), rk, err, cls)
+               if (len(err) > 0) then
+                  call fail(err, cls)
+                  exit
+               end if
+               k = rk
+             end block
+          end if
           if (k%tag /= GCT_KEY) then
              ! its toString, as clj's message has it: a pattern's is its source
              ! (String concatenation makes a nil "null")
@@ -2044,7 +2115,8 @@ contains
                 return
              end if
              if (digit_of(text(pos:pos), 16) < 0) then
-                call fail("Invalid unicode escape: \u" // text(pos:pos))
+                ! the whole character, as clj's message has it, not its first byte
+                call fail("Invalid unicode escape: \u" // text(pos:min(len(text), pos + u8_len(text(pos:pos)) - 1)))
                 return
              end if
              block
@@ -2379,6 +2451,11 @@ contains
       end if
     end function checks
   end function symbol_token_ok
+
+  subroutine gcr_set_tag_resolver(f)
+    procedure(sq_expander_i) :: f
+    tag_resolver => f
+  end subroutine gcr_set_tag_resolver
 
   subroutine gcr_set_eval_reader(f)
     procedure(eval_reader_i) :: f

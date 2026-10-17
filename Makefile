@@ -535,7 +535,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind
@@ -624,6 +624,11 @@ check-banner:
 check-torture:
 	@echo "--- a few forms with a collection at every object allocation: the read-string shape included ---"
 	CLOTRAN_GC_EVERY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/torture_check.clj </dev/null > $(B)/torture_check.out 2>&1; grep -q "^TORTURE CHECK PASSED" $(B)/torture_check.out
+check-seed-per-process:
+	@echo "--- every run its own random seed (random_init): two runs, two random-uuids, as clj's ---"
+	a=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
+	  b=$$(printf '(prn (random-uuid) (rand-int 1000000000))\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -o '#uuid "[^"]*" [0-9]*'); \
+	  [ -n "$$a" ] && [ "$$a" != "$$b" ]
 check-threads:
 	@echo "--- eight futures allocating at once, the heap checked at every young collection (step 14d) ---"
 	CLOTRAN_GC_VERIFY=1 ./clotran-bin src/clj/clojure/core.clj test/clj/threads_heap.clj </dev/null > $(B)/threads_heap.out 2>&1; \

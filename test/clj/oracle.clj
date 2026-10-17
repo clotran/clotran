@@ -3413,3 +3413,11 @@ x10
 
 ;; reader conditionals: read only under {:read-cond :allow}, its :features claimed (LispReader.checkConditionalAllowed)
 (for [f [(fn [] (read-string "#?(:zz 1 :default 2)")) (fn [] (read-string {:read-cond :allow} "#?(:zz 1 :default 2)")) (fn [] (read-string {:read-cond :allow :features #{:zz}} "#?(:zz 1 :default 2)")) (fn [] (read-string {:read-cond :allow} "[1 #?@(:zz [2] :default [3 4]) 5]")) (fn [] (read-string {:read-cond :allow} "[#?(:zz 1)]")) (fn [] (read-string {:features #{:zz}} "#?(:zz 1)")) (fn [] (read-string {:read-cond :bogus} "#?(:zz 1)")) (fn [] (read-string "[#?(:zz 1)]")) (fn [] (read {:read-cond :allow} (clotran.io/pushback-reader (clotran.io/text-reader "#?(:zz 1 :default 2)")))) (fn [] (read (clotran.io/pushback-reader (clotran.io/text-reader "#?(:zz 1)"))))]] (try (f) (catch clotran.host.exception e (.getMessage e))))
+
+;; requiring-resolve: serialized-require locks RT/REQUIRE_LOCK, which the
+;; host had no member for, so every call failed
+((requiring-resolve (quote clojure.set/union)) #{1} #{2})
+(var? (requiring-resolve (quote clojure.walk/postwalk)))
+(requiring-resolve (quote clojure.string/no-such-fn))
+;; find-ns of what is not a symbol is the cast clj makes, not a crash
+(for [x [(quote (quote x)) "clojure.core" 1]] (try (find-ns x) (catch clotran.host.throwable e [(class e) (re-find #"^class \S+ cannot be cast to class" (.getMessage e))])))

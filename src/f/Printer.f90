@@ -261,6 +261,33 @@ contains
        ! differently once it crossed 8 entries would be a leak of the
        ! implementation into the language.
        call gca_entries(v, keys, vals)
+       ! a tagged literal (tagged-literal, a #tag the reader suppressed)
+       ! is a map under a marker key; it prints as TaggedLiteral does,
+       ! #tag form -- what a reader error's message shows of one
+       block
+         integer :: j, it, iform
+         logical :: tagged
+         tagged = .false.
+         it = 0
+         iform = 0
+         do j = 1, size(keys)
+            if (keys(j)%tag /= GCT_KEY) cycle
+            if (gc_ref_is(keys(j)%ref, "clotran/tagged-literal")) tagged = .true.
+            if (gc_ref_is(keys(j)%ref, "tag")) it = j
+            if (gc_ref_is(keys(j)%ref, "form")) iform = j
+         end do
+         if (tagged .and. it > 0 .and. iform > 0) then
+            call gcp_str(vals(it), readable, s=dlt_1)
+            s = "#" // dlt_1 // " "
+            call gcp_str(vals(iform), readable, s=dlt_1)
+            block
+               character(len=:), allocatable :: dlw
+               dlw = s // dlt_1
+               call move_alloc(dlw, s)
+            end block
+            return
+         end if
+       end block
        s = "{"
        do i = 1, size(keys)
           if (i > 1) then

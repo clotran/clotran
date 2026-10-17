@@ -2045,8 +2045,8 @@ end module clotran_rt_decl
         [head ns-name] (read-string text)
         ;; clojure.core is loaded before anything runs, and loading it
         ;; again re-evaluates every definition against itself
-        _ (when-not (find-ns ns-name) (load-file src))
         _ (when-not (= 'ns head) (throw (ex-info (str src " does not begin with (ns ...)") {})))
+        _ (when-not (find-ns ns-name) (load-file src))
         forms (binding [*ns* (the-ns ns-name)] (read-string (str "[" text "\n]")))
         touched (last-touch forms)
         defns (keep-indexed (fn [i f] (when (and (seq? f) (#{'defn 'defn-} (first f))) [i f])) forms)

@@ -242,4 +242,13 @@
  ;; "  at file:line:col" kept for an uncaught error's report had leaked
  ;; into it (tree mode, and flat at the top level)
  [(try (read-string "(") (catch clotran.host.exception e (ex-message e))) (try (read-string {:read-cond :allow} "#?(:cljs 1 3 2)") (catch clotran.host.exception e (ex-message e)))]
+ ;; reader messages (scripts/fuzz-read): \u before a non-ASCII character
+ ;; names the whole character, not its first byte; a #tag where reading is
+ ;; suppressed -- an unchosen branch, *suppress-read* -- is a tagged
+ ;; literal and prints as one; an unknown #tag in a feature is the
+ ;; reader's own error, as clj resolves it while reading
+ (mapv (fn [t] (try (read-string {:read-cond :allow :features #{:zz}} t) (catch clotran.host.exception e (ex-message e))))
+       ["\"\\uλ\"" "\"\\ué}\"" "#?(:cljs #js {} :default 1)" "#?((:a #js {}) 1)"
+        "[#?(:zz @true :cljs #js {} :default #?@(:yy ?(:zz true :cljs #js {} :default #?@(:yy (0) :zz [true] :default ())) %1 %&)\n]"])
+ (binding [*suppress-read* true] (pr-str (read-string "#js {}")))
 ]

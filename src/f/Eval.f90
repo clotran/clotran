@@ -1192,6 +1192,7 @@ contains
     call gcr_set_ns_resolver(kw_ns_of)
     call gcr_set_sq_expander(sq_reader_hook)
     call gcr_set_eval_reader(eval_reader_hook)
+    call gcr_set_tag_resolver(tag_resolver_hook)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     ! The sweep tells us when an object owning out-of-heap storage
@@ -1718,6 +1719,7 @@ contains
     call gcr_set_ns_resolver(kw_ns_of)
     call gcr_set_sq_expander(sq_reader_hook)
     call gcr_set_eval_reader(eval_reader_hook)
+    call gcr_set_tag_resolver(tag_resolver_hook)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])
@@ -4749,6 +4751,12 @@ contains
     case (HK_FALSE);    out = gc_bool(.false.)
     case (HK_LINEBOX);  out = gc_obj(OBJ_ATOM, [gc_int(0_gc_ip), gc_nil()], [roots])
     case (HK_BOXVAR);   out = gc_cell_get(host_box(), 1)
+    ! an object to lock and nothing else: a static is folded where it is
+    ! written (analyze), so each place that names one has its own -- and
+    ! core.clj names RT.REQUIRE_LOCK in one place, serialized-require,
+    ! analysed while core itself loads, before any namespace of
+    ! clotran's could be (which is why it is not an HK_CLJVAR)
+    case (HK_LOCK);     out = gc_obj(OBJ_ATOM, [gc_nil(), gc_nil()], [roots])
     case (HK_CLJVAR)
        ! ns/name's value, the namespace loaded the first time
        block
@@ -6639,6 +6647,37 @@ contains
   ! (var ns/x) the Var, interned; a (Ctor. args), a (Class/member args)
   ! or a list headed by a Var called with the arguments as read,
   ! unevaluated; anything else refused as EvalReader refuses it.
+  ! For the reader (gcr_set_tag_resolver): form's #tag literals resolved
+  ! now by clotran.reader, or the error that resolving them raises
+  recursive subroutine tag_resolver_hook(form, roots, out, err, cls)
+    type(gc_value), intent(in) :: form
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value), intent(out) :: out
+    character(len=:), allocatable, intent(out) :: err, cls
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    err = ""
+    cls = ""
+    out = resolve_unread(form)
+    if (tctx%has_error) then
+       ! the thrown exception's own message, as a reader error carries one
+       block
+         type(gc_value) :: exc, m
+         exc = thrown_value()
+         m = gc_nil()
+         if (gc_kind(exc) == OBJ_ERR) m = gc_slot(exc, 2)
+         if (m%tag == GCT_STR) then
+            call text_of(m, s=err)
+         else
+            call gce_error(s=err)
+         end if
+       end block
+       cls = "clotran.host.runtime_exception"
+       call gce_clear_error()
+       out = gc_nil()
+    end if
+  end subroutine tag_resolver_hook
+
   subroutine eval_reader_hook(check, form, roots, out, err, cls)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
@@ -12340,10 +12379,18 @@ contains
        ! here made (the-ns 'nope) answer a namespace instead of
        ! throwing, and alias to it succeed.
        a = strip_meta(gcv_nth(args, 0))
-       block
-          call gc_ref_text(a%ref, s=dlt_1)
-          out = gcn_find(dlt_1)
-       end block
+       if (a%tag /= GCT_SYM) then
+          ! (Symbol) name, as clj casts it: a list's ref is no string, and
+          ! reading one as a name brought the process down
+          call class_name_of(a, s=dlt_1)
+          call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 // &
+               " cannot be cast to class clotran.host.symbol", [vs_get(vst, base + 1)])
+       else
+          block
+             call gc_ref_text(a%ref, s=dlt_1)
+             out = gcn_find(dlt_1)
+          end block
+       end if
     case (B_LOADFILE)
        ! Read the whole file, then analyse and evaluate each form. The
        ! first error ends it, as Compiler.load does. *ns* is SAVED AND
@@ -15938,8 +15985,20 @@ contains
          else
             call gcr_set_read_cond(allow, feats, was_allow, was_feats)
             block
+               ! *suppress-read* bound true: #tag form reads as a tagged
+               ! literal, as LispReader's CtorReader answers then
+               type(gc_value) :: cns, sr
+               logical :: sup, was_sup
+               sup = .false.
+               cns = gcn_find("clojure.core")
+               if (gc_kind(cns) == OBJ_NS) then
+                  sr = gcn_lookup(cns, gc_sym("*suppress-read*", [vs_get(vst, base + 1), cns]))
+                  if (gcn_is_var(sr)) sup = truthy(gcn_var_value(sr))
+               end if
+               was_sup = gcr_set_suppress_read(sup)
                call gc_ref_text(sv%ref, s=dlt_1)
                out = gcr_read(dlt_1, [vs_get(vst, base + 1)])
+               was_sup = gcr_set_suppress_read(was_sup)
             end block
             call gcr_set_read_cond(was_allow, was_feats, allow, feats)
             if (gcr_has_error()) then

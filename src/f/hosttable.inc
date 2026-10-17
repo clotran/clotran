@@ -21,12 +21,15 @@
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14, &
-       HK_BOXVAR = -15, HK_CLJVAR = -16
+       HK_BOXVAR = -15, HK_CLJVAR = -16, HK_LOCK = -17
 
-  type(hm), parameter :: HOST_STATICS_1(98) = [ &
+  type(hm), parameter :: HOST_STATICS_1(99) = [ &
   ! a static field written in Clojure: the var the name gives, its
   ! namespace loaded first (HK_CLJVAR)
        hm("clotran.queue.PersistentQueue", "EMPTY", HK_CLJVAR, "clotran.queue/EMPTY"), &
+  ! RT.REQUIRE_LOCK: what serialized-require, and so requiring-resolve,
+  ! locks (HK_LOCK)
+       hm("clotran.host.rt", "REQUIRE_LOCK", HK_LOCK), &
   ! PersistentList.creator is a static IFn that builds a list from its arguments.
        hm("clotran.host.persistent_list", "creator", B_LIST, "list"), &
   ! core.clj's own make-array, aget, aset and the aset-int family are
@@ -429,7 +432,7 @@
        hm("clotran.host.numbers", "longs", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(326) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(327) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(99) = [ &
   ! Instance members. The target becomes the first argument, which is all
