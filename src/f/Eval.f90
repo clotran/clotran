@@ -16805,10 +16805,14 @@ contains
        ! object and usually differs between objects. The pool index is
        ! exactly that for a heap object (the collector does not move),
        ! and an immediate hashes by value, as a boxed Long would not --
-       ! print-object only puts it in #object[... 0x..] anyway.
+       ! print-object only puts it in #object[... 0x..] anyway. The
+       ! index is scrambled by an odd multiplier mod 2^31, one to one, so
+       ! it spreads over 31 bits as clj's does: a bare index is a few hex
+       ! digits, and pprint's #<Future@..> then fit a line clj's never
+       ! does (test_pretty.clj's future-filled, at width 20).
        a = strip_meta(gcv_nth(args, 0))
        if (a%ref /= 0) then
-          out = gc_int(int(a%ref, gc_ip))
+          out = gc_int(modulo(int(a%ref, c_int64_t) * 1103515245_c_int64_t, 2147483648_c_int64_t))
        else
           out = gc_int(int(gc_hash(a), gc_ip))
        end if

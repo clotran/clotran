@@ -843,7 +843,9 @@ fields in a run `gc_set_slot` can write.
 the collector does not move). `(pr-str *ns*)` is now
 `#object[Namespace 0x3 "user"]`, an atom prints as
 `#object[Atom 0x.. {:status :ready, :val 1}]`, and the
-number after `0x` is the one thing that still differs from clj.
+number after `0x` is the one thing that still differs from clj (since
+2026-10-17 the index times an odd constant mod 2^31, one to one, so as
+wide as clj's).
 A function prints as `#object[user$fn 0x.. "#<fn>"]`; what differs
 is the text inside, entry 18. The original entry follows.
 
