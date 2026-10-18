@@ -154,7 +154,7 @@ contains
        ! *ns* is dynamic, as clj declares it: :dynamic in its metadata is
        ! what `binding` checks (DEVIATIONS 36)
        call vs_set(base + 2, core)
-       call vs_set(base + 1, gca_empty([vs_get(base + 2)]))
+       call vs_set(base + 1, gc_slot(vs_get(base + 2), 2))
        call vs_set(base + 1, gca_assoc(vs_get(base + 1), gc_key("dynamic", [vs_get(base + 1), vs_get(base + 2)]), &
             gc_bool(.true.), [vs_get(base + 1), vs_get(base + 2)]))
        call gc_set_slot(vs_get(base + 2), 2, vs_get(base + 1))
@@ -311,7 +311,7 @@ contains
     character(len=:), allocatable :: dlt_1, dlt_2, dlt_3, dlt_4, dlt_5, dlt_6
     var = gc_nil()
     if (gc_kind(ns) /= OBJ_NS) return
-    base = vs_enter(5)
+    base = vs_enter(7)
     call vs_set(base + 1, ns)
     call vs_set(base + 2, sym)
     call vs_set(base + 3, val)
@@ -374,9 +374,20 @@ contains
        end block
     end if
 
-    var = gc_obj(OBJ_VAR, [vs_get(base + 3), gc_nil(), vs_get(base + 1), &
+    ! its metadata starts as {:ns ns :name sym}: clj's Var constructor ends
+    ! in setMeta, which ensures those two keys (clj's Var: its constructor and setMeta),
+    ! so every Var has them -- a host builtin core.clj never redefines
+    ! too, which an editor's docs and definitions read
+    call vs_set(base + 6, gca_empty([roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))
+    call vs_set(base + 7, gc_key("ns", [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6)]))
+    call vs_set(base + 6, gca_assoc(vs_get(base + 6), vs_get(base + 7), vs_get(base + 1), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6), vs_get(base + 7)]))
+    call vs_set(base + 7, gc_key("name", [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6)]))
+    call vs_set(base + 6, gca_assoc(vs_get(base + 6), vs_get(base + 7), vs_get(base + 2), &
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6), vs_get(base + 7)]))
+    var = gc_obj(OBJ_VAR, [vs_get(base + 3), vs_get(base + 6), vs_get(base + 1), &
          vs_get(base + 2)], &
-         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+         [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 6)])
     call vs_set(base + 4, var)
     binds = gca_assoc(vs_get(base + 5), vs_get(base + 2), &
          vs_get(base + 4), [roots, vs_get(base + 1), vs_get(base + 2), vs_get(base + 4), vs_get(base + 5)])

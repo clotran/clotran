@@ -261,6 +261,8 @@ module Eval
   integer, parameter :: B_UIADD = 443, B_UISUB = 444, B_UIMUL = 445, B_UIDIV = 446, B_UIREM = 447, &
        B_UINEG = 448, B_UIINC = 449, B_UIDEC = 450
   integer, parameter :: B_RUN = 451, B_SETENV = 452, B_MKDIRS = 453, B_DELETE = 454, B_RENAME = 455, B_MKEXEC = 456, B_TEMPDIR = 457
+  ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
+  integer, parameter :: B_SETMETA = 458
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1780,7 +1782,16 @@ contains
        if (.not. gcn_is_var(vls(i))) cycle
        owner = gc_slot(vls(i), 3)
        if (.not. gc_identical(owner, vs_get(vst, base + 2))) cycle
-       if (var_not_public(vls(i))) cycle
+       ! refer maps only public Vars, whatever namespace is current; and a
+       ! Var made private since it was referred -- a builtin core.clj
+       ! redefines ^:private (reduce1, spread, sigs) -- loses that refer
+       if (var_private(vls(i))) then
+          if (gc_identical(gca_get(vs_get(vst, base + 3), ks(i)), vls(i))) then
+             m = gca_dissoc(vs_get(vst, base + 3), ks(i), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+             call vs_set(vst, base + 3, m)
+          end if
+          cycle
+       end if
        ! the namespace's own interns and earlier refers win, as refer's
        ! check for a name already mapped keeps them
        if (gca_contains(vs_get(vst, base + 3), ks(i))) cycle
@@ -1789,6 +1800,15 @@ contains
     end do
     call gc_set_slot(vs_get(vst, base + 1), 2, vs_get(vst, base + 3))
     call vs_leave(vst, base)
+  contains
+    logical function var_private(var)
+      type(gc_value), intent(in) :: var
+      type(gc_value) :: md
+      var_private = .false.
+      md = gc_slot(var, 2)
+      if (.not. gca_is(md)) return
+      var_private = truthy(gca_get(md, gc_key("private", [var, md])))
+    end function var_private
   end subroutine gce_refer_core
 
   ! user as the current namespace, clojure.core referred into it: what
@@ -14803,6 +14823,23 @@ contains
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
        call gc_set_slot(a, meta_slot(a), out)
+    case (B_SETMETA)
+       ! a Var's setMeta ensures :name and :ns (clj's Var, setMeta), which
+       ! intern with a symbol's metadata and defprotocol's methods go through;
+       ! anything else's is resetMeta's
+       call vs_set(vst, base + 2, gcv_nth(args, 0))
+       call vs_set(vst, base + 3, gcv_nth(args, 1))
+       if (gc_kind(vs_get(vst, base + 2)) == OBJ_VAR) then
+          if (.not. gca_is(vs_get(vst, base + 3))) call vs_set(vst, base + 3, gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+          if (gc_kind(gc_slot(vs_get(vst, base + 2), 3)) == OBJ_NS) &
+               call vs_set(vst, base + 3, gca_assoc(vs_get(vst, base + 3), gc_key("ns", [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+               gc_slot(vs_get(vst, base + 2), 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+          if (tag_of(gc_slot(vs_get(vst, base + 2), 4)) /= GCT_NIL) &
+               call vs_set(vst, base + 3, gca_assoc(vs_get(vst, base + 3), gc_key("name", [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]), &
+               gc_slot(vs_get(vst, base + 2), 4), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+       end if
+       out = vs_get(vst, base + 3)
+       call gc_set_slot(vs_get(vst, base + 2), meta_slot(vs_get(vst, base + 2)), out)
     case (B_EVAL)
        ! Analyse then evaluate, the same two halves load does. definline
        ! calls this at macroexpansion time to fold its body.

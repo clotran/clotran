@@ -547,7 +547,7 @@
        hm("", "getValue", B_VAL, "val"), &
        hm("", "alterMeta", B_ALTERMETA, "clotran-alter-meta"), &
        hm("", "resetMeta", B_RESETMETA, "clotran-reset-meta"), &
-       hm("", "setMeta", B_RESETMETA, "clotran-reset-meta"), &
+       hm("", "setMeta", B_SETMETA, "clotran-set-meta"), &
        hm("", "set", B_SETVAL, "clotran-set-val"), &
   ! a Ref's transaction members (DEVIATIONS 10): touch behind ensure, and the history a serialized STM never keeps
        hm("", "touch", B_TOUCH, "clotran-touch"), &

@@ -3256,6 +3256,13 @@ x10
 (binding [*ns* (create-ns 'bare3)] (try (eval '(inc 1)) (catch clotran.host.throwable e (re-find #"^Unable to resolve symbol: inc in this context" (.getMessage (or (.getCause e) e))))))
 (binding [*ns* (create-ns 'only3)] (clojure.core/refer 'clojure.core :only '[inc]) [(eval '(inc 1)) (try (eval '(dec 1)) (catch clotran.host.throwable e :unresolved))])
 (binding [*ns* (create-ns 'ren3)] (clojure.core/refer 'clojure.core :rename '{inc plus1}) [(eval '(plus1 1)) (try (eval '(inc 1)) (catch clotran.host.throwable e :unresolved))])
+;; user is given only core's PUBLIC Vars, though some were public builtins before core.clj made them
+;; ^:private (reduce1, spread, sigs): the editor's completions offered reduce1 (clotran-nrepl's test)
+[(contains? (ns-map 'user) 'reduce1) (contains? (ns-map 'user) 'spread) (some (fn [[_ v]] (and (var? v) (= 'clojure.core (ns-name (:ns (meta v)))) (:private (meta v)) v)) (ns-map 'user))]
+;; every Var's metadata has :ns and :name, as clj's setMeta ensures (clj's Var, setMeta): the host's own
+;; builtins, *ns*, a protocol's methods and intern given a symbol's metadata had lost them
+(remove (fn [[_ v]] (and (:ns (meta v)) (:name (meta v)))) (ns-publics 'clojure.core))
+(let [v (intern 'user (with-meta 'w36 {:a 1}))] (.setMeta v {:z 2}) [(:z (meta v)) (:name (meta v)) (ns-name (:ns (meta v))) (:a (meta v))])
 
 ;; a static call on a class nothing knows is refused when analysed (DEVIATIONS 32), and a definterface's name is a value
 (try (eval '(defn f32e [] (Strng32/format "x"))) (catch clotran.host.throwable e (re-find #"^No such namespace: Strng32" (.getMessage (or (.getCause e) e)))))

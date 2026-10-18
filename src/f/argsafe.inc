@@ -99,33 +99,33 @@
        args_reusable = .true.
     case (B_SCHEDTAKE, B_SECOND, B_SEQ, B_SEQFROM, B_SETDYNAMIC, B_SETENV)
        args_reusable = .true.
-    case (B_SETERRHANDLER, B_SETERRMODE, B_SETMACRO, B_SETVAL, B_SETVALIDATOR, B_SH)
+    case (B_SETERRHANDLER, B_SETERRMODE, B_SETMACRO, B_SETMETA, B_SETVAL, B_SETVALIDATOR)
        args_reusable = .true.
-    case (B_SHL, B_SHR, B_SLEEP, B_SLURP, B_SOCKACCEPT, B_SOCKCLOSE)
+    case (B_SH, B_SHL, B_SHR, B_SLEEP, B_SLURP, B_SOCKACCEPT)
        args_reusable = .true.
-    case (B_SOCKCONNECT, B_SOCKLISTEN, B_SOCKPORT, B_SOCKREAD, B_SOCKREADB, B_SOCKWRITE)
+    case (B_SOCKCLOSE, B_SOCKCONNECT, B_SOCKLISTEN, B_SOCKPORT, B_SOCKREAD, B_SOCKREADB)
        args_reusable = .true.
-    case (B_SOCKWRITEB, B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STE_CLASS, B_STE_FILE)
+    case (B_SOCKWRITE, B_SOCKWRITEB, B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STE_CLASS)
        args_reusable = .true.
-    case (B_STE_LINE, B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN, B_STUB)
+    case (B_STE_FILE, B_STE_LINE, B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN)
        args_reusable = .true.
-    case (B_SUBMIT, B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS)
+    case (B_STUB, B_SUBMIT, B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL)
        args_reusable = .true.
-    case (B_SYMBOL2, B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS)
+    case (B_SWAPVALS, B_SYMBOL2, B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE)
        args_reusable = .true.
-    case (B_TEMPDIR, B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC)
+    case (B_TASKSTATUS, B_TEMPDIR, B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG)
        args_reusable = .true.
-    case (B_TOSTRING, B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC, B_UFLOATCAST)
+    case (B_TODEC, B_TOSTRING, B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC)
        args_reusable = .true.
-    case (B_UIADD, B_UIDEC, B_UIDIV, B_UIINC, B_UIMUL, B_UINC)
+    case (B_UFLOATCAST, B_UIADD, B_UIDEC, B_UIDIV, B_UIINC, B_UIMUL)
        args_reusable = .true.
-    case (B_UINEG, B_UIREM, B_UISUB, B_UPCASE, B_USHR, B_UTF8BYTES)
+    case (B_UINC, B_UINEG, B_UIREM, B_UISUB, B_UPCASE, B_USHR)
        args_reusable = .true.
-    case (B_UTF8STRING, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE, B_VARINTERN)
+    case (B_UTF8BYTES, B_UTF8STRING, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE)
        args_reusable = .true.
-    case (B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE, B_WRITEBYTES)
+    case (B_VARINTERN, B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE)
        args_reusable = .true.
-    case (B_ZERO)
+    case (B_WRITEBYTES, B_ZERO)
        args_reusable = .true.
     case default
        args_reusable = .false.
