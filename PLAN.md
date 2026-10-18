@@ -5757,6 +5757,47 @@ milestones); the ACL2 model and check-vm-gen in the gates, then
 docs/model-coverage.md's Owed rows by risk (the multi-threaded heap
 first); then the next large thing -- Lemmis, or stage 2 of generation.
 
+### 39. Execution: compiled by default, the proved machine underneath (decided 2026-10-18; after 1.0)
+
+James, 2026-10-18, on the JIT and x86: "I'm also under this assumption
+of my general knowledge of clojurescript being completely transpiled.
+It's fast though." -- and he does not want "run interpreted until it
+gets hot". Where it stands: the flat interpreter runs by default; the
+VM (generated from ACL2) is opt-in (`CLOTRAN_VM=1`); the JIT is opt-in
+(`CLOTRAN_JIT=1`) and arm64 only -- its proof targets an abstract CPU
+meant for arm64 and x86-64, but only the arm64 emitter was built; x86-64
+runs interpreted and through `clotran compile`. Measured the same day:
+gfortran and flang turn a small function into a loadable library in
+0.17-0.24 s at -O2, a native JIT in microseconds.
+
+**The model, as ClojureScript's** (everything compiled ahead of time;
+gfortran and flang are our V8):
+1. *A project's namespaces compile to Fortran when loaded*, one library
+   per namespace, cached by its source's hash: unchanged code is built
+   once, an edit rebuilds that namespace only (about the feel of a
+   ClojureScript rebuild). Native on every architecture, x86-64
+   included, with no emitter of ours.
+2. *Forms typed at the REPL are interpreted* -- 0.2 s a form would be
+   sluggish -- by the VM, the proved machine, made the default
+   interpreter so the code people run is the code proved; the flat
+   interpreter retired once the VM matches it (docs/model-coverage.md).
+3. *The JIT accelerates the REPL*, arm64 today; an x86-64 emitter is
+   optional, best generated from the JIT model as the VM's step loop is,
+   and the arm64 one then too.
+4. *Said plainly*: numeric code (tier A) becomes plain Fortran at
+   Fortran's speed; dynamic Clojure (tier B: persistent maps, closures,
+   values of several types) becomes Fortran calling clotran's runtime --
+   faster than interpreting, far from tier A; the compiler says which
+   tier each function lands in.
+
+**The Fortran output hardened:** standard Fortran, `-std=f2018` under
+gfortran and flang in the gate for every emitted file; readable names;
+the compiled-against-interpreted-against-clj fuzzers (fuzz-build-pure
+found 7 differences on 2026-10-18, fixed before rc.6) as the everyday
+check; the proof when Lemmis's Stage A (step 38: Fortran's subset in
+ACL2) gives the target a meaning -- the compiler's source side is the
+VM model, its target side Stage A.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
