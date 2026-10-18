@@ -6,16 +6,28 @@
   library, reads the manifest, and interns a fn per routine in the
   package's own namespace, so a package named chemsol answers to
   (chemsol/readopt ..). Loading and calling are the host's, reached as
-  fortran/load-package* and fortran/call-package*.")
+  fortran/load-package* and fortran/call-package*.
+
+  A directory holding a package.edn is a package DECLARED, not built
+  (clotran.bind): loading it builds the library into the cache first,
+  unless the same sources were built before.")
 
 (defn load-package
-  "Opens the shared library at path and interns its routines as fns in
-  the namespace the manifest names. Answers the manifest."
+  "Opens the shared library at path -- or the one the package.edn in the
+  directory path declares, built when it must be -- and interns its
+  routines as fns in the namespace the manifest names, each with the file
+  and line it is declared at, when the manifest says. Answers the manifest."
   [path]
-  (let [{:keys [handle manifest]} (fortran/load-package* path)
+  (let [declared? (clotran-file-exists? (str path "/package.edn"))
+        lib (if declared? (do (require 'clotran.bind) ((resolve 'clotran.bind/build) path)) path)
+        {:keys [handle manifest]} (fortran/load-package* lib)
         ns-sym (symbol (:package manifest))
-        pkg-ns (create-ns ns-sym)]
+        pkg-ns (create-ns ns-sym)
+        ;; a declared package's sources are named relative to its directory
+        file-of (fn [r] (when-let [f (:file r)] (if (and declared? (not (re-find #"^(/|[A-Za-z]:[/\\])" f))) (str path "/" f) f)))]
     (doseq [r (:routines manifest)]
-      (intern pkg-ns (with-meta (symbol (:name r)) {:doc (:doc r) :arglists (list (mapv (comp symbol :name) (remove #(= :out (:intent %)) (:args r))))})
+      (intern pkg-ns (with-meta (symbol (:name r))
+                       (cond-> {:doc (:doc r) :arglists (list (mapv (comp symbol :name) (remove #(= :out (:intent %)) (:args r))))}
+                         (:file r) (assoc :file (file-of r) :line (:line r))))
               (fn [& args] (fortran/call-package* handle r (vec args)))))
     manifest))

@@ -99,8 +99,8 @@ runs the same forms through, and `bb` (babashka) runs the scripts.
   `scripts/run-clojure-tests-parallel test/clj/derived`.
 - `model/` -- the ACL2 books: the VM, the allocator and collectors, the
   agent pool, each proved before it was built (`model-coverage.md`).
-- `scripts/` -- babashka scripts: the oracle, the fuzzers,
-  `bind-fortran`, the gates and the release.
+- `scripts/` -- babashka scripts: the oracle, the fuzzers, the gates
+  and the release.
 - `packages/` -- BLAS and ChemSol as packages (`../PACKAGES.md`), and
   `packaging/` -- the Linux containers, and the Windows commands and
   notices a release carries.

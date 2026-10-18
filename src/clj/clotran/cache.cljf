@@ -1,0 +1,43 @@
+(ns clotran.cache
+  "Where clotran keeps what it can fetch or build again (PLAN step 36):
+  `$CLOTRAN_CACHE`, or `~/.clotran/cache`.
+
+    src/<group>/<name>/<id>      a dependency's sources, named by what
+                                 they are -- a git sha -- and never
+                                 changed after (clotran.deps)
+    build/abi<n>-<compiler>-<arch>/   the libraries this clotran compiled
+                                 (clotran.loader): a directory per runtime
+                                 ABI, Fortran compiler and machine, so a
+                                 library gfortran built is never handed to
+                                 a clotran flang built, and one home shared
+                                 by two kinds of machine, as on a cluster,
+                                 keeps two builds
+
+  Deleting the cache loses nothing that cannot be made again. A project
+  keeps only its resolved map of library to directory
+  (.clotran-cache/deps.edn, clotran.deps/cached-path)."
+  (:require [clojure.string :as str]))
+
+(defn- home []
+  (or (clotran.host.system/getenv "HOME") (clotran.host.system/getenv "USERPROFILE") "."))
+
+(defn root
+  "The cache directory: $CLOTRAN_CACHE, else ~/.clotran/cache."
+  []
+  (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (home) "/.clotran/cache")))
+
+(defn src-dir
+  "The sources of lib at id (a git sha): src/<group>/<name>/<id>, the
+  group the library's namespace, or its name when it has none, as
+  tools.deps reads foo as foo/foo."
+  [lib id]
+  (str (root) "/src/" (or (namespace lib) (name lib)) "/" (name lib) "/" id))
+
+(defn- slug [s] (-> (str s) str/lower-case (str/replace #"[^a-z0-9.]+" "-")))
+
+(defn build-dir
+  "The libraries clotran compiled with this runtime ABI, Fortran compiler
+  and machine: build/abi5-gcc-16.2.0-aarch64, say."
+  [abi]
+  (str (root) "/build/abi" abi "-" (slug (clotran.host.system/getProperty "clotran.compiler"))
+       "-" (slug (clotran.host.system/getProperty "clotran.arch"))))

@@ -1966,7 +1966,10 @@ object: `clj` answers false for all three (the last because each use of
 because Long caches -128..127. So clj's answer depends on boxing
 decisions no Clojure program can rely on; clotran's is value identity.
 Reals compare by value, as `==` does: `0.0` and `-0.0` are identical, and
-a NaN is identical to itself.
+a NaN is identical to itself. The reader agrees with clj's on literals
+even so: two `##NaN` in one set or map literal are a duplicate key, as
+they are in clj, whose reader hands out one object for every `##NaN`
+(scripts/fuzz-read found the difference; test/clj/fuzz-regressions.edn).
 
 Removal would mean boxing numbers, which is the cost this representation
 exists to avoid (PLAN.md, the calling convention's step 3). Not planned.

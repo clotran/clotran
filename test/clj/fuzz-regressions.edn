@@ -19,6 +19,14 @@
  (try (rationalize ##-Inf) (catch clotran.host.number_format_exception e :nan))
  (try (rationalize ##Inf) (catch clotran.host.number_format_exception e :nan))
  (try (rationalize ##NaN) (catch clotran.host.number_format_exception e :nan))
+ ;; inside #(...), %N with digits past an int is Integer.parseInt's error,
+ ;; not the arg-literal message; %0N is that message (scripts/fuzz-read, seed
+ ;; 3050909765)
+ (mapv #(try (pr-str (read-string %)) (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))) ["#(%372036854775809)" "#(%2147483648)" "#(%0123)"])
+ ;; every ##NaN the reader gives is clj's one Double.NaN, so two in a set or
+ ;; a map literal are a duplicate key by identity there, though (= ##NaN ##NaN)
+ ;; is false (scripts/fuzz-read, seed 1630062132)
+ (mapv #(try (pr-str (read-string %)) (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))) ["#{##NaN ##NaN}" "{##NaN 1 ##NaN 2}" "#{##NaN ##Inf}" "{##NaN 1 ##-Inf 2}" "#{##NaN 1.0}" "[##NaN ##NaN]"])
  ;; ## reads a FORM, skipping whitespace, commas and comments before it
  ;; (scripts/fuzz-read, seed 2921485854)
  (read-string "(##,NaN true)")

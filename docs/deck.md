@@ -70,7 +70,7 @@ Everything is weighed against these four. The pure Clojure language is reproduce
 ## A. Pipelines -- today
 
 - Fortran libraries are **packages**: shared libraries opened at run time, pinned by sha256
-- `scripts/bind-fortran` writes the binding from the library's own signatures
+- `clotran bind` writes the binding from the library's own signatures
 - `examples/chemsol.cljf` replaces a Fortran main program: same output, byte for byte
 - Arrays of every primitive kind, `aget`/`aset` checked value by value against Clojure
 - Futures on OS threads; agents on a work-stealing pool proved in ACL2; `dosync` a real transaction, serialized

@@ -114,7 +114,7 @@ no copy and no bridge.
 
 - Fortran libraries are **packages**: shared libraries the unchanged
   binary opens at run time (`packages/blas`, `packages/chemsol`).
-  `scripts/bind-fortran` writes the binding from a library's own
+  `clotran bind` writes the binding from a library's own
   signatures, free-form or F77. `examples/chemsol.cljf` replaces a
   Fortran main program and reproduces its output byte for byte.
 - Arrays are Fortran arrays: `double`, `long`, `int`, `float`, `boolean`,
@@ -318,7 +318,7 @@ core and the libraries Clojure vendors, the launcher and `clotran-deps`
 -- and from here each step is weighed against the four scenarios:
 
 1. **Interop beyond the F77 subset.** Derived types, `optional` and
-   pointer dummies are listed by `bind-fortran` today, not bound.
+   pointer dummies are listed by `clotran bind` today, not bound.
 2. **Speed.** Compiling core itself, so general code stops paying the
    interpreter's price; parallel marking in the collector.
 3. **Tooling.** Editor support -- an LSP, VS Code -- and installers for

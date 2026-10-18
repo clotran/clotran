@@ -27,7 +27,8 @@
   interpreted definitions stand. Loading this namespace is cheap on
   purpose: it is the part of the compiler every run needs, and only
   that part."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [clotran.cache :as cache]))
 
 ;;; ---- one function, analysed ---------------------------------------
 
@@ -193,8 +194,11 @@
 
 (defn- mode [] (clotran.host.system/getenv "CLOTRAN_AUTOCOMPILE"))
 
-(defn- cache-dir []
-  (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (clotran.host.system/getenv "HOME") "/.cache/clotran")))
+(defn- cache-dir
+  "Where this clotran's compiled libraries go: the cache's build directory
+  for this runtime ABI, Fortran compiler and machine (clotran.cache), so a
+  library gfortran built is never handed to a clotran flang built."
+  [] (cache/build-dir abi))
 
 (def ^:private ext
   (delay (let [os (str (clotran.host.system/getProperty "os.name"))]

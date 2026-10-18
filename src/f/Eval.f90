@@ -468,7 +468,7 @@ module Eval
        TASK_DONE = 3, TASK_FAILED = 4, TASK_CANCELLED = 5
 
   public :: gce_eval, gce_base_env, gce_has_error, gce_error, gce_clear_error, gce_set_spec_check
-  public :: gce_program_report
+  public :: gce_program_report, compiler_short
   public :: gce_bind_repl_vars, gce_set_command_line_args, gce_launch_action
   public :: gce_main_bindings, gce_push_load_frame, gce_install_compiled, gce_raise_arity_named, gce_raise_coded
   public :: gce_enter_user, gce_refer_core
@@ -476,7 +476,7 @@ module Eval
   public :: gce_analyze, gce_trace, gce_set_site
   public :: gce_ctx_new, gce_ctx_switch, gce_ctx_current, gce_current_fn, gce_new_slots, gce_dot_slots, gce_take_rest
   public :: gce_repl
-  public :: gce_set_home, gce_home
+  public :: gce_set_home, gce_home, gce_set_version
   public :: gce_image_write, gce_image_read, gce_set_no_install
   public :: gce_apply, gce_env, gce_exec_node, gce_apply_slots
   public :: flat_stats_print, vm_stats_print
@@ -740,6 +740,9 @@ module Eval
   ! The directory the binary lives in: a classpath root, so `clotran`
   ! run from anywhere finds src/clj. main.f90 sets it from argv(0).
   character(len=:), allocatable, save :: clotran_home
+  ! VERSION as the build stamped it (main.f90's stamp.inc), the property
+  ! clotran.version: what an index or a tool server says it came from
+  character(len=:), allocatable, save :: clotran_version
 
   include "hosttable.inc"
 
@@ -1810,6 +1813,24 @@ contains
       var_private = truthy(gca_get(md, gc_key("private", [var, md])))
     end function var_private
   end subroutine gce_refer_core
+
+  ! The Fortran compiler this clotran was built by, short -- "GCC 16.2.0",
+  ! "flang 23.1.1": compiler_version() without its parenthesis, Homebrew's
+  ! prefix and the word "version". The banner prints it (main.f90) and the
+  ! cache's build directory is named by it (clotran.cache). A subroutine,
+  ! not a function: a deferred-length function result is static under
+  ! gfortran (no-static-slen).
+  subroutine compiler_short(cv)
+    use iso_fortran_env, only: compiler_version
+    character(len=:), allocatable, intent(out) :: cv
+    integer :: k
+    cv = trim(adjustl(compiler_version()))
+    k = index(cv, " (")
+    if (k > 0) cv = cv(1:k - 1)
+    if (index(cv, "Homebrew ") == 1) cv = cv(10:)
+    k = index(cv, " version ")
+    if (k > 0) cv = cv(1:k) // cv(k + 9:)
+  end subroutine compiler_short
 
   ! user as the current namespace, clojure.core referred into it: what
   ! RT.doInit does, for the REPL, a script and a program
@@ -13510,11 +13531,15 @@ contains
          end if
        end block
     case (B_READFORMS)
-       ! (clotran-read-forms path): every top-level form of a file as a
-       ! vector, read as load-file reads them -- the file registered with
-       ! the reader, so each form's position decodes to its real file,
-       ! line and column (clotran-position). Nothing is evaluated, so a
-       ! ::keyword resolves against the CURRENT namespace: bind *ns*.
+       ! (clotran-read-forms path [transient]): every top-level form of a
+       ! file as a vector, read as load-file reads them -- the file
+       ! registered with the reader, so each form's position decodes to its
+       ! real file, line and column (clotran-position). Nothing is
+       ! evaluated, so a ::keyword resolves against the CURRENT namespace:
+       ! bind *ns*. A true second argument reads into the reader's scratch
+       ! slot instead (LispReader SCRATCH_FILE): the positions hold until
+       ! the next such read, and an index reading every file of a
+       ! workspace never fills the file table.
        block
          character(len=:), allocatable :: path, text
          type(gc_value) :: form, acc
@@ -13535,7 +13560,7 @@ contains
             close(u)
             lb = vs_enter(vst, 1)
             call vs_set(vst, lb + 1, gcv_empty([vs_get(vst, base + 1)]))
-            fid = gcr_begin_file(text, path)
+            fid = gcr_begin_file(text, path, gcv_count(args) > 1 .and. truthy(gcv_nth(args, 1)))
             j = 1
             do
                form = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, lb + 1)], eof, fid)
@@ -15268,6 +15293,9 @@ contains
           ! where this clotran lives: the launcher, src/clj, build/
           if (gc_ref_is(a%ref, "clotran.home") .and. allocated(clotran_home)) &
                out = gc_str(clotran_home, [vs_get(vst, base + 1)])
+          ! this clotran's VERSION, as the banner prints it
+          if (gc_ref_is(a%ref, "clotran.version") .and. allocated(clotran_version)) &
+               out = gc_str(clotran_version, [vs_get(vst, base + 1)])
           ! the working directory, / between its parts on every system
           if (gc_ref_is(a%ref, "user.dir")) then
              block
@@ -15314,6 +15342,38 @@ contains
                   nm(j:j) = buf(j)
                end do
                out = gc_str(nm(1:int(k)), [vs_get(vst, base + 1)])
+             end block
+          end if
+          ! the machine this binary was built for (proc_shim.c clotran_arch)
+          ! and the Fortran compiler that built it: what keys the cache's
+          ! build directory (clotran.cache)
+          if (gc_ref_is(a%ref, "clotran.arch")) then
+             block
+               interface
+                  function c_arch(buf, cap) bind(C, name="clotran_arch") result(r)
+                    import :: c_char, c_long
+                    character(kind=c_char), intent(out) :: buf(*)
+                    integer(c_long), value :: cap
+                    integer(c_long) :: r
+                  end function c_arch
+               end interface
+               character(kind=c_char) :: buf(64)
+               character(len=64) :: nm
+               integer(c_long) :: k
+               integer :: j
+               k = c_arch(buf, 64_c_long)
+               nm = ""
+               do j = 1, int(k)
+                  nm(j:j) = buf(j)
+               end do
+               out = gc_str(nm(1:int(k)), [vs_get(vst, base + 1)])
+             end block
+          end if
+          if (gc_ref_is(a%ref, "clotran.compiler")) then
+             block
+               character(len=:), allocatable :: cv
+               call compiler_short(cv)
+               out = gc_str(cv, [vs_get(vst, base + 1)])
              end block
           end if
        end if
@@ -23565,6 +23625,11 @@ contains
     character(len=*), intent(in) :: dir
     clotran_home = dir
   end subroutine gce_set_home
+
+  subroutine gce_set_version(v)
+    character(len=*), intent(in) :: v
+    clotran_version = v
+  end subroutine gce_set_version
 
   subroutine gce_home(h)
     character(len=:), allocatable, intent(out) :: h

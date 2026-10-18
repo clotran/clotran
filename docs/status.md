@@ -66,7 +66,7 @@ recalled (`scripts/oracle`).
 | the five host-bound sibling libs | bytecode generation; see `upstream/clojure/src/clj/clojure/PROVENANCE.md` |
 | regex | ICU over UTF-8: `\w`, `\b` and `(?i)` are Unicode where clj's default is ASCII, and `(?U)`, clj's way of asking for Unicode, is accepted (DEVIATIONS 14) |
 | `clojure.spec.alpha` | vendored and consulted before every macro expansion, as the Compiler does; `s/check-asserts` turns `s/assert` on, as in clj (DEVIATIONS 42, resolved) |
-| calling a Fortran library | a package per library: `scripts/bind-fortran` writes its shims and manifest from the library's own signatures, free-form or F77 (`packages/blas`, `packages/chemsol`); derived types, optional and pointer dummies are listed, not bound (PLAN.md step 9). A package built by another compiler than clotran's brings a second Fortran runtime into the process: built by clotran's own is the supported case |
+| calling a Fortran library | a package per library: `clotran bind` writes its shims and manifest from the library's own signatures, free-form or F77 (`packages/blas`, `packages/chemsol`); derived types, optional and pointer dummies are listed, not bound (PLAN.md step 9). A package built by another compiler than clotran's brings a second Fortran runtime into the process: built by clotran's own is the supported case |
 
 `DEVIATIONS.md` is the full ledger: every place clotran does something
 real Clojure does not, why, and what removing it would take. A

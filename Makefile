@@ -415,10 +415,11 @@ $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
 # PACKAGE beside its Clojure in packages/blas, opened at run time; the
 # base binary links no BLAS.
-# Its shims and manifest are GENERATED from the F77 sources by scripts/bind-fortran.
+# Its shims and manifest are GENERATED from the F77 sources by clotran bind
+# (src/clj/clotran/bind.cljf), the binary just built.
 blas-sources = $(S)/blas/dgemm.f $(S)/blas/lsame.f $(S)/blas/xerbla.f
-packages/blas/blas_bind.f90: $(blas-sources) scripts/bind-fortran
-	scripts/bind-fortran --package blas --out $@ $(blas-sources)
+packages/blas/blas_bind.f90: $(blas-sources) src/clj/clotran/bind.cljf | clotran-bin
+	./clotran-bin$(EXE) --launch bind --package blas --out $@ $(blas-sources)
 packages/blas/libblas.$(SOEXT): $(blas-sources) packages/blas/blas_bind.f90 | $(B) $(FCSTAMP)
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
@@ -530,11 +531,11 @@ embed: examples/embed/heat
 $(B)/libtestpkg.$(SOEXT): $(T)/testpkg.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -shared -fPIC -o $@ $<
 
-# and the same library bound by the GENERATOR: scripts/bind-fortran writes
-# the shims and manifest for test/f/samplelib.f90, a library written with
-# no thought of clotran, and the language test calls them through the door.
-$(B)/samplelib_shims.f90: $(T)/samplelib.f90 scripts/bind-fortran | $(B)
-	scripts/bind-fortran --package samplelib --out $@ $<
+# and the same library bound by the GENERATOR: clotran bind writes the
+# shims and manifest for test/f/samplelib.f90, a library written with no
+# thought of clotran, and the language test calls them through the door.
+$(B)/samplelib_shims.f90: $(T)/samplelib.f90 src/clj/clotran/bind.cljf | $(B) clotran-bin
+	./clotran-bin$(EXE) --launch bind --package samplelib --out $@ $<
 $(B)/libsamplelib.$(SOEXT): $(T)/samplelib.f90 $(B)/samplelib_shims.f90 | $(B) $(FCSTAMP)
 	mkdir -p $(PKGMOD)
 	$(FC) $(filter-out -frecursive -J$(B),$(FCFLAGS)) -J$(PKGMOD) -shared -fPIC -o $@ $^
@@ -565,9 +566,9 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
-TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print
+TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
@@ -642,6 +643,9 @@ endif
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
+check-index:
+	@echo "--- the index of definitions against the live Vars: core.clj, clotran's own namespaces, a Fortran package (PLAN 36) ---"
+	./clotran-bin src/clj/clojure/core.clj test/clj/index_check.clj </dev/null > $(B)/index_check.out 2>&1; s=$$?; grep -v '^note: ' $(B)/index_check.out; exit $$s
 check-language:
 	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"
 	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null > $(B)/language_test.out 2>&1; \
@@ -699,11 +703,11 @@ check-break:
 check-readme:
 	@echo "--- README.md's and docs/guide.md's examples, run: their verified output stays verified; examples/mylib bound, built and called ---"
 	scripts/readme-check README.md docs/guide.md
-	rm -rf $(B)/mylib && mkdir -p $(B)/mylib/mylib
-	scripts/bind-fortran --package mylib --out $(B)/mylib/mylib_bind.f90 examples/mylib/mylib.f90
-	cd $(B)/mylib && $(FC) -J. -shared -fPIC -o mylib/libmylib.$(SOEXT) $(CURDIR)/examples/mylib/mylib.f90 mylib_bind.f90
-	cd $(B)/mylib && sh $(CURDIR)/clotran $(CURDIR)/examples/mylib/demo.cljf </dev/null 2>&1 | grep -v '^note: ' > out.txt
+	@# the package examples/mylib/package.edn declares, built by its first load into a cache of this run's own
+	rm -rf $(B)/mylib && mkdir -p $(B)/mylib
+	cd examples/mylib && CLOTRAN_CACHE=$(CURDIR)/$(B)/mylib/cache sh $(CURDIR)/clotran demo.cljf </dev/null 2>&1 | grep -v '^note: ' > $(CURDIR)/$(B)/mylib/out.txt
 	printf '[2.0 4.0 6.0]\n56.0\n' | diff - $(B)/mylib/out.txt
+	ls $(B)/mylib/cache/build/*/pkg/mylib-*/manifest.edn > /dev/null
 check-libraries:
 	@echo "--- the portable libraries, on Clojure's OWN tests, verbatim ---"
 	scripts/run-library-tests
@@ -775,8 +779,11 @@ check-fuzz-build-pure:
 	@echo "--- clotran build --pure (PLAN 13): generated tier-A programs built and run, against clj; bad arguments against the generator ---"
 	scripts/fuzz-build-pure -n 12 -s $(SEED) > $(B)/fuzz-build-pure.out 2>&1; s=$$?; cat $(B)/fuzz-build-pure.out; exit $$s
 check-fuzz-bind:
-	@echo "--- packages from generated Fortran (PLAN 29): bind-fortran, gfortran and flang, every routine called through the door ---"
+	@echo "--- packages from generated Fortran (PLAN 29): clotran bind, gfortran and flang, every routine called through the door ---"
 	scripts/fuzz-bind -n 12 -s $(SEED) > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s
+check-fuzz-index:
+	@echo "--- the index of definitions (PLAN 36): generated files of def forms, read by clotran.index, against the loaded Vars and against clj ---"
+	scripts/fuzz-index -n 20 -s $(SEED) > $(B)/fuzz-index.out 2>&1; s=$$?; cat $(B)/fuzz-index.out; exit $$s
 check-fuzz-net:
 	@echo "--- sockets and the REPL over one (PLAN 29): random payloads echoed, generated forms through io-prepl against clj ---"
 	scripts/fuzz-net -n 20 -s $(SEED) > $(B)/fuzz-net.out 2>&1; s=$$?; cat $(B)/fuzz-net.out; exit $$s

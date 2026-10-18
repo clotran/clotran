@@ -20,9 +20,17 @@ Beside the library sits a Clojure namespace that is the API:
 packages/blas/blas.cljf wraps `blas.raw/dgemm`, thirteen positional
 arguments as netlib declares them, as `(blas/dgemm a b)`.
 
-Shims and manifests are GENERATED from the Fortran sources by
-`scripts/bind-fortran`, for free-form modules and F77 fixed form alike.
-A hand-written shim, as ChemSol's is, is still a shim.
+Shims and manifests are GENERATED from the Fortran sources by `clotran
+bind` (src/clj/clotran/bind.cljf, in core: its shims are clotran's own
+ABI), for free-form modules and F77 fixed form alike, each routine named
+with the file and line it is declared at. A hand-written shim, as
+ChemSol's is, is still a shim. A directory holding a `package.edn` --
+`{:name "mylib" :sources ["mylib.f90"]}`, the static declaration -- is
+a package DECLARED: `(fortran/load-package dir)` or `clotran bind dir`
+builds its shims, manifest and library together into the cache
+(`~/.clotran/cache/build/<abi>-<compiler>/pkg/<name>-<hash>`), keyed by
+the sources' hash, so nothing there is ever stale against the sources;
+edit the Fortran and the next load builds again (PLAN step 36).
 
 A namespace compiled by `clotran compile` goes through the same door: a
 library with a `clotran_manifest`, installed over the functions its
@@ -191,7 +199,8 @@ dependencies at all.
 - `:local/root` -- a directory with its own `deps.edn`.
 - `:git/url` + `:git/sha` -- the full sha is REQUIRED (vendoring rule 1:
   pinned); `:git/tag` is not read yet (1.x), the sha alone pins. Checked out once
-  into `~/.cache/clotran/gitlibs/<lib>/<sha>`, never modified after.
+  into the cache, `~/.clotran/cache/src/<group>/<name>/<sha>` (`CLOTRAN_CACHE`
+  moves the cache; PLAN step 36), never modified after.
 - `:mvn/version` -- refused, naming the library, unless it is one of
   the three provided above: a jar is clj bytecode. A project that needs
   one in clj and something else here says so with an alias.
@@ -204,9 +213,12 @@ library named twice at two different shas is an ERROR naming both
 paths, not a silent pick -- the choice is the project's, written in its
 own `:deps`, which always wins.
 
-**Caching.** The resolved path is written to `.clotran-cache/path`,
+**Caching.** The resolved path is written to `.clotran-cache/deps.edn`,
 keyed by a hash of every `deps.edn` that went into it, so an
-unchanged project starts with no resolution at all. The `clotran`
+unchanged project starts with no resolution at all; beside it, each
+library's directory, coordinate and paths (`:libs`), so a tool that
+reads code -- an editor's index -- knows where a dependency's sources
+are without resolving. The `clotran`
 launcher, run in a directory holding a `deps.edn`, asks
 `clotran-deps` for the path (cached) and sets `CLOTRAN_PATH`.
 
@@ -216,7 +228,7 @@ launcher, run in a directory holding a `deps.edn`, asks
 **Status (2026-09-29).** clotran has `CLOTRAN_PATH` (check-path in the
 gate) and exits 1 when a script fails to load. `../clotran-deps`
 resolves `:paths`, `:local/root`, `:git/url` + full `:git/sha` (cached
-under `~/.cache/clotran/gitlibs`), aliases, the provided Clojure
+under `~/.clotran/cache/src`), aliases, the provided Clojure
 libraries and refused jars, transitively, with conflicts an error unless
 the project settles them; its `test/run.sh` checks each. It resolves and
 loads `clotran-nrepl` both ways, and the `clotran` launcher runs it

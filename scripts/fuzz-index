@@ -1,0 +1,134 @@
+#!/usr/bin/env bb
+;; fuzz-index: the index of definitions against the live Vars and against
+;; clj (PLAN step 36).
+;;
+;;   scripts/fuzz-index [-n N] [-s SEED]
+;;
+;; N generated files, each a run of top-level forms -- def with and without
+;; a docstring, defn of one or several arities with docstrings, attribute
+;; maps and ^:private, defmacro, defmulti and defmethod, defonce, declare,
+;; defprotocol with methods, defrecord and deftype, a def inside a do, a
+;; when or a let, comment blocks, #_ forms, line comments, blank lines and
+;; forms broken over lines -- loaded by clotran, which prints each Var's
+;; :line and :column, and read by clotran.index, which must put every
+;; Var-making definition at the same place; and loaded by clj, whose Vars
+;; the def, defn, defmacro, defmulti, defonce and declare entries must
+;; match too, line and column. Nothing is ever defined twice, so a position
+;; is one definition's.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 20 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-index [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+
+;; ---- the forms --------------------------------------------------------------
+
+(def g-doc (g/elements ["\"a doc\"" "\"two\\nlines\"" nil]))
+(def g-nl (g/elements ["" "\n" "\n\n" "\n;; a comment\n" "\n#_(def gone 1)\n"]))
+(def g-break (g/elements [" " "\n  " "\n    "]))   ; where a form may break over lines
+
+(defn- form
+  "One top-level form defining name (and, for a protocol or a type, names
+  made from it); returns [text [[name kind] ...]]."
+  [kind nm {:keys [doc break priv arity]}]
+  (let [d (when doc (str doc break))
+        meta-priv (when priv "^:private ")]
+    (case kind
+      :def [(str "(def " meta-priv nm break d "1)") [[nm :clj]]]
+      :defonce [(str "(defonce " nm break "2)") [[nm :clj]]]
+      :defn (let [arities (case arity 1 (str "[x]" break "x") 2 (str "([x]" break "x)" break "([x y]" break "y)"))]
+              [(str "(defn " meta-priv nm break d (when (= arity 2) (str "{:added \"1.0\"}" break)) arities ")") [[nm :clj]]])
+      :defn- [(str "(defn- " nm break d "[]" break ":p)") [[nm :clj]]]
+      :defmacro [(str "(defmacro " nm break d "[& body]" break "`(do ~@body))") [[nm :clj]]]
+      :defmulti [(str "(defmulti " nm break d "(fn [x] x))") [[nm :clj]]]
+      :defmethod [(str "(defmethod " nm " :k" break "[x]" break "x)") []]
+      :declare [(str "(declare " nm ")") [[nm :clj]]]
+      :defprotocol [(str "(defprotocol " nm break d "(" nm "-m1 [this]" break "\"m1 doc\")" break "(" nm "-m2 [this] [this x]))")
+                    [[nm :clj]]]
+      :defrecord [(str "(defrecord " nm " [a b])") [[(str "->" nm) :clotran] [(str "map->" nm) :clotran]]]
+      :deftype [(str "(deftype " nm " [a])") [[(str "->" nm) :clotran]]]
+      :do [(str "(do" break "(def " nm " 3))") [[nm :clj]]]
+      :when [(str "(when true" break "(def " nm " 4))") [[nm :clj]]]
+      :let [(str "(let [v 5]" break "(def " nm " v))") [[nm :clj]]]
+      :comment [(str "(comment" break "(def " nm " :never))") []])))
+
+(def g-kind (g/elements [:def :def :defonce :defn :defn :defn :defn- :defmacro :defmulti :defmethod :declare :defprotocol :defrecord :deftype :do :when :let :comment]))
+(def g-opts (g/hash-map :doc g-doc :break g-break :priv g/boolean :arity (g/elements [1 2])))
+(def g-file (g/vector (g/tuple g-kind g-opts g-nl) 1 14))
+
+(defn gen-file
+  "A file's text and the names it defines, each with who checks its position."
+  [i spec]
+  (let [defs (atom [])
+        ;; a defmethod needs its defmulti: it dispatches on a multi this file made
+        multis (atom [])
+        text (str/join "\n" (cons (str "(ns fzix.f" i ")")
+                                  (map-indexed (fn [j [kind o nl]]
+                                                 (let [nm (str "f" i "d" j)
+                                                       kind (if (and (= kind :defmethod) (empty? @multis)) :defmulti kind)
+                                                       nm (if (= kind :defmethod) (first @multis) nm)
+                                                       [t ns] (form kind nm o)]
+                                                   (when (= kind :defmulti) (swap! multis conj nm))
+                                                   (swap! defs into ns)
+                                                   (str nl t)))
+                                               spec)))]
+    {:text (str text "\n") :defs @defs :ns (str "fzix.f" i)}))
+
+;; ---- running --------------------------------------------------------------------
+
+(defn run [cmd dir secs]
+  (let [proc (apply p/process {:dir dir :out :string :err :string :in ""} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true :exit -1 :out "" :err "timeout"}) r)))
+
+(defn positions-from
+  "Lines 'POS name line col' printed by a driver, as {name [line col]}."
+  [out]
+  (into {} (for [[_ nm l c] (re-seq #"(?m)^POS (\S+) (\S+) (\S+)$" out)] [nm [(read-string l) (read-string c)]])))
+
+(let [{:keys [n seed]} opts
+      work (str (fs/create-temp-dir {:prefix "fuzz-index"}))
+      files (vec (for [i (range n)] (assoc (gen-file i (g/generate g-file 8 (+ seed i))) :path (str work "/f" i ".clj"))))
+      problems (atom [])
+      pos-form (fn [ns nm] (str "(let [m (meta (ns-resolve '" ns " '" nm "))] (println \"POS\" '" nm " (:line m) (:column m)))"))]
+  (doseq [{:keys [path text]} files] (spit path text))
+  ;; clotran: load every file, print its Vars' positions, index every file
+  (let [driver (str work "/drive.clj")]
+    (spit driver (str (str/join "\n" (for [{:keys [path ns defs]} files]
+                                       (str "(load-file " (pr-str path) ")\n" (str/join "\n" (for [[nm _] defs] (pos-form ns nm))))))
+                      "\n(require 'clotran.index)\n"
+                      (str/join "\n" (for [{:keys [path]} files]
+                                       (str "(doseq [e (clotran.index/index-file " (pr-str path) ") :when (#{:def :defn :defmacro :defmulti :defprotocol :protocol-fn :declare} (:kind e))] (println \"IDX\" (:name e) (:line e) (:column e)))")))
+                      "\n"))
+    (let [r (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") driver] repo 300)
+          live (positions-from (:out r))
+          idx (into {} (for [[_ nm l c] (re-seq #"(?m)^IDX (\S+) (\S+) (\S+)$" (:out r))] [nm [(read-string l) (read-string c)]]))]
+      (when (not= 0 (:exit r)) (swap! problems conj (str "clotran failed: " (str/trim (str (:err r) (:out r))))))
+      (doseq [{:keys [defs]} files [nm _] defs]
+        (let [want (live nm) got (idx nm)]
+          (cond (nil? want) (swap! problems conj (str nm ": no Var after loading"))
+                (nil? got) (swap! problems conj (str nm ": not in the index; Var at " (pr-str want)))
+                (not= want got) (swap! problems conj (str nm ": index says " (pr-str got) ", Var says " (pr-str want))))))
+      ;; and clj on the same files, for the kinds whose Vars clj positions the same way
+      (let [cdriver (str work "/clj-drive.clj")]
+        (spit cdriver (str (str/join "\n" (for [{:keys [path ns defs]} files]
+                                            (str "(load-file " (pr-str path) ")\n" (str/join "\n" (for [[nm who] defs :when (= who :clj)] (pos-form ns nm))))))
+                           "\n"))
+        (let [c (run ["clj" "-M" cdriver] repo 300)
+              theirs (positions-from (:out c))]
+          (when (not= 0 (:exit c)) (swap! problems conj (str "clj failed: " (str/trim (:err c)))))
+          (doseq [{:keys [defs]} files [nm who] defs :when (= who :clj)]
+            (when (and (theirs nm) (not= (theirs nm) (idx nm)))
+              (swap! problems conj (str nm ": clj's Var at " (pr-str (theirs nm)) ", the index says " (pr-str (idx nm))))))))))
+  (doseq [x @problems] (println x))
+  (println (str "fuzz-index: " n " files, " (reduce + (map (comp count :defs) files)) " definitions, " (count @problems) " problems"))
+  (if (System/getenv "FUZZ_KEEP") (println "kept:" work) (fs/delete-tree work))
+  (System/exit (if (empty? @problems) 0 1)))

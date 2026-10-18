@@ -1131,7 +1131,7 @@
          "dgemm: argument alpha is a real8: pass a real, not 1 (clotran.host.int8)")
   ;; ALIASING (F2018 15.5.2.13; model `alias-ok`): c is written, so it
   ;; may not also be a or b -- it crossed, and dgemm answered [3 8 3 8]
-  ;; for [3 3 3 3]. a and b are only read (bind-fortran infers :in for
+  ;; for [3 3 3 3]. a and b are only read (clotran bind infers :in for
   ;; an array the F77 body never writes), so A x A crosses.
   (check "an array written and bound twice is refused"
          (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1.0 c 2 b 2 1.0 c 2))
@@ -1276,11 +1276,14 @@
 (check "a scalar where an array is wanted is an error" (try (testpkg/sum-arr 1.0) (catch clotran.host.exception e :not-array)) :not-array)
 (check "the fns carry arglists" (:arglists (meta #'testpkg/divmod)) '([a b]))
 
-;;; ---- a library bound by the generator: scripts/bind-fortran -----------
+;;; ---- a library bound by the generator: clotran bind ------------------
 ;; test/f/samplelib.f90 has no shims and no manifest; the Makefile runs
 ;; the generator over it and builds build/libsamplelib from the two.
 (def sl (fortran/load-package "build/libsamplelib"))
 (check "the generator named the package" (:package sl) "samplelib.raw")
+(check "and where each routine is declared, on its Var (PLAN step 36)"
+       [(:file (meta #'samplelib.raw/double-it)) (:line (meta #'samplelib.raw/double-it))]
+       ["test/f/samplelib.f90" (let [t (slurp "test/f/samplelib.f90")] (inc (count (re-seq #"\n" (subs t 0 (clojure.string/index-of t "subroutine double_it"))))))])
 (check "a generated :out scalar" (samplelib.raw/double-it 21.0) {:y 42.0})
 (check "a generated function over an array and its length"
        (let [a (fortran/make-array "real8" 3)] (fortran/aset a 0 1.5) (fortran/aset a 1 2.5) (fortran/aset a 2 3.0) (samplelib.raw/sum-arr a 3)) 7.0)
@@ -1545,6 +1548,20 @@
 (check "recur in a fn with the wrong count is refused in clj's words"
        (try (eval '(fn [x] (recur 1 2))) (catch clotran.host.throwable e (re-find #"^Mismatched argument count to recur, expected: 1 args, got: 2" (.getMessage e))))
        "Mismatched argument count to recur, expected: 1 args, got: 2")
+
+;;; ---- source positions past 120 files, and a transient read (PLAN step 36):
+;;; the packed position held a file id up to 127, so the 121st file loaded
+;;; lost its positions; now 510, and clotran-read-forms with a true second
+;;; argument reads into a scratch slot an editor's index reuses for every file.
+(clotran-mkdirs "build/manyfiles")
+(dotimes [i 140]
+  (spit (str "build/manyfiles/f" i ".clj") (str ";; file " i "\n(ns mf" i ")\n(def v" i " " i ")\n"))
+  (load-file (str "build/manyfiles/f" i ".clj")))
+(check "the 140th file loaded has its positions" (select-keys (meta (resolve 'mf139/v139)) [:file :line]) {:file "build/manyfiles/f139.clj" :line 3})
+(spit "build/manyfiles/t.clj" ";;\n;;\n;;\n;;\n(ns t)\n(def z 1)\n")
+(check "a transient read decodes its positions" (map meta (clotran-read-forms "build/manyfiles/f0.clj" true)) [{:line 2 :column 1} {:line 3 :column 1}])
+(check "and the next transient read its own" (map meta (clotran-read-forms "build/manyfiles/t.clj" true)) [{:line 5 :column 1} {:line 6 :column 1}])
+(check "a transient read registers no file" (count (filter #(= "build/manyfiles/t.clj" (:file (meta %))) (vals (ns-publics 'mf0)))) 0)
 
 ;;; ---- shutdown-agents, after every agent above is done with: a send
 ;;; is still accepted, and queued, and never runs; await-for times out

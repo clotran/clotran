@@ -1,4 +1,4 @@
-(fortran/load-package "mylib")        ; ./mylib/libmylib.dylib
+(fortran/load-package ".")            ; package.edn here: built into the cache on first use
 (def x (double-array [1 2 3]))
 (mylib.raw/scale 3 2.0 x)             ; x is :inout -- scaled in place, no copy
 (println (vec x))

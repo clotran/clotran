@@ -52,6 +52,7 @@
  "Eval.f90/break_root" {:class :shared, :note "the debugger: one break at a time, under a lock"}
  "Eval.f90/break_stderr" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/clotran_home" {:class :fixed, :note "set from argv(0) at startup"}
+ "Eval.f90/clotran_version" {:class :fixed, :note "set from stamp.inc at startup"}
  "Eval.f90/ctxs" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
  "Eval.f90/ev_limit" {:class :fixed, :note "read once from the environment"}
  "Eval.f90/free_ctx" {:class :shared, :note "the context table: under a lock (step 14a/b)"}
@@ -250,6 +251,7 @@
  "LispReader.f90/rd_key_made" {:class :fixed, :note "with rd_key"}
  "LispReader.f90/anon_seq" {:class :shared, :note "numbers #(...) parameters, one counter for every thread as RT.nextID is: atomic in 14e"}
  "LispReader.f90/files" {:class :shared, :note "a registry: additions under a lock"}
+ "LispReader.f90/said_no_pos" {:class :shared, :note "a note printed once a process; a race prints it twice, nothing worse"}
  "LispReader.f90/n_files" {:class :shared, :note "a registry: additions under a lock"}
  "Namespace.f90/current_root" {:class :fixed, :note "bootstrap only"}
  "Namespace.f90/ns_var_root" {:class :fixed, :note "#'clojure.core/*ns*, made at startup"}

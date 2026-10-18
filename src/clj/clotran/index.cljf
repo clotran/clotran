@@ -1,0 +1,191 @@
+(ns clotran.index
+  "The definitions a project holds, read and not evaluated (PLAN step 36):
+  `clotran index`. Every editor's go-to-definition, hover and symbol
+  search reads this, with or without a REPL running.
+
+    clotran index [--out FILE] [PATH ...]
+
+  With no PATH, the project in the current directory: its source roots
+  (CLOTRAN_PATH, which the launcher sets from deps.edn) and clotran's own
+  src/clj, the language. A PATH is a Clojure file, a directory walked for
+  .cljf, .cljc and .clj files, or a directory holding a package.edn, whose
+  Fortran routines are read by the same parser that writes their shims
+  (clotran.bind/routines). The answer is EDN, one definition a line:
+
+    {:ns clojure.core :name map :kind :defn :file \"...\" :line 2748 :column 1
+     :doc \"...\" :arglists ([f] [f coll] ...) :private false}
+
+  Clojure definitions are the forms clj's own Compiler would see at the
+  top of a file -- def, defn, definline, defmacro, defmulti and defmethod,
+  defprotocol and its methods, defrecord and deftype and their
+  constructors, definterface, declare, ns and in-ns, inside any list that
+  is not quoted (a do, a let, a when around a def) -- read
+  with the reader that loads them, so a position here is the position
+  (meta #'var) answers once the file has loaded (test/clj/index_check.clj
+  holds the two to that). A definition a user's own macro makes is not
+  seen; a REPL knows those, and the language server merges it in.
+
+  Positions come from a transient read (clotran-read-forms with true):
+  the file is not registered with the reader, so an index of a thousand
+  files costs the reader one slot."
+  (:require [clojure.string :as str]
+            [clotran.bind :as bind]))
+
+(def ^:private heads
+  {"def" :def "defonce" :def "defn" :defn "defn-" :defn "definline" :defn "defmacro" :defmacro
+   "defmulti" :defmulti "defmethod" :defmethod "defprotocol" :defprotocol
+   "defrecord" :defrecord "deftype" :deftype "definterface" :definterface
+   "declare" :declare "ns" :ns "in-ns" :in-ns "do" :do "comment" :comment})
+
+(defn- head-of [form] (when (and (seq? form) (symbol? (first form))) (get heads (name (first form)))))
+
+(defn- arglists-of
+  "The parameter vectors after a defn's name, doc and attribute map: one
+  vector, or the head of each ([params] body) list."
+  [xs]
+  (let [xs (cond->> xs (string? (first xs)) rest)
+        xs (cond->> xs (map? (first xs)) rest)]
+    (cond (vector? (first xs)) (list (first xs))
+          (seq? (first xs)) (apply list (keep #(when (and (seq? %) (vector? (first %))) (first %)) xs))
+          :else nil)))
+
+(defn- doc-of
+  "The docstring after a name: a string followed by something, or the
+  name's own :doc metadata."
+  [sym xs]
+  (or (:doc (meta sym))
+      (when (and (string? (first xs)) (seq (rest xs))) (first xs))
+      (when (map? (first xs)) (:doc (first xs)))))
+
+(defn- entry [ns sym kind form file & {:as more}]
+  (let [m (meta form) sm (meta sym)]
+    (merge {:ns ns :name (symbol (name sym)) :kind kind :file file
+            :line (:line m) :column (:column m)
+            :private (boolean (or (:private sm) (= "defn-" (name (first form)))))}
+           (when-let [d (:doc sm)] {:doc d})
+           (when (:macro sm) {:macro true})
+           more)))
+
+(defn- defs-of
+  "The definitions of one top-level form, and the namespace after it."
+  [ns form file]
+  (let [k (head-of form)
+        [_ sym & xs] (when k form)]
+    (case k
+      (:ns) [(symbol (name sym)) [(entry ns sym :ns form file)]]
+      (:in-ns) [(if (and (seq? sym) (= 'quote (first sym))) (second sym) ns) []]
+      (:do) (reduce (fn [[ns acc] f] (let [[ns2 es] (defs-of ns f file)] [ns2 (into acc es)])) [ns []] (rest form))
+      (:comment) [ns []]
+      (:def) [ns (when (symbol? sym) [(entry ns sym :def form file :doc (doc-of sym xs))])]
+      (:defn :defmacro) [ns (when (symbol? sym) [(entry ns sym k form file :doc (doc-of sym xs) :arglists (or (:arglists (meta sym)) (arglists-of xs)))])]
+      (:defmulti) [ns (when (symbol? sym) [(entry ns sym :defmulti form file :doc (doc-of sym xs))])]
+      (:defmethod) [ns (when (symbol? sym) [(entry ns sym :defmethod form file :dispatch (pr-str (first xs)) :arglists (arglists-of (rest xs)))])]
+      (:defprotocol) [ns (when (symbol? sym)
+                           (into [(entry ns sym :defprotocol form file :doc (doc-of sym xs))]
+                                 (for [sig xs :when (and (seq? sig) (symbol? (first sig)))]
+                                   (entry ns (first sig) :protocol-fn form file
+                                          :doc (first (filter string? sig))
+                                          :arglists (apply list (filter vector? sig))
+                                          :protocol (symbol (name sym))))))]
+      (:defrecord :deftype) [ns (when (symbol? sym)
+                                  (into [(entry ns sym k form file :fields (first xs))]
+                                        (cond-> [(entry ns (symbol (str "->" (name sym))) :defn form file :arglists (list (first xs)))]
+                                          (= k :defrecord) (conj (entry ns (symbol (str "map->" (name sym))) :defn form file :arglists '([m]))))))]
+      (:definterface) [ns (when (symbol? sym) [(entry ns sym :definterface form file)])]
+      (:declare) [ns (for [s (rest form) :when (symbol? s)] (entry ns s :declare form file))]
+      ;; any other list -- a let, a when, a binding around a def, as core.clj
+      ;; writes *clojure-version* -- is looked into, as the Compiler evaluates
+      ;; it; a quoted form is data
+      (if (and (seq? form) (not= 'quote (first form)))
+        (reduce (fn [[ns acc] f] (let [[ns2 es] (defs-of ns f file)] [ns2 (into acc es)])) [ns []] (rest form))
+        [ns []]))))
+
+(defn index-file
+  "The definitions a Clojure file holds, in order; a file the reader
+  refuses gives one entry naming the error."
+  [path]
+  (let [forms (try (binding [*ns* (the-ns 'user)] (clotran-read-forms path true))
+                   (catch clotran.host.throwable e {:error (.getMessage e)}))]
+    (if (map? forms)
+      [{:file path :kind :error :error (:error forms)}]
+      (loop [fs forms ns 'user acc []]
+        (if (empty? fs) acc
+          (let [[ns2 es] (defs-of ns (first fs) path)]
+            (recur (rest fs) ns2 (into acc es))))))))
+
+(defn fortran-defs
+  "The routines of the package DIR/package.edn declares, from its sources:
+  bound ones as clotran names them (mylib.raw/scale), with the file and
+  line each is declared at, and the ones clotran bind does not bind,
+  marked, so an editor can still go to them."
+  [dir]
+  (let [{:keys [name sources]} (bind/read-package dir)
+        pkg-ns (symbol (str name ".raw"))]
+    (vec (for [rel sources
+               :let [path (str dir "/" rel)]
+               r (bind/routines (clotran-slurp path) path)
+               :let [bound? (bind/bindable? r)]]
+           (cond-> {:ns pkg-ns :name (symbol (bind/edn-name (:name r))) :kind :fortran :file path :line (:line r) :column 1
+                    :private false :module (:module r) :bound bound?
+                    :arglists (list (mapv (comp symbol bind/edn-name :name) (remove #(= "out" (:intent %)) (:args r))))}
+             (:rspec r) (assoc :returns (:type (:rspec r))))))))
+
+(defn- clojure-file? [p] (re-find #"\.(cljf|cljc|clj)$" p))
+
+(defn- walk
+  "Every Clojure file under dir, and every directory holding a package.edn,
+  as [:clojure path] and [:package dir]; .clotran-cache, .git and build are
+  not looked into."
+  [dir]
+  (let [names (sort (clotran-list-dir dir))]
+    (concat
+     (when (some #{"package.edn"} names) [[:package dir]])
+     (mapcat (fn [n]
+               (let [p (str dir "/" n)]
+                 (case (clotran-file-kind p)
+                   :directory (when-not (#{".clotran-cache" ".git" "build" ".cpcache"} n) (walk p))
+                   :file (when (clojure-file? n) [[:clojure p]])
+                   nil)))
+             names))))
+
+(defn index-paths
+  "The definitions under paths: files, directories, packages."
+  [paths]
+  (vec (mapcat (fn [p]
+                 (case (clotran-file-kind p)
+                   :directory (mapcat (fn [[k x]] (if (= k :package) (fortran-defs x) (index-file x))) (walk p))
+                   :file (index-file p)
+                   (throw (ex-info (str "clotran index: no such file or directory: " p) {:path p}))))
+               paths)))
+
+(defn project-roots
+  "Where a project's definitions come from: CLOTRAN_PATH's entries -- the
+  launcher sets it from deps.edn -- and clotran's own src/clj, the language."
+  []
+  (let [sep (clotran.host.system/getProperty "path.separator")
+        cp (clotran.host.system/getenv "CLOTRAN_PATH")
+        home (clotran.host.system/getProperty "clotran.home")]
+    (vec (distinct (concat (when-not (str/blank? cp) (remove str/blank? (str/split cp (re-pattern (str "\\" sep)))))
+                           (when (str/blank? cp) ["src"])
+                           [(str home "/src/clj")])))))
+
+(defn write-index
+  "The index of paths as EDN, to out or standard output: a header, then one
+  definition a line, so two indexes diff."
+  [paths out]
+  (let [defs (index-paths paths)
+        text (str "{:clotran " (pr-str (str (clotran.host.system/getProperty "clotran.version"))) " :roots " (pr-str (vec paths)) "\n :defs [\n"
+                  (str/join "\n" (map pr-str defs))
+                  "\n]}\n")]
+    (if out (clotran-spit out text) (print text))
+    (count defs)))
+
+(defn main
+  "The `clotran index` command: true when done, :usage otherwise."
+  [args]
+  (let [out (second (drop-while #(not= % "--out") args))
+        paths (vec (remove #{"--out" out} args))]
+    (if (some #(str/starts-with? % "--") paths)
+      :usage
+      (do (write-index (if (seq paths) paths (filter #(clotran-file-exists? %) (project-roots))) out)
+          true))))

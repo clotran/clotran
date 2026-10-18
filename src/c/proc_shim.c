@@ -228,6 +228,21 @@ long clotran_os_name(char *buf, long cap) {
   return (long)strlen(buf);
 }
 
+/* the machine this binary was built for, as uname -m spells it on Linux:
+ * into buf, NUL-ended; its length. The cache is keyed by it (clotran.cache):
+ * one home shared by two kinds of machine, as on a cluster, keeps two builds */
+long clotran_arch(char *buf, long cap) {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  const char *a = "aarch64";
+#elif defined(__x86_64__) || defined(_M_X64)
+  const char *a = "x86_64";
+#else
+  const char *a = "unknown";
+#endif
+  snprintf(buf, (size_t)cap, "%s", a);
+  return (long)strlen(buf);
+}
+
 /* user.dir: this process's working directory, into buf, NUL-ended,
  * with / between its parts on every system; its length, or -1 */
 #ifdef _WIN32

@@ -137,7 +137,7 @@
       ;; THE MODEL: breadth first; the project's own :deps chosen first
       (let [proj-named (set (keys proj-deps))
             dir-of (fn [lib c] (if-let [sha (:git/sha c)]
-                                 (str (fs/home) "/.cache/clotran/gitlibs/" lib "/" sha)
+                                 (str (fs/home) "/.clotran/cache/src/" lib "/" sha)
                                  (str (fs/canonicalize (:local/root c)))))
             result
             (loop [q (vec (for [[l c] proj-deps] [l c "project"])) chosen [] where {} err nil]
@@ -165,7 +165,9 @@
                                          (when alias? [(str (fs/canonicalize pd) "/dev")])
                                          (mapcat (fn [lib] (let [{:keys [dir extra]} ((:where result) lib)]
                                                              (cond-> [(str dir "/src")] extra (conj (str dir "/res")))))
-                                                 (:chosen result))))})]
+                                                 (:chosen result))))
+                      ;; and what .clotran-cache/deps.edn says each library's directory is
+                      :libs (into {} (for [lib (:chosen result)] [(symbol lib) (:dir ((:where result) lib))]))})]
         (spit (str pd "/src/fzmain/core.cljf")
               (str "(ns fzmain.core (:require "
                    (str/join " " (for [lib (:chosen result)] (str "[" (ns-of (:i ((:where result) lib)) nil) ".core]")))
@@ -265,7 +267,7 @@
           cs (g/generate g-case 10 (+ seed c))
           _ (fs/create-dirs dir)
           {:keys [project alias? expect loads]} (with-redefs [fs/home (constantly home)] (build! dir cs))
-          _ (swap! kinds update (or (:error expect) (if (some #(str/includes? % ".cache/clotran/gitlibs") (:path expect)) :path-with-git :path)) (fnil inc 0))
+          _ (swap! kinds update (or (:error expect) (if (some #(str/includes? % ".clotran/cache/src") (:path expect)) :path-with-git :path)) (fnil inc 0))
           r (run (cond-> ["sh" deps-bin] alias? (conj "-A:dev") true (conj project)) {"HOME" home "CLOTRAN" repo} 300)]
       (cond
         (:timeout r) (problem "TIMEOUT case" c ": clotran-deps did not answer in 300 s")
@@ -282,8 +284,13 @@
               want (mapv #(str (fs/canonicalize %)) (:path expect))]
           (if (not= (set got) (set want))
             (problem "case" c ": path\n   want:" (pr-str want) "\n   got: " (pr-str got))
+            ;; the libraries' directories written for tools are the ones chosen,
             ;; and clotran loads each library from where it was chosen
-            (let [l (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str project "/src/fzmain/core.cljf")]
+            (let [written (try (:libs (read-string (slurp (str project "/.clotran-cache/deps.edn")))) (catch Exception _ nil))
+                  canon (fn [m] (into {} (for [[l d] m] [l (str (fs/canonicalize d))])))
+                  _ (when (not= (and (map? written) (canon (update-vals written :dir))) (canon (:libs expect)))
+                      (problem "case" c ": .clotran-cache/deps.edn :libs\n   want:" (pr-str (:libs expect)) "\n   got: " (pr-str written)))
+                  l (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") (str project "/src/fzmain/core.cljf")]
                          {"CLOTRAN_PATH" (str/join ":" got) "HOME" home} 120)
                   seen (into {} (for [[_ i w] (re-seq #"WHERE (\d+) \"?([^\"\n]+)\"?" (:out l))] [(parse-long i) w]))]
               (when (not= seen loads)

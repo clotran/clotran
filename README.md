@@ -69,9 +69,10 @@ contiguous, column-major, at an address the collector never moves:
 ```
 
 **Calling your own Fortran.** Any free-form module, written with no
-thought of clotran, becomes a package: `scripts/bind-fortran` reads its
-signatures and writes the shims, your compiler builds a shared library,
-and clotran opens it at run time. `examples/mylib/mylib.f90`:
+thought of clotran, becomes a package: a `package.edn` beside it names
+the sources, and clotran reads their signatures, writes the shims,
+builds the library with your compiler and opens it at run time.
+`examples/mylib/mylib.f90`:
 
 ```fortran
 module mylib
@@ -92,12 +93,15 @@ contains
 end module mylib
 ```
 
-From a checkout (`bind-fortran` is a [babashka](https://babashka.org)
-script), in `examples/mylib` (`.so` on Linux, `.dll` on Windows):
+Beside it, `package.edn` is the whole declaration:
+
+```clojure
+{:name "mylib" :sources ["mylib.f90"]}
+```
+
+and in `examples/mylib`:
 
 ```
-$ ../../scripts/bind-fortran --package mylib --out mylib_bind.f90 mylib.f90
-$ mkdir -p mylib && gfortran -shared -fPIC -o mylib/libmylib.dylib mylib.f90 mylib_bind.f90
 $ clotran demo.cljf
 [2.0 4.0 6.0]
 56.0
@@ -106,15 +110,18 @@ $ clotran demo.cljf
 where `demo.cljf` is
 
 ```clojure
-(fortran/load-package "mylib")        ; ./mylib/libmylib.dylib
+(fortran/load-package ".")            ; package.edn here: built into the cache on first use
 (def x (double-array [1 2 3]))
 (mylib.raw/scale 3 2.0 x)             ; x is :inout -- scaled in place, no copy
 (println (vec x))
 (println (mylib.raw/norm2sq 3 x))
 ```
 
-The array crosses as the buffer it is: no copy, no descriptor, no C
-written by hand. `make test` builds and runs this example. The reference
+The first load builds the library into `~/.clotran/cache` (`clotran bind .`
+does it by hand, and prints where); edit the Fortran and the next load
+builds it again. The array crosses as the buffer it is: no copy, no
+descriptor, no C written by hand, and each routine's Var knows the file
+and line it is declared at. `make test` builds and runs this example. The reference
 BLAS (`packages/blas`) and ChemSol, a real solvation code
 (`packages/chemsol`), are packages the same way; `PACKAGES.md` says how.
 

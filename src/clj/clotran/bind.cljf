@@ -1,83 +1,110 @@
-#!/usr/bin/env bb
-;; bind-fortran: the shims and manifest for a package, from a library's
-;; own signatures (PLAN.md step 9, src/f/DynLoad.f90).
-;;
-;;   scripts/bind-fortran --package NAME --out FILE.f90 SRC.f90 [SRC2.f90 ...]
-;;
-;; Reads free-form Fortran modules: every subroutine and function whose
-;; dummy arguments are declared with a type this door carries -- real(8)
-;; or double precision, integer or integer(4), integer(8), logical,
-;; character -- as scalars, explicit-shape, assumed-shape or assumed-size
-;; arrays. For each it writes a bind(C) shim taking argc C pointers (a
-;; scalar by pointer to its C type, an array by pointer then one int4 per
-;; extent, a string null-terminated) and unpacking them to the routine's
-;; positional arguments, plus one clotran_manifest function answering the
-;; EDN that names them all. An intent the source does not declare is
-;; taken as :inout, which is safe and costs a key in the answer map --
-;; except for an ARRAY the body provably never writes (`never-written?`),
-;; which is :in: the door's alias check (PLAN step 27) refuses an array
-;; that may be written and is bound twice, and BLAS's dgemm(a, a) must
-;; not be refused because F77 has no intent statement.
-;;
-;; What it does not bind, it lists in a comment at the top of the output
-;; rather than guessing: derived types, optional, pointer and allocatable
-;; dummies, procedure arguments, kinds it does not carry. Fixed-form F77
-;; is not read; packages/blas shows that shim written by hand.
-(require '[clojure.string :as str])
+(ns clotran.bind
+  "The shims and manifest for a package, from a library's own signatures
+  (PLAN.md steps 9 and 36, src/f/DynLoad.f90): `clotran bind`.
+
+    clotran bind --package NAME --out FILE.f90 SRC.f90 [SRC2.f90 ...]
+    clotran bind [DIR]        the package DIR/package.edn declares, built
+                              into the cache; prints its library's path
+
+  Reads free-form Fortran modules, and F77 fixed form: every subroutine
+  and function whose dummy arguments are declared with a type the door
+  carries -- real(8) or double precision, integer or integer(4),
+  integer(8), logical, character -- as scalars, explicit-shape,
+  assumed-shape or assumed-size arrays. For each it writes a bind(C) shim
+  taking argc C pointers (a scalar by pointer to its C type, an array by
+  pointer then one int4 per extent, a string null-terminated) and
+  unpacking them to the routine's positional arguments, plus one
+  clotran_manifest function answering the EDN that names them all, each
+  with the file and line it is declared at (an editor's go-to-definition
+  reads them through the Var's metadata, clotran.package). An intent the
+  source does not declare is taken as :inout, which is safe and costs a
+  key in the answer map -- except for an ARRAY the body provably never
+  writes (`never-written?`), which is :in: the door's alias check (PLAN
+  step 27) refuses an array that may be written and is bound twice, and
+  BLAS's dgemm(a, a) must not be refused because F77 has no intent
+  statement.
+
+  What it does not bind, it lists in a comment at the top of the output
+  rather than guessing: derived types, optional, pointer and allocatable
+  dummies, procedure arguments, kinds it does not carry. `routines` is the
+  parser on its own -- every routine a file declares, bound or not, with
+  its position -- for the index and the language server (step 36), so the
+  editor's view of a routine and the shim that calls it come from one
+  parse.
+
+  A package.edn is the static declaration of a package:
+
+    {:name \"mylib\" :sources [\"mylib.f90\"]}
+
+  Everything derived from the sources -- the shims, the manifest, the
+  library -- is one build output in the cache (clotran.cache), keyed by
+  the sources' hash, so a position can never disagree with the code: edit
+  the Fortran and the next load builds again. (fortran/load-package DIR)
+  on such a directory builds it when it must."
+  (:require [clojure.string :as str]
+            [clotran.cache :as cache]
+            [clotran.loader :as loader]))
+
+;; bumped when the shims or the manifest change shape: a library built by
+;; an older generator is built again
+(def generator-version 2)
 
 ;; the C kind each type crosses as (DynLoad's pointers point at these);
 ;; int8 is c_int64_t, not c_long, which is 4 bytes on Windows
-(def kinds {"real8" "real(c_double)" "int4" "integer(c_int)" "int8" "integer(c_int64_t)" "logical" "logical(c_bool)"})
+(def ^:private kinds {"real8" "real(c_double)" "int4" "integer(c_int)" "int8" "integer(c_int64_t)" "logical" "logical(c_bool)"})
 
 ;; A scalar logical crosses as one C byte, logical(c_bool), but a
 ;; routine declares its own kind -- default logical is 4 bytes -- so the
 ;; shim copies through a temporary of the DECLARED kind, back again
 ;; unless the intent is in. Passing the byte straight on was a type
 ;; mismatch the compiler refused (test/f/samplelib echo_kinds).
-(defn copied-logical? [a] (and (= "logical" (:type a)) (zero? (:rank a))))
+(defn- copied-logical? [a] (and (= "logical" (:type a)) (zero? (:rank a))))
 
 (defn fixed-form? [path] (boolean (re-find #"(?i)\.(f|for|f77)$" path)))
 
-(defn fixed-to-free
-  "Fixed-form source as free-form lines: a C, c, * or ! in column 1 is a
-  comment, a non-blank column 6 continues the line above, columns 7-72
-  carry the statement."
+(defn- fixed-to-free
+  "Fixed-form source as [line text] statements: a C, c, * or ! in column 1
+  is a comment, a non-blank column 6 continues the line above, columns
+  7-72 carry the statement. A statement keeps the line it starts on."
   [src]
-  (let [ls (->> (str/split-lines src)
-                (remove #(re-find #"^[Cc*!]" %))
-                (remove str/blank?)
-                (map #(let [l (if (> (count %) 72) (subs % 0 72) %)
-                            cont (and (>= (count l) 6) (not (str/blank? (subs l 5 6))))
-                            body (if (>= (count l) 7) (subs l 6) "")]
-                        [cont body])))]
+  (let [ls (->> (map-indexed (fn [i l] [(inc i) l]) (str/split-lines src))
+                (remove (fn [[_ l]] (re-find #"^[Cc*!]" l)))
+                (remove (fn [[_ l]] (str/blank? l)))
+                (map (fn [[n l]] (let [l (if (> (count l) 72) (subs l 0 72) l)
+                                       cont (and (>= (count l) 6) (not (str/blank? (subs l 5 6))))
+                                       body (if (>= (count l) 7) (subs l 6) "")]
+                                   [n cont body]))))]
     (loop [ls ls acc []]
       (if (empty? ls) acc
-        (let [[cont body] (first ls)]
+        (let [[n cont body] (first ls)]
           (if (and cont (seq acc))
-            (recur (rest ls) (conj (pop acc) (str (peek acc) body)))
-            (recur (rest ls) (conj acc body))))))))
+            (recur (rest ls) (conj (pop acc) (update (peek acc) 1 str body)))
+            (recur (rest ls) (conj acc [n body]))))))))
 
-(defn strip [src & [path]]
-  ;; comments off, continuation lines joined, lower-cased
+(defn- statements
+  "The source as [line text] statements: comments off, continuation lines
+  joined, lower-cased, each with the line it starts on."
+  [src path]
   (let [lines (if (and path (fixed-form? path))
                 (fixed-to-free src)
-                (map #(str/replace % #"!.*$" "") (str/split-lines src)))
+                (map-indexed (fn [i l] [(inc i) (str/replace l #"!.*$" "")]) (str/split-lines src)))
         joined (loop [ls lines acc [] cur nil]
                  (if (empty? ls)
                    (if cur (conj acc cur) acc)
-                   (let [l (str/trimr (first ls))
+                   (let [[n l] (first ls)
+                         l (str/trimr l)
                          l (str/replace l #"^\s*&" "")]
                      (if (str/ends-with? l "&")
-                       (recur (rest ls) acc (str (or cur "") (subs l 0 (dec (count l)))))
-                       (recur (rest ls) (conj acc (str (or cur "") l)) nil)))))]
-    (map #(str/lower-case (str/trim %)) joined)))
+                       (recur (rest ls) acc [(or (first cur) n) (str (second cur) (subs l 0 (dec (count l))))])
+                       (recur (rest ls) (conj acc [(or (first cur) n) (str (second cur) l)]) nil)))))]
+    (mapv (fn [[n l]] [n (str/lower-case (str/trim l))]) joined)))
 
-(defn split-args [s] (when-not (str/blank? s) (map str/trim (str/split s #","))))
+(defn- split-args [s] (when-not (str/blank? s) (map str/trim (str/split s #","))))
 
 ;; "real(8), intent(in) :: a(n), b" -> [{:type "real8" :intent "in"} ["a(n)" "b"]]
-(def f77-type #"^(double\s*precision|real\*8|real\*4|real|integer\*8|integer\*4|integer\*2|integer|logical|character\*\(\*\)|character\*\d+|character)\s+([a-z_].*)$")
+(def ^:private f77-type #"^(double\s*precision|real\*8|real\*4|real|integer\*8|integer\*4|integer\*2|integer|logical|character\*\(\*\)|character\*\d+|character)\s+([a-z_].*)$")
 
-(defn parse-decl [l]
+(defn- parse-decl [l]
   (when-let [[_ spec names] (or (re-matches #"^(.*?)\s*::\s*(.*)$" l)
                                 (when-not (re-find #"::|\bfunction\b|\bsubroutine\b|^(external|intrinsic|parameter|data|save|common|implicit|dimension)\b" l)
                                   (when-let [[_ ty names] (re-matches f77-type l)] [nil ty names])))]
@@ -107,15 +134,15 @@
                             :else (recur (rest cs) depth (str cur c) out)))))]
       [{:type type :intent intent :unbindable unbindable :dim dim :ftype (first (str/split spec #","))} names])))
 
-(defn rank-of [name-with-dims dim]
+(defn- rank-of [name-with-dims dim]
   (let [d (or (second (re-find #"\(([^)]*)\)" name-with-dims)) dim)]
     (if d (inc (count (re-seq #"," d))) 0)))
 
-(defn bare-name [n] (str/replace n #"\(.*$" ""))
+(defn- bare-name [n] (str/replace n #"\(.*$" ""))
 
 ;; Calls that read their arguments and write none of them: Fortran's
 ;; intrinsics, and the statements that look like calls.
-(def reads-only
+(def ^:private reads-only
   #{"if" "while" "abs" "dabs" "max" "min" "dmax1" "dmin1" "sqrt" "dsqrt" "dble" "real" "int"
     "nint" "mod" "sign" "dsign" "exp" "dexp" "log" "dlog" "sin" "cos" "tan" "atan" "atan2"
     "size" "len" "len_trim" "lbound" "ubound" "sum" "product" "maxval" "minval" "dot_product"})
@@ -132,7 +159,7 @@
                                   (recur (dec j) (dec depth)))
           :else (recur (dec j) depth))))
 
-(defn never-written?
+(defn- never-written?
   "True only when the routine's executable lines cannot write array p:
   every use is subscripted, none is assigned, read, passed in a CALL, or
   passed to anything but an intrinsic or another array of this routine.
@@ -154,20 +181,27 @@
                              (recur)))))))))
      lines)))
 
-;; the routines of one module: [{:module m :name n :kind :subroutine/:function :args [..] :result r} ..]
-(defn routines [src & [path]]
-  (let [ls (vec (strip src path))
-        module (some #(second (re-matches #"^module\s+(\w+)$" %)) ls)]
+(defn routines
+  "The routines a Fortran source declares, bound or not:
+  [{:module m :name n :kind :subroutine|:function :file path :line l
+    :args [{:name :type :intent :rank ...}] :rspec r} ...], each at the
+  line its declaration starts on. The parser the shims, the index and the
+  language server share."
+  [src path]
+  (let [ls (statements src path)
+        text (fn [i] (second (ls i)))
+        module (some #(second (re-matches #"^module\s+(\w+)$" (second %))) ls)]
     (loop [i 0 out []]
       (if (>= i (count ls)) out
-        (let [l (ls i)
+        (let [l (text i)
               m (or (when-let [[_ n a] (re-matches #"^(?:recursive\s+|pure\s+|elemental\s+)*subroutine\s+(\w+)\s*\(([^)]*)\)\s*$" l)] {:kind :subroutine :name n :params (split-args a)})
                     (when-let [[_ t n a r] (re-matches #"^(?:(.*?)\s+)?function\s+(\w+)\s*\(([^)]*)\)\s*(?:result\s*\((\w+)\))?\s*$" l)]
                       (when-not (re-find #"^end" l) {:kind :function :name n :params (split-args a) :result (or r n) :rtype-spec t})))]
           (if-not m (recur (inc i) out)
             ;; the body up to end subroutine/function: collect declarations of the dummies
-            (let [end (loop [j (inc i)] (if (or (>= j (count ls)) (re-matches (re-pattern (str "^end\\s*(" (name (:kind m)) ")?\\s*(" (:name m) ")?\\s*$")) (ls j))) j (recur (inc j))))
-                  decls (keep parse-decl (subvec ls (inc i) (min end (count ls))))
+            (let [end (loop [j (inc i)] (if (or (>= j (count ls)) (re-matches (re-pattern (str "^end\\s*(" (name (:kind m)) ")?\\s*(" (:name m) ")?\\s*$")) (text j))) j (recur (inc j))))
+                  body-lines (map second (subvec ls (inc i) (min end (count ls))))
+                  decls (keep parse-decl body-lines)
                   wanted (set (map str/lower-case (concat (:params m) (when (= :function (:kind m)) [(:result m)]))))
                   info (reduce (fn [acc [spec names]]
                                  (reduce (fn [acc n] (let [b (bare-name n)] (if (contains? wanted b) (assoc acc b (assoc spec :rank (rank-of n (:dim spec)) :dims (or (second (re-find #"\(([^)]*)\)" n)) (:dim spec)))) acc))) acc names))
@@ -176,12 +210,12 @@
                           (or (get info (:result m))
                               (when-let [[spec _] (and (:rtype-spec m) (parse-decl (str (:rtype-spec m) " :: " (:result m))))] (assoc spec :rank 0))))
                   args (mapv (fn [p] (merge {:name p :rank 0} (get info p {:unbindable "undeclared"}))) (:params m))
-                  body (remove parse-decl (subvec ls (inc i) (min end (count ls))))
+                  body (remove parse-decl body-lines)
                   arrays (set (map :name (filter #(pos? (:rank %)) args)))
                   args (mapv (fn [a] (if (and (nil? (:intent a)) (pos? (:rank a)) (never-written? (:name a) body arrays))
                                        (assoc a :intent "in") a))
                              args)]
-              (recur end (conj out (assoc m :module module :args args :rspec rspec))))))))))
+              (recur end (conj out (assoc m :module module :file path :line (first (ls i)) :args args :rspec rspec))))))))))
 
 (defn bindable? [r]
   (and (every? #(and (nil? (:unbindable %)) (:type %)) (:args r))
@@ -189,13 +223,13 @@
        (not-any? #(and (= "string" (:type %)) (pos? (:rank %))) (:args r))
        (not-any? #(and (= "string" (:type %)) (= "out" (:intent %))) (:args r))))
 
-(defn edn-name [n] (str/replace n "_" "-"))
+(defn edn-name "A Fortran name as clotran spells it: scale_by is scale-by." [n] (str/replace n "_" "-"))
 
-(defn ftype-decl [a]
+(defn- ftype-decl [a]
   (let [ft (case (:type a) "real8" "double precision" "int4" "integer" "int8" "integer(8)" "logical" "logical" "string" "character(len=*)")]
     (str "       " ft " :: " (:name a) (when (pos? (:rank a)) (str "(" (or (:dims a) (str/join "," (repeat (:rank a) "*"))) ")")))))
 
-(defn interface-of [r]
+(defn- interface-of [r]
   ;; scalars first, so an array's dims may name them
   (let [[scalars arrays] ((juxt filter remove) #(zero? (:rank %)) (:args r))
         head (if (= :function (:kind r))
@@ -206,21 +240,28 @@
          (when (= :function (:kind r)) (str (ftype-decl (assoc (:rspec r) :name (:result r) :rank 0)) "\n"))
          "     end " (name (:kind r)) " " (:name r) "\n")))
 
-(defn manifest [pkg rs]
+(defn manifest
+  "The EDN a package's clotran_manifest answers: its name, and each bound
+  routine with its shim's symbol, arguments, result, and where it is
+  declared."
+  [pkg rs]
   (str "{:package \"" pkg ".raw\" :routines ["
        (str/join " "
          (for [r rs]
            (str "{:name \"" (edn-name (:name r)) "\" :symbol \"" pkg "_" (:name r) "_shim\" :args ["
                 (str/join " " (for [a (:args r)] (str "{:name \"" (edn-name (:name a)) "\" :type :" (:type a) " :intent :" (or (:intent a) (if (= "string" (:type a)) "in" "inout")) " :rank " (:rank a) "}")))
-                "]" (when (:rspec r) (str " :returns :" (:type (:rspec r)))) "}")))
+                "]" (when (:rspec r) (str " :returns :" (:type (:rspec r))))
+                (when (:module r) (str " :module \"" (:module r) "\""))
+                (when (:file r) (str " :file " (pr-str (:file r)) " :line " (:line r)))
+                "}")))
        "]}"))
 
-(defn fortran-string-lines [s]
+(defn- fortran-string-lines [s]
   ;; the EDN as a Fortran character parameter, in pieces a free-form line can hold
   (let [pieces (map #(apply str %) (partition-all 90 s))]
     (str/join " // &\n       " (map #(str "'" (str/replace % "'" "''") "'") pieces))))
 
-(defn shim [pkg r]
+(defn- shim [pkg r]
   (let [args (:args r)
         ;; argv slots: a scalar one, an array one plus its rank, then the result
         slots (loop [as args k 1 out []] (if (empty? as) out (let [a (first as)] (recur (rest as) (+ k 1 (:rank a)) (conj out (assoc a :slot k))))))
@@ -253,12 +294,14 @@
                      (str "\n    " (:name a) "_c = " (:name a))))
          "\n  end subroutine " pkg "_" (:name r) "_shim\n")))
 
-(defn generate [pkg srcs]
-  (let [rs (mapcat (fn [f] (routines (slurp f) f)) srcs)
-        ok (filter bindable? rs)
+(defn generate
+  "The Fortran of a package's binding: the manifest and one shim per bound
+  routine of rs, the routines of srcs (named in the header)."
+  [pkg rs srcs]
+  (let [ok (filter bindable? rs)
         skipped (remove bindable? rs)
         modules (distinct (keep :module ok))]
-    (str "! GENERATED by scripts/bind-fortran for package " pkg " from " (str/join ", " srcs) ".\n"
+    (str "! GENERATED by clotran bind for package " pkg " from " (str/join ", " srcs) ".\n"
          "! The manifest and one shim per routine (src/f/DynLoad.f90). Do not edit;\n! regenerate.\n"
          (when (seq skipped) (str "! Not bound: " (str/join "; " (for [r skipped] (str (:name r) " (" (str/join ", " (distinct (keep (fn [a] (or (:unbindable a) (when (and (= "string" (:type a)) (pos? (:rank a))) "character array"))) (conj (vec (:args r)) (:rspec r))))) ")"))) "\n"))
          "module " pkg "_pkg\n  use iso_c_binding\n"
@@ -277,10 +320,107 @@
          (str/join "\n" (map #(shim pkg %) ok))
          "end module " pkg "_pkg\n")))
 
-(let [args *command-line-args*
-      opt (fn [k] (second (drop-while #(not= % k) args)))
-      pkg (opt "--package") out (opt "--out")
-      srcs (->> args (partition-all 2 1) (remove (fn [[a _]] (str/starts-with? a "--"))) (map first) (remove #(contains? #{pkg out} %)) (filter #(re-find #"(?i)\.(f90|f95|f03|f08|f|for|f77)$" %)))]
-  (when-not (and pkg out (seq srcs)) (binding [*out* *err*] (println "usage: scripts/bind-fortran --package NAME --out FILE.f90 SRC.f90 [SRC.f90 ...]")) (System/exit 2))
-  (spit out (generate pkg srcs))
+(defn- read-routines [srcs] (vec (mapcat (fn [f] (routines (clotran-slurp f) f)) srcs)))
+
+(defn write-binding
+  "`clotran bind --package NAME --out FILE.f90 SRC...`: FILE.f90 written."
+  [pkg out srcs]
+  (clotran-spit out (generate pkg (read-routines srcs) srcs))
   (println "wrote" out "for" pkg "from" (str/join ", " srcs)))
+
+;; ---- a package declared by package.edn, built into the cache -------------
+
+(def ^:private windows? (str/starts-with? (str (clotran.host.system/getProperty "os.name")) "Windows"))
+(def ^:private ext
+  (delay (let [os (str (clotran.host.system/getProperty "os.name"))]
+           (cond (str/starts-with? os "Mac") "dylib" (str/starts-with? os "Windows") "dll" :else "so"))))
+(def ^:private sep (clotran.host.system/getProperty "path.separator"))
+(defn- getenv [k] (let [v (clotran.host.system/getenv k)] (when-not (str/blank? v) v)))
+(defn- absolute? [p] (boolean (re-find #"^(/|[A-Za-z]:[/\\])" p)))
+(defn- absolute [p] (if (absolute? p) p (str (clotran.host.system/getProperty "user.dir") "/" p)))
+
+(defn- on-path?
+  "The name a command has where PATH finds it, or nil."
+  [cmd]
+  (some (fn [d] (some #(when (= :file (clotran-file-kind %)) %)
+                      (if windows? [(str d "/" cmd ".exe") (str d "/" cmd)] [(str d "/" cmd)])))
+        (str/split (or (getenv "PATH") "") (re-pattern (str "\\" sep)))))
+
+(defn fortran-compiler
+  "FC if set; else gfortran on PATH; else the compiler this clotran was
+  built with, by absolute path (build/fc) -- a PATH without Homebrew's
+  directory, as an Emacs started from the Dock has, finds no gfortran."
+  []
+  (or (getenv "FC")
+      (when (on-path? "gfortran") "gfortran")
+      (let [f (str (clotran.host.system/getProperty "clotran.home") "/build/fc")]
+        (when (clotran-file-exists? f)
+          (let [fc (str/trim (clotran-slurp f))] (when (clotran-file-exists? fc) fc))))
+      "gfortran"))
+
+(defn- fail [msg data] (throw (ex-info (str "clotran bind: " msg) data)))
+
+(defn read-package
+  "DIR/package.edn, checked: {:name \"mylib\" :sources [\"mylib.f90\" ...]},
+  the name a Fortran name (it prefixes the shims' module), every source a
+  file under DIR."
+  [dir]
+  (let [f (str dir "/package.edn")
+        _ (when-not (clotran-file-exists? f) (fail (str "no package.edn in " dir) {:dir dir}))
+        m (try (read-string (clotran-slurp f))
+               (catch clotran.host.exception e (fail (str f ": " (ex-message e)) {:file f})))]
+    (when-not (map? m) (fail (str f ": a package.edn is a map") {:file f}))
+    (when-not (and (string? (:name m)) (re-matches #"[A-Za-z][A-Za-z0-9_]*" (:name m)))
+      (fail (str f ": :name must be a Fortran name, letters, digits and _") {:file f}))
+    (when-not (and (vector? (:sources m)) (seq (:sources m)) (every? string? (:sources m)))
+      (fail (str f ": :sources must be a vector of Fortran files") {:file f}))
+    (doseq [s (:sources m) :when (not (clotran-file-exists? (str dir "/" s)))]
+      (fail (str f ": source " s " is not there") {:file f :source s}))
+    m))
+
+(defn build
+  "The package DIR/package.edn declares, built into the cache unless the
+  same sources were built before: its library's path. The shims
+  (NAME_bind.f90), the manifest as EDN (manifest.edn) and the library sit
+  together in one directory named by the sources' hash, so none of them
+  can be stale against the others; the manifest's :file names each source
+  relative to DIR."
+  [dir & {:keys [force?]}]
+  (let [{:keys [name sources]} (read-package dir)
+        dir (absolute dir)
+        srcs (mapv #(str dir "/" %) sources)
+        texts (mapv clotran-slurp srcs)
+        h (str/replace (str (hash [generator-version loader/abi sources texts])) "-" "m")
+        out (str (cache/build-dir loader/abi) "/pkg/" name "-" h)
+        lib (str out "/lib" name "." @ext)]
+    (when (or force? (not (clotran-file-exists? lib)))
+      (clotran-mkdirs out)
+      (let [rs (vec (mapcat (fn [s rel] (routines (clotran-slurp s) rel)) srcs sources))
+            shims (str out "/" name "_bind.f90")
+            fc (fortran-compiler)
+            gnu? (not (str/starts-with? (last (str/split fc #"[/\\]")) "flang"))
+            log (str out "/build.log")]
+        (clotran-spit shims (generate name rs sources))
+        (clotran-spit (str out "/manifest.edn") (manifest name (filter bindable? rs)))
+        (when-not (zero? (clotran-run (vec (concat [fc "-O2" "-ffp-contract=off" "-shared" "-fPIC" "-J" out]
+                                                   (when gnu? ["-ffree-line-length-none"])
+                                                   ["-o" (str lib ".part")] srcs [shims]))
+                                      out log nil true))
+          (fail (str name " did not build (" fc "):\n" (clotran-slurp log)) {:dir dir :log log}))
+        (clotran-rename (str lib ".part") lib)))
+    lib))
+
+(defn main
+  "The `clotran bind` command: true when it did its work, :usage otherwise."
+  [args]
+  (let [opt (fn [k] (second (drop-while #(not= % k) args)))
+        pkg (opt "--package") out (opt "--out")
+        force? (some #{"--force"} args)
+        rest-args (remove #{"--force"} args)]
+    (cond
+      (and pkg out)
+      (let [srcs (->> rest-args (partition-all 2 1) (remove (fn [[a _]] (str/starts-with? a "--"))) (map first) (remove #(contains? #{pkg out} %)) (filter #(re-find #"(?i)\.(f90|f95|f03|f08|f|for|f77)$" %)))]
+        (if (seq srcs) (do (write-binding pkg out srcs) true) :usage))
+      (and (<= (count rest-args) 1) (not-any? #(str/starts-with? % "--") rest-args))
+      (do (println (build (or (first rest-args) ".") :force? force?)) true)
+      :else :usage)))

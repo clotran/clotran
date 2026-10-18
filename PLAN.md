@@ -5453,6 +5453,97 @@ so an experiment links to a tree-shaken source and its binary and is
 reproducible by construction -- the AOT road of step 12 and the image
 already know what a program reaches.
 
+### 36. Editors: definitions without a REPL, one debugger, any editor (decided 2026-10-18)
+
+James, 2026-10-18: "I don't want to do a lot of work in emacs only for it
+not to be reusable in vscode or even vim"; go to definition in clotran
+code and in Fortran, "I would prefer to not need to lean on nrepl for
+this", debugging as in clojure-mode, loading and compiling that replaces
+definitions, docstrings. Decided with him item by item the same day.
+
+**The layers, each a protocol every editor already speaks:**
+- *Tree-sitter* in the editor: highlighting, indentation, structure. The
+  existing tree-sitter-clojure and tree-sitter-fortran grammars; no
+  grammar of ours.
+- *LSP* (`clotran lsp`): definitions into Clojure and Fortran, hover
+  docs, symbols, errors, gfortran's included -- from a static index, so
+  no REPL is needed to read code.
+- *nREPL, base operations only* (`clotran nrepl`): evaluate, load,
+  compile and replace. No middleware, so no client version to keep in
+  step (CIDER and cider-nrepl's lock is what James never liked); the
+  server never sends a Clojure version-string, so CIDER, which stays
+  usable, reads clotran as a generic runtime.
+- *DAP* (`clotran dap`, step 31a's design): breakpoints, steps, frames,
+  locals; attach to the running process first.
+
+The smarts live in clotran, as custom LSP requests (the top-level form at
+a position, a file's namespace), so every editor's client is thin. Not
+Calva ("a bit opinionated") and not a CIDER fork: our own clients.
+
+**In the v1.0 rc, in order:**
+1. *The cache.* `~/.clotran/cache/src/<group>/<name>/<id>` (a git sha
+   today; named for what it holds, not how it came -- James: not all code
+   is git) and `~/.clotran/cache/build/<abi>-<compiler>/...`; `CLOTRAN_CACHE`
+   moves it (an HPC home's quota); a project
+   keeps only its resolved map of library to directory. A project-local
+   cache waits for 1.x's reproducible experiments. DONE 2026-10-18:
+   clotran.cache (root, src-dir, build-dir -- abi5-gcc-16.2.0-aarch64,
+   from two new host properties, clotran.compiler and clotran.arch);
+   clotran.loader and clotran.deps build on it; .clotran-cache/deps.edn
+   carries :libs; scripts/fuzz-deps and clotran-deps' tests check both.
+2. *`clotran bind` in core.* bind-fortran's signature parser in clotran,
+   with each routine's file, line and module: its shims are clotran's
+   private ABI, so it versions with the loader, and a user needs no bb.
+   `package.edn` is the static declaration (name, sources, profile);
+   shims, manifest and library are one build output keyed by the
+   sources' hash, so positions and code cannot disagree (James caught a
+   static manifest going stale). The index and the language server call
+   the same parser. DONE 2026-10-18: clotran.bind (the script's parser,
+   each statement with its line; routines, bindable?, generate, build),
+   `clotran bind --package/--out` as the script was and `clotran bind
+   DIR` for a package.edn; clotran.package builds a declared package on
+   load and puts :file and :line on each routine's Var; examples/mylib is
+   one, the README's example needs no bb; scripts/fuzz-bind checks the
+   positions; the bb script is gone.
+3. *`clotran index`*: every definition, Clojure and Fortran, with its
+   position, docstring and arglists, read and not evaluated; its oracle
+   is the live Vars' metadata. DONE 2026-10-18: clotran.index (def, defn,
+   definline, defmacro, defmulti, defmethod, defprotocol and its methods,
+   defrecord and deftype with their constructors, definterface, declare,
+   ns and in-ns, inside any unquoted list), test/clj/index_check.clj
+   against every Var of core.clj and clotran's own namespaces in the
+   gate, scripts/fuzz-index against the loaded Vars and against clj. On
+   the way: the reader's file table held 120 files and silently gave the
+   121st no positions -- now 510, a form past 4M characters of one file
+   says so once, and clotran-read-forms with a true second argument
+   reads into a scratch slot, so an index of any size costs one; and
+   fuzz-read found two ##NaN in one set or map literal read as two keys
+   where clj's reader, which hands out one Double.NaN, refuses a
+   duplicate (fixed, DEVIATIONS 53).
+4. *`clotran nrepl`*: clotran-nrepl pinned by the install, so no
+   deps.edn names it; `.nrepl-port`; the real version in describe; a
+   terminal REPL in the same process as the socket.
+5. *Profiles*: debug symbols by default for what clotran compiles;
+   dev (checks), release, fast. No profile changes an answer
+   (`-ffp-contract=off` stays; fast-math is an opt-in and a DEVIATIONS
+   entry).
+6. *`:cljf` in `.cljc`, proved*: cljfmt, rewrite-clj and tools.reader
+   vendored unmodified, their `:cljf` branches derived as upstream/derive
+   derives Clojure's, cljfmt on clj the oracle, byte for byte; smaller
+   fixtures and regressions for each bug it finds on the way.
+7. *The guide's editors section*, VS Code with no extension included.
+
+**After it, as packages:** clotran-ide's language server, then cljfmt as
+its formatter (format as you type: idiomatic code for newcomers), the
+package rebuild on a Fortran change (code replaced, module state fresh,
+and said so), clotran-ide's debug adapter, clotran-vscode (ClojureScript,
+standalone: LSP, DAP, evaluate at the cursor, load, compile) and
+clotran-mode on eglot, dape and its own evaluate-at-point.
+
+**1.x:** calling a stripped binary by a declaration form (a binary
+library ships no interface; Gaussian ships programs, which clotran
+already runs).
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

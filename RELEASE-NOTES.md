@@ -56,7 +56,7 @@ change.
   `.cljc` file, or by `read-string` given `{:read-cond :allow}` (entry 33).
 - **Fortran underneath, on purpose.** Arrays are Fortran arrays a
   library takes as they are; a package is a shared library opened at run
-  time, its shims written by `scripts/bind-fortran` from the library's
+  time, its shims written by `clotran bind` from the library's
   own signatures; `clotran compile` turns a namespace into Fortran, and
   a numeric function into a pure Fortran loop that needs no runtime.
 - **Threads.** A future runs on an OS thread of its own; agents on a
@@ -75,7 +75,7 @@ change.
   handed to a handler, the REPL by default. Steps count calls, not
   lines; one level, so a break inside the handler is a snapshot; no
   socket.
-- **Interop** is `call-package*` over the shims `bind-fortran`
+- **Interop** is `call-package*` over the shims `clotran bind`
   generates. Derived types, optional and pointer dummies are listed,
   not bound -- the first thing in 1.x. A package built by a compiler
   other than clotran's brings a second Fortran runtime into the

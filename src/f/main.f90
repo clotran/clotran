@@ -10,7 +10,6 @@
 ! gives its main thread a stack of its choosing for the same reason.
 module clotran_main
   use iso_c_binding
-  use iso_fortran_env, only: compiler_version
   use GC
   use LispReader
   use Printer
@@ -66,6 +65,7 @@ contains
        character(len=:), allocatable :: dlr_1
        call home_dir(d=dlr_1)
        call gce_set_home(dlr_1)
+       call gce_set_version(CLOTRAN_VERSION)
        home = dlr_1
     end block
     ! A BUILT PROGRAM: this file carries its image and entry, and every
@@ -900,15 +900,9 @@ contains
     integer(8), intent(in) :: image_id
     character(len=:), allocatable :: cv, tail
     character(len=8) :: hex
-    integer :: k
     ! "GCC version 16.2.0", "Homebrew flang version 23.1.1 (https://...)"
     ! -> "GCC 16.2.0", "flang 23.1.1"
-    cv = trim(adjustl(compiler_version()))
-    k = index(cv, " (")
-    if (k > 0) cv = cv(1:k - 1)
-    if (index(cv, "Homebrew ") == 1) cv = cv(10:)
-    k = index(cv, " version ")
-    if (k > 0) cv = cv(1:k) // cv(k + 9:)
+    call compiler_short(cv)
     if (imaged) then
        write(hex, '(Z8.8)') image_id
        tail = "clotran image " // to_lower(hex)

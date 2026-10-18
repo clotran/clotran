@@ -100,10 +100,17 @@ module LispReader
   ! newlines per form and simpler than threading a line counter
   ! through every read_* routine. Files are named once, in a small
   ! table; id 0 is "no file" (the REPL).
-  ! 2^24: an offset up to 16M characters, a file id up to 127. 2^26 let
-  ! the 32nd file overflow the packed integer.
-  integer, parameter :: POS_SHIFT = 2**24
-  integer, parameter :: MAX_FILES = 120
+  ! 2^22: an offset up to 4M characters, a file id up to 511 in a default
+  ! integer. 2^26 let the 32nd file overflow the packed integer, and 2^24
+  ! stopped at the 120th: a project of more files, or an editor's index
+  ! reading every file of a workspace, lost positions past it (PLAN step
+  ! 36). A form past 4M characters of one file records none, said once.
+  integer, parameter :: POS_SHIFT = 2**22
+  ! ids 1..MAX_FILES are files loaded or read; SCRATCH_FILE is the slot a
+  ! transient read (clotran-read-forms with a true second argument) reuses,
+  ! its positions good until the next one, so an index reading every file
+  ! of a workspace never fills the table
+  integer, parameter :: MAX_FILES = 510, SCRATCH_FILE = 511
   ! One entry per file ever loaded, line index included: a position
   ! inside core.clj is asked about long after some other file became
   ! current, and must be answered against core.clj's own lines.
@@ -112,8 +119,10 @@ module LispReader
      integer, allocatable :: line_starts(:)
      logical :: read_cond = .false.   ! a .cljc: #? is read (Compiler.load)
   end type src_file
-  type(src_file), save :: files(MAX_FILES)
+  type(src_file), save :: files(SCRATCH_FILE)
   integer, save :: n_files = 0
+  ! the note that a position was not recorded, printed once a process
+  logical, save :: said_no_pos = .false.
   ! the suffix the last #(...) read gave its parameters: one counter for
   ! every thread, as RT.nextID is, so no two reads name them alike
   integer, save :: anon_seq = 0
@@ -281,14 +290,18 @@ contains
     if (i >= 1 .and. i <= n_files) name = trim(files(i)%name)
   end subroutine gcr_file_name
 
-  function gcr_begin_file(text, name) result(fid)
+  function gcr_begin_file(text, name, transient) result(fid)
     type(rd_state), pointer :: rdx
     character(len=*), intent(in) :: text, name
+    logical, intent(in), optional :: transient
     integer :: fid
     integer :: i, n, k
+    logical :: scratch
     character(len=:), allocatable :: rel
     rdx => rd_self()
     rdx%cur_file = 0
+    scratch = .false.
+    if (present(transient)) scratch = transient
     ! a file of the vendored tree is known by its CLASSPATH name, as the
     ! clj knows it: (:file (meta #'map)) is "clojure/core.clj" there, and
     ! a stack frame reads (clojure/core.clj:270:13)
@@ -296,14 +309,20 @@ contains
     k = index(name, "src/clj/", back=.true.)
     if (k > 0) rel = name(k + 8:)
     call gc_state_lock()
-    do i = 1, n_files
-       if (trim(files(i)%name) == rel) rdx%cur_file = i
-    end do
-    if (rdx%cur_file == 0 .and. n_files < MAX_FILES) then
-       n_files = n_files + 1
-       files(n_files)%name = rel
-       rdx%cur_file = n_files
+    if (scratch) then
+       rdx%cur_file = SCRATCH_FILE
+       files(SCRATCH_FILE)%name = rel
+    else
+       do i = 1, n_files
+          if (trim(files(i)%name) == rel) rdx%cur_file = i
+       end do
+       if (rdx%cur_file == 0 .and. n_files < MAX_FILES) then
+          n_files = n_files + 1
+          files(n_files)%name = rel
+          rdx%cur_file = n_files
+       end if
     end if
+    if (rdx%cur_file == 0) call say_no_pos(rel, "more than 510 files have loaded")
     rdx%rc_file = len(rel) >= 5
     if (rdx%rc_file) rdx%rc_file = rel(len(rel) - 4:) == ".cljc"
     if (rdx%cur_file > 0) files(rdx%cur_file)%read_cond = rdx%rc_file
@@ -325,6 +344,15 @@ contains
        end if
     end do
   end function gcr_begin_file
+
+  ! Once a process: a position that could not be recorded, so an error
+  ! or a definition there names no line -- a note, not a failure
+  subroutine say_no_pos(rel, why)
+    character(len=*), intent(in) :: rel, why
+    if (said_no_pos) return
+    said_no_pos = .true.
+    write(0, '(A)') "note: no source positions for " // rel // ": " // why // " (clotran records a file id up to 510 and an offset up to 4M characters)"
+  end subroutine say_no_pos
 
   ! The next form after pos, advancing pos past it; eof when only
   ! whitespace and comments remain. What Compiler.load does per form:
@@ -399,7 +427,7 @@ contains
     fname = ""
     line = 1
     col = off
-    if (fid >= 1 .and. fid <= n_files) then
+    if ((fid >= 1 .and. fid <= n_files) .or. fid == SCRATCH_FILE) then
        if (allocated(files(fid)%line_starts)) then
           lo = 1
           hi = size(files(fid)%line_starts)
@@ -415,7 +443,7 @@ contains
           col = off - files(fid)%line_starts(lo) + 1
        end if
     end if
-    if (fid >= 1 .and. fid <= n_files) fname = trim(files(fid)%name)
+    if ((fid >= 1 .and. fid <= n_files) .or. fid == SCRATCH_FILE) fname = trim(files(fid)%name)
   end subroutine gcr_position_parts
 
   ! Reads ONE form from text. Trailing text is ignored, which is what
@@ -835,8 +863,14 @@ contains
          ! the position, on the head cell of a non-empty list only:
          ! the empty list may be shared
          if (.not. rdx%has_error) then
+            ! at the REPL (file 0) the offset alone is the position, decoded
+            ! as line 1 and the column: a break's frame says (1:17)
             if (gcl_is(v)) then
-               if (gcl_count(v) > 0) call gc_set_i2(v, rdx%cur_file * POS_SHIFT + start)
+               if (start >= POS_SHIFT) then
+                  if (rdx%cur_file /= 0) call say_no_pos(trim(files(rdx%cur_file)%name), "a form sits past 4M characters")
+               else if (gcl_count(v) > 0) then
+                  call gc_set_i2(v, rdx%cur_file * POS_SHIFT + start)
+               end if
             end if
          end if
        end block
@@ -1062,6 +1096,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v
     integer :: n, e, ios
+    integer(8) :: big
     character(len=:), allocatable :: tok
     character(len=24) :: nm
     rdx => rd_self()
@@ -1078,8 +1113,17 @@ contains
        n = 1
     else if (tok == "&") then
        n = -1
-    else if (verify(tok, "0123456789") == 0 .and. tok(1:1) /= "0" .and. len(tok) <= 9) then
-       read(tok, *, iostat=ios) n
+    else if (verify(tok, "0123456789") == 0 .and. tok(1:1) /= "0") then
+       ! argPat's %[1-9][0-9]* matched; then Integer.parseInt, whose
+       ! NumberFormatException is the error for digits past an int, not
+       ! the arg-literal message (scripts/fuzz-read, seed 3050909765)
+       big = huge(big)
+       if (len(tok) <= 18) read(tok, *, iostat=ios) big
+       if (big > int(huge(n), 8)) then
+          call fail('For input string: "' // tok // '"', "clotran.host.number_format_exception")
+          return
+       end if
+       n = int(big)
     else
        call fail("arg literal must be %, %& or %integer", "clotran.host.illegal_state_exception")
        return
@@ -1091,6 +1135,18 @@ contains
     end if
     v = gc_sym(trim(nm), roots)
   end function read_arg
+
+  ! Every ##NaN clj's reader gives is its one Double.NaN object
+  ! (LispReader.SymbolicValueReader's map of specials), so two in one set
+  ! or map literal are a duplicate by identity -- createWithCheck's conj
+  ! finds the first -- though (= ##NaN ##NaN) is false. Here a NaN is a
+  ! value like any other, so the duplicate check remembers one
+  ! (scripts/fuzz-read, seed 1630062132).
+  logical function nan_key(k)
+    type(gc_value), intent(in) :: k
+    nan_key = .false.
+    if (k%tag == GCT_REAL) nan_key = gc_rval(k) /= gc_rval(k)
+  end function nan_key
 
   ! A key as clj's "Duplicate key" message names it (toString): a
   ! keyword resolved, a string's text, a symbol or integer as itself,
@@ -1140,9 +1196,11 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, items, m, item
     integer :: base, i
+    logical :: saw_nan
 
     rdx => rd_self()
     v = gc_nil()
+    saw_nan = .false.
     base = vs_enter(3)
     items = read_seq(text, pos, "}", .true., roots)
     if (rdx%has_error) then
@@ -1163,8 +1221,9 @@ contains
     do i = 0, gcv_count(vs_get(base + 1)) - 1
        item = gcv_nth(vs_get(base + 1), i)
        call vs_set(base + 3, item)
-       ! PersistentHashSet.createWithCheck: an element twice is an error
-       if (gca_contains(vs_get(base + 2), vs_get(base + 3))) then
+       ! PersistentHashSet.createWithCheck: an element twice is an error,
+       ! a second ##NaN among them (nan_key)
+       if (gca_contains(vs_get(base + 2), vs_get(base + 3)) .or. (saw_nan .and. nan_key(vs_get(base + 3)))) then
           block
             character(len=:), allocatable :: kt
             call key_text(vs_get(base + 3), "", kt)
@@ -1172,6 +1231,7 @@ contains
           end block
           call vs_leave(base); return
        end if
+       if (nan_key(vs_get(base + 3))) saw_nan = .true.
        m = gca_assoc(vs_get(base + 2), vs_get(base + 3), vs_get(base + 3), roots)
        call vs_set(base + 2, m)
     end do
@@ -1743,7 +1803,7 @@ contains
     end if
     ! On a list read from a file, MetaReader adds the ^'s own line and
     ! column to the map, over any the map gave.
-    if (gcl_is(vs_get(base + 2)) .and. rdx%cur_file /= 0) then
+    if (gcl_is(vs_get(base + 2)) .and. rdx%cur_file /= 0 .and. caret < POS_SHIFT) then
        block
          character(len=:), allocatable :: pf
          integer :: pl, pc
@@ -1883,7 +1943,7 @@ contains
     type(gc_value), allocatable :: r2(:)
     integer :: kp, ke
     character(len=:), allocatable :: odd, dup
-    logical :: has_dup, done
+    logical :: has_dup, done, saw_nan
 
     rdx => rd_self()
     odd = "Map literal must contain an even number of forms"
@@ -1891,6 +1951,7 @@ contains
     rdx%ns_map = .false.
     dup = ""
     has_dup = .false.
+    saw_nan = .false.
     v = gca_empty(roots)
     do
        r2 = with(roots, v)
@@ -1913,11 +1974,13 @@ contains
           call fail(odd)
           return
        end if
-       ! PersistentArrayMap.createWithCheck: a key twice is an error
-       if (gca_contains(v, k)) then
+       ! PersistentArrayMap.createWithCheck: a key twice is an error, a
+       ! second ##NaN among them (nan_key)
+       if (gca_contains(v, k) .or. (saw_nan .and. nan_key(k))) then
           if (.not. has_dup) call key_text(k, text(kp:ke), dup)
           has_dup = .true.
        end if
+       if (nan_key(k)) saw_nan = .true.
        v = gca_assoc(v, k, val, with(with(r2, k), val))
     end do
   end function read_map

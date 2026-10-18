@@ -52,8 +52,18 @@ pinned by its full `:git/sha` (`PACKAGES.md`).
 
 For Emacs, `clotran-mode` opens `.cljf` files in clojure-mode and has
 `M-x clotran-jack-in`, which starts clotran with the nREPL server from
-`clotran-nrepl` and connects the stock CIDER to it. Both are separate
-libraries, not yet published.
+`clotran-nrepl` and connects the stock CIDER to it. Both are
+repositories of their own under github.com/clotran.
+
+An editor needs no REPL to read code: `clotran index` writes every
+definition a project holds -- its own files, its dependencies', the
+language's, and the Fortran routines of its packages -- as EDN, one a
+line, with namespace, name, kind, file, line, column, docstring and
+arglists, read by clotran's own reader and never evaluated, so a position
+there is the one `(meta #'var)` answers once the file loads. The language
+server (PLAN step 36) serves it; `clotran index --out defs.edn` writes it
+by hand, and `clotran index path...` indexes just those files or
+directories.
 
 ## What it does
 
@@ -106,7 +116,7 @@ function keyed by the routine's own argument names:
 `scripts/chemsol-check` runs it on ChemSol's three reference inputs and
 diffs against the original program's output: all three match byte for
 byte. The arrays cross as the same buffers the Fortran writes into,
-with no copy. `scripts/bind-fortran` writes the shims and manifest for a library from its own signatures, so a package is declared rather than hand-bound. PLAN.md step 7
+with no copy. `clotran bind` writes the shims and manifest for a library from its own signatures, so a package is declared rather than hand-bound: a `package.edn` naming the sources is the whole declaration, and the library is built into the cache on first load (the README's `examples/mylib`). PLAN.md step 7
 records what the library dictated for it.
 
 **A Fortran program can embed clotran.** `examples/embed/heat.f90` is
@@ -312,7 +322,8 @@ answers, and `scripts/pure-check` runs its cases through the installed
 library against `clj`.
 
 With `CLOTRAN_AUTOCOMPILE=1`, `./clotran` compiles what it loads, in the
-background, into a cache (`~/.cache/clotran`, or `$CLOTRAN_CACHE`), and
+background, into the cache (`~/.clotran/cache/build`, a directory per
+compiler; `$CLOTRAN_CACHE` moves the cache), and
 installs a namespace from the cache whenever the same text loads again.
 It is off by default for now: compiled core still calls through heap
 frames, and seq code runs slower compiled than interpreted --

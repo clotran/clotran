@@ -153,24 +153,12 @@
 
 ;; --- clotran compile file.cljf [library] ----------------------------------
 
-(defn- on-path?
-  "The name a command has where PATH finds it, or nil."
-  [cmd]
-  (some (fn [d] (some #(when (= :file (clotran-file-kind %)) %)
-                      (if windows? [(str d "/" cmd ".exe") (str d "/" cmd)] [(str d "/" cmd)])))
-        (str/split (or (getenv "PATH") "") (re-pattern (str "\\" sep)))))
-
 (defn- fortran-compiler
   "FC if set; else gfortran on PATH; else the compiler this clotran was
-  built with, by absolute path (build/fc) -- a PATH without Homebrew's
-  directory, as an Emacs started from the Dock has, finds no gfortran."
+  built with (clotran.bind/fortran-compiler, which packages share)."
   []
-  (or (getenv "FC")
-      (when (on-path? "gfortran") "gfortran")
-      (let [f (str home "/build/fc")]
-        (when (clotran-file-exists? f)
-          (let [fc (str/trim (clotran-slurp f))] (when (clotran-file-exists? fc) fc))))
-      "gfortran"))
+  (require 'clotran.bind)
+  ((resolve 'clotran.bind/fortran-compiler)))
 
 (defn- compile-lib
   "The library: :wrote, :no-fortran when there was nothing to compile, or
@@ -504,6 +492,22 @@
             (err "clotran: this deps.edn names sources, but there is no clotran-deps to read it (PACKAGES.md)"))
           true))))
 
+;; --- clotran bind: a package's shims and manifest, or the package a package.edn declares
+
+(defn- bind [args]
+  (case (in-process '[clotran.bind] (str "(clotran.bind/main " (pr-str (mapv slashes args)) ")"))
+    true (exit! 0)
+    :usage (do (err "usage: clotran bind --package NAME --out FILE.f90 SRC.f90 [SRC.f90 ...]\n       clotran bind [--force] [DIR]      the package DIR/package.edn declares, built into the cache") (exit! 2))
+    (exit! 1)))
+
+;; --- clotran index: the project's definitions, read and not evaluated
+
+(defn- index [args]
+  (case (in-process '[clotran.index] (str "(clotran.index/main " (pr-str (mapv slashes args)) ")"))
+    true (exit! 0)
+    :usage (do (err "usage: clotran index [--out FILE] [PATH ...]") (exit! 2))
+    (exit! 1)))
+
 (defn- aliases-of [a] (mapv keyword (remove str/blank? (str/split (subs a 2) #":"))))
 
 (defn main
@@ -513,6 +517,9 @@
     (case (first args)
       "new" (new-project (rest args))
       "explain" (explain (rest args))
+      "bind" (bind (rest args))
+      ;; after the project's path: the index covers what deps.edn names
+      "index" (if (project-path! []) (index (rest args)) (exit! 1))
       "compile" (case (second args)
                   "--pure" (compile-pure (drop 2 args))
                   "--report" (compile-report (drop 2 args))
