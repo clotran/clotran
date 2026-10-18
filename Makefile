@@ -880,8 +880,7 @@ image: $(B)/core.image
 #   sudo make install PREFIX=/usr/local
 #   make uninstall                   the same PREFIX
 #
-# On Windows (MSYS2 make) PREFIX defaults to %LOCALAPPDATA%\Programs\clotran;
-# the Windows build itself is untested until CI runs it (PLAN step 21).
+# On Windows (MSYS2 make) PREFIX defaults to %LOCALAPPDATA%\Programs\clotran.
 # Built for this machine's architecture only (uname -m), not universal.
 ifneq ($(filter MINGW% MSYS% CYGWIN%,$(UNAME_S)),)
 PREFIX ?= $(subst \,/,$(LOCALAPPDATA))/Programs/clotran
@@ -925,8 +924,8 @@ install: clotran-bin $(B)/fc
 	  *) echo "clotran is installed: $(CLOTRAN_BIN)/clotran -- $(CLOTRAN_BIN) is not on your PATH; add it" ;; esac
 
 # A release: what make install puts in a PREFIX, made relocatable --
-# the shared libraries the binary needs beyond the C library carried
-# beside it, the commands finding their homes from where they are
+# the commands finding their homes from where they are, the binary
+# needing only the C library, its runtimes linked in
 # (scripts/dist-bundle) -- as build/dist/NAME.tar.gz. A Linux one is
 # built on an old glibc (scripts/dist-linux) so it runs on any newer one.
 DIST_OS = $(if $(filter Windows,$(OS_TARGET)),windows,$(shell uname -s | tr A-Z a-z))

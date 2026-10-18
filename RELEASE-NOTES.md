@@ -13,6 +13,17 @@ the GPL; install is `install.sh` or `install.ps1`; `requiring-resolve`
 works; and each run has its own random seed (a flang build answered the
 same `rand` every run).
 
+Since rc.4, on main: the repositories live in the `clotran`
+organization (github.com/clotran/clotran, with clotran-deps,
+clotran-nrepl and clotran-mode beside it); ICU's data is trimmed to what
+regex and case mapping read, so `clotran-bin` is 9.5 MB on macOS where
+rc.4's was 38 MB, every regex and case answer the same; `(?U)`, clj's
+way of asking for Unicode classes, is accepted, and a quantified `\b`
+compiles (DEVIATIONS 14); ChemSol is BSD 3-clause, with Arieh Warshel's
+permission; and a release carries the licenses it must -- `LICENSE`,
+`NOTICE`, Clojure's `epl-v10.html`, ICU's, and on Windows the mingw-w64
+and winpthreads notices -- in `lib/clotran`.
+
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
 language as the smallest package: the binary, its heap image, the
@@ -79,10 +90,10 @@ change.
 - **macOS** (arm64): built and gated with gfortran and flang.
 - **Linux**: built and gated in a container (Debian 13, gfortran and
   flang 23.1.1) on aarch64, and on real x86_64 through `scripts/gate-wsl`. The release is a tarball built on glibc 2.28
-  (manylinux_2_28) carrying the libraries the binary needs beyond the
-  C library -- libgfortran, libquadmath, libstdc++, libgcc_s -- beside
-  it, so it runs on any glibc as new or newer: Debian 10, Ubuntu 18.10,
-  RHEL 8 and on. It is not a static binary: packages and compiled
+  (manylinux_2_28) with gfortran's runtimes -- libgfortran, libstdc++,
+  libgcc -- linked into the binary, so it needs only the C library and
+  runs on any glibc as new or newer: Debian 10, Ubuntu 18.10, RHEL 8 and
+  on. It is not a static binary: packages and compiled
   namespaces are opened into the running binary and resolve its
   symbols, which a static glibc or musl binary cannot do. `clotran
   compile` needs a gfortran on the machine. The aarch64 and x86_64 tarballs were run

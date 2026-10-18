@@ -5318,7 +5318,8 @@ expected differences, each a DEVIATIONS entry. VERSION is 0.1.0.
    hand; `clotran new` writes a `deps.edn`. The optional tools
    (clotran-nrepl, clotran-mode, later the generator's output) are git
    coordinates in a project's `deps.edn`, pinned by sha, never in the
-   binary. The sibling repositories stay local until James says.
+   binary. The sibling repositories stay local until James says
+   (public since 2026-10-17, under github.com/clotran).
 5. *The version.* VERSION 1.0.0, the pinned Clojure release named, a
    stated policy for what a minor and a patch may change (DEVIATIONS
    entries, the ABI, the package format). Begun 2026-10-12: VERSION is

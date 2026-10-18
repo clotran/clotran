@@ -22,7 +22,7 @@ case "$os-$arch" in
   Darwin-arm64) target=darwin-arm64 ;;
   Linux-aarch64|Linux-arm64) target=linux-aarch64 ;;
   Linux-x86_64|Linux-amd64) target=linux-x86_64 ;;
-  *) die "no release for $os $arch (there are darwin-arm64, linux-aarch64, linux-x86_64; Windows: scoop)" ;;
+  *) die "no release for $os $arch (there are darwin-arm64, linux-aarch64, linux-x86_64; Windows: install.ps1)" ;;
 esac
 if [ "$os" = Linux ]; then
   if ls /lib/ld-musl-* >/dev/null 2>&1 || (ldd --version 2>&1 | grep -qi musl); then

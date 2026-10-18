@@ -5,14 +5,17 @@
 ;;
 ;; STAGE is a PREFIX make install filled: STAGE/bin/clotran,
 ;; STAGE/lib/clotran/clotran-bin, and clotran-deps beside them. This
-;; carries every shared library the binary needs beyond the C library into
-;; STAGE/lib/clotran/lib, points the binary there by its own location
-;; ($ORIGIN on Linux, @executable_path on macOS), and rewrites the two
-;; commands in STAGE/bin to find their homes from where they are, so the
-;; directory runs wherever it is unpacked. On Linux the one system
-;; library left is glibc, no older than the build machine's; a static
-;; binary is not possible, as packages and clotran compile's libraries
-;; are dlopen'd into it and resolve its symbols.
+;; rewrites the two commands in STAGE/bin to find their homes from where
+;; they are, so the directory runs wherever it is unpacked, and carries
+;; into STAGE/lib/clotran/lib any shared library the binary needs beyond
+;; the C library, found from the binary's own location ($ORIGIN on Linux,
+;; @executable_path on macOS). gfortran's runtimes are linked in
+;; (Makefile, STATIC_RT_gfortran), so there is none to carry and no lib/
+;; is left; what it does carry it prints, which is how a build that lost
+;; that would show. On Linux the one system library is glibc, no older
+;; than the build machine's; a static binary is not possible, as packages
+;; and clotran compile's libraries are dlopen'd into it and resolve its
+;; symbols.
 (require '[babashka.fs :as fs]
          '[babashka.process :as p]
          '[clojure.string :as str])
@@ -98,6 +101,7 @@
       :else (case (str/trim (sh "uname" "-s"))
               "Linux" (linux)
               "Darwin" (macos)))
+(when (empty? (fs/list-dir libdir)) (fs/delete libdir))
 
 ;; the commands in bin, by their own place rather than the install's path
 (doseq [[cmd target] [["clotran" "lib/clotran/clotran"] ["clotran-deps" "lib/clotran-deps/bin/clotran-deps"]]

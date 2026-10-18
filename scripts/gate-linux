@@ -2,8 +2,9 @@
 ;; gate-linux: make crosscheck on Linux, in packaging/linux/Dockerfile.gate
 ;; (Debian 13, gfortran and flang, the oracle's clj and bb at the macOS
 ;; gate's versions), on this tree's files as they are now, tracked and new (not ignored): the
-;; compilers' two halves one after the other (XC_SERIAL), as at once they
-;; outgrew the container's memory.
+;; compilers' two halves one after the other (XC_SERIAL), each at two
+;; jobs (XC_JOBS): at once, and then at four jobs, they outgrew the
+;; container's 8 GB (a torture run, then oracle-gc, killed at status 137).
 ;;
 ;;   scripts/gate-linux [log]      default build/gate-linux.log
 ;;
@@ -17,7 +18,7 @@
 (def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
 (def log (str (fs/absolutize (or (first *command-line-args*) (str repo "/build/gate-linux.log")))))
 (def work (str (fs/create-temp-dir {:prefix "gate-linux"})))
-(def target (or (System/getenv "GATE_TARGET") "crosscheck XC_SERIAL=1"))
+(def target (or (System/getenv "GATE_TARGET") "crosscheck XC_SERIAL=1 XC_JOBS=2"))
 (def arch (let [m (str/trim (:out (p/shell {:out :string} "uname" "-m")))] (if (= m "arm64") "aarch64" m)))
 
 (p/shell "docker" "build" "-q" "-t" "clotran-gate" "--build-arg" (str "ARCH=" arch)

@@ -13,7 +13,16 @@ make FC=flang all test      # just the flang side
 Every build product lives under `build/` -- objects, `.mod` files, the
 test binaries in `build/test/` -- and the only artifact in the root is
 `./clotran-bin` itself. The first build also compiles vendored ICU from
-source, which takes a few minutes once; after that it is cached.
+source, which takes a few minutes once; after that it is cached. ICU's
+data is cut to what regex and case mapping read (the Makefile's
+`ICU_KEEP`, applied by ICU's own `icupkg`), most of the difference
+between a 38 MB binary and a 9.5 MB one.
+
+`make crosscheck` is the gate before a commit, on this machine.
+`scripts/gate-linux` runs it in a Debian container (Docker), and
+`scripts/gate-wsl` on an x86_64 machine's WSL; `make fuzz-all` runs
+every fuzzer at full size, for a release candidate. Each writes a log
+whose last line is `EXIT n`, and that line is the verdict.
 
 To have the build on your PATH:
 
@@ -24,7 +33,11 @@ make uninstall                      # the same PREFIX
 ```
 
 What it installs, and `clotran-deps` beside it, is in `guide.md`
-(Dependencies and editors).
+(Dependencies and editors); the licenses a distribution carries --
+`LICENSE`, `NOTICE`, Clojure's `epl-v10.html`, ICU's -- go in beside the
+binary. `make dist` makes the same install relocatable, as the release
+archive for this machine (`scripts/dist-bundle`); `scripts/dist-linux`
+builds the Linux ones in their containers.
 
 On Windows the build is native, in MSYS2's UCRT64 environment (its
 gfortran, gcc, make and git: `pacman -S mingw-w64-ucrt-x86_64-gcc-fortran
@@ -40,20 +53,32 @@ core and `clotran.launcher` reads the arguments (`new`, `compile`,
 the Fortran compiler, a clotran of its own -- from an argument list
 (`clotran-run`), never through a shell.
 
-`./clotran` is the entry point, a shell script: it hands `clotran-bin`
-core.clj and wraps the REPL in `rlwrap` when there is a terminal and
-`rlwrap` is installed, for history and arrow-key editing, exactly the
-way real Clojure's own `clj` wraps `clojure`. Files named after it load
-after core.clj, so `./clotran prog.cljf` runs a program. It works from
-any directory: the binary takes its own directory as a classpath root.
+`./clotran` only adds `rlwrap` to the REPL, when there is a terminal and
+`rlwrap` is installed, for history and arrow-key editing, as Clojure's
+own `clj` wraps `clojure`; then it runs `clotran-bin --launch`. It works
+from any directory: the binary finds its home, image and sources from
+its own path. `./clotran-bin` without `--launch` is the interpreter
+alone, a plain stdin/stdout REPL that loads only the files named on its
+command line, which is what the scripts and the Makefile use, passing
+core.clj explicitly.
 
-`./clotran-bin` is the interpreter alone, a plain stdin/stdout REPL that
-loads only the files named on its command line -- which
-is what the scripts and the Makefile use, passing core.clj explicitly.
+## Beside the checkout
 
-```
-./clotran
-```
+Some of the build looks in `..`, for siblings:
+
+- `../clotran-deps` -- the package manager (`CLOTRAN_DEPS=dir` names
+  another). `make install` installs it beside clotran, and
+  `check-install` runs a `deps.edn` project through the pair.
+- `../clojure` and `../clojurescript` -- clones of Clojure at
+  `clojure-1.12.6` and ClojureScript at `r1.12.145`, which
+  `upstream/derive-tests` and `scripts/clojuredocs` read. The derived
+  tests are committed, so a build and the gate need neither.
+- `../acl2/saved_acl2` -- ACL2, which `make model` runs to certify the
+  books in `model/` (`ACL2=path` names another). The gate does not need
+  it; `make fuzz-door` does.
+
+`clj` itself (the Clojure CLI, with a JDK) is the oracle `make test`
+runs the same forms through, and `bb` (babashka) runs the scripts.
 
 ## Layout
 
@@ -68,8 +93,18 @@ is what the scripts and the Makefile use, passing core.clj explicitly.
 - `src/clj` -- that derived source, and clotran's own (`src/clj/clotran`).
 - `test/f` -- unit tests for the Fortran host, one file per module.
 - `test/clj` -- Clojure's own test suite, derived the same way, and
-  clotran's own checks (`oracle.clj`, `language_test.clj`). The
+  clotran's own checks (`oracle.clj`, `language_test.clj`, and
+  `fuzz-regressions.edn`, every case a fuzzer found). The
   conformance measure is `test/clj/derived/`, run by
   `scripts/run-clojure-tests-parallel test/clj/derived`.
-- `clotran` -- the launcher, and `clotran-bin` the binary it runs
-  (see below).
+- `model/` -- the ACL2 books: the VM, the allocator and collectors, the
+  agent pool, each proved before it was built (`model-coverage.md`).
+- `scripts/` -- babashka scripts: the oracle, the fuzzers,
+  `bind-fortran`, the gates and the release.
+- `packages/` -- BLAS and ChemSol as packages (`../PACKAGES.md`), and
+  `packaging/` -- the Linux containers, and the Windows commands and
+  notices a release carries.
+- `examples/` and `bench/` -- what the README and `guide.md` run, and
+  what `scripts/bench` and `scripts/bench-langs` time.
+- `clotran` -- the rlwrap wrapper, and `clotran-bin` the binary it runs
+  (see above).
