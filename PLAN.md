@@ -5735,6 +5735,28 @@ What core may need on the way (a C callback into the
 evaluator, the main thread given to an event loop) is a core change
 with its own oracle case, as ever.
 
+### 38. Lemmis: Fortran, extended with Clojure (decided 2026-10-18; queued after 1.0)
+
+James, 2026-10-18: a Fortran-like language with Clojure's idioms, "so
+that people can approach it and not be paren-weinies", Fortran
+compatible but extended "not in the stupid way that c++ is on c", with
+Clojure's laziness and immutability showing through. A library, not
+core: it reads its text into Clojure forms, and clotran does the rest.
+Its repository and plan: github.com/clotran/lemmis -- the rule (valid
+Fortran keeps its meaning, extensions only in syntax Fortran rejects),
+two kinds of value with an explicit crossing, one loop extended, the
+oracles (the standard's numbered rules, flang's parse trees, gfortran
+and flang, NIST's FCVS, clj) and an ACL2 track. Core gives it two hooks
+when its turn comes: `require` finding a Lemmis file, and the index
+reading one.
+
+**The queue after 1.0** (2026-10-18, one thing finished and used before
+the next starts): James's own packages on 1.0, and patch releases from
+what they teach; `(graph (* x x))` in a window (step 37's first
+milestones); the ACL2 model and check-vm-gen in the gates, then
+docs/model-coverage.md's Owed rows by risk (the multi-threaded heap
+first); then the next large thing -- Lemmis, or stage 2 of generation.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
