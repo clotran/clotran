@@ -60,6 +60,34 @@ and no editor has to know where it is. For Emacs, `clotran-mode` opens
 `.cljf` files in clojure-mode and makes `M-x cider-jack-in` run it. Both
 are repositories of their own under github.com/clotran.
 
+`clotran lsp` is the language server, `clotran-ide`, for the project
+here, over its standard input and output as every editor's client
+starts one (`--port N` for a socket): go to definition into Clojure and
+into the Fortran of a package, hover documentation, the file's and the
+workspace's symbols, completion, and errors as you type -- what the
+reader refuses, at its line, and for a Fortran file the compiler's
+syntax check on save. All of it from clotran's index, with no REPL
+running, and from the editor's unsaved text. Formatting -- the file, a
+region, or the form being typed in -- is cljfmt itself, running on
+clotran, with the project's `.cljfmt.edn`. Two requests of clotran's
+own, `clotran/formAtPoint` and `clotran/namespace`, give a thin client
+the form at the cursor and the file's namespace, for evaluating. It
+comes as `clotran-nrepl` does, pinned by the install's `tools.edn`.
+`clotran-mode` sets Emacs up: `.cljf` files open in it, eglot starts
+the server, and `C-c C-z` opens a REPL of its own -- `C-x C-e`,
+`C-M-x`, `C-c C-k`, `C-c C-K` -- with no CIDER to install, though CIDER
+works as it is. Without clotran-mode, in Emacs 29:
+
+```elisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs '(clojure-mode . ("clotran" "lsp"))))
+```
+
+then `M-x eglot` in a `.cljf` buffer of the project; `M-.` finds
+definitions, `C-h .` shows the docs. Neovim's built-in client is
+`vim.lsp.start({name = "clotran", cmd = {"clotran", "lsp"}, root_dir =
+vim.fs.root(0, "deps.edn")})` in an autocommand for `.cljf` files.
+
 An editor needs no REPL to read code: `clotran index` writes every
 definition a project holds -- its own files, its dependencies', the
 language's, and the Fortran routines of its packages -- as EDN, one a

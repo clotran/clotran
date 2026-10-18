@@ -67,7 +67,7 @@ module Eval
   use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
-       c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t
+       c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t, c_int8_t
   implicit none
   private
 
@@ -273,6 +273,11 @@ module Eval
   ! a StringBuilder's deleteCharAt and setLength
   integer, parameter :: B_CHARDIGIT = 461, B_INTTOSTR = 462, B_HSETCHECK = 463, B_LISTFROM = 464, &
        B_REDUCEBIG = 465, B_BITLENGTH = 466, B_SBDELETE = 467, B_SBSETLEN = 468
+  ! (clotran-stdin-read-bytes bytes off len), (clotran-stdout-write-bytes
+  ! bytes off len): this process's own standard input and output as bytes
+  ! (proc_shim.c), for a protocol counted in bytes over stdio -- the
+  ! language server, clotran lsp (PLAN step 36)
+  integer, parameter :: B_STDINREADB = 469, B_STDOUTWRITEB = 470
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1346,6 +1351,8 @@ contains
     call bind_builtin(core, "clotran-bit-length", B_BITLENGTH)
     call bind_builtin(core, "clotran-sb-delete-char-at", B_SBDELETE)
     call bind_builtin(core, "clotran-sb-set-length", B_SBSETLEN)
+    call bind_builtin(core, "clotran-stdin-read-bytes", B_STDINREADB)
+    call bind_builtin(core, "clotran-stdout-write-bytes", B_STDOUTWRITEB)
     call bind_builtin(core, "clotran-installed-libraries", B_INSTALLED)
     call bind_builtin(core, "clotran-library-manifest", B_LIBMANIFEST)
     call bind_builtin(core, "count", B_COUNT)
@@ -12194,6 +12201,68 @@ contains
             end if
          end if
        end block
+    case (B_STDINREADB, B_STDOUTWRITEB)
+       ! (clotran-stdin-read-bytes bytes off len): up to len bytes of this
+       ! process's standard input into the byte array from off, how many,
+       ! -1 at its end; (clotran-stdout-write-bytes bytes off len) writes
+       ! them all to its standard output, after whatever unit 6 holds. The
+       ! pair of the socket ones below, for a protocol counted in bytes
+       ! over stdio: the language server (clotran lsp, PLAN step 36).
+       block
+         interface
+            function c_stdin_read(b, cap) bind(C, name="clotran_stdin_read") result(r)
+              import :: c_long, c_int8_t
+              integer(c_int8_t), intent(inout) :: b(*)
+              integer(c_long), value :: cap
+              integer(c_long) :: r
+            end function c_stdin_read
+            function c_stdout_write(b, len) bind(C, name="clotran_stdout_write") result(r)
+              import :: c_long, c_int8_t
+              integer(c_int8_t), intent(in) :: b(*)
+              integer(c_long), value :: len
+              integer(c_long) :: r
+            end function c_stdout_write
+         end interface
+         type(gc_value) :: arr
+         integer(1), pointer, contiguous :: p(:)
+         logical :: ok
+         character(len=:), allocatable :: kn
+         integer :: off, ln
+         integer(c_long) :: n
+         arr = strip_meta(gcv_nth(args, 0))
+         off = int(int_of_number(gcv_nth(args, 1)))
+         ln = int(int_of_number(gcv_nth(args, 2)))
+         ok = gc_kind(arr) == OBJ_ARRAY
+         if (ok) then
+            call gcna_kind(gc_i1(arr), kn)
+            ok = kn == "int1" .and. gc_i2(arr) == -1
+         end if
+         if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
+         if (.not. ok) then
+            call raise_class("clotran.host.illegal_argument_exception", "not a byte array", [vs_get(vst, base + 1)])
+         else if (off < 0 .or. ln < 0 .or. off + ln > size(p)) then
+            call raise_class("clotran.host.index_out_of_bounds_exception", "offset and length outside the array", [vs_get(vst, base + 1)])
+         else if (id == B_STDINREADB) then
+            n = 0
+            if (ln > 0) then
+               call gc_mutator_leave()
+               n = c_stdin_read(p(off + 1:off + ln), int(ln, c_long))
+               call gc_mutator_enter()
+            end if
+            if (n > 0) then
+               out = gc_int(int(n, gc_ip))
+            else if (n == 0) then
+               out = gc_int(-1_gc_ip)
+            else
+               call fail_as("clotran.host.io_exception", "standard input could not be read", [vs_get(vst, base + 1)])
+            end if
+         else
+            flush(6)
+            n = 0
+            if (ln > 0) n = c_stdout_write(p(off + 1:off + ln), int(ln, c_long))
+            if (n < 0) call fail_as("clotran.host.io_exception", "standard output could not be written", [vs_get(vst, base + 1)])
+         end if
+       end block
     case (B_SOCKREADB, B_SOCKWRITEB)
        ! (clotran-socket-read-bytes h bytes off len ms): up to len bytes into
        ! the byte array from off, answering how many, -1 at the end of the
@@ -13609,7 +13678,7 @@ contains
          end if
        end block
     case (B_READFORMS)
-       ! (clotran-read-forms path [transient]): every top-level form of a
+       ! (clotran-read-forms path [transient [text]]): every top-level form of a
        ! file as a vector, read as load-file reads them -- the file
        ! registered with the reader, so each form's position decodes to its
        ! real file, line and column (clotran-position). Nothing is
@@ -13627,15 +13696,28 @@ contains
             call text_of(gcv_nth(args, 0), s=dlt_1)
             path = dlt_1
          end block
-         open(newunit=u, file=path, access="stream", form="unformatted", &
-              status="old", action="read", iostat=st)
+         st = 0
+         if (gcv_count(args) > 2 .and. truthy(gcv_nth(args, 2))) then
+            ! a third argument is the text itself, read under the file's
+            ! name: an editor's buffer, not yet saved (the language server)
+            block
+               call text_of(gcv_nth(args, 2), s=dlt_1)
+               text = dlt_1
+            end block
+         else
+            open(newunit=u, file=path, access="stream", form="unformatted", &
+                 status="old", action="read", iostat=st)
+            if (st == 0) then
+               inquire(unit=u, size=fsize)
+               allocate(character(len=fsize) :: text)
+               if (fsize > 0) read(u, iostat=st) text
+               close(u)
+               st = 0
+            end if
+         end if
          if (st /= 0) then
             call fail_as("clotran.host.file_not_found_exception", path // " (No such file or directory)", [vs_get(vst, base + 1)])
          else
-            inquire(unit=u, size=fsize)
-            allocate(character(len=fsize) :: text)
-            if (fsize > 0) read(u, iostat=st) text
-            close(u)
             lb = vs_enter(vst, 1)
             call vs_set(vst, lb + 1, gcv_empty([vs_get(vst, base + 1)]))
             fid = gcr_begin_file(text, path, gcv_count(args) > 1 .and. truthy(gcv_nth(args, 1)))
@@ -13643,9 +13725,26 @@ contains
             do
                form = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, lb + 1)], eof, fid)
                if (gcr_has_error()) then
+                  ! PATH:LINE:COLUMN: the error, as a compiler says it, the
+                  ! line and column (in characters) where the reader stopped:
+                  ! an editor's diagnostic reads them
                   block
+                     integer :: k, ln, col
+                     character(len=24) :: lb, cb
+                     ln = 1
+                     col = 1
+                     do k = 1, min(j - 2, len(text))
+                        if (text(k:k) == char(10)) then
+                           ln = ln + 1
+                           col = 1
+                        else if (iand(ichar(text(k:k)), 192) /= 128) then
+                           col = col + 1
+                        end if
+                     end do
+                     write(lb, '(I0)') ln
+                     write(cb, '(I0)') col
                      call gcr_error(s=dlt_1)
-                     call fail("clotran-read-forms " // path // ": " // dlt_1)
+                     call fail("clotran-read-forms " // path // ":" // trim(lb) // ":" // trim(cb) // ": " // dlt_1)
                   end block
                   exit
                end if

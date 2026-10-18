@@ -109,25 +109,27 @@
        args_reusable = .true.
     case (B_SOCKLISTEN, B_SOCKPORT, B_SOCKREAD, B_SOCKREADB, B_SOCKWRITE, B_SOCKWRITEB)
        args_reusable = .true.
-    case (B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STE_CLASS, B_STE_FILE, B_STE_LINE)
+    case (B_SPIT, B_STACKTRACE, B_STARTSWITH, B_STDINREADB, B_STDOUTWRITEB, B_STE_CLASS)
        args_reusable = .true.
-    case (B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN, B_STUB, B_SUBMIT)
+    case (B_STE_FILE, B_STE_LINE, B_STE_METHOD, B_STR, B_STRCONTAINS, B_STRLEN)
        args_reusable = .true.
-    case (B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL, B_SWAPVALS, B_SYMBOL2)
+    case (B_STUB, B_SUBMIT, B_SUBS, B_SUBSTRING, B_SUBVEC, B_SWAPVAL)
        args_reusable = .true.
-    case (B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE, B_TASKSTATUS, B_TEMPDIR)
+    case (B_SWAPVALS, B_SYMBOL2, B_TAGGEDLIT, B_TASKCANCEL, B_TASKCANCELLED, B_TASKDONE)
        args_reusable = .true.
-    case (B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG, B_TODEC, B_TOSTRING)
+    case (B_TASKSTATUS, B_TEMPDIR, B_THREADDAEMON, B_THREADSTART, B_TOARRAY, B_TOBIG)
        args_reusable = .true.
-    case (B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC, B_UFLOATCAST, B_UIADD)
+    case (B_TODEC, B_TOSTRING, B_TOUCH, B_TXRUNNING, B_TYPE, B_UDEC)
        args_reusable = .true.
-    case (B_UIDEC, B_UIDIV, B_UIINC, B_UIMUL, B_UINC, B_UINEG)
+    case (B_UFLOATCAST, B_UIADD, B_UIDEC, B_UIDIV, B_UIINC, B_UIMUL)
        args_reusable = .true.
-    case (B_UIREM, B_UISUB, B_UPCASE, B_USHR, B_UTF8BYTES, B_UTF8STRING)
+    case (B_UINC, B_UINEG, B_UIREM, B_UISUB, B_UPCASE, B_USHR)
        args_reusable = .true.
-    case (B_UUIDOF, B_VAL, B_VALS, B_VARCREATE, B_VARINTERN, B_VARNS)
+    case (B_UTF8BYTES, B_UTF8STRING, B_UUIDOF, B_VAL, B_VALS, B_VARCREATE)
        args_reusable = .true.
-    case (B_VARSYM, B_VEC, B_WITHMETA, B_WRITE, B_WRITEBYTES, B_ZERO)
+    case (B_VARINTERN, B_VARNS, B_VARSYM, B_VEC, B_WITHMETA, B_WRITE)
+       args_reusable = .true.
+    case (B_WRITEBYTES, B_ZERO)
        args_reusable = .true.
     case default
        args_reusable = .false.

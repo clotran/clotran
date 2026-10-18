@@ -320,3 +320,47 @@ int clotran_delete(const char *p) {
 /* from moved to to, replacing a file there, in one step where the system
  * has one: a reader never sees half of to. 0, or -1. */
 int clotran_rename(const char *from, const char *to) { return replace_file(from, to); }
+
+/* --- this process's own standard input and output, as bytes ---------------
+ *
+ * A protocol whose messages are counted in bytes and run over stdio -- the
+ * language server protocol, `clotran lsp` (PLAN step 36) -- reads and
+ * writes here, beside Fortran's unit 5 and 6, which it does not touch; on
+ * Windows the two are put in binary mode once, so no newline is
+ * translated and no byte count lies. */
+#ifdef _WIN32
+#include <io.h>
+#include <fcntl.h>
+static void stdio_binary(int fd) {
+  static int done[2];
+  if (!done[fd]) { _setmode(fd, _O_BINARY); done[fd] = 1; }
+}
+#define STDIO_READ(fd, b, n) _read(fd, b, (unsigned)(n))
+#define STDIO_WRITE(fd, b, n) _write(fd, b, (unsigned)(n))
+#else
+static void stdio_binary(int fd) { (void)fd; }
+#define STDIO_READ(fd, b, n) read(fd, b, (size_t)(n))
+#define STDIO_WRITE(fd, b, n) write(fd, b, (size_t)(n))
+#endif
+
+/* up to cap bytes of standard input into buf: how many, 0 at its end, -1 */
+long clotran_stdin_read(char *buf, long cap) {
+  stdio_binary(0);
+  for (;;) {
+    long n = STDIO_READ(0, buf, cap);
+    if (n < 0 && errno == EINTR) continue;
+    return n;
+  }
+}
+
+/* all len bytes of buf to standard output: len, or -1 */
+long clotran_stdout_write(const char *buf, long len) {
+  stdio_binary(1);
+  long done = 0;
+  while (done < len) {
+    long n = STDIO_WRITE(1, buf + done, len - done);
+    if (n < 0) { if (errno == EINTR) continue; return -1; }
+    done += n;
+  }
+  return done;
+}

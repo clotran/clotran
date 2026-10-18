@@ -566,7 +566,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
 TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
@@ -673,6 +673,19 @@ check-nrepl:
 	    grep -q 'nREPL server started on port' out.txt || { echo "no jack-in line:"; cat out.txt; exit 1; }; [ $$s -eq 0 ] || exit $$s; \
 	  done; \
 	else echo "skipped: no clotran-nrepl at $(CLOTRAN_NREPL)"; fi
+check-lsp:
+	@echo "--- clotran lsp (PLAN 36): clotran-ide's own tests beside this checkout (memory, stdio, the JSON oracle, eglot when there is an Emacs), then the server tools.edn pins through an installed clotran, answering the same session over its stdio; skipped without the checkout ---"
+	@if [ -f $(CLOTRAN_IDE)/src/clotran/ide/lsp.cljf ]; then \
+	  d=$(CURDIR)/$(B)/lsp; rm -rf $$d && mkdir -p $$d && \
+	  CLOTRAN=$(CURDIR) sh $(CLOTRAN_IDE)/test/run.sh > $$d/beside.txt 2>&1 || { cat $$d/beside.txt; exit 1; }; grep -v '^ok   -' $$d/beside.txt; \
+	  $(MAKE) -s install PREFIX=$$d/inst > $$d/install.log 2>&1 && \
+	  cp -R $(CLOTRAN_IDE)/test/fixtures/proj $$d/proj && rm -rf $$d/proj/.clotran-cache && \
+	  proj=$$d/proj && export LSP_TEST_PROJ=$$proj && \
+	  LSP_TEST=write LSP_TEST_FILE=$$d/session.bin CLOTRAN_PATH=$(CLOTRAN_IDE)/src:$$proj/src $(CURDIR)/clotran-bin $(CURDIR)/src/clj/clojure/core.clj $(CLOTRAN_IDE)/test/lsp_test.cljf </dev/null > /dev/null 2>&1 && \
+	  ( cd $$proj && CLOTRAN_CACHE=$$d/cache env -u CLOTRAN_IDE $$d/inst/bin/clotran lsp < $$d/session.bin > $$d/out.bin 2> $$d/err.txt ) || { echo "the pinned server:"; cat $$d/err.txt; exit 1; }; \
+	  LSP_TEST=check LSP_TEST_FILE=$$d/out.bin CLOTRAN_PATH=$(CLOTRAN_IDE)/src:$$proj/src $(CURDIR)/clotran-bin $(CURDIR)/src/clj/clojure/core.clj $(CLOTRAN_IDE)/test/lsp_test.cljf </dev/null > $$d/pinned.txt 2>&1; s=$$?; \
+	  echo "pinned:"; grep -v '^note: \|^ok   -' $$d/pinned.txt; [ $$s -eq 0 ] || { cat $$d/err.txt; exit $$s; }; \
+	else echo "skipped: no clotran-ide at $(CLOTRAN_IDE)"; fi
 check-index:
 	@echo "--- the index of definitions against the live Vars: core.clj, clotran's own namespaces, a Fortran package (PLAN 36) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/index_check.clj </dev/null > $(B)/index_check.out 2>&1; s=$$?; grep -v '^note: ' $(B)/index_check.out; exit $$s
@@ -893,8 +906,8 @@ crosscheck:
 	$(XC_SYNC) $(XC_DIR)/flang/
 	$(XC_SYNC) $(XC_DIR)/gfortran/
 	echo "crosscheck: fuzz seed $(SEED) (make crosscheck SEED=$(SEED) repeats it)"; \
-	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
-	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
+	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) CLOTRAN_IDE=$(CLOTRAN_IDE) $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
+	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) CLOTRAN_IDE=$(CLOTRAN_IDE) $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
 	wait; \
 	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
 	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
@@ -943,6 +956,9 @@ CLOTRAN_NREPL ?= $(abspath $(CURDIR)/../clotran-nrepl)
 # cljfmt on clotran, the .cljc proof (PLAN step 36): its tests run in the
 # gate when the checkout is beside this one
 CLOTRAN_CLJFMT ?= $(abspath $(CURDIR)/../cljfmt)
+# clotran-ide, the language server `clotran lsp` starts: the checkout beside
+# this one unless named (check-lsp; the launcher reads the same variable)
+CLOTRAN_IDE ?= $(abspath $(CURDIR)/../clotran-ide)
 
 # the Fortran compiler this build uses, by absolute path: `clotran compile`
 # falls back to it where gfortran is not on PATH (an Emacs from the Dock)

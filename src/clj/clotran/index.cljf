@@ -76,7 +76,9 @@
       (:in-ns) [(if (and (seq? sym) (= 'quote (first sym))) (second sym) ns) []]
       (:do) (reduce (fn [[ns acc] f] (let [[ns2 es] (defs-of ns f file)] [ns2 (into acc es)])) [ns []] (rest form))
       (:comment) [ns []]
-      (:def) [ns (when (symbol? sym) [(entry ns sym :def form file :doc (doc-of sym xs))])]
+      ;; (def x) with nothing after the name declares, as clj's Compiler
+      ;; takes it: core.clj's (def map) before the defn 1000 lines on
+      (:def) [ns (when (symbol? sym) [(entry ns sym (if (seq xs) :def :declare) form file :doc (doc-of sym xs))])]
       (:defn :defmacro) [ns (when (symbol? sym) [(entry ns sym k form file :doc (doc-of sym xs) :arglists (or (:arglists (meta sym)) (arglists-of xs)))])]
       (:defmulti) [ns (when (symbol? sym) [(entry ns sym :defmulti form file :doc (doc-of sym xs))])]
       (:defmethod) [ns (when (symbol? sym) [(entry ns sym :defmethod form file :dispatch (pr-str (first xs)) :arglists (arglists-of (rest xs)))])]
@@ -102,33 +104,38 @@
 
 (defn index-file
   "The definitions a Clojure file holds, in order; a file the reader
-  refuses gives one entry naming the error."
-  [path]
-  (let [forms (try (binding [*ns* (the-ns 'user)] (clotran-read-forms path true))
-                   (catch clotran.host.throwable e {:error (.getMessage e)}))]
-    (if (map? forms)
-      [{:file path :kind :error :error (:error forms)}]
-      (loop [fs forms ns 'user acc []]
-        (if (empty? fs) acc
-          (let [[ns2 es] (defs-of ns (first fs) path)]
-            (recur (rest fs) ns2 (into acc es))))))))
+  refuses gives one entry naming the error. With text, that is read in
+  the file's place -- an editor's buffer, not yet saved -- under the
+  file's name."
+  ([path] (index-file path nil))
+  ([path text]
+   (let [forms (try (binding [*ns* (the-ns 'user)] (clotran-read-forms path true text))
+                    (catch clotran.host.throwable e {:error (.getMessage e)}))]
+     (if (map? forms)
+       [{:file path :kind :error :error (:error forms)}]
+       (loop [fs forms ns 'user acc []]
+         (if (empty? fs) acc
+           (let [[ns2 es] (defs-of ns (first fs) path)]
+             (recur (rest fs) ns2 (into acc es)))))))))
 
 (defn fortran-defs
   "The routines of the package DIR/package.edn declares, from its sources:
   bound ones as clotran names them (mylib.raw/scale), with the file and
   line each is declared at, and the ones clotran bind does not bind,
-  marked, so an editor can still go to them."
-  [dir]
+  marked, so an editor can still go to them. texts, a map of path to
+  text, is read in place of those files: an editor's unsaved buffers."
+  ([dir] (fortran-defs dir nil))
+  ([dir texts]
   (let [{:keys [name sources]} (bind/read-package dir)
         pkg-ns (symbol (str name ".raw"))]
     (vec (for [rel sources
                :let [path (str dir "/" rel)]
-               r (bind/routines (clotran-slurp path) path)
+               r (bind/routines (or (get texts path) (clotran-slurp path)) path)
                :let [bound? (bind/bindable? r)]]
            (cond-> {:ns pkg-ns :name (symbol (bind/edn-name (:name r))) :kind :fortran :file path :line (:line r) :column 1
                     :private false :module (:module r) :bound bound?
                     :arglists (list (mapv (comp symbol bind/edn-name :name) (remove #(= "out" (:intent %)) (:args r))))}
-             (:rspec r) (assoc :returns (:type (:rspec r))))))))
+             (:rspec r) (assoc :returns (:type (:rspec r)))))))))
 
 (defn- clojure-file? [p] (re-find #"\.(cljf|cljc|clj)$" p))
 

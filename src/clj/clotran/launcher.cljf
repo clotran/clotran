@@ -519,21 +519,25 @@
     (when-not (some #{dir} (str/split cp (re-pattern (str "\\" sep))))
       (clotran-setenv "CLOTRAN_PATH" (if (str/blank? cp) dir (str cp sep dir))))))
 
-(defn- nrepl-src
-  "clotran-nrepl's src: a checkout CLOTRAN_NREPL names, one beside this
-  clotran's home, else the one tools.edn pins, fetched into the cache by
-  clotran.deps -- so no project's deps.edn names the server, and the
-  version that runs is the one this clotran was installed with."
-  []
-  (or (some #(when (clotran-file-exists? (str % "/src/clotran/nrepl/server.cljf")) (str % "/src"))
-            (remove nil? [(getenv "CLOTRAN_NREPL") (str home "/../clotran-nrepl")]))
+(defn- tool-src
+  "A tool's src -- clotran-nrepl's, clotran-ide's: a checkout the
+  variable names (CLOTRAN_NREPL, CLOTRAN_IDE), one beside this clotran's
+  home, else the one tools.edn pins, fetched into the cache by
+  clotran.deps -- so no project's deps.edn names the tool, and the
+  version that runs is the one this clotran was installed with. file is
+  the source file that says a checkout is one."
+  [lib variable file]
+  (or (some #(when (clotran-file-exists? (str % "/src/" file)) (str % "/src"))
+            (remove nil? [(getenv variable) (str home "/../" (name lib))]))
       (let [tools (str home "/tools.edn")]
         (when (and (clotran-file-exists? tools) (deps-home))
-          (let [coord (get (read-string (clotran-slurp tools)) 'clotran/clotran-nrepl)]
+          (let [coord (get (read-string (clotran-slurp tools)) lib)]
             (when (and (:git/url coord) (:git/sha coord))
               (ensure-path! (deps-home))
               (require 'clotran.deps)
-              (str ((resolve 'clotran.deps/git-dir) 'clotran/clotran-nrepl (:git/url coord) (:git/sha coord)) "/src")))))))
+              (str ((resolve 'clotran.deps/git-dir) lib (:git/url coord) (:git/sha coord)) "/src")))))))
+
+(defn- nrepl-src [] (tool-src 'clotran/clotran-nrepl "CLOTRAN_NREPL" "clotran/nrepl/server.cljf"))
 
 (defn- nrepl
   "`clotran nrepl [--port N]`: the nREPL server (clotran-nrepl) in this
@@ -556,6 +560,29 @@
               (answer! ["--repl"])
               @(promise)))))))
 
+;; --- clotran lsp: the language server (clotran-ide) over this process's stdio
+
+(defn- lsp
+  "`clotran lsp [--port N] [--verbose]`: the language server, clotran-ide,
+  for the project here -- definitions, docs, symbols and errors from
+  clotran's index, with no REPL -- over standard input and output as
+  every editor's client expects, or on a TCP port. The server comes as
+  clotran-nrepl does: a checkout beside clotran, CLOTRAN_IDE, or the
+  commit tools.edn pins."
+  [args]
+  (let [src (tool-src 'clotran/clotran-ide "CLOTRAN_IDE" "clotran/ide/lsp.cljf")]
+    (if-not src
+      (do (err "clotran lsp: no clotran-ide found: a checkout beside clotran (CLOTRAN_IDE=dir names one), or the tools.edn an installed clotran carries") (exit! 1))
+      (do (ensure-path! src)
+          ;; cljfmt on clotran is the server's formatter, when it is to be had
+          ;; the same way; its indents are resources beside its src
+          (when-let [fmt (tool-src 'clotran/cljfmt "CLOTRAN_CLJFMT" "cljfmt/core.cljc")]
+            (ensure-path! fmt)
+            (ensure-path! (str/replace fmt #"/src$" "/resources")))
+          (require 'clotran.ide.lsp)
+          ((resolve 'clotran.ide.lsp/main) args)
+          (exit! 0)))))
+
 ;; --- clotran index: the project's definitions, read and not evaluated
 
 (defn- index [args]
@@ -576,6 +603,7 @@
       "bind" (bind (rest args))
       ;; after the project's path: the index covers what deps.edn names
       "index" (if (project-path! []) (index (rest args)) (exit! 1))
+      "lsp" (if (project-path! []) (lsp (rest args)) (exit! 1))
       "compile" (case (second args)
                   "--pure" (compile-pure (drop 2 args))
                   "--report" (compile-report (drop 2 args))

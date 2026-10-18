@@ -69,6 +69,12 @@ Some of the build looks in `..`, for siblings:
 - `../clotran-deps` -- the package manager (`CLOTRAN_DEPS=dir` names
   another). `make install` installs it beside clotran, and
   `check-install` runs a `deps.edn` project through the pair.
+- `../clotran-nrepl` and `../clotran-ide` -- the nREPL server and the
+  language server (`CLOTRAN_NREPL`, `CLOTRAN_IDE`), which `check-nrepl`
+  and `check-lsp` run beside the checkout and then as an installed
+  clotran fetches them, by the commits `tools.edn` pins; `../cljfmt`,
+  whose tests `check-cljfmt` runs. Each check skips without its
+  checkout.
 - `../clojure` and `../clojurescript` -- clones of Clojure at
   `clojure-1.12.6` and ClojureScript at `r1.12.145`, which
   `upstream/derive-tests` and `scripts/clojuredocs` read. The derived

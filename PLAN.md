@@ -4552,7 +4552,23 @@ The first version debugs a JIT'd function by running it interpreted.
   POSIX shell and `dlopen` stand in the way today. The debugger can
   only be as native as the build.
 - First step, a spike: drive `lldb-dap` from a bb script, stop inside a
-  Fortran package call, and read the stack and the locals.
+  Fortran package call, and read the stack and the locals. DONE
+  2026-10-18, as part of step 36's item 11: a bb script spoke DAP to
+  Xcode's lldb-dap over stdio (initialize, launch clotran-bin on
+  examples/mylib/demo.cljf, a function breakpoint on
+  `__mylib_MOD_scale`, configurationDone), got the stopped event and
+  the full stack -- the subroutine, its shim, dl_call_shim, pkg_call,
+  call_builtin, flat_run, run_loop, gce_eval, load_text, load_file --
+  through frames named by their symbols. Learned: lldb-dap answers
+  `launch` before `initialized`, so a client must not wait for it
+  after configurationDone; the breakpoint is unverified until the
+  package's library is dlopen'd, then a breakpoint event verifies it;
+  and the LOCALS were unreadable -- "debug map object file ... does
+  not exist": macOS keeps DWARF in the .o files a dylib was linked
+  from, and `clotran bind` builds a package in one compiler call whose
+  objects are temporary. Stage one must keep the objects beside the
+  library in the cache (or run dsymutil on it) before any local can be
+  shown.
 
 **Fuzzing, decided with it:**
 - The gate shrinks the first failure of each kind (about 60 s bound),
@@ -5578,6 +5594,60 @@ package rebuild on a Fortran change (code replaced, module state fresh,
 and said so), clotran-ide's debug adapter, clotran-vscode (ClojureScript,
 standalone: LSP, DAP, evaluate at the cursor, load, compile) and
 clotran-mode on eglot, dape and its own evaluate-at-point.
+
+8. *The language server*, `clotran lsp`. DONE 2026-10-18:
+   github.com/clotran/clotran-ide -- clotran.ide.json (RFC 8259, cheshire
+   on bb the oracle, scripts/fuzz-json), clotran.ide.rpc (the
+   Content-Length framing over bytes: this process's stdio by two new
+   host builtins, clotran-stdin-read-bytes and
+   clotran-stdout-write-bytes, or a clotran.net socket, or memory for a
+   test) and clotran.ide.lsp: initialize, the document notifications
+   (whole-text sync), definition, hover, documentSymbol,
+   workspace/symbol, completion, publishDiagnostics, and clotran's
+   formAtPoint and namespace. Everything resolves through clotran.index,
+   which now reads an editor's text in a file's place
+   (clotran-read-forms takes the text as a third argument), names the
+   line and column where the reader stopped, and calls `(def x)` a
+   declaration, so `map` goes to its defn and not to core.clj's forward
+   `(def map)`. Positions are converted to UTF-16 against the line's
+   text. Fortran: the word under the cursor to a package's routine, and
+   the compiler's -fsyntax-only on save as diagnostics. The test drives
+   the server with its own client over memory, then `clotran lsp` over
+   its real stdio, then eglot (Emacs 29) when there is one, each
+   position checked against the loaded Var's; check-lsp in the gate runs
+   them beside the checkout and then the pinned server through an
+   installed clotran.
+9. *cljfmt as the formatter.* DONE 2026-10-18: textDocument/formatting,
+   rangeFormatting and onTypeFormatting in clotran-ide -- the document,
+   the top-level forms a range touches, or the form being typed in
+   (after a newline or a closing bracket), each form reformatted alone
+   by cljfmt.core/reformat-string with the project's .cljfmt.edn. The
+   launcher puts cljfmt on the path as it does clotran-ide (tools.edn
+   pins all three), the capability is offered when its source is there
+   and cljfmt is loaded on the first request, so a server that never
+   formats never pays for it.
+12. *clotran-vscode*, ClojureScript, standalone. DONE 2026-10-18 (DAP
+   waits on 11): github.com/clotran/clotran-vscode, built by shadow-cljs
+   (:simple, since the editor's objects are reached by name); `.cljf` is
+   Clojure to VS Code's own grammar; `clotran lsp` through
+   vscode-languageclient for a workspace holding a .cljf or a
+   package.edn, so a plain Clojure project is left alone; a REPL of its
+   own -- jack-in runs `clotran nrepl`, an nREPL client of 90 lines
+   connects, Cmd+Enter evaluates the form at the cursor by the server's
+   formAtPoint with the result inline, the selection, load, load and
+   compile. Tested two ways: the client under Node against a real
+   `clotran nrepl`, and VS Code itself (@vscode/test-electron at the
+   engines version, 1.95.0) on the fixture project through its own
+   provider commands -- definition into Clojure and Fortran, hover,
+   format document -- then jack-in, load, an evaluation and quit.
+13. *clotran-mode on eglot, with its own evaluate-at-point.* DONE
+   2026-10-18 (before 10-12, since it needed only 8): a major mode
+   derived from clojure-mode; eglot gets `clotran lsp` and starts in
+   each buffer; C-c C-z starts `clotran nrepl` and connects through a
+   small nREPL client in the mode itself (bencode, the base operations:
+   no server version to keep in step), C-x C-e, C-M-x, C-c C-k and
+   C-c C-K; CIDER still works as it is. test/repl-test.el drives all of
+   it in a headless Emacs 29, M-. included.
 
 **1.x:** calling a stripped binary by a declaration form (a binary
 library ships no interface; Gaussian ships programs, which clotran
