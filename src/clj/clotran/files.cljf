@@ -9,7 +9,8 @@
   whole file once and hands it out a line or all at once; a writer
   gathers what is written and writes the file when it is closed. An
   input or output stream is BYTES (PLAN 15): a file's or a byte array's.
-  URLs and classpath resources are not here.")
+  `resource` finds a file under a root of clotran's path (io/resource's
+  lookup); URLs are not here.")
 
 ;; clotran.io loads on first use: core.clj requires this namespace at its
 ;; form 640, before the macros clotran.io is written with exist
@@ -213,5 +214,8 @@
       (or silently (throw (clotran.host.io_exception. (str "Couldn't delete " p)))))))
 
 (defn resource
-  "Classpath resources are not here: nil, as for one that is missing."
-  [n & _] nil)
+  "The file named n under a root of clotran's path -- its source roots, a
+  loaded package's directory, CLOTRAN_PATH -- as a File, or nil when none
+  has it: io/resource's lookup, for a library that ships data beside its
+  code (cljfmt's indent rules). clj answers a URL; a File slurps the same."
+  [n & _] (when-let [p (clotran-resource n)] (file p)))

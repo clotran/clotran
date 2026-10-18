@@ -70,6 +70,35 @@ server (PLAN step 36) serves it; `clotran index --out defs.edn` writes it
 by hand, and `clotran index path...` indexes just those files or
 directories.
 
+**VS Code, with no extension.** VS Code ships a Clojure grammar and an
+integrated terminal, which is enough to edit and run clotran until the
+clotran extension (PLAN step 36) is out. Three settings, each in the
+file VS Code keeps for it (Preferences: Open User Settings (JSON),
+Open Keyboard Shortcuts (JSON), and a project's `.vscode/tasks.json`):
+
+```json
+{"files.associations": {"*.cljf": "clojure"}}
+```
+
+```json
+[{"key": "cmd+enter", "command": "workbench.action.terminal.runSelectedText",
+  "when": "editorTextFocus && editorLangId == clojure"}]
+```
+
+```json
+{"version": "2.0.0",
+ "tasks": [{"label": "clotran compile", "type": "shell",
+            "command": "clotran compile ${file}", "problemMatcher": []}]}
+```
+
+Then `clotran` in the integrated terminal is the REPL, Cmd+Enter sends
+the selection (or the line) to it, and the task compiles the file --
+the next load installs the library. Highlighting and bracket colours
+come with the grammar. What this setup lacks is what the extension
+brings: evaluating the form at the cursor with its result inline,
+definitions and docs without a REPL (`clotran index`), and the debugger.
+
+
 ## What it does
 
 **Real Fortran arrays**, which is the one thing this host has that the

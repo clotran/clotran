@@ -1549,6 +1549,13 @@
        (try (eval '(fn [x] (recur 1 2))) (catch clotran.host.throwable e (re-find #"^Mismatched argument count to recur, expected: 1 args, got: 2" (.getMessage e))))
        "Mismatched argument count to recur, expected: 1 args, got: 2")
 
+;;; ---- a BigInteger built with a radix, as tools.reader's match-number builds
+;;; one (PLAN step 36); clj's BigInteger and BigInt are one type here, so the
+;;; oracle cannot name the constructor
+(check "a BigInteger from hex digits" (clotran.host.bigint. "ff" 16) 255N)
+(check "and from negative octal" (clotran.host.bigint. "-777" 8) -511N)
+(check "a digit outside the radix is clj's error" (try (clotran.host.bigint. "zz" 10) (catch clotran.host.number_format_exception e (.getMessage e))) "For input string: \"zz\"")
+
 ;;; ---- source positions past 120 files, and a transient read (PLAN step 36):
 ;;; the packed position held a file id up to 127, so the 121st file loaded
 ;;; lost its positions; now 510, and clotran-read-forms with a true second

@@ -282,6 +282,8 @@ int32_t cre_group_span_units(void *handle, int32_t idx, int32_t *start, int32_t 
 int32_t cu_isws(int32_t cp)    { return u_isWhitespace((UChar32)cp) ? 1 : 0; }
 int32_t cu_isalpha(int32_t cp) { return u_isalpha((UChar32)cp) ? 1 : 0; }
 int32_t cu_isdigit(int32_t cp) { return u_isdigit((UChar32)cp) ? 1 : 0; }
+/* Character.digit: the digit value of cp in radix, -1 when it is none (ICU u_digit) */
+int32_t cu_digit(int32_t cp, int32_t radix) { return u_digit((UChar32)cp, (int8_t)radix); }
 int32_t cu_isupper(int32_t cp) { return u_isupper((UChar32)cp) ? 1 : 0; }
 int32_t cu_islower(int32_t cp) { return u_islower((UChar32)cp) ? 1 : 0; }
 int32_t cu_isalnum(int32_t cp) { return u_isalnum((UChar32)cp) ? 1 : 0; }

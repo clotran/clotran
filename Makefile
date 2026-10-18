@@ -566,7 +566,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-profiles check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
 TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
@@ -643,6 +643,9 @@ endif
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
+check-cljfmt:
+	@echo "--- cljfmt on clotran (PLAN 36): the formatter, rewrite-clj and tools.reader derived from .cljc and .clj, byte for byte against cljfmt on clj over a corpus; skipped without the checkout ---"
+	@if [ -x $(CLOTRAN_CLJFMT)/test/run.sh ]; then CLOTRAN=$(CURDIR) sh $(CLOTRAN_CLJFMT)/test/run.sh > $(B)/cljfmt.out 2>&1; s=$$?; grep -E '^(ok|FAIL|cljfmt:|CLJFMT)' $(B)/cljfmt.out; [ $$s -eq 0 ] || { tail -20 $(B)/cljfmt.out; exit $$s; }; else echo "skipped: no cljfmt at $(CLOTRAN_CLJFMT)"; fi
 check-profiles:
 	@echo "--- build profiles (PLAN 36): dev, release and fast compile one namespace to the same answers as each other and as the interpreter; dev's bounds check stops a package writing past its array ---"
 	rm -rf $(B)/profiles && mkdir -p $(B)/profiles
@@ -890,8 +893,8 @@ crosscheck:
 	$(XC_SYNC) $(XC_DIR)/flang/
 	$(XC_SYNC) $(XC_DIR)/gfortran/
 	echo "crosscheck: fuzz seed $(SEED) (make crosscheck SEED=$(SEED) repeats it)"; \
-	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
-	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
+	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
+	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
 	wait; \
 	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
 	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
@@ -937,6 +940,9 @@ CLOTRAN_DEPS ?= $(abspath $(CURDIR)/../clotran-deps)
 # clotran-nrepl, the server `clotran nrepl` starts: the checkout beside this
 # one unless named (check-nrepl; the launcher reads the same variable)
 CLOTRAN_NREPL ?= $(abspath $(CURDIR)/../clotran-nrepl)
+# cljfmt on clotran, the .cljc proof (PLAN step 36): its tests run in the
+# gate when the checkout is beside this one
+CLOTRAN_CLJFMT ?= $(abspath $(CURDIR)/../cljfmt)
 
 # the Fortran compiler this build uses, by absolute path: `clotran compile`
 # falls back to it where gfortran is not on PATH (an Emacs from the Dock)

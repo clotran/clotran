@@ -102,6 +102,11 @@ module Regex
        integer(c_int32_t), value :: cp
        integer(c_int32_t) :: r
      end function cu_isalpha
+     function cu_digit(cp, radix) result(r) bind(C, name="cu_digit")
+       import :: c_int32_t
+       integer(c_int32_t), value :: cp, radix
+       integer(c_int32_t) :: r
+     end function cu_digit
      function cu_isdigit(cp) result(r) bind(C, name="cu_isdigit")
        import :: c_int32_t
        integer(c_int32_t), value :: cp
@@ -172,7 +177,7 @@ module Regex
        regex_find_next, regex_group_count, regex_group_span, &
        regex_last_error
   ! clotran.host.char, answered by ICU (regex_shim.c)
-  public :: cu_isws, cu_isalpha, cu_isdigit, cu_isupper, cu_islower, cu_isalnum, cu_toupper, cu_tolower
+  public :: cu_isws, cu_isalpha, cu_isdigit, cu_digit, cu_isupper, cu_islower, cu_isalnum, cu_toupper, cu_tolower
 
 contains
 

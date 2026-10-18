@@ -5550,8 +5550,27 @@ Calva ("a bit opinionated") and not a CIDER fork: our own clients.
 6. *`:cljf` in `.cljc`, proved*: cljfmt, rewrite-clj and tools.reader
    vendored unmodified, their `:cljf` branches derived as upstream/derive
    derives Clojure's, cljfmt on clj the oracle, byte for byte; smaller
-   fixtures and regressions for each bug it finds on the way.
+   fixtures and regressions for each bug it finds on the way. DONE
+   2026-10-18: github.com/clotran/cljfmt -- cljfmt 0.16.6's core, the
+   rewrite-clj v1.2.50 and tools.reader v1.5.2 it pins, 12,000 lines in
+   upstream/, derived into src/ by its ./derive (bb's rewrite-clj finds
+   each reader conditional and adds a :cljf branch, the :clj one through
+   clotran's names.clj); test/run.sh formats a corpus on both hosts and
+   diffs byte for byte, scripts/fuzz-format generated code; check-cljfmt
+   in the gate beside the checkout. What clotran lacked, each with its
+   oracle case: io/resource (nil before; now the file under a path root),
+   System/lineSeparator, Character/digit and isDigit, Integer/toString
+   with a radix, a BigInteger built with a radix and its bitLength,
+   longValue and negate, PersistentHashSet/createWithCheck,
+   PersistentList/create, RT/map, Numbers/reduceBigInt, a StringBuilder's
+   deleteCharAt and setLength. tools.reader -- the host reader, 2,000
+   lines of host-bound .clj -- loaded on the first try once renamed.
 7. *The guide's editors section*, VS Code with no extension included.
+   DONE 2026-10-18: `clotran nrepl`, `clotran index` and the VS Code
+   setup -- a file association onto VS Code's own Clojure grammar, a key
+   sending the selection to the integrated terminal, a compile task --
+   each JSON checked, against VS Code 1.95's built-in Clojure language
+   (id `clojure`, which does not list .cljf itself).
 
 **After it, as packages:** clotran-ide's language server, then cljfmt as
 its formatter (format as you type: idiomatic code for newcomers), the

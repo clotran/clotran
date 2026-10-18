@@ -3259,6 +3259,19 @@ x10
 ;; user is given only core's PUBLIC Vars, though some were public builtins before core.clj made them
 ;; ^:private (reduce1, spread, sigs): the editor's completions offered reduce1 (clotran-nrepl's test)
 [(contains? (ns-map 'user) 'reduce1) (contains? (ns-map 'user) 'spread) (some (fn [[_ v]] (and (var? v) (= 'clojure.core (ns-name (:ns (meta v)))) (:private (meta v)) v)) (ns-map 'user))]
+;; host members cljfmt, rewrite-clj and tools.reader reach for (PLAN step 36): Character/digit and isDigit,
+;; Integer/toString with a radix, a BigInteger with a radix and its bitLength, longValue and negate,
+;; PersistentHashSet/createWithCheck, PersistentList/create, RT/map, Numbers/reduceBigInt, a StringBuilder's
+;; deleteCharAt and setLength
+[(clotran.host.char/digit \f 16) (clotran.host.char/digit \9 8) (clotran.host.char/digit (int \z) 36) (clotran.host.char/digit \٣ 10) (clotran.host.char/isDigit \7) (clotran.host.char/isDigit \x) (clotran.host.char/valueOf \q)]
+[(clotran.host.int4/toString 255 16) (clotran.host.int4/toString -255 2) (clotran.host.int8/toString 1234567890123 36) (clotran.host.int4/toString 7) (clotran.host.int8/toString -9223372036854775808 16)]
+[(.bitLength (biginteger 255)) (.bitLength (biginteger -256)) (.bitLength (biginteger 0)) (.bitLength (biginteger 123456789012345678901234567890N)) (.bitLength (biginteger -123456789012345678901234567890N)) (.longValue (biginteger 42)) (bigint (.negate (biginteger 42)))]
+[(clotran.host.persistent_hash_set/createWithCheck [1 2 3]) (try (clotran.host.persistent_hash_set/createWithCheck [1 2 1]) (catch clotran.host.illegal_argument_exception e (.getMessage e))) (clotran.host.persistent_list/create [1 2 3]) (clotran.host.rt/map (to-array [:a 1 :b 2])) (clotran.host.numbers/reduceBigInt 5N) (instance? clotran.host.int8 (clotran.host.numbers/reduceBigInt 5N))]
+(let [sb (clotran.host.string_builder. "héllo")] (.deleteCharAt sb 4) (.setLength sb 2) (.append sb "!") (str sb))
+;; io/resource finds a file by its path-relative name -- core.clj is one on both hosts -- and a
+;; missing one is nil (clotran.files/resource, PLAN step 36: cljfmt reads its indent rules so)
+(some? (clotran.files/resource "clojure/core.clj"))
+(clotran.files/resource "no/such/thing.txt")
 ;; every Var's metadata has :ns and :name, as clj's setMeta ensures (clj's Var, setMeta): the host's own
 ;; builtins, *ns*, a protocol's methods and intern given a symbol's metadata had lost them
 (remove (fn [[_ v]] (and (:ns (meta v)) (:name (meta v)))) (ns-publics 'clojure.core))

@@ -29,9 +29,11 @@
 (def beside (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*))))))
 (def deps (or (System/getenv "CLOTRAN_DEPS") (str beside "/clotran-deps")))
 (def nrepl (or (System/getenv "CLOTRAN_NREPL") (str beside "/clotran-nrepl")))
+(def cljfmt (or (System/getenv "CLOTRAN_CLJFMT") (str beside "/cljfmt")))
 (apply p/shell {:continue true} "docker" "run" "--rm" "-v" (str work ":/w") "-v" "clotran-m2:/root/.m2"
        (concat (when (fs/exists? deps) ["-v" (str deps ":/clotran-deps:ro")])
                (when (fs/exists? nrepl) ["-v" (str nrepl ":/clotran-nrepl:ro")])
+               (when (fs/exists? cljfmt) ["-v" (str cljfmt ":/cljfmt:ro")])
                ["clotran-gate" "bash" "-c"
          (str "cd /src && tar xf /w/src.tar && (make " target " > /w/gate.log 2>&1; echo \"EXIT $?\" >> /w/gate.log)")]))
 (fs/create-dirs (fs/parent log))

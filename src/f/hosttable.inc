@@ -23,7 +23,7 @@
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14, &
        HK_BOXVAR = -15, HK_CLJVAR = -16, HK_LOCK = -17
 
-  type(hm), parameter :: HOST_STATICS_1(99) = [ &
+  type(hm), parameter :: HOST_STATICS_1(110) = [ &
   ! a static field written in Clojure: the var the name gives, its
   ! namespace loaded first (HK_CLJVAR)
        hm("clotran.queue.PersistentQueue", "EMPTY", HK_CLJVAR, "clotran.queue/EMPTY"), &
@@ -100,6 +100,17 @@
        hm("clotran.host.system", "getenv", B_GETENV, "clotran-getenv"), &
   ! The clock, so `time` works. ClojureScript has system-time, so this is language.
        hm("clotran.host.system", "nanoTime", B_NANOTIME, "clotran-nano-time"), &
+       hm("clotran.host.system", "lineSeparator", B_LINESEP, "clotran-line-separator"), &
+       hm("clotran.host.char", "isDigit", B_ISDIGIT, "clotran-digit?"), &
+       hm("clotran.host.char", "digit", B_CHARDIGIT, "clotran-char-digit"), &
+       hm("clotran.host.char", "valueOf", B_CHARCAST, "char"), &
+       hm("clotran.host.int4", "toString", B_INTTOSTR, "clotran-int-to-string"), &
+       hm("clotran.host.int8", "toString", B_INTTOSTR, "clotran-int-to-string"), &
+       hm("clotran.host.persistent_hash_set", "createWithCheck", B_HSETCHECK, "clotran-hash-set-checked"), &
+       hm("clotran.host.persistent_list", "create", B_LISTFROM, "clotran-list-from"), &
+       hm("clotran.host.rt", "map", B_HMAP, "hash-map"), &
+       hm("clotran.host.real8", "NaN", HK_NAN), &
+       hm("clotran.host.numbers", "reduceBigInt", B_REDUCEBIG, "clotran-reduce-bigint"), &
        hm("clotran.host.system", "currentTimeMillis", B_MILLIS, "clotran-current-time-millis"), &
   ! Thread/sleep is what every example writes; the same wait as clotran.thread/sleep
        hm("clotran.host.thread", "sleep", B_SLEEP, "clotran-sleep"), &
@@ -432,9 +443,9 @@
        hm("clotran.host.numbers", "longs", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(327) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(338) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
-  type(hm), parameter :: HOST_METHODS_1(99) = [ &
+  type(hm), parameter :: HOST_METHODS_1(104) = [ &
   ! Instance members. The target becomes the first argument, which is all
   ! an instance method is: (.withMeta x m) calls with-meta on x and m.
        hm("", "meta", B_META, "meta"), &
@@ -530,6 +541,11 @@
        hm("", "disjoin", B_DISJ, "disj"), &
        hm("", "concat", B_STR, "str"), &
        hm("", "toString", B_TOSTRING, "clotran-to-string"), &
+       hm("", "bitLength", B_BITLENGTH, "clotran-bit-length"), &
+       hm("", "longValue", B_LONGCAST, "unchecked-long"), &
+       hm("", "negate", B_SUB, "-"), &
+       hm("", "deleteCharAt", B_SBDELETE, "clotran-sb-delete-char-at"), &
+       hm("", "setLength", B_SBSETLEN, "clotran-sb-set-length"), &
        hm("", "pattern", B_TOSTRING, "clotran-to-string"), &
        hm("", "toUpperCase", B_UPCASE, "clotran-upcase"), &
        hm("", "toLowerCase", B_DOWNCASE, "clotran-downcase"), &
@@ -645,4 +661,4 @@
        hm("", "isCancelled", B_TASKCANCELLED, "clotran-task-cancelled"), &
        hm("", "cancel", B_TASKCANCEL, "clotran-task-cancel"), &
        hm("", "availableProcessors", B_NPROCS, "clotran-processors") ]
-  type(hm), parameter :: HOST_METHODS(178) = [HOST_METHODS_1, HOST_METHODS_2]
+  type(hm), parameter :: HOST_METHODS(183) = [HOST_METHODS_1, HOST_METHODS_2]

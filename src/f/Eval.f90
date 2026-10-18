@@ -263,6 +263,16 @@ module Eval
   integer, parameter :: B_RUN = 451, B_SETENV = 452, B_MKDIRS = 453, B_DELETE = 454, B_RENAME = 455, B_MKEXEC = 456, B_TEMPDIR = 457
   ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
   integer, parameter :: B_SETMETA = 458
+  ! (clotran-resource rel): the file on clotran's path, io/resource's lookup
+  integer, parameter :: B_CPRESOURCE = 459
+  ! System/lineSeparator: the line.separator property, as a call (cljfmt asks so)
+  integer, parameter :: B_LINESEP = 460
+  ! what cljfmt, rewrite-clj and tools.reader reach for (PLAN step 36):
+  ! Character/digit, Integer/toString with a radix, createWithCheck,
+  ! PersistentList/create, Numbers/reduceBigInt, a BigInteger's bitLength,
+  ! a StringBuilder's deleteCharAt and setLength
+  integer, parameter :: B_CHARDIGIT = 461, B_INTTOSTR = 462, B_HSETCHECK = 463, B_LISTFROM = 464, &
+       B_REDUCEBIG = 465, B_BITLENGTH = 466, B_SBDELETE = 467, B_SBSETLEN = 468
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1326,6 +1336,16 @@ contains
     call bind_builtin(core, "clotran-rename", B_RENAME)
     call bind_builtin(core, "clotran-make-executable", B_MKEXEC)
     call bind_builtin(core, "clotran-temp-dir", B_TEMPDIR)
+    call bind_builtin(core, "clotran-resource", B_CPRESOURCE)
+    call bind_builtin(core, "clotran-line-separator", B_LINESEP)
+    call bind_builtin(core, "clotran-char-digit", B_CHARDIGIT)
+    call bind_builtin(core, "clotran-int-to-string", B_INTTOSTR)
+    call bind_builtin(core, "clotran-hash-set-checked", B_HSETCHECK)
+    call bind_builtin(core, "clotran-list-from", B_LISTFROM)
+    call bind_builtin(core, "clotran-reduce-bigint", B_REDUCEBIG)
+    call bind_builtin(core, "clotran-bit-length", B_BITLENGTH)
+    call bind_builtin(core, "clotran-sb-delete-char-at", B_SBDELETE)
+    call bind_builtin(core, "clotran-sb-set-length", B_SBSETLEN)
     call bind_builtin(core, "clotran-installed-libraries", B_INSTALLED)
     call bind_builtin(core, "clotran-library-manifest", B_LIBMANIFEST)
     call bind_builtin(core, "count", B_COUNT)
@@ -4167,8 +4187,29 @@ contains
        out = call_builtin(B_TODEC, vs_get(vst, base + 1))
     else if (cname == "clotran.host.bigint" .or. cname == "clotran.host.bigint") then
        ! (BigInteger. "12"), which core.clj's bigint falls back to for
-       ! a string. There is one big integer type here, not two.
-       out = call_builtin(B_TOBIG, vs_get(vst, base + 1))
+       ! a string. There is one big integer type here, not two. With a
+       ! radix, (BigInteger. "ff" 16), the digits are read in it, as
+       ! tools.reader's match-number hands them.
+       if (gcv_count(vs_get(vst, base + 1)) >= 2) then
+          block
+            character(len=:), allocatable :: digits, dec
+            logical :: okr
+            type(gc_value) :: d0, d1
+            okr = .false.
+            d0 = gcv_nth(vs_get(vst, base + 1), 0)
+            d1 = gcv_nth(vs_get(vst, base + 1), 1)
+            digits = ""
+            if (d0%tag == GCT_STR) call gc_ref_text(d0%ref, s=digits)
+            if (d0%tag == GCT_STR .and. d1%tag == GCT_INT) call radix_text(digits, int(d1%ival), dec, okr)
+            if (okr) then
+               out = gc_big(dec, [vs_get(vst, base + 1)])
+            else
+               call fail_as("clotran.host.number_format_exception", "For input string: """ // digits // """", [vs_get(vst, base + 1)])
+            end if
+          end block
+       else
+          out = call_builtin(B_TOBIG, vs_get(vst, base + 1))
+       end if
     else if (cname == "clotran.host.map_entry") then
        ! (MapEntry. k v): a map entry is a two-vector marked as one
        ! (DEVIATIONS 39); clojure.spec.alpha's tagged-ret builds them
@@ -5172,6 +5213,43 @@ contains
   ! so (parse-long "x") is nil in Clojure and was an ERROR here -- the
   ! catch could not match, and the failure escaped the function that
   ! existed to contain it.
+  ! The decimal text of digits written in radix (2..36, an optional leading
+  ! -), for a BigInteger built with one; ok false when a character is no
+  ! digit of that radix or the text is empty
+  subroutine radix_text(digits, radix, dec, ok)
+    character(len=*), intent(in) :: digits
+    integer, intent(in) :: radix
+    character(len=:), allocatable, intent(out) :: dec
+    logical, intent(out) :: ok
+    character(len=:), allocatable :: acc, o, rt
+    character(len=24) :: b
+    integer :: i, d, from
+    logical :: neg
+    ok = .false.
+    dec = "0"
+    if (radix < 2 .or. radix > 36 .or. len(digits) == 0) return
+    write(b, '(I0)') radix
+    rt = trim(b)
+    neg = digits(1:1) == "-"
+    from = 1
+    if (neg .or. digits(1:1) == "+") from = 2
+    if (from > len(digits)) return
+    acc = "0"
+    do i = from, len(digits)
+       d = int(cu_digit(int(iachar(digits(i:i)), c_int32_t), int(radix, c_int32_t)))
+       if (d < 0) return
+       write(b, '(I0)') d
+       call big_mul(acc, rt, o)
+       call big_add(o, trim(b), acc)
+    end do
+    if (neg) then
+       call big_neg(acc, dec)
+    else
+       dec = acc
+    end if
+    ok = .true.
+  end subroutine radix_text
+
   subroutine fail_as(class_name, msg, roots)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
@@ -14848,6 +14926,207 @@ contains
        a = gcv_nth(args, 0)
        out = gcv_nth(args, 1)
        call gc_set_slot(a, meta_slot(a), out)
+    case (B_LINESEP)
+       out = gc_str(LINE_SEP, [vs_get(vst, base + 1)])
+    case (B_CHARDIGIT)
+       ! Character/digit: the value of a character (or its code point) as a
+       ! digit in the radix, -1 when it is none, through ICU as clj's is Unicode
+       block
+         integer :: cp, rdx
+         a = gcv_nth(args, 0)
+         cp = int(a%ival)
+         rdx = 10
+         if (gcv_count(args) > 1) then
+            b = gcv_nth(args, 1)
+            rdx = int(b%ival)
+         end if
+         out = gc_int(int(cu_digit(int(cp, c_int32_t), int(rdx, c_int32_t)), gc_ip))
+       end block
+    case (B_INTTOSTR)
+       ! Integer/toString and Long/toString with a radix: lower-case digits, a
+       ! leading -, a radix outside 2..36 read as 10, as clj's are
+       block
+         integer(gc_ip) :: nv, rdx, q
+         character(len=36), parameter :: dg = "0123456789abcdefghijklmnopqrstuvwxyz"
+         character(len=72) :: buf
+         integer :: p, d
+         logical :: neg
+         a = gcv_nth(args, 0)
+         nv = a%ival
+         rdx = 10
+         if (gcv_count(args) > 1) then
+            b = gcv_nth(args, 1)
+            rdx = b%ival
+         end if
+         if (rdx < 2 .or. rdx > 36) rdx = 10
+         neg = nv < 0
+         if (.not. neg) nv = -nv
+         p = 73
+         do
+            q = nv / rdx
+            d = int(-(nv - q * rdx))
+            p = p - 1
+            buf(p:p) = dg(d + 1:d + 1)
+            nv = q
+            if (nv == 0) exit
+         end do
+         if (neg) then
+            p = p - 1
+            buf(p:p) = "-"
+         end if
+         out = gc_str(buf(p:72), [vs_get(vst, base + 1)])
+       end block
+    case (B_HSETCHECK)
+       ! PersistentHashSet/createWithCheck: a set, an element twice an
+       ! IllegalArgumentException naming it, as the reader's #{} is -- a
+       ! second NaN among them, since clj's reader hands out one object
+       block
+         type(gc_value) :: items, mp, it
+         integer :: i2
+         logical :: saw_nan, dupl
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, items)
+         mp = gca_hash_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         call vs_set(vst, base + 3, mp)
+         saw_nan = .false.
+         do i2 = 0, gcv_count(vs_get(vst, base + 2)) - 1
+            it = gcv_nth(vs_get(vst, base + 2), i2)
+            dupl = gca_contains(vs_get(vst, base + 3), it)
+            if (it%tag == GCT_REAL) then
+               if (gc_rval(it) /= gc_rval(it)) then
+                  dupl = dupl .or. saw_nan
+                  saw_nan = .true.
+               end if
+            end if
+            if (dupl) then
+               call gcp_str(it, .false., s=dlt_1)
+               call fail_as("clotran.host.illegal_argument_exception", "Duplicate key: " // dlt_1, [vs_get(vst, base + 1)])
+               exit
+            end if
+            mp = gca_assoc(vs_get(vst, base + 3), it, it, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+            call vs_set(vst, base + 3, mp)
+         end do
+         if (.not. tctx%has_error) out = gc_obj(OBJ_SET, [vs_get(vst, base + 3)], [vs_get(vst, base + 3)])
+       end block
+    case (B_LISTFROM)
+       ! PersistentList/create: a list of a collection's elements
+       block
+         type(gc_value) :: items
+         integer :: i2
+         items = coll_to_vector(gcv_nth(args, 0), [vs_get(vst, base + 1)])
+         call vs_set(vst, base + 2, items)
+         out = gcl_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         do i2 = gcv_count(vs_get(vst, base + 2)) - 1, 0, -1
+            call vs_set(vst, base + 3, out)
+            out = gcl_cons(gcv_nth(vs_get(vst, base + 2), i2), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+         end do
+       end block
+    case (B_REDUCEBIG)
+       ! Numbers/reduceBigInt: a BigInt that fits a long is the long
+       a = gcv_nth(args, 0)
+       out = a
+       if (a%tag == GCT_BIG) then
+          call gc_ref_text(a%ref, s=dlt_1)
+          if (big_fits_i64(dlt_1)) out = gc_int(big_to_i64(dlt_1))
+       end if
+    case (B_BITLENGTH)
+       ! BigInteger.bitLength: the bits of the magnitude, a negative number's
+       ! of -n-1 (two's complement less its sign): 255 and -256 are 8, 0 is 0
+       block
+         integer(gc_ip) :: x
+         integer :: bits
+         character(len=:), allocatable :: m, q, r
+         a = gcv_nth(args, 0)
+         bits = 0
+         if (a%tag == GCT_INT) then
+            x = a%ival
+            if (x < 0) x = -x - 1
+            bits = bit_size(x) - leadz(x)
+         else if (a%tag == GCT_BIG) then
+            call gc_ref_text(a%ref, s=m)
+            if (big_is_neg(m)) then
+               call big_neg(m, q)
+               call big_sub(q, "1", m)
+            end if
+            do while (m /= "0")
+               call big_divmod(m, "2", q, r)
+               m = q
+               bits = bits + 1
+            end do
+         end if
+         out = gc_int(int(bits, gc_ip))
+       end block
+    case (B_SBDELETE, B_SBSETLEN)
+       ! StringBuilder.deleteCharAt(i) and setLength(n), by code point as
+       ! clotran indexes a string: the builder's text rewritten in place,
+       ! and the builder answered, as clj's deleteCharAt is
+       block
+         character(len=:), allocatable :: t, u
+         integer :: i2, want, at, cp, nb
+         a = gcv_nth(args, 0)
+         out = a
+         if (gc_kind(a) == OBJ_SB) then
+            call gc_sb_flush(a, [vs_get(vst, base + 1)])
+            b = gc_slot(a, 1)
+            t = ""
+            if (b%tag == GCT_STR) call gc_ref_text(b%ref, s=t)
+            b = gcv_nth(args, 1)
+            want = int(b%ival)
+            ! the byte at which code point `want` starts
+            at = 1
+            cp = 0
+            do while (at <= len(t) .and. cp < want)
+               nb = 1
+               if (iachar(t(at:at)) >= 240) then
+                  nb = 4
+               else if (iachar(t(at:at)) >= 224) then
+                  nb = 3
+               else if (iachar(t(at:at)) >= 192) then
+                  nb = 2
+               end if
+               at = at + nb
+               cp = cp + 1
+            end do
+            if (id == B_SBSETLEN) then
+               u = t(1:min(at - 1, len(t)))
+               do i2 = cp + 1, want
+                  u = u // achar(0)
+               end do
+            else if (at <= len(t)) then
+               nb = 1
+               if (iachar(t(at:at)) >= 240) then
+                  nb = 4
+               else if (iachar(t(at:at)) >= 224) then
+                  nb = 3
+               else if (iachar(t(at:at)) >= 192) then
+                  nb = 2
+               end if
+               u = t(1:at - 1) // t(at + nb:)
+            else
+               block
+                 character(len=24) :: b1, b2
+                 write(b1, '(I0)') want
+                 write(b2, '(I0)') cp
+                 call fail_as("clotran.host.string_index_out_of_bounds_exception", "index " // trim(b1) // ",length " // trim(b2), [vs_get(vst, base + 1)])
+               end block
+               u = t
+            end if
+            call gc_set_slot(a, 1, gc_str(u, [vs_get(vst, base + 1)]))
+            call gc_set_i1(a, 0)
+         end if
+       end block
+    case (B_CPRESOURCE)
+       ! (clotran-resource "cljfmt/indents/clojure.clj"): the file so named
+       ! under a root of clotran's path -- the source roots, a loaded
+       ! package's directory, CLOTRAN_PATH -- or nil: io/resource's lookup
+       ! for a library that ships data beside its code (clotran.files)
+       block
+         character(len=:), allocatable :: rel, found
+         call text_of(gcv_nth(args, 0), s=rel)
+         call classpath_find(rel, path=found, raw=.true.)
+         out = gc_nil()
+         if (len(found) > 0) out = gc_str(found, [vs_get(vst, base + 1)])
+       end block
     case (B_SETMETA)
        ! a Var's setMeta ensures :name and :ns (clj's Var, setMeta), which
        ! intern with a symbol's metadata and defprotocol's methods go through;
@@ -21835,17 +22114,31 @@ contains
   ! beside a .clj wrote the .cljc for other hosts, so it wins here;
   ! RT.load prefers the .clj, which is right for the host the .clj was
   ! written for. DEVIATIONS 33.
-  subroutine classpath_find(rel, path)
+  ! raw: rel as a file name, no extension tried -- io/resource's lookup
+  ! (clotran.files/resource), path "" when no root has it
+  subroutine classpath_find(rel, path, raw)
     character(len=*), intent(in) :: rel
     character(len=:), allocatable, intent(out) :: path
+    logical, intent(in), optional :: raw
     character(len=:), allocatable :: cand
     character(len=1024) :: roots(5)
     character(len=4), parameter :: exts(3) = [character(len=4) :: "cljf", "cljc", "clj"]
+    character(len=5) :: sfx(3)
     logical :: there
-    integer :: i, e
+    integer :: i, e, ne
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
+    ne = 3
+    do e = 1, 3
+       sfx(e) = "." // exts(e)
+    end do
+    if (present(raw)) then
+       if (raw) then
+          ne = 1
+          sfx(1) = ""
+       end if
+    end if
     roots(1) = "src/clj"
     roots(2) = "test/clj"
     roots(3) = "."
@@ -21860,8 +22153,8 @@ contains
     ! a loaded package's directory is a root too (pkg_library)
     if (allocated(pkg_roots)) then
        do i = 1, size(pkg_roots)
-          do e = 1, 3
-             cand = trim(pkg_roots(i)) // "/" // rel // "." // trim(exts(e))
+          do e = 1, ne
+             cand = trim(pkg_roots(i)) // "/" // rel // trim(sfx(e))
              inquire(file=cand, exist=there)
              if (there) then
                 path = cand
@@ -21873,9 +22166,10 @@ contains
     ! The src/clj spelling is the fallback too, so a genuinely missing
     ! file still reports the path a reader would expect to see.
     path = "src/clj/" // rel // ".clj"
-    do e = 1, 3
+    if (ne == 1) path = ""
+    do e = 1, ne
        do i = 1, 5
-          cand = trim(roots(i)) // "/" // rel // "." // trim(exts(e))
+          cand = trim(roots(i)) // "/" // rel // trim(sfx(e))
           inquire(file=cand, exist=there)
           if (there) then
              path = cand
@@ -21915,8 +22209,8 @@ contains
             end if
          end if
          if (z > a) then
-            do e = 1, 3
-               cand = cp(a:z-1) // "/" // rel // "." // trim(exts(e))
+            do e = 1, ne
+               cand = cp(a:z-1) // "/" // rel // trim(sfx(e))
                inquire(file=cand, exist=there)
                if (there) then
                   path = cand

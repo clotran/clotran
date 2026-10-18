@@ -1590,7 +1590,10 @@ core.clj's `slurp` and `spit` -- written against `jio/reader` and
 `jio/writer` -- unable to run at all. `src/clj/clotran/files.cljf`
 defines the namespace over clotran's whole-file primitives: `reader`
 (with `.readLine`, so `line-seq` works), `writer` (`:append`), `copy`,
-`file`, `make-parents`, `delete-file`; TEXT only, and `resource` is nil.
+`file`, `make-parents`, `delete-file`; TEXT only. `resource` answers the
+file so named under a root of clotran's path -- the source roots, a
+loaded package's directory, `CLOTRAN_PATH` -- as a File, where clj answers
+a URL from the classpath; both slurp (cljfmt reads its indent rules so).
 
 Two of the vendored files are Clojure written against clj's collection library:
 `core_print.clj` dispatches `print-method` and `print-dup` on
