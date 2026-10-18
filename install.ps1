@@ -7,7 +7,7 @@
 # there) and puts its bin on the user PATH. CLOTRAN_VERSION picks a release
 # (default: the one this script was written for).
 $ErrorActionPreference = 'Stop'
-$version = if ($env:CLOTRAN_VERSION) { $env:CLOTRAN_VERSION } else { '1.0.0-rc.5' }
+$version = if ($env:CLOTRAN_VERSION) { $env:CLOTRAN_VERSION } else { '1.0.0-rc.6' }
 $base = if ($env:CLOTRAN_BASE_URL) { $env:CLOTRAN_BASE_URL } else { "https://github.com/clotran/clotran/releases/download/v$version" }
 if ($env:PROCESSOR_ARCHITECTURE -ne 'AMD64') { throw "install.ps1: no release for $env:PROCESSOR_ARCHITECTURE (there is windows-x86_64)" }
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

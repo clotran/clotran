@@ -1,30 +1,30 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 5 of 1.0.0: `1.0.0-rc.5`. Since rc.4, the
-editor story (PLAN step 36): `clotran nrepl` starts the nREPL server
-in-process, writes `.nrepl-port` and on a terminal opens the REPL in the
-same program, the server pinned by the install's `tools.edn`, so no
-project names it; `clotran index` writes every definition a project
-holds -- Clojure and Fortran, with file, line, docstring and arglists
--- read and never evaluated, checked against every Var of core.clj;
-`clotran bind` is in core, and a `package.edn` beside a Fortran file is
-a package built into the cache on first load, each routine's Var naming
-the line it is declared at; build profiles, release (-O2 with debug
-symbols, the default), dev (checks and backtraces) and fast; the cache
-is `~/.clotran/cache`; `io/resource` answers from clotran's path. The
-proof that a portable `.cljc` library runs: cljfmt, rewrite-clj and
-tools.reader derived to clotran's names format 108 files byte for byte
-as cljfmt on clj does (github.com/clotran/cljfmt), which cost clotran
-a dozen host members it lacked. Found by the fuzzers on the way and
-fixed: `user` saw core's private Vars; 92 Vars had no `:ns`; the reader
-kept 120 files' positions and silently none past them (now 510); two
-`##NaN` in a literal, `%N` past an int and metadata on a `#tag` form
-in an unselected branch each read differently from clj. The
-repositories live in the `clotran` organization; ICU's data is trimmed
-to what regex and case mapping read, so `clotran-bin` is 9.5 MB where
-rc.4's was 38; `(?U)` is accepted; ChemSol is BSD 3-clause with Arieh
-Warshel's permission; a release carries the licenses it must beside
-the binary.
+This is release candidate 6 of 1.0.0: `1.0.0-rc.6`. Since rc.5, the
+editors (PLAN step 36): `clotran lsp` starts the language server
+(github.com/clotran/clotran-ide) -- definitions into Clojure and into a
+package's Fortran, hover, symbols, completion, errors as you type from
+the reader and the Fortran compiler, formatting by cljfmt on clotran --
+from the project's index, with no REPL running; `clotran dap` runs a
+program under lldb-dap and stops at a breakpoint in a package's Fortran
+with its source line and the stack beneath it; a package whose Fortran
+changed is rebuilt when it is loaded again and says so, and loading a
+`.f90` file from an editor's REPL rebuilds its package. The editors
+themselves: the VS Code extension (github.com/clotran/clotran-vscode,
+written in ClojureScript) is built once per platform -- macOS arm64,
+Linux x64 and arm64, Alpine x64 and arm64, Windows x64 -- each build
+carrying this release, so installing the extension installs clotran;
+clotran-mode for Emacs (github.com/clotran/clotran-mode) is a
+clojure-mode with eglot, an nREPL client of its own and dape, and
+`M-x clotran-install`. A release now carries clotran-ide, clotran-nrepl
+and cljfmt at the commits `tools.edn` pins, so the language server and
+the REPL start with no git and no network. Found on the way and fixed:
+`clotran bind` threw away a package's objects, which is where macOS
+keeps its debug information; the package cache did not tell two
+packages' directories apart; every process clotran started inherited
+its open sockets; clotran's notes (a stale image, a library not used)
+were printed on standard output, where a language server's messages go,
+and are on standard error now, as clj's warnings are.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the

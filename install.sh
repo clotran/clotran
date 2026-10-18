@@ -10,7 +10,7 @@
 # release (default: the one this script was written for).
 set -eu
 
-version=${CLOTRAN_VERSION:-1.0.0-rc.5}
+version=${CLOTRAN_VERSION:-1.0.0-rc.6}
 prefix=${PREFIX:-$HOME/.local}
 base=${CLOTRAN_BASE_URL:-https://github.com/clotran/clotran/releases/download/v$version}
 
