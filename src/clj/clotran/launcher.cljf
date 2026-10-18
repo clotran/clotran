@@ -100,7 +100,7 @@
                         (str "(ns " name ".core-test\n  (:require [clojure.test :refer [deftest is]]\n"
                              "            [" name ".core :as core]))\n\n"
                              "(deftest greet-test\n  (is (= \"hello, world\" (core/greet \"world\"))))\n"))
-          (clotran-spit (str name "/.gitignore") ".clotran-cache/\n")
+          (clotran-spit (str name "/.gitignore") ".clotran-cache/\n.nrepl-port\n")
           (clotran-spit (str name "/README.md")
                         (str "# " name "\n\nA clotran project: Clojure, hosted on Fortran.\n\n"
                              "    clotran                       # a REPL with src on the path\n"
@@ -500,6 +500,52 @@
     :usage (do (err "usage: clotran bind --package NAME --out FILE.f90 SRC.f90 [SRC.f90 ...]\n       clotran bind [--force] [DIR]      the package DIR/package.edn declares, built into the cache") (exit! 2))
     (exit! 1)))
 
+;; --- clotran nrepl: the nREPL server (clotran-nrepl) in this process, then the REPL
+
+(defn- ensure-path!
+  "dir on CLOTRAN_PATH, appended when it is not there."
+  [dir]
+  (let [cp (or (getenv "CLOTRAN_PATH") "")]
+    (when-not (some #{dir} (str/split cp (re-pattern (str "\\" sep))))
+      (clotran-setenv "CLOTRAN_PATH" (if (str/blank? cp) dir (str cp sep dir))))))
+
+(defn- nrepl-src
+  "clotran-nrepl's src: a checkout CLOTRAN_NREPL names, one beside this
+  clotran's home, else the one tools.edn pins, fetched into the cache by
+  clotran.deps -- so no project's deps.edn names the server, and the
+  version that runs is the one this clotran was installed with."
+  []
+  (or (some #(when (clotran-file-exists? (str % "/src/clotran/nrepl/server.cljf")) (str % "/src"))
+            (remove nil? [(getenv "CLOTRAN_NREPL") (str home "/../clotran-nrepl")]))
+      (let [tools (str home "/tools.edn")]
+        (when (and (clotran-file-exists? tools) (deps-home))
+          (let [coord (get (read-string (clotran-slurp tools)) 'clotran/clotran-nrepl)]
+            (when (and (:git/url coord) (:git/sha coord))
+              (ensure-path! (deps-home))
+              (require 'clotran.deps)
+              (str ((resolve 'clotran.deps/git-dir) 'clotran/clotran-nrepl (:git/url coord) (:git/sha coord)) "/src")))))))
+
+(defn- nrepl
+  "`clotran nrepl [--port N]`: the nREPL server (clotran-nrepl) in this
+  process, for the project here; .nrepl-port written, the line CIDER's
+  jack-in waits for printed. On a terminal the REPL follows in the same
+  process, so the editor and the prompt share one program; on a pipe --
+  an editor started it -- the process serves until it is ended."
+  [args]
+  (let [port (or (some-> (second (drop-while #(not= % "--port") args)) parse-long) 0)
+        src (nrepl-src)]
+    (if-not src
+      (do (err "clotran nrepl: no clotran-nrepl found: a checkout beside clotran (CLOTRAN_NREPL=dir names one), or the tools.edn an installed clotran carries") (exit! 1))
+      (do (ensure-path! src)
+          (require 'clotran.nrepl.server)
+          (let [p (:port ((resolve 'clotran.nrepl.server/start!) {:port port}))]
+            (clotran-spit ".nrepl-port" (str p))
+            (println (str "nREPL server started on port " p " on host localhost - nrepl://localhost:" p))
+            (flush)
+            (if (= "true" (clotran.host.system/getProperty "clotran.tty"))
+              (answer! ["--repl"])
+              @(promise)))))))
+
 ;; --- clotran index: the project's definitions, read and not evaluated
 
 (defn- index [args]
@@ -528,7 +574,8 @@
       ;; after the project's path, as a program's run is: it loads the program
       "build" (if (project-path! []) (build-program (rest args)) (exit! 1))
       (let [test? (= "test" (first args))
-            args (if test? (vec (rest args)) args)
+            nrepl? (= "nrepl" (first args))
+            args (if (or test? nrepl?) (vec (rest args)) args)
             [aliases args] (if (some-> (first args) (str/starts-with? "-A"))
                              [(aliases-of (first args)) (vec (rest args))]
                              [nil args])
@@ -545,6 +592,7 @@
         (when-not (getenv "CLOTRAN_AUTOCOMPILE") (clotran-setenv "CLOTRAN_AUTOCOMPILE" "0"))
         (cond
           (not (project-path! aliases)) (exit! 1)
+          nrepl? (nrepl args)
           test? (answer! (into ["-m" "clotran.test-runner"] args))
           (= "-m" (first args)) (answer! args)
           (some-> (first args) (str/starts-with? "-"))

@@ -19,6 +19,10 @@
  (try (rationalize ##-Inf) (catch clotran.host.number_format_exception e :nan))
  (try (rationalize ##Inf) (catch clotran.host.number_format_exception e :nan))
  (try (rationalize ##NaN) (catch clotran.host.number_format_exception e :nan))
+ ;; metadata on a #tag form in a branch nobody selected: the form is clj's
+ ;; TaggedLiteral, no IMeta, so the whole conditional is refused even when
+ ;; another branch was chosen (scripts/fuzz-read, seed 3385231973)
+ (mapv #(try (pr-str (read-string {:read-cond :allow :features #{:zz}} %)) (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))) ["#?(:zz 1 :cljs ^:x #js {})" "#?(:cljs ^:x #js {} :default 2)" "#?(:cljs #js {} :default 2)" "#?(:cljs ^:x [1] :default 2)"])
  ;; inside #(...), %N with digits past an int is Integer.parseInt's error,
  ;; not the arg-literal message; %0N is that message (scripts/fuzz-read, seed
  ;; 3050909765)

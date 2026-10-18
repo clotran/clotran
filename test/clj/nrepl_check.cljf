@@ -1,0 +1,19 @@
+;; nrepl_check.cljf: `clotran nrepl`, started by make check-nrepl in build/nrepl
+;; with its standard input a pipe, wrote .nrepl-port; over that port describe
+;; answers this clotran's version and an eval answers. clotran-nrepl's bencode
+;; is on CLOTRAN_PATH (the checkout beside this one).
+(require '[clotran.nrepl.bencode :as b] '[clotran.net :as net] '[clojure.string :as str])
+(def port (parse-long (str/trim (slurp ".nrepl-port"))))
+(def c (net/connect "127.0.0.1" port))
+(def src (b/byte-source c))
+(defn ask [m]
+  (b/write-value c m)
+  (loop [acc []]
+    (let [r (b/read-value src)]
+      (if (some #{"done"} (get r "status")) (conj acc r) (recur (conj acc r))))))
+(def version (get-in (first (ask {"op" "describe" "id" "1"})) ["versions" "clotran" "version-string"]))
+(def value (some #(get % "value") (ask {"op" "eval" "code" "(+ 1 2)" "id" "2"})))
+(println "nrepl-check: describe says clotran" version "and (+ 1 2) is" value)
+(if (and (= version (clotran.host.system/getProperty "clotran.version")) (= value "3"))
+  (println "NREPL CHECK PASSED")
+  (do (println "NREPL CHECK FAILED") (clotran.host.system/exit 1)))

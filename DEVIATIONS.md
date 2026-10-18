@@ -1375,7 +1375,8 @@ case by case: once a branch is chosen, everything after it is read past
 unchecked; a feature that is not a keyword is "Feature should be a
 keyword", and `:else` and `:none` are reserved; a branch nobody selects
 is read under the equivalent of `*suppress-read*`, so a `:cljs` branch
-may hold `#js {}`; and a `#?@` where one form is wanted -- after `'`,
+may hold `#js {}` -- as clj's TaggedLiteral, which takes no metadata, so
+`^:x #js {}` there is refused as clj refuses it (fuzz-read); and a `#?@` where one form is wanted -- after `'`,
 `@`, `^`, `#_` -- gives its first form and leaves the rest pending for
 whatever reads next, as LispReader's pendingForms do, so `[@#?@(:x [a
 b])]` is `[(deref a) b]`.

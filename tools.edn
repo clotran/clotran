@@ -1,0 +1,6 @@
+;; The tools an installed clotran can start by itself, each pinned to a
+;; commit, fetched into the cache by clotran-deps on first use (PLAN step
+;; 36): `clotran nrepl` runs clotran-nrepl. A checkout beside clotran, or
+;; CLOTRAN_NREPL, is used instead when there is one. No project names them.
+{clotran/clotran-nrepl {:git/url "https://github.com/clotran/clotran-nrepl.git"
+                        :git/sha "fbd838a38f8b45186d6a696efe0b8224b21b7f66"}}

@@ -5522,7 +5522,20 @@ Calva ("a bit opinionated") and not a CIDER fork: our own clients.
    duplicate (fixed, DEVIATIONS 53).
 4. *`clotran nrepl`*: clotran-nrepl pinned by the install, so no
    deps.edn names it; `.nrepl-port`; the real version in describe; a
-   terminal REPL in the same process as the socket.
+   terminal REPL in the same process as the socket. DONE 2026-10-18:
+   tools.edn at the root and beside an installed binary pins the commit,
+   fetched by clotran.deps into the cache on first use (a checkout
+   beside clotran, or CLOTRAN_NREPL, wins while developing); the
+   launcher starts the server in-process, writes .nrepl-port, prints the
+   jack-in line and, by the new clotran.tty property, hands the REPL to
+   the host on a terminal or waits on a pipe; check-nrepl in the gate
+   where the checkout is beside; clotran-nrepl's bin/ is gone and
+   clotran-mode's jack-in is `clotran nrepl`. The crosscheck now tells
+   its copies where clotran-deps and clotran-nrepl are: without that,
+   fuzz-deps' project part and check-nrepl skipped on macOS and ran only
+   in the Linux gate. fuzz-read, on the Windows seed: metadata on a #tag
+   form in a branch nobody selected must be refused, as clj's
+   TaggedLiteral takes none (fixed, DEVIATIONS 33).
 5. *Profiles*: debug symbols by default for what clotran compiles;
    dev (checks), release, fast. No profile changes an answer
    (`-ffp-contract=off` stays; fast-math is an opt-in and a DEVIATIONS

@@ -15296,6 +15296,24 @@ contains
           ! this clotran's VERSION, as the banner prints it
           if (gc_ref_is(a%ref, "clotran.version") .and. allocated(clotran_version)) &
                out = gc_str(clotran_version, [vs_get(vst, base + 1)])
+          ! whether standard input is a terminal, "true" or "false": `clotran
+          ! nrepl` follows its server with the REPL on one and waits on a pipe
+          if (gc_ref_is(a%ref, "clotran.tty")) then
+             block
+               interface
+                  function c_isatty(fd) bind(C, name="isatty") result(r)
+                    import :: c_int
+                    integer(c_int), value :: fd
+                    integer(c_int) :: r
+                  end function c_isatty
+               end interface
+               if (c_isatty(0_c_int) == 1) then
+                  out = gc_str("true", [vs_get(vst, base + 1)])
+               else
+                  out = gc_str("false", [vs_get(vst, base + 1)])
+               end if
+             end block
+          end if
           ! the working directory, / between its parts on every system
           if (gc_ref_is(a%ref, "user.dir")) then
              block

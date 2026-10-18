@@ -1783,6 +1783,20 @@ contains
        call fail("Metadata can only be applied to IMetas", "clotran.host.illegal_argument_exception")
        call vs_leave(base); return
     end if
+    ! a tagged literal -- #tag form read where reading is suppressed, a
+    ! branch nobody selected -- is clj's TaggedLiteral, an ILookup and no
+    ! IMeta, so ^:cljs #js {} in a :cljs branch is refused there too
+    ! (scripts/fuzz-read, seed 3385231973)
+    if (gca_is(form)) then
+       block
+         type(gc_value) :: mark
+         mark = gca_get(form, gc_key("clotran/tagged-literal", [roots, vs_get(base + 2)]))
+         if (mark%tag /= GCT_NIL) then
+            call fail("Metadata can only be applied to IMetas", "clotran.host.illegal_argument_exception")
+            call vs_leave(base); return
+         end if
+       end block
+    end if
     ! A form with metadata already (^int ^:foo x): MetaReader merges, the
     ! outer ^'s entries over the form's own -- {:foo true, :tag int} --
     ! where a second wrapper hid the first and records' ^int

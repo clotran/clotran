@@ -50,10 +50,15 @@ packages, and the optional tools (`clotran-nrepl`, `clotran-mode`) --
 comes from a project's `deps.edn` as a `:local/root` or a `:git/url`
 pinned by its full `:git/sha` (`PACKAGES.md`).
 
-For Emacs, `clotran-mode` opens `.cljf` files in clojure-mode and has
-`M-x clotran-jack-in`, which starts clotran with the nREPL server from
-`clotran-nrepl` and connects the stock CIDER to it. Both are
-repositories of their own under github.com/clotran.
+`clotran nrepl [--port N]` starts the nREPL server, `clotran-nrepl`, in a
+clotran for the project here, writes `.nrepl-port`, prints the line an
+editor's jack-in waits for and, on a terminal, opens the REPL in the
+same process, so the editor and the prompt share one program. The
+server comes from the checkout beside clotran or from the `tools.edn` an
+installed clotran carries, pinned to a commit, so no project names it
+and no editor has to know where it is. For Emacs, `clotran-mode` opens
+`.cljf` files in clojure-mode and makes `M-x cider-jack-in` run it. Both
+are repositories of their own under github.com/clotran.
 
 An editor needs no REPL to read code: `clotran index` writes every
 definition a project holds -- its own files, its dependencies', the

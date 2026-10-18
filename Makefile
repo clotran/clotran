@@ -566,7 +566,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
 TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
@@ -596,7 +596,7 @@ check-install:
 	@rm -rf $(B)/inst $(B)/outside && mkdir -p $(B)/outside
 	@$(MAKE) -s install PREFIX=$(CURDIR)/$(B)/inst >/dev/null
 	@# the licenses travel with it: EPL-1.0 for Clojure, ICU's, and on Windows the static runtime's
-	cd $(B)/inst/lib/clotran && ls LICENSE NOTICE epl-v10.html LICENSE-ICU $(if $(EXE),winpthreads-COPYING mingw-w64-runtime-COPYING.txt) >/dev/null
+	cd $(B)/inst/lib/clotran && ls LICENSE NOTICE epl-v10.html tools.edn LICENSE-ICU $(if $(EXE),winpthreads-COPYING mingw-w64-runtime-COPYING.txt) >/dev/null
 	@echo "(require (quote [clojure.set :as set])) (println :installed-says (set/union #{1} #{2}) (clojure-version))" > $(B)/outside/t.cljf
 	cd $(B)/outside && $(CURDIR)/$(B)/inst/bin/clotran t.cljf </dev/null 2>&1 | grep -q ":installed-says #{1 2}"
 	@# a project: its deps.edn read by the clotran-deps installed beside clotran,
@@ -643,6 +643,20 @@ endif
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
+check-nrepl:
+	@echo "--- clotran nrepl (PLAN 36): the server beside this checkout, then the one tools.edn pins through an installed clotran, each started on a pipe; .nrepl-port, describe's version, an eval; skipped without the checkout ---"
+	@if [ -f $(CLOTRAN_NREPL)/src/clotran/nrepl/server.cljf ]; then \
+	  d=$(CURDIR)/$(B)/nrepl; rm -rf $$d && mkdir -p $$d/beside $$d/pinned && \
+	  $(MAKE) -s install PREFIX=$$d/inst > $$d/install.log 2>&1 && \
+	  for leg in beside pinned; do \
+	    cd $$d/$$leg && if [ $$leg = beside ]; then c=$(CURDIR)/clotran; else c=$$d/inst/bin/clotran; fi; \
+	    ( CLOTRAN_CACHE=$$d/cache CLOTRAN_NREPL=$(CLOTRAN_NREPL) $$c nrepl --port 0 </dev/null > out.txt 2>&1 & echo $$! > pid ); \
+	    i=0; while [ ! -s .nrepl-port ] && [ $$i -lt 300 ]; do sleep 0.2; i=$$((i+1)); done; \
+	    CLOTRAN_PATH=$(CLOTRAN_NREPL)/src $(CURDIR)/clotran-bin $(CURDIR)/src/clj/clojure/core.clj $(CURDIR)/test/clj/nrepl_check.cljf </dev/null > check.txt 2>&1; s=$$?; \
+	    kill $$(cat pid) 2>/dev/null; echo "$$leg:"; grep -v '^note: ' check.txt; \
+	    grep -q 'nREPL server started on port' out.txt || { echo "no jack-in line:"; cat out.txt; exit 1; }; [ $$s -eq 0 ] || exit $$s; \
+	  done; \
+	else echo "skipped: no clotran-nrepl at $(CLOTRAN_NREPL)"; fi
 check-index:
 	@echo "--- the index of definitions against the live Vars: core.clj, clotran's own namespaces, a Fortran package (PLAN 36) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/index_check.clj </dev/null > $(B)/index_check.out 2>&1; s=$$?; grep -v '^note: ' $(B)/index_check.out; exit $$s
@@ -840,6 +854,10 @@ check-static:
 # the verdict is the same EXIT line.
 XC_DIR ?= $(or $(TMPDIR),/tmp)/clotran-crosscheck
 #
+# The siblings the checks want -- clotran-deps for fuzz-deps and
+# check-install, clotran-nrepl for check-nrepl -- are not beside a copy,
+# so each half is told where this checkout's are; without that both
+# checks quietly skipped their part here and ran only in the Linux gate.
 # The two halves run AT ONCE, each in a copy of its own (XC_DIR/flang,
 # XC_DIR/gfortran), each building and testing with -j; each half's
 # output is its own log, printed whole once both have finished, and the
@@ -856,8 +874,8 @@ crosscheck:
 	$(XC_SYNC) $(XC_DIR)/flang/
 	$(XC_SYNC) $(XC_DIR)/gfortran/
 	echo "crosscheck: fuzz seed $(SEED) (make crosscheck SEED=$(SEED) repeats it)"; \
-	( $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
-	( $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
+	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
+	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
 	wait; \
 	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
 	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
@@ -900,6 +918,9 @@ CLOTRAN_BIN = $(PREFIX)/bin
 # path (PACKAGES.md): installed beside clotran from its checkout, as the
 # clj script ships tools.deps -- the one beside this one unless named
 CLOTRAN_DEPS ?= $(abspath $(CURDIR)/../clotran-deps)
+# clotran-nrepl, the server `clotran nrepl` starts: the checkout beside this
+# one unless named (check-nrepl; the launcher reads the same variable)
+CLOTRAN_NREPL ?= $(abspath $(CURDIR)/../clotran-nrepl)
 
 # the Fortran compiler this build uses, by absolute path: `clotran compile`
 # falls back to it where gfortran is not on PATH (an Emacs from the Dock)
@@ -911,7 +932,7 @@ install: clotran-bin $(B)/fc
 	rm -rf "$(CLOTRAN_LIB).new"
 	mkdir -p "$(CLOTRAN_LIB).new/src" "$(CLOTRAN_LIB).new/build" "$(CLOTRAN_BIN)"
 	cp clotran-bin$(EXE) clotran "$(CLOTRAN_LIB).new/"
-	cp LICENSE NOTICE epl-v10.html "$(CLOTRAN_LIB).new/"
+	cp LICENSE NOTICE epl-v10.html tools.edn "$(CLOTRAN_LIB).new/"
 	cp src/c/icu/LICENSE "$(CLOTRAN_LIB).new/LICENSE-ICU"
 	[ -z "$(EXE)" ] || cp packaging/windows/licenses/* "$(CLOTRAN_LIB).new/"
 	cp -R src/clj "$(CLOTRAN_LIB).new/src/"

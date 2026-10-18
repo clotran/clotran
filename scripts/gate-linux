@@ -24,10 +24,14 @@
 (p/shell "docker" "build" "-q" "-t" "clotran-gate" "--build-arg" (str "ARCH=" arch)
          "-f" (str repo "/packaging/linux/Dockerfile.gate") (str repo "/packaging/linux"))
 (p/shell {:dir repo} "sh" "-c" (str "git ls-files -co --exclude-standard -z | COPYFILE_DISABLE=1 tar --no-xattrs --null -T - -cf " work "/src.tar"))
-;; clotran-deps beside it, read-only, where scripts/fuzz-deps looks
-(def deps (or (System/getenv "CLOTRAN_DEPS") (str (babashka.fs/parent (babashka.fs/parent (babashka.fs/parent (babashka.fs/canonicalize *file*)))) "/clotran-deps")))
+;; clotran-deps and clotran-nrepl beside it, read-only, where scripts/fuzz-deps
+;; and check-nrepl look
+(def beside (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*))))))
+(def deps (or (System/getenv "CLOTRAN_DEPS") (str beside "/clotran-deps")))
+(def nrepl (or (System/getenv "CLOTRAN_NREPL") (str beside "/clotran-nrepl")))
 (apply p/shell {:continue true} "docker" "run" "--rm" "-v" (str work ":/w") "-v" "clotran-m2:/root/.m2"
        (concat (when (fs/exists? deps) ["-v" (str deps ":/clotran-deps:ro")])
+               (when (fs/exists? nrepl) ["-v" (str nrepl ":/clotran-nrepl:ro")])
                ["clotran-gate" "bash" "-c"
          (str "cd /src && tar xf /w/src.tar && (make " target " > /w/gate.log 2>&1; echo \"EXIT $?\" >> /w/gate.log)")]))
 (fs/create-dirs (fs/parent log))
