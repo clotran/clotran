@@ -5692,6 +5692,42 @@ clotran-mode on eglot, dape and its own evaluate-at-point.
 library ships no interface; Gaussian ships programs, which clotran
 already runs).
 
+### 37. Graphics: clotran-ui and clotran-plot (decided 2026-10-18)
+
+James, 2026-10-18: "we also need various kinds of graphs, bars, pies,
+scatter, lines"; "render molecules 3d with ball and stick (at first)";
+"plot 3d potential energy surfaces ... show an in-progress PES scan and
+be able to project a 3d surface on it. then, click on a point and see the
+animation of the optimization steps"; "I also want to show my son how to
+graph functions ... Ti-85 graphing calculators were cool because they
+just did the thing"; "I want something intuitive and not some
+programmers idea of what a good plotting library looks like".
+
+Two libraries, outside core as every tool is (step 35), each with its
+own PLAN.md:
+- **clotran-ui** (github.com/clotran/clotran-ui): the platform for user
+  interfaces -- libui-ng (native windows and widgets, one C library,
+  vendored by sha256) with its drawing area as the 2D canvas, and the
+  area's native view handed to Metal or Vulkan as the 3D view. The
+  event loop, and macOS's rule that windows live on the main thread
+  (clotran evaluates on a second one), are solved here once. Decided
+  2026-10-10: not raylib or SDL.
+- **clotran-plot** (github.com/clotran/clotran-plot): graphs, over
+  clotran-ui or to SVG/PNG with no window system. The data picks the
+  picture (Mackinlay's Show Me): a function of x a curve, a list of
+  numbers a line over the step, timestamped values a time axis, pairs a
+  scatter, categories bars, a grid a surface, atoms a molecule. Ticks by
+  extended Wilkinson (Talbot, Lin, Hanrahan 2010), functions sampled
+  adaptively with the range kept from blow-ups (Mathematica's Plot),
+  calendar-aware time ticks; a plot of an atom redraws as it changes.
+
+**The order:** a window with a canvas from the REPL; `(graph (* x x))`
+in it, with trace and zoom; several functions, data of each shape; a
+live plot of an atom; then a 3D surface, molecules, and the PES scan
+end to end. What core may need on the way (a C callback into the
+evaluator, the main thread given to an event loop) is a core change
+with its own oracle case, as ever.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
