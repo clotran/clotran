@@ -5,8 +5,8 @@
 ;; CLOTRAN_NREPL / CLOTRAN_IDE / CLOTRAN_CLJFMT, is used instead when there
 ;; is one. No project names them.
 {clotran/clotran-nrepl {:git/url "https://github.com/clotran/clotran-nrepl.git"
-                        :git/sha "fbd838a38f8b45186d6a696efe0b8224b21b7f66"}
+                        :git/sha "211616104c225498b794edbf3f6002dcc52c873f"}
  clotran/clotran-ide {:git/url "https://github.com/clotran/clotran-ide.git"
-                      :git/sha "4105b0faaaf2372a154db4893774de1db4b788b8"}
+                      :git/sha "a87df973d53504e76643f37fbf94b3e8be5ac00b"}
  clotran/cljfmt {:git/url "https://github.com/clotran/cljfmt.git"
-                 :git/sha "23e4da7a7940a27da73535e8f3c0ddba53bb6f45"}}
+                 :git/sha "40a9b02b87d7cb1ef63cdcbbb85581f1f89b207b"}}

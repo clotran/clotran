@@ -84,7 +84,15 @@ works as it is. Without clotran-mode, in Emacs 29:
 ```
 
 then `M-x eglot` in a `.cljf` buffer of the project; `M-.` finds
-definitions, `C-h .` shows the docs. Neovim's built-in client is
+definitions, `C-h .` shows the docs. A package's Fortran edits the same
+way: load its `.f90` from the editor (`C-c C-k` in clotran-mode, the
+load key in VS Code) and the package is built again from its sources,
+its routines replaced, its module state fresh, and the REPL says so.
+`clotran dap` is the debugger behind every editor's debug client (VS
+Code's `clotran` debug type, Emacs's dape, Neovim's nvim-dap): it drives
+lldb-dap, so a breakpoint in a package's Fortran stops with its source
+line and the native stack; Fortran locals and Clojure frames shown as
+Clojure are the next stage. Neovim's built-in client is
 `vim.lsp.start({name = "clotran", cmd = {"clotran", "lsp"}, root_dir =
 vim.fs.root(0, "deps.edn")})` in an autocommand for `.cljf` files.
 

@@ -4568,7 +4568,10 @@ The first version debugs a JIT'd function by running it interpreted.
   from, and `clotran bind` builds a package in one compiler call whose
   objects are temporary. Stage one must keep the objects beside the
   library in the cache (or run dsymutil on it) before any local can be
-  shown.
+  shown. Done the same day (step 36, item 11): the objects are kept, the
+  source line shows -- and Apple's lldb then shows no Fortran locals at
+  all, having no plugin for the language. So the values are clotran's to
+  decode, as this step said from the start.
 
 **Fuzzing, decided with it:**
 - The gate shrinks the first failure of each kind (about 60 s bound),
@@ -5640,6 +5643,42 @@ clotran-mode on eglot, dape and its own evaluate-at-point.
    engines version, 1.95.0) on the fixture project through its own
    provider commands -- definition into Clojure and Fortran, hover,
    format document -- then jack-in, load, an evaluation and quit.
+10. *The package rebuild on a Fortran change.* DONE 2026-10-18:
+   `fortran/load-package` of a declared package whose sources changed
+   builds it again (the hash differs), replaces every routine's fn and
+   says so on *out* -- "clotran: mylib.raw rebuilt from its sources: 2
+   routines replaced, module state fresh" -- the new library's module
+   variables fresh, the old library left mapped (nothing unloads one
+   safely). `clotran.package/load-file-package` finds a Fortran file's
+   package (a package.edn beside it or within two directories up), and
+   clotran-nrepl's load-file of a .f90 calls it, so C-c C-k in a .f90
+   buffer (clotran-mode's clotran-fortran-mode) and VS Code's load key
+   in a Fortran file rebuild the package; the nREPL and clotran-mode
+   tests edit a routine and watch its answer change.
+11. *The debug adapter, stage one.* DONE 2026-10-18: `clotran dap`
+   (clotran.ide.dap) speaks DAP to the editor over stdio or a port and
+   drives lldb-dap -- Xcode's, one on PATH, or CLOTRAN_LLDB_DAP --
+   started on a port of its own (`--connection listen://`; clotran-run-pid
+   and clotran-kill are the two host builtins it needed, the child's
+   output to a log so stdio stays the editor's), names the backend once
+   as an output event, rewrites `launch` ({program: a .cljf, args, cwd}
+   into clotran-bin --launch, so the debuggee is the process the
+   launcher would have been) and relays the rest. `clotran bind` now
+   compiles a package to objects kept beside its library, since on
+   macOS the DWARF lives there: a breakpoint in a package's Fortran
+   stops with the source line (mylib.f90:8). Not yet: the LOCALS of a
+   Fortran frame -- Apple's lldb has no Fortran language plugin and
+   shows none ("inspection of frame variables will be limited"), though
+   the DWARF has them (five formal parameters in mylib.o); clotran
+   decoding them from their DWARF locations through readMemory, with
+   the type knowledge bind has, is the next stage, as 31a foresaw. Nor
+   Clojure frames as Clojure, nor Linux and Windows backends (gdb 14's
+   `-i dap`, lldb-dap from LLVM) -- the proxy is written for them, the
+   test skips where there is no lldb-dap. test/dap_test.cljf drives the
+   adapter in-process: initialize, launch the fixture's debug.cljf, a
+   function breakpoint, the stop, the stack (subroutine, shim, pkg_call,
+   gce_eval), the source position, scopes, disconnect -- and lldb-dap is
+   gone after.
 13. *clotran-mode on eglot, with its own evaluate-at-point.* DONE
    2026-10-18 (before 10-12, since it needed only 8): a major mode
    derived from clojure-mode; eglot gets `clotran lsp` and starts in

@@ -261,6 +261,10 @@ module Eval
   integer, parameter :: B_UIADD = 443, B_UISUB = 444, B_UIMUL = 445, B_UIDIV = 446, B_UIREM = 447, &
        B_UINEG = 448, B_UIINC = 449, B_UIDEC = 450
   integer, parameter :: B_RUN = 451, B_SETENV = 452, B_MKDIRS = 453, B_DELETE = 454, B_RENAME = 455, B_MKEXEC = 456, B_TEMPDIR = 457
+  ! (clotran-run-pid argv dir out env): clotran-run without waiting, answering
+  ! the child's process id; (clotran-kill pid) ends it -- the debug adapter
+  ! starts the native debugger so and stops it when the session ends (PLAN 31a)
+  integer, parameter :: B_RUNPID = 471, B_KILL = 472
   ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
   integer, parameter :: B_SETMETA = 458
   ! (clotran-resource rel): the file on clotran's path, io/resource's lookup
@@ -1335,6 +1339,8 @@ contains
     call bind_builtin(core, "clotran-file-kind", B_FSKIND)
     call bind_builtin(core, "clotran-list-dir", B_FSLIST)
     call bind_builtin(core, "clotran-run", B_RUN)
+    call bind_builtin(core, "clotran-run-pid", B_RUNPID)
+    call bind_builtin(core, "clotran-kill", B_KILL)
     call bind_builtin(core, "clotran-setenv", B_SETENV)
     call bind_builtin(core, "clotran-mkdirs", B_MKDIRS)
     call bind_builtin(core, "clotran-delete", B_DELETE)
@@ -11847,7 +11853,7 @@ contains
             out = vs_get(vst, base + 2)
          end if
        end block
-    case (B_RUN)
+    case (B_RUN, B_RUNPID)
        ! (clotran-run argv dir out env wait?): the program argv names -- a
        ! vector of strings -- run with no shell between (proc_shim.c), so
        ! no argument is split or expanded: in dir (nil: here), stdin empty,
@@ -11904,6 +11910,8 @@ contains
          if (n >= 5) then
             if (.not. truthy(gcv_nth(args, 4))) w = 0
          end if
+         ! clotran-run-pid: started, not waited for, its process id answered
+         if (id == B_RUNPID) w = 2
          if (na == 0) then
             call fail("clotran-run: no program named")
             return
@@ -11913,6 +11921,20 @@ contains
               penv // c_null_char, ne, w)
          call gc_mutator_enter()
          out = gc_int(int(r, gc_ip))
+       end block
+    case (B_KILL)
+       ! (clotran-kill pid): the process clotran-run-pid answered, ended
+       ! (SIGTERM; TerminateProcess on Windows): true, or false when it
+       ! could not be
+       block
+         interface
+            function c_kill(p) bind(C, name="clotran_kill") result(r)
+              import :: c_long
+              integer(c_long), value :: p
+              integer(c_long) :: r
+            end function c_kill
+         end interface
+         out = gc_bool(c_kill(int(int_of_number(gcv_nth(args, 0)), c_long)) == 0)
        end block
     case (B_SETENV)
        ! (clotran-setenv name value): this process's environment, which

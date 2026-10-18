@@ -27,6 +27,7 @@ static int interrupted(int e) { return e == WSAEINTR; }
 #  include <sys/socket.h>
 #  include <netinet/in.h>
 #  include <unistd.h>
+#  include <fcntl.h>
 typedef int sock_t;
 #  define BAD_SOCK (-1)
 #  define CLOSE_SOCK close
@@ -89,7 +90,18 @@ static struct addrinfo *resolve(const char *host, int32_t port, int passive, cha
     return res;
 }
 
+/* a socket is never handed to a process clotran starts: one inherited
+ * kept a test's listening port and connections open in lldb-dap */
+static void not_inherited(sock_t s) {
+#ifdef _WIN32
+    SetHandleInformation((HANDLE)s, HANDLE_FLAG_INHERIT, 0);
+#else
+    fcntl(s, F_SETFD, fcntl(s, F_GETFD) | FD_CLOEXEC);
+#endif
+}
+
 static void no_sigpipe(sock_t s) {
+    not_inherited(s);
 #ifdef SO_NOSIGPIPE
     int one = 1;
     setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, (const char *)&one, sizeof one);
@@ -116,6 +128,7 @@ int64_t cs_listen(const char *host, int32_t port, int32_t backlog, char *err, in
     for (a = res; a; a = a->ai_next) {
         sock_t s = socket(a->ai_family, a->ai_socktype, a->ai_protocol);
         if (s == BAD_SOCK) { code = last_err(); continue; }
+        not_inherited(s);
         int one = 1;
         setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (const char *)&one, sizeof one);
         /* dual stack: Windows makes an IPv6 socket v6-only, so a server on

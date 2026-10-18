@@ -391,7 +391,10 @@
         dir (absolute dir)
         srcs (mapv #(str dir "/" %) sources)
         texts (mapv clotran-slurp srcs)
-        h (str/replace (str (hash [generator-version loader/abi (profile/profile) sources texts])) "-" "m")
+        ;; the package's directory is in the key: the library's debug info
+        ;; names the sources by absolute path, and a debugger's breakpoint in
+        ;; a copy of the same sources elsewhere must find its own library
+        h (str/replace (str (hash [generator-version loader/abi (profile/profile) dir sources texts])) "-" "m")
         out (str (cache/build-dir loader/abi) "/pkg/" name "-" h)
         lib (str out "/lib" name "." @ext)]
     (when (or force? (not (clotran-file-exists? lib)))
@@ -402,10 +405,19 @@
             log (str out "/build.log")]
         (clotran-spit shims (generate name rs sources))
         (clotran-spit (str out "/manifest.edn") (manifest name (filter bindable? rs)))
-        (when-not (zero? (clotran-run (vec (concat [fc] (profile/compile-flags fc) ["-shared" "-fPIC" "-J" out]
-                                                   ["-o" (str lib ".part")] srcs [shims]))
-                                      out log nil true))
-          (fail (str name " did not build (" fc "):\n" (clotran-slurp log)) {:dir dir :log log}))
+        ;; compiled to objects in the cache, then linked: the objects stay,
+        ;; since on macOS a library's DWARF lives in the objects it was
+        ;; linked from, and a debugger stopped in a routine reads its locals
+        ;; there (PLAN 31a)
+        (let [objs (mapv #(str out "/" (str/replace (last (str/split % #"[/\\]")) #"\.[^.]+$" ".o")) (concat srcs [shims]))
+              link-log (str out "/link.log")]
+          (when-not (and (zero? (clotran-run (vec (concat [fc] (profile/compile-flags fc) ["-c" "-fPIC" "-J" out] srcs [shims]))
+                                             out log nil true))
+                         (zero? (clotran-run (vec (concat [fc] ["-shared" "-fPIC" "-o" (str lib ".part")] objs))
+                                             out link-log nil true)))
+            (fail (str name " did not build (" fc "):\n" (clotran-slurp log)
+                       (when (clotran-file-exists? link-log) (clotran-slurp link-log)))
+                  {:dir dir :log log})))
         (clotran-rename (str lib ".part") lib)))
     lib))
 

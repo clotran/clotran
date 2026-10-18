@@ -8,7 +8,11 @@
  * joined into the one command line CreateProcess takes, quoted by the
  * rules CommandLineToArgvW and the C runtime read back, so the child's
  * argv is the parent's. Strings are UTF-8 everywhere (on Windows the
- * binary's manifest makes the narrow -A calls UTF-8). */
+ * binary's manifest makes the narrow -A calls UTF-8).
+ *
+ * wait: 1 waits and answers the exit status; 0 answers 0 once the child
+ * has started; 2 answers its process id, for clotran_kill to end later
+ * (the debug adapter starts lldb-dap this way). */
 /* rand_s, for a temporary directory's name on Windows */
 #define _CRT_RAND_S
 #include <stdlib.h>
@@ -108,8 +112,8 @@ long clotran_run(const char *args, long nargv, const char *dir, const char *out,
   }
   long r = -1;
   if (CreateProcessA(NULL, line, NULL, NULL, TRUE, 0, blk, *dir ? dir : NULL, &si, &pi)) {
-    r = 0;
-    if (wait) {
+    r = wait == 2 ? (long)pi.dwProcessId : 0;
+    if (wait == 1) {
       DWORD code = 0;
       WaitForSingleObject(pi.hProcess, INFINITE);
       GetExitCodeProcess(pi.hProcess, &code);
@@ -121,6 +125,15 @@ long clotran_run(const char *args, long nargv, const char *dir, const char *out,
   if (in != INVALID_HANDLE_VALUE) CloseHandle(in);
   free(blk); free(line); free(argv); free(env);
   return r;
+}
+
+/* the process a run with wait 2 answered, ended: 0, or -1 */
+long clotran_kill(long pid) {
+  HANDLE h = OpenProcess(PROCESS_TERMINATE, FALSE, (DWORD)pid);
+  if (!h) return -1;
+  BOOL ok = TerminateProcess(h, 1);
+  CloseHandle(h);
+  return ok ? 0 : -1;
 }
 
 static int make_dir(const char *p) { return _mkdir(p); }
@@ -135,6 +148,7 @@ static int replace_file(const char *from, const char *to) {
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <signal.h>
 extern char **environ;
 
 #ifdef __APPLE__
@@ -205,8 +219,8 @@ long clotran_run(const char *args, long nargv, const char *dir, const char *out,
       _exit(127);
     }
     if (pid > 0) {
-      r = 0;
-      if (wait) {
+      r = wait == 2 ? (long)pid : 0;
+      if (wait == 1) {
         int st = 0;
         while (waitpid(pid, &st, 0) < 0 && errno == EINTR) ;
         r = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + (WIFSIGNALED(st) ? WTERMSIG(st) : 0);
@@ -216,6 +230,9 @@ long clotran_run(const char *args, long nargv, const char *dir, const char *out,
   free(envp); free(argv); free(env);
   return r;
 }
+
+/* the process a run with wait 2 answered, ended (SIGTERM): 0, or -1 */
+long clotran_kill(long pid) { return pid > 0 && kill((pid_t)pid, SIGTERM) == 0 ? 0 : -1; }
 
 static int make_dir(const char *p) { return mkdir(p, 0777); }
 static int remove_dir(const char *p) { return rmdir(p); }

@@ -12,16 +12,26 @@
   (clotran.bind): loading it builds the library into the cache first,
   unless the same sources were built before.")
 
+(defonce ^:private loaded
+  ;; package namespace -> the library its routines come from now
+  (atom {}))
+
 (defn load-package
   "Opens the shared library at path -- or the one the package.edn in the
   directory path declares, built when it must be -- and interns its
   routines as fns in the namespace the manifest names, each with the file
-  and line it is declared at, when the manifest says. Answers the manifest."
+  and line it is declared at, when the manifest says. Answers the manifest.
+
+  Loaded again after its sources changed, a declared package is built
+  again and every routine's fn replaced; the new library's module
+  variables start fresh, the old library stays mapped (nothing unloads a
+  shared library safely), and a line on *out* says so."
   [path]
   (let [declared? (clotran-file-exists? (str path "/package.edn"))
         lib (if declared? (do (require 'clotran.bind) ((resolve 'clotran.bind/build) path)) path)
         {:keys [handle manifest]} (fortran/load-package* lib)
         ns-sym (symbol (:package manifest))
+        before (get @loaded ns-sym)
         pkg-ns (create-ns ns-sym)
         ;; a declared package's sources are named relative to its directory
         file-of (fn [r] (when-let [f (:file r)] (if (and declared? (not (re-find #"^(/|[A-Za-z]:[/\\])" f))) (str path "/" f) f)))]
@@ -30,4 +40,26 @@
                        (cond-> {:doc (:doc r) :arglists (list (mapv (comp symbol :name) (remove #(= :out (:intent %)) (:args r))))}
                          (:file r) (assoc :file (file-of r) :line (:line r))))
               (fn [& args] (fortran/call-package* handle r (vec args)))))
+    (swap! loaded assoc ns-sym lib)
+    (when (and before (not= before lib))
+      (println (str "clotran: " (:package manifest) " rebuilt from its sources: "
+                    (count (:routines manifest)) " routines replaced, module state fresh")))
     manifest))
+
+(defn package-dir
+  "The directory with a package.edn that holds the Fortran file: its own
+  or, within two levels, a parent's; nil when none."
+  [path]
+  (loop [dir (clojure.string/replace path #"[/\\][^/\\]*$" "") n 0]
+    (cond (clotran-file-exists? (str dir "/package.edn")) dir
+          (or (> n 2) (not (re-find #"[/\\]" dir))) nil
+          :else (recur (clojure.string/replace dir #"[/\\][^/\\]*$" "") (inc n)))))
+
+(defn load-file-package
+  "The package a Fortran file belongs to, loaded -- built again when its
+  sources changed (PLAN step 36): an editor's load-file of a .f90. Answers
+  the package's name; an error when the file is in no package."
+  [path]
+  (if-let [dir (package-dir path)]
+    (:package (load-package dir))
+    (throw (ex-info (str path " is in no package: no package.edn beside it or within two directories above") {:file path}))))

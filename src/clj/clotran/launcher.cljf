@@ -583,6 +583,21 @@
           ((resolve 'clotran.ide.lsp/main) args)
           (exit! 0)))))
 
+;; --- clotran dap: the debug adapter (clotran-ide), the same way
+
+(defn- dap
+  "`clotran dap [--port N] [--verbose]`: the debug adapter, clotran-ide's,
+  for the project here, over stdio or a TCP port: it speaks DAP to the
+  editor and drives the native debugger (lldb-dap) underneath (PLAN 31a)."
+  [args]
+  (let [src (tool-src 'clotran/clotran-ide "CLOTRAN_IDE" "clotran/ide/dap.cljf")]
+    (if-not src
+      (do (err "clotran dap: no clotran-ide found: a checkout beside clotran (CLOTRAN_IDE=dir names one), or the tools.edn an installed clotran carries") (exit! 1))
+      (do (ensure-path! src)
+          (require 'clotran.ide.dap)
+          ((resolve 'clotran.ide.dap/main) args)
+          (exit! 0)))))
+
 ;; --- clotran index: the project's definitions, read and not evaluated
 
 (defn- index [args]
@@ -604,6 +619,7 @@
       ;; after the project's path: the index covers what deps.edn names
       "index" (if (project-path! []) (index (rest args)) (exit! 1))
       "lsp" (if (project-path! []) (lsp (rest args)) (exit! 1))
+      "dap" (if (project-path! []) (dap (rest args)) (exit! 1))
       "compile" (case (second args)
                   "--pure" (compile-pure (drop 2 args))
                   "--report" (compile-report (drop 2 args))
