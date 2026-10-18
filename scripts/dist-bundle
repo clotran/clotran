@@ -18,6 +18,7 @@
 ;; symbols.
 (require '[babashka.fs :as fs]
          '[babashka.process :as p]
+         '[clojure.edn :as edn]
          '[clojure.string :as str])
 
 (def stage (str (fs/absolutize (or (first *command-line-args*)
@@ -109,4 +110,32 @@
         :when (and (not windows?) (fs/exists? f))]
   (spit f (str "#!/bin/sh\n# " cmd ", from a clotran release: its home is beside this directory\n"
                "here=$(cd \"$(dirname \"$0\")/..\" && pwd)\nexec \"$here/" target "\" \"$@\"\n")))
+;; the tools tools.edn pins -- clotran-nrepl, clotran-ide, cljfmt -- carried
+;; beside lib/clotran at their commits, where the launcher looks first
+;; (tool-src: a checkout beside its home), so a release starts `clotran
+;; lsp` and `clotran nrepl` with no git and no network. From a checkout
+;; beside this tree when it has the commit (the gates mount them), else
+;; cloned from the pin's url; src, resources and the licence only.
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(doseq [[lib {url :git/url sha :git/sha}] (edn/read-string (slurp (str repo "/tools.edn")))
+        :let [dest (str stage "/lib/" (name lib))
+              beside (str (fs/parent repo) "/" (name lib))
+              from (if (and (fs/exists? (str beside "/.git"))
+                            (zero? (:exit (p/shell {:continue true :out :string :err :string} "git" "-C" beside "cat-file" "-e" (str sha "^{commit}")))))
+                     beside
+                     (let [d (str (fs/create-temp-dir {:prefix "dist-tool"}) "/" (name lib))]
+                       (p/shell "git" "clone" "--quiet" url d)
+                       d))
+              ;; a relative name: MSYS tar takes C:\\... for a remote host
+              tar ".tool.tar"]]
+  (fs/delete-tree dest)
+  (fs/create-dirs dest)
+  (p/shell "git" "-C" from "archive" "--format=tar" "-o" (str (fs/absolutize dest) "/" tar) sha)
+  (p/shell {:dir dest} "tar" "xf" tar)
+  (fs/delete (str dest "/" tar))
+  (doseq [e (fs/list-dir dest)
+          :when (not (re-find #"^(src|resources|LICENSE.*|README.*)$" (str (fs/file-name e))))]
+    (fs/delete-tree e))
+  (spit (str dest "/COMMIT") (str sha "\n"))
+  (println "carried" (name lib) (subs sha 0 12) "from" (if (= from beside) "the checkout beside" url)))
 (println "dist-bundle:" stage)

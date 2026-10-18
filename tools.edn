@@ -1,7 +1,9 @@
 ;; The tools an installed clotran can start by itself, each pinned to a
 ;; commit, fetched into the cache by clotran-deps on first use (PLAN step
 ;; 36): `clotran nrepl` runs clotran-nrepl, `clotran lsp` runs clotran-ide,
-;; whose formatter is cljfmt on clotran. A checkout beside clotran, or
+;; whose formatter is cljfmt on clotran. A release carries each beside
+;; lib/clotran at its commit (scripts/dist-bundle), so it needs no git or
+;; network for them; a checkout beside clotran, or
 ;; CLOTRAN_NREPL / CLOTRAN_IDE / CLOTRAN_CLJFMT, is used instead when there
 ;; is one. No project names them.
 {clotran/clotran-nrepl {:git/url "https://github.com/clotran/clotran-nrepl.git"

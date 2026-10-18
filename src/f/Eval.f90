@@ -2124,7 +2124,7 @@ contains
        if (tctx%has_error) then
           block
              call gce_error(s=dlt_1)
-             print '(A,A,A,A)', "note: not using ", cand, ": ", dlt_1
+             write(0, '(A,A,A,A)') "note: not using ", cand, ": ", dlt_1
           end block
           call gce_clear_error()
        end if
@@ -2152,7 +2152,7 @@ contains
                    auto_waiting(n_auto_waiting) = path
                 end if
              else
-                print '(A,A,A,A)', "note: not compiling ", path, ": ", dlr_e
+                write(0, '(A,A,A,A)') "note: not compiling ", path, ": ", dlr_e
              end if
           end block
           call gce_clear_error()
@@ -15466,7 +15466,7 @@ contains
               out = uuid_call("identity-uuid", gcv_empty([vs_get(vst, base + 1)]))
          ! core_proxy is clotran's own, below; proxy is a special form
          if (rel == "clojure/gvec") then
-            print '(A,A,A)', "note: skipping ", rel, &
+            write(0, '(A,A,A)') "note: skipping ", rel, &
                  " (it generates host classes)"
             ! The namespace exists, empty: require checks that a lib
             ! defined its namespace after loading, and find-ns no

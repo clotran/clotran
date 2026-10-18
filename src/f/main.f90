@@ -820,7 +820,7 @@ contains
     if (st /= 0) return
     read(u, pos=base0 + 1, iostat=st) magic
     if (st /= 0 .or. magic /= IMAGE_MAGIC) then
-       print '(A,A)', "note: not an image, loading the sources: ", path
+       write(0, '(A,A)') "note: not an image, loading the sources: ", path
        close(u)
        return
     end if
@@ -833,7 +833,7 @@ contains
       tail = ""
       if (sz > len(IMAGE_END) + 8) read(u, pos=sz - 7 - len(IMAGE_END), iostat=st) tail
       if (st /= 0 .or. tail /= IMAGE_END) then
-         print '(A,A)', "note: an incomplete image, loading the sources: ", path
+         write(0, '(A,A)') "note: an incomplete image, loading the sources: ", path
          close(u)
          return
       end if
@@ -844,7 +844,7 @@ contains
     allocate(character(len=k) :: stamp)
     read(u) stamp
     if (stamp /= BUILD_STAMP) then
-       print '(A,A)', "note: the image is from another build of clotran, loading the sources: ", path
+       write(0, '(A,A)') "note: the image is from another build of clotran, loading the sources: ", path
        close(u)
        return
     end if
@@ -858,7 +858,7 @@ contains
        have = -1
        inquire(file=p, size=have)
        if (have /= sz .and. .not. app) then
-          print '(A,A,A,A)', "note: ", nm, " changed since the image was made, loading the sources: ", path
+          write(0, '(A,A,A,A)') "note: ", nm, " changed since the image was made, loading the sources: ", path
           close(u)
           return
        end if
@@ -866,7 +866,7 @@ contains
     end do
     call gc_image_read(u, ok)
     if (.not. ok) then
-       print '(A,A)', "note: the image is of another heap layout, loading the sources: ", path
+       write(0, '(A,A)') "note: the image is of another heap layout, loading the sources: ", path
        close(u)
        call gc_init(65536)
        return
