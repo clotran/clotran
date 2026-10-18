@@ -1,28 +1,30 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 4 of 1.0.0: `1.0.0-rc.4`. rc.3 was withdrawn:
-following the README on a clean install found its Linux build crashing
-on any double -- the gcc 8 Fortran runtime it carried could not read the
-formats gfortran 14 writes. Since rc.3: gfortran's runtimes are linked
-into the binary, so a release needs only the system's C library, a
-program `clotran build` makes runs anywhere, and a package built by any
-current gfortran loads; the `clotran` command is clotran's own Clojure
-(`clotran-bin --launch`), running what it needs from an argument list
-with no shell, so the Windows zip carries no busybox and nothing under
-the GPL; install is `install.sh` or `install.ps1`; `requiring-resolve`
-works; and each run has its own random seed (a flang build answered the
-same `rand` every run).
-
-Since rc.4, on main: the repositories live in the `clotran`
-organization (github.com/clotran/clotran, with clotran-deps,
-clotran-nrepl and clotran-mode beside it); ICU's data is trimmed to what
-regex and case mapping read, so `clotran-bin` is 9.5 MB on macOS where
-rc.4's was 38 MB, every regex and case answer the same; `(?U)`, clj's
-way of asking for Unicode classes, is accepted, and a quantified `\b`
-compiles (DEVIATIONS 14); ChemSol is BSD 3-clause, with Arieh Warshel's
-permission; and a release carries the licenses it must -- `LICENSE`,
-`NOTICE`, Clojure's `epl-v10.html`, ICU's, and on Windows the mingw-w64
-and winpthreads notices -- in `lib/clotran`.
+This is release candidate 5 of 1.0.0: `1.0.0-rc.5`. Since rc.4, the
+editor story (PLAN step 36): `clotran nrepl` starts the nREPL server
+in-process, writes `.nrepl-port` and on a terminal opens the REPL in the
+same program, the server pinned by the install's `tools.edn`, so no
+project names it; `clotran index` writes every definition a project
+holds -- Clojure and Fortran, with file, line, docstring and arglists
+-- read and never evaluated, checked against every Var of core.clj;
+`clotran bind` is in core, and a `package.edn` beside a Fortran file is
+a package built into the cache on first load, each routine's Var naming
+the line it is declared at; build profiles, release (-O2 with debug
+symbols, the default), dev (checks and backtraces) and fast; the cache
+is `~/.clotran/cache`; `io/resource` answers from clotran's path. The
+proof that a portable `.cljc` library runs: cljfmt, rewrite-clj and
+tools.reader derived to clotran's names format 108 files byte for byte
+as cljfmt on clj does (github.com/clotran/cljfmt), which cost clotran
+a dozen host members it lacked. Found by the fuzzers on the way and
+fixed: `user` saw core's private Vars; 92 Vars had no `:ns`; the reader
+kept 120 files' positions and silently none past them (now 510); two
+`##NaN` in a literal, `%N` past an int and metadata on a `#tag` form
+in an unselected branch each read differently from clj. The
+repositories live in the `clotran` organization; ICU's data is trimmed
+to what regex and case mapping read, so `clotran-bin` is 9.5 MB where
+rc.4's was 38; `(?U)` is accepted; ChemSol is BSD 3-clause with Arieh
+Warshel's permission; a release carries the licenses it must beside
+the binary.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
@@ -129,12 +131,12 @@ change.
 
 ## Install
 
-    tar xzf clotran-1.0.0-rc.4-<os>-<arch>[-musl].tar.gz
-    clotran-1.0.0-rc.4-<os>-<arch>[-musl]/bin/clotran
+    tar xzf clotran-1.0.0-rc.5-<os>-<arch>[-musl].tar.gz
+    clotran-1.0.0-rc.5-<os>-<arch>[-musl]/bin/clotran
 
 and on Windows, the zip unpacked anywhere:
 
-    clotran-1.0.0-rc.4-windows-x86_64\bin\clotran.cmd
+    clotran-1.0.0-rc.5-windows-x86_64\bin\clotran.cmd
 
 `SHA256SUMS` beside them lists each archive's sha256.
 
