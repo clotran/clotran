@@ -5539,7 +5539,14 @@ Calva ("a bit opinionated") and not a CIDER fork: our own clients.
 5. *Profiles*: debug symbols by default for what clotran compiles;
    dev (checks), release, fast. No profile changes an answer
    (`-ffp-contract=off` stays; fast-math is an opt-in and a DEVIATIONS
-   entry).
+   entry). DONE 2026-10-18: clotran.profile (CLOTRAN_PROFILE, or a
+   project's :clotran/profile; release = -O2 -g, dev = -O0 -g
+   -fcheck=bounds,do,pointer,mem -fbacktrace, fast = -O3 -g), one
+   compile-flags for `clotran compile`, `build` and `bind`, the profile
+   in both cache keys; check-profiles compiles pure_sample three ways
+   and diffs every answer against the interpreter and shows dev stopping
+   test/f/oobpkg's write past its array; the nightly fuzz runs compiled
+   mode under dev and fast. fast-math is not offered.
 6. *`:cljf` in `.cljc`, proved*: cljfmt, rewrite-clj and tools.reader
    vendored unmodified, their `:cljf` branches derived as upstream/derive
    derives Clojure's, cljfmt on clj the oracle, byte for byte; smaller

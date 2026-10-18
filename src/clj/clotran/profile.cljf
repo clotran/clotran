@@ -1,0 +1,48 @@
+(ns clotran.profile
+  "How clotran compiles its Fortran (PLAN step 36): a namespace through
+  `clotran compile`, a program through `clotran build`, a package through
+  `clotran bind`. Three profiles:
+
+    dev      -O0, debug symbols, gfortran's run-time checks (bounds, do,
+             pointer, memory) and backtraces: for finding a mistake
+    release  -O2 with debug symbols, the default: debug symbols cost
+             nothing at run time, and a debugger can read any build
+    fast     -O3: speed on this machine
+
+  CLOTRAN_PROFILE names one; the launcher sets it from a project's
+  deps.edn, `:clotran/profile :dev`. A profile may change speed, never
+  answers: every profile keeps -ffp-contract=off, so a fused multiply-add
+  never moves a last bit, and the flags that make a constant 1e300/1e-300
+  or x/0.0 the ##Inf Clojure answers. The gate's check-profiles compiles
+  one namespace three ways and compares every answer; -ffast-math and
+  its kind are not offered, since they would be a DEVIATIONS entry.
+  A library built under one profile is never handed to another: the
+  profile is part of what names a build in the cache."
+  (:require [clojure.string :as str]))
+
+(def profiles
+  {:dev     {:gnu ["-O0" "-g" "-fcheck=bounds,do,pointer,mem" "-fbacktrace"] :flang ["-O0" "-g"]}
+   :release {:gnu ["-O2" "-g"] :flang ["-O2" "-g"]}
+   :fast    {:gnu ["-O3" "-g"] :flang ["-O3" "-g"]}})
+
+(defn profile
+  "The profile in force: CLOTRAN_PROFILE, else :release."
+  []
+  (let [e (clotran.host.system/getenv "CLOTRAN_PROFILE")
+        p (keyword (if (str/blank? e) "release" e))]
+    (when-not (contains? profiles p)
+      (throw (ex-info (str "clotran: CLOTRAN_PROFILE is " e "; the profiles are dev, release and fast") {:profile e})))
+    p))
+
+(defn gnu?
+  "Whether fc is gfortran (anything but flang): its flags differ."
+  [fc]
+  (not (str/starts-with? (last (str/split fc #"[/\\]")) "flang")))
+
+(defn compile-flags
+  "The flags clotran compiles Fortran with under the profile in force, for
+  the compiler fc: the profile's, then what every build needs."
+  [fc]
+  (vec (concat (get-in profiles [(profile) (if (gnu? fc) :gnu :flang)])
+               ["-ffp-contract=off"]
+               (when (gnu? fc) ["-ffree-line-length-none" "-fno-range-check"]))))

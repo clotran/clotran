@@ -335,6 +335,16 @@ frames, and seq code runs slower compiled than interpreted --
 `(apply + (take 1e6 (range)))` takes 1440 ms with it and 915 without.
 Numeric code like the example below still gains, so turn it on for
 that.
+How the Fortran is compiled is a PROFILE: `release`, the default, is
+`-O2` with debug symbols, which cost nothing at run time and let a
+debugger read any build; `dev` is unoptimized with gfortran's run-time
+checks and backtraces, so a package writing past its array is stopped
+with the line that did it; `fast` is `-O3`. `CLOTRAN_PROFILE=dev` names
+one, or a project's `deps.edn` says `:clotran/profile :dev`. A profile
+may change speed, never answers: every one keeps `-ffp-contract=off`,
+and the gate compiles one namespace all three ways and compares every
+answer. A library built under one profile is never handed to another.
+
 A namespace you are working on goes around the loop by itself: edit it,
 reload it, and it runs interpreted while its new build compiles; at a
 later prompt the REPL says so and the compiled version is in place, with

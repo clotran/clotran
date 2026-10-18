@@ -43,7 +43,8 @@
   on such a directory builds it when it must."
   (:require [clojure.string :as str]
             [clotran.cache :as cache]
-            [clotran.loader :as loader]))
+            [clotran.loader :as loader]
+            [clotran.profile :as profile]))
 
 ;; bumped when the shims or the manifest change shape: a library built by
 ;; an older generator is built again
@@ -390,7 +391,7 @@
         dir (absolute dir)
         srcs (mapv #(str dir "/" %) sources)
         texts (mapv clotran-slurp srcs)
-        h (str/replace (str (hash [generator-version loader/abi sources texts])) "-" "m")
+        h (str/replace (str (hash [generator-version loader/abi (profile/profile) sources texts])) "-" "m")
         out (str (cache/build-dir loader/abi) "/pkg/" name "-" h)
         lib (str out "/lib" name "." @ext)]
     (when (or force? (not (clotran-file-exists? lib)))
@@ -398,12 +399,10 @@
       (let [rs (vec (mapcat (fn [s rel] (routines (clotran-slurp s) rel)) srcs sources))
             shims (str out "/" name "_bind.f90")
             fc (fortran-compiler)
-            gnu? (not (str/starts-with? (last (str/split fc #"[/\\]")) "flang"))
             log (str out "/build.log")]
         (clotran-spit shims (generate name rs sources))
         (clotran-spit (str out "/manifest.edn") (manifest name (filter bindable? rs)))
-        (when-not (zero? (clotran-run (vec (concat [fc "-O2" "-ffp-contract=off" "-shared" "-fPIC" "-J" out]
-                                                   (when gnu? ["-ffree-line-length-none"])
+        (when-not (zero? (clotran-run (vec (concat [fc] (profile/compile-flags fc) ["-shared" "-fPIC" "-J" out]
                                                    ["-o" (str lib ".part")] srcs [shims]))
                                       out log nil true))
           (fail (str name " did not build (" fc "):\n" (clotran-slurp log)) {:dir dir :log log}))

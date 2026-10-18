@@ -1,0 +1,6 @@
+;; profiles_oob.cljf (make check-profiles): a package whose routine writes
+;; past its array, built by the first load under CLOTRAN_PROFILE; under dev
+;; gfortran's bounds check ends the process with "above upper bound".
+(fortran/load-package "test/f/oobpkg")
+(oobpkg.raw/poke 3 (double-array [1.0 2.0 3.0]))
+(println :survived)

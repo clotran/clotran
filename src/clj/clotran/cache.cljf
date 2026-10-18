@@ -21,10 +21,16 @@
 (defn- home []
   (or (clotran.host.system/getenv "HOME") (clotran.host.system/getenv "USERPROFILE") "."))
 
+(defn- absolute
+  "p as an absolute path: a relative CLOTRAN_CACHE is from where clotran
+  started, whatever directory a build runs in."
+  [p]
+  (if (re-find #"^(/|[A-Za-z]:[/\\])" p) p (str (clotran.host.system/getProperty "user.dir") "/" p)))
+
 (defn root
-  "The cache directory: $CLOTRAN_CACHE, else ~/.clotran/cache."
+  "The cache directory: $CLOTRAN_CACHE, else ~/.clotran/cache; absolute."
   []
-  (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (home) "/.clotran/cache")))
+  (absolute (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (home) "/.clotran/cache"))))
 
 (defn src-dir
   "The sources of lib at id (a git sha): src/<group>/<name>/<id>, the

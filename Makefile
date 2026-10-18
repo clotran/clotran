@@ -566,10 +566,10 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-profiles check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
-TEST_NIGHTLY = check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
+TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -643,6 +643,19 @@ endif
 check-embed-repl:
 	@echo "--- a REPL into the running solver: read its grid, write it, stop it (PLAN step 21) ---"
 	scripts/embed-repl-check
+check-profiles:
+	@echo "--- build profiles (PLAN 36): dev, release and fast compile one namespace to the same answers as each other and as the interpreter; dev's bounds check stops a package writing past its array ---"
+	rm -rf $(B)/profiles && mkdir -p $(B)/profiles
+	for p in dev release fast; do CLOTRAN_PROFILE=$$p ./clotran compile test/clj/pure_sample.cljf $(B)/profiles/$$p.$(SOEXT) </dev/null > $(B)/profiles/$$p.log 2>&1 || { cat $(B)/profiles/$$p.log; exit 1; }; done
+	./clotran-bin$(EXE) src/clj/clojure/core.clj test/clj/profiles_check.clj </dev/null 2>&1 | grep -v '^note: ' > $(B)/profiles/interpreted.out
+	for p in dev release fast; do PROFILE_LIB=$(B)/profiles/$$p.$(SOEXT) ./clotran-bin$(EXE) src/clj/clojure/core.clj test/clj/profiles_check.clj </dev/null 2>&1 | grep -v '^note: ' > $(B)/profiles/$$p.out; grep -q '^installed true' $(B)/profiles/$$p.out || { echo "$$p: not installed"; cat $(B)/profiles/$$p.out; exit 1; }; grep -v '^installed' $(B)/profiles/$$p.out | diff $(B)/profiles/interpreted.out - || { echo "$$p answers differ from the interpreter"; exit 1; }; done
+	grep -q '^PROFILES CHECK DONE' $(B)/profiles/interpreted.out
+	@echo "profiles: dev, release and fast agree with the interpreter on $$(grep -c '=>' $(B)/profiles/interpreted.out) cases"
+ifeq ($(notdir $(FC)),gfortran)
+	! CLOTRAN_PROFILE=dev CLOTRAN_CACHE=$(B)/profiles/cache ./clotran test/clj/profiles_oob.cljf </dev/null > $(B)/profiles/oob-dev.txt 2>&1
+	grep -q 'above upper bound' $(B)/profiles/oob-dev.txt
+	@echo "profiles: dev caught the package writing past its array"
+endif
 check-nrepl:
 	@echo "--- clotran nrepl (PLAN 36): the server beside this checkout, then the one tools.edn pins through an installed clotran, each started on a pipe; .nrepl-port, describe's version, an eval; skipped without the checkout ---"
 	@if [ -f $(CLOTRAN_NREPL)/src/clotran/nrepl/server.cljf ]; then \
@@ -795,6 +808,9 @@ check-fuzz-build-pure:
 check-fuzz-bind:
 	@echo "--- packages from generated Fortran (PLAN 29): clotran bind, gfortran and flang, every routine called through the door ---"
 	scripts/fuzz-bind -n 12 -s $(SEED) > $(B)/fuzz-bind.out 2>&1; s=$$?; cat $(B)/fuzz-bind.out; exit $$s
+check-fuzz-profiles:
+	@echo "--- the language fuzzer's compiled mode under the dev and fast profiles (PLAN 36): a profile changes speed, never an answer ---"
+	CLOTRAN_PROFILE=dev scripts/fuzz -n 100 -s $(SEED) -m compiled > $(B)/fuzz-profiles.out 2>&1 && CLOTRAN_PROFILE=fast scripts/fuzz -n 100 -s $(SEED) -m compiled >> $(B)/fuzz-profiles.out 2>&1; s=$$?; cat $(B)/fuzz-profiles.out; exit $$s
 check-fuzz-index:
 	@echo "--- the index of definitions (PLAN 36): generated files of def forms, read by clotran.index, against the loaded Vars and against clj ---"
 	scripts/fuzz-index -n 20 -s $(SEED) > $(B)/fuzz-index.out 2>&1; s=$$?; cat $(B)/fuzz-index.out; exit $$s

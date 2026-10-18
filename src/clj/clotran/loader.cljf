@@ -28,7 +28,8 @@
   purpose: it is the part of the compiler every run needs, and only
   that part."
   (:require [clojure.string :as str]
-            [clotran.cache :as cache]))
+            [clotran.cache :as cache]
+            [clotran.profile :as profile]))
 
 ;;; ---- one function, analysed ---------------------------------------
 
@@ -207,10 +208,11 @@
 (defn- key-of [src] (str/replace src #"[^A-Za-z0-9._-]" "_"))
 
 (defn- hash-of
-  "What names a file's cached library: its text, and the runtime ABI, so a
-  clotran with other entries builds its own."
+  "What names a file's cached library: its text, the runtime ABI, so a
+  clotran with other entries builds its own, and the profile it is
+  compiled under, so a dev build is never handed to a release run."
   [src]
-  (str/replace (str (hash [abi (clotran-slurp src)])) "-" "m"))
+  (str/replace (str (hash [abi (profile/profile) (clotran-slurp src)])) "-" "m"))
 
 (defn- ptr-path [src h] (str (cache-dir) "/" (key-of src) "-" h ".ptr"))
 

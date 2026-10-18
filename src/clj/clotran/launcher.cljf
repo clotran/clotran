@@ -92,6 +92,8 @@
           (clotran-spit (str name "/deps.edn")
                         (str ";; clotran reads this as tools.deps does (clotran-deps): :paths, :deps and\n"
                              ";; :aliases. Name a library with :local/root or :git/url + :git/sha.\n"
+                             ";; :clotran/profile picks how Fortran is compiled: :dev (checks, no\n"
+                             ";; optimization), :release (the default) or :fast.\n"
                              "{:paths [\"src\"]\n :deps {}\n :aliases {:test {:extra-paths [\"test\"]}}}\n"))
           (clotran-spit (str name "/src/" dir "/core.cljf")
                         (str "(ns " name ".core\n  \"" name ", on clotran.\")\n\n"
@@ -160,6 +162,13 @@
   (require 'clotran.bind)
   ((resolve 'clotran.bind/fortran-compiler)))
 
+(defn- compile-flags
+  "The flags of the profile in force (clotran.profile: CLOTRAN_PROFILE, or a
+  project's :clotran/profile; release by default) for the compiler fc."
+  [fc]
+  (require 'clotran.profile)
+  ((resolve 'clotran.profile/compile-flags) fc))
+
 (defn- compile-lib
   "The library: :wrote, :no-fortran when there was nothing to compile, or
   :failed -- and the exit status set to match."
@@ -175,7 +184,7 @@
           lib (or (second args) (str stem "." ext))
           out (absolute lib)
           fc (fortran-compiler)
-          long (when-not (str/starts-with? (last (str/split fc #"[/\\]")) "flang") "-ffree-line-length-none")]
+          flags (compile-flags fc)]
       (with-temp [w]
         (let [generate (fn [pure?]
                          (clotran-delete (str w "/out.f90"))
@@ -190,10 +199,7 @@
               ;; the compiler runs INSIDE the work directory: a stale
               ;; clotran_rt_decl.mod in the caller's once shadowed this one's
               build (fn []
-                      (zero? (clotran-run (vec (concat [fc "-O2" "-ffp-contract=off" "-shared" "-fPIC"]
-                                                       ;; gfortran folds a constant 1e300/1e-300 or x/0.0 at
-                                                       ;; compile time and refuses it; Clojure answers ##Inf
-                                                       (when long [long "-fno-range-check"])
+                      (zero? (clotran-run (vec (concat [fc] flags ["-shared" "-fPIC"]
                                                        ["-o" (str out ".part") "out.f90"]
                                                        (when undef [undef])))
                                           w (str w "/build.err") nil true)))
@@ -363,10 +369,10 @@
           :else
           (let [fc (fortran-compiler)
                 gnu? (str/includes? (last (str/split fc #"[/\\]")) "gfortran")
-                flags (concat ["-O2" "-ffp-contract=off"]
-                              ;; -fno-range-check: a constant 1e300/1e-300 or x/0.0 is
-                              ;; ##Inf, as Clojure answers, not a compile error
-                              (when gnu? ["-fno-backtrace" "-fno-range-check"]))
+                ;; the profile's flags; a program's run-time error prints no
+                ;; backtrace, except under dev, whose point it is
+                flags (concat (compile-flags fc)
+                              (when (and gnu? (not= "dev" (getenv "CLOTRAN_PROFILE"))) ["-fno-backtrace"]))
                 link (cond (not gnu?) []
                            windows? ["-static"]
                            :else ["-static-libgfortran" "-static-libgcc" "-static-libquadmath"])
@@ -476,6 +482,10 @@
   CLOTRAN_PATH is set already, and not in a clotran source tree, whose
   deps.edn pins the oracle's clj. True, or false when it cannot be read."
   [aliases]
+  ;; the project's profile (clotran.profile), unless the environment chose
+  (when (and (not (getenv "CLOTRAN_PROFILE")) (clotran-file-exists? "deps.edn"))
+    (when-let [p (try (:clotran/profile (read-string (clotran-slurp "deps.edn"))) (catch clotran.host.exception _ nil))]
+      (clotran-setenv "CLOTRAN_PROFILE" (name p))))
   (if (or (getenv "CLOTRAN_PATH") (not (clotran-file-exists? "deps.edn"))
           (clotran-file-exists? "src/clj/clotran/rt.cljf"))
     true
