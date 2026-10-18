@@ -5724,7 +5724,14 @@ own PLAN.md:
 **The order:** a window with a canvas from the REPL; `(graph (* x x))`
 in it, with trace and zoom; several functions, data of each shape; a
 live plot of an atom; then a 3D surface, molecules, and the PES scan
-end to end. What core may need on the way (a C callback into the
+end to end. A project starts from a template (James, 2026-10-18):
+`clotran new NAME --template T`, a template a folder of files with the
+name filled in -- `app` (today's layout, the default) and `package` (a
+Fortran package wired up) in core, `graphics` in clotran-plot (a
+project on clotran-ui and clotran-plot that opens a window and graphs
+x^2), and anyone's from git, pinned as deps.edn pins a library; with
+it, the generated README points at clotran-mode's C-c C-z, not CIDER.
+What core may need on the way (a C callback into the
 evaluator, the main thread given to an event loop) is a core change
 with its own oracle case, as ever.
 
