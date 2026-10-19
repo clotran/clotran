@@ -1,36 +1,20 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 6 of 1.0.0: `1.0.0-rc.6`. Since rc.5, the
-editors (PLAN step 36): `clotran lsp` starts the language server
-(github.com/clotran/clotran-ide) -- definitions into Clojure and into a
-package's Fortran, hover, symbols, completion, errors as you type from
-the reader and the Fortran compiler, formatting by cljfmt on clotran --
-from the project's index, with no REPL running; `clotran dap` runs a
-program under lldb-dap and stops at a breakpoint in a package's Fortran
-with its source line and the stack beneath it; a package whose Fortran
-changed is rebuilt when it is loaded again and says so, and loading a
-`.f90` file from an editor's REPL rebuilds its package. The editors
-themselves: the VS Code extension (github.com/clotran/clotran-vscode,
-written in ClojureScript) is built once per platform -- macOS arm64,
-Linux x64 and arm64, Alpine x64 and arm64, Windows x64 -- each build
-carrying this release, so installing the extension installs clotran;
-clotran-mode for Emacs (github.com/clotran/clotran-mode) is a
-clojure-mode with eglot, an nREPL client of its own and dape, and
-`M-x clotran-install`. A release now carries clotran-ide, clotran-nrepl
-and cljfmt at the commits `tools.edn` pins, so the language server and
-the REPL start with no git and no network. Found on the way and fixed:
-`clotran bind` threw away a package's objects, which is where macOS
-keeps its debug information; the package cache did not tell two
-packages' directories apart; every process clotran started inherited
-its open sockets; clotran's notes (a stale image, a library not used)
-were printed on standard output, where a language server's messages go,
-and are on standard error now, as clj's warnings are. And
-found by this release's full fuzz run: a program `clotran build --pure`
-made could skip an argument whose value went unused, and with it the
-error Clojure raises there, and answered `min` and `max` of a NaN as
-Fortran does rather than as clj; `format` wrote `%.0f` with a trailing
-point and rounded exact ties to even. Each is fixed, with its case in
-the gate.
+This is release candidate 7 of 1.0.0: `1.0.0-rc.7`. Since rc.6:
+windows (PLAN step 37): the process's first thread serves a mailbox, and
+`fortran/main-thread*` hands it a package's function -- a window
+system's event loop, which macOS runs only there -- so clotran-ui
+(github.com/clotran/clotran-ui, libui-ng) opens native windows from the
+REPL or a program on macOS and Windows, and clotran-plot
+(github.com/clotran/clotran-plot) graphs in them: functions, trace and
+zoom, a graphing calculator, and 3D surfaces turned with the mouse on
+Metal or Vulkan; a program with a window open runs until it closes, as
+clj's does with a JFrame. The ACL2 model is in the gate: every book
+certifies, the generated Fortran is what its books generate, and a
+ratchet fails when code the model describes moves without its books, or
+when the count of parts the model owes grows; the hash map trie and the
+main thread's mailbox are proved. `clotran -e EXPR` prints each form's
+value as `clj -e` does, and `clotran --version` says which clotran.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
