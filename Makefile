@@ -1024,6 +1024,9 @@ dist: clotran-bin $(B)/fc
 	  [ -z "$(DIST_BASE)" ] || echo "image $(DIST_BASE)"; } > $(B)/dist/$(DIST_NAME)/lib/clotran/BUILDINFO
 	cd $(B)/dist && $(DIST_PACK)
 	@echo "dist: $(B)/dist/$(DIST_NAME)"
+	@# on Windows, clotran.cmd hands clotran a file it was redirected from: a
+	@# child of the script (chcp) that inherited it read it all first, once
+	@[ -z "$(EXE)" ] || { printf '(+ 1 2)\n' > $(B)/dist/in.txt && (cd $(B)/dist && cmd //c '$(DIST_NAME)\bin\clotran.cmd < in.txt') | $(LINES) | grep -qx 'user=> 3' && echo "dist: clotran.cmd reads a redirected file"; }
 
 uninstall:
 	rm -rf "$(CLOTRAN_LIB)" "$(CLOTRAN_LIB).new" "$(CLOTRAN_BIN)/clotran"
