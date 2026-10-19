@@ -24,7 +24,13 @@ keeps its debug information; the package cache did not tell two
 packages' directories apart; every process clotran started inherited
 its open sockets; clotran's notes (a stale image, a library not used)
 were printed on standard output, where a language server's messages go,
-and are on standard error now, as clj's warnings are.
+and are on standard error now, as clj's warnings are. And
+found by this release's full fuzz run: a program `clotran build --pure`
+made could skip an argument whose value went unused, and with it the
+error Clojure raises there, and answered `min` and `max` of a NaN as
+Fortran does rather than as clj; `format` wrote `%.0f` with a trailing
+point and rounded exact ties to even. Each is fixed, with its case in
+the gate.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
