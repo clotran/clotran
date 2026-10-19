@@ -620,11 +620,14 @@ check-install:
 	@$(MAKE) -s uninstall PREFIX=$(CURDIR)/$(B)/inst
 	@test -z "$$(find $(B)/inst -type f)"
 check-new:
-	@echo "--- clotran new: a project whose own test passes, and a name refused ---"
+	@echo "--- clotran new: a project whose own test passes, its deps.edn naming clotran-plot once uncommented, a name refused; clotran --help ---"
 	@rm -rf $(B)/new && mkdir -p $(B)/new
 	cd $(B)/new && $(CURDIR)/clotran new my-app >/dev/null
 	cd $(B)/new/my-app && CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null 2>&1 | grep -q "^0 failures, 0 errors"
 	cd $(B)/new && ! $(CURDIR)/clotran new Hello 2>/dev/null
+	sed -e 's/;; clotran\/clotran-plot/clotran\/clotran-plot/' -e 's/;;  *:git\/sha/:git\/sha/' $(B)/new/my-app/deps.edn > $(B)/new/plot.edn
+	cd $(B)/new && $(CURDIR)/clotran -e '(keys (:deps (read-string (slurp "plot.edn"))))' </dev/null | $(LINES) | grep -qx '(clotran/clotran-plot)'
+	$(CURDIR)/clotran --help </dev/null | grep -q '^  clotran new NAME '
 check-program: $(B)/core.image
 	@echo "--- a program: a script's *command-line-args*, -m NS's -main, -e EXPR and --version as clj's, status 1 on an error, clotran test's status (PLAN step 22) ---"
 	@rm -rf $(B)/program && mkdir -p $(B)/program/src/p $(B)/program/test/p

@@ -228,13 +228,15 @@ launcher, run in a directory holding a `deps.edn`, asks
 **Status (2026-09-29).** clotran has `CLOTRAN_PATH` (check-path in the
 gate) and exits 1 when a script fails to load. `../clotran-deps`
 resolves `:paths`, `:local/root`, `:git/url` + full `:git/sha` (cached
-under `~/.clotran/cache/src`), aliases, the provided Clojure
+under `~/.clotran/cache/tree`, only the sha's tree: GitHub's archive of it,
+else git fetching that one commit at depth 1; fetched by `clotran deps`
+alone, never by a run), aliases, the provided Clojure
 libraries and refused jars, transitively, with conflicts an error unless
 the project settles them; its `test/run.sh` checks each. It resolves and
 loads `clotran-nrepl` both ways, and the `clotran` launcher runs it
 itself in a directory with a `deps.edn`, the answer cached in
 `.clotran-cache/` while no `deps.edn` it read has changed.
-`clotran-nrepl` serves (PLAN step 21 d). Not yet: `:git/tag`, and native packages with a build recipe.
+`clotran-nrepl` serves (PLAN step 21 d). A `:git/tag` beside the sha is a label checked to name it. Not yet: native packages with a build recipe.
 
 What the rules above add up to. The decisions made earlier (PLAN.md
 step 9), which this keeps:

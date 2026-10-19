@@ -2,9 +2,11 @@
   "Where clotran keeps what it can fetch or build again (PLAN step 36):
   `$CLOTRAN_CACHE`, or `~/.clotran/cache`.
 
-    src/<group>/<name>/<id>      a dependency's sources, named by what
+    tree/<group>/<name>/<id>     a dependency's sources, named by what
                                  they are -- a git sha -- and never
-                                 changed after (clotran.deps)
+                                 changed after (clotran.deps); only the
+                                 tree, no history (before rc.8, src/ held
+                                 full clones, and is left to those)
     build/abi<n>-<compiler>-<arch>/   the libraries this clotran compiled
                                  (clotran.loader): a directory per runtime
                                  ABI, Fortran compiler and machine, so a
@@ -33,11 +35,11 @@
   (absolute (or (clotran.host.system/getenv "CLOTRAN_CACHE") (str (home) "/.clotran/cache"))))
 
 (defn src-dir
-  "The sources of lib at id (a git sha): src/<group>/<name>/<id>, the
+  "The sources of lib at id (a git sha): tree/<group>/<name>/<id>, the
   group the library's namespace, or its name when it has none, as
   tools.deps reads foo as foo/foo."
   [lib id]
-  (str (root) "/src/" (or (namespace lib) (name lib)) "/" (name lib) "/" id))
+  (str (root) "/tree/" (or (namespace lib) (name lib)) "/" (name lib) "/" id))
 
 (defn- slug [s] (-> (str s) str/lower-case (str/replace #"[^a-z0-9.]+" "-")))
 

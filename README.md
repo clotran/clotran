@@ -55,7 +55,28 @@ $ cd my-app && clotran test           # every -test namespace under test/
 
 With a `-main` in `my-app.core`, `clotran -m my-app.core a b` calls it,
 and `clotran build -m my-app.core -o my-app` makes one executable that
-runs with no clotran installed (`docs/guide.md`).
+runs with no clotran installed (`docs/guide.md`). `clotran --help` lists
+every command.
+
+**Libraries and graphs.** A library goes in the project's `deps.edn`,
+pinned to a commit by its `:git/sha`, and `clotran deps` fetches it --
+the one command that downloads. `clotran new` writes
+[clotran-plot](https://github.com/clotran/clotran-plot) there, commented
+out:
+
+```
+$ clotran new graphs && cd graphs     # take the ;; off clotran-plot's two lines in deps.edn
+$ clotran deps                        # ready: clotran/clotran-plot clotran/clotran-ui
+$ clotran                             # then, at its prompt:
+```
+
+```clojure
+(require '[clotran.plot :as plot])
+(plot/y= (* x x))                     ; a window with the parabola, in front
+(plot/y= (sin x) (/ x 4))             ; the same window, two curves
+```
+
+No compiler and no git are needed for it, on macOS or Windows.
 
 **Fortran arrays.** The `fortran` namespace makes real Fortran arrays:
 contiguous, column-major, at an address the collector never moves:
@@ -68,7 +89,8 @@ contiguous, column-major, at an address the collector never moves:
 (f/array-shape m)                     ;=> [2 3]
 ```
 
-**Calling your own Fortran.** Any free-form module, written with no
+**Calling your own Fortran.** This needs a Fortran compiler (gfortran
+or flang) on the PATH. Any free-form module, written with no
 thought of clotran, becomes a package: a `package.edn` beside it names
 the sources, and clotran reads their signatures, writes the shims,
 builds the library with your compiler and opens it at run time.
@@ -99,9 +121,10 @@ Beside it, `package.edn` is the whole declaration:
 {:name "mylib" :sources ["mylib.f90"]}
 ```
 
-and in `examples/mylib`:
+and in `examples/mylib`, in a clone of this repository:
 
 ```
+$ git clone https://github.com/clotran/clotran && cd clotran/examples/mylib
 $ clotran demo.cljf
 [2.0 4.0 6.0]
 56.0
@@ -149,6 +172,13 @@ clotran array is a Fortran array, so handing it to a library is an
 ordinary call -- and the language on top is still Clojure, from
 Clojure's own source, checked against `clj` itself. `docs/rationale.md`
 has the long version, with what it costs.
+
+## Editors
+
+- VS Code: the clotran extension, from the Marketplace (Extensions,
+  search "clotran"; [clotran/clotran-vscode](https://github.com/clotran/clotran-vscode)),
+  installs clotran with it.
+- Emacs: [clotran-mode](https://github.com/clotran/clotran-mode).
 
 ## More
 

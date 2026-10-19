@@ -71,6 +71,37 @@
   [w files env]
   (run-quiet w (into [bin core] (remove nil? files)) env))
 
+(def ^:private usage
+  "clotran --help: every command, as clj --help lists its own."
+  "usage: clotran [-A:ALIASES] [FILE [ARGS] | -m NS [ARGS] | -e EXPR]
+       clotran COMMAND ...
+
+  clotran                  a REPL, with the project's deps.edn on the path
+  clotran FILE [ARGS]      run a file
+  clotran -m NS [ARGS]     run NS's -main
+  clotran -e EXPR          evaluate EXPR, print each value
+  clotran -A:a:b ...       with deps.edn's aliases :a and :b
+
+  clotran new NAME         a new project: deps.edn, src, test
+  clotran deps             fetch the libraries deps.edn names (nothing
+                           else downloads)
+  clotran test             run the project's tests
+  clotran build -m NS      a program, one binary (-o OUT; --pure)
+  clotran compile FILE     a library compiled to Fortran
+  clotran bind DIR         build the Fortran package DIR declares
+  clotran explain CODE     what a compiler message means
+  clotran nrepl            an nREPL server for an editor
+  clotran lsp | dap        the language server, the debug adapter
+  clotran index            the project's definitions, for tools
+
+  clotran --version        which clotran
+  clotran --help           this
+
+A library goes in deps.edn, as :git/url and :git/sha:
+  {:deps {clotran/clotran-plot {:git/url \"https://github.com/clotran/clotran-plot\"
+                                :git/sha \"c5a8f98344f7c3ce90f013b2f7ddefbf52d061c7\"}}}
+then clotran deps. More: https://github.com/clotran/clotran/blob/main/docs/guide.md")
+
 ;; --- clotran new NAME -----------------------------------------------------
 
 (defn- new-project [args]
@@ -94,7 +125,12 @@
                              ";; :aliases. Name a library with :local/root or :git/url + :git/sha.\n"
                              ";; :clotran/profile picks how Fortran is compiled: :dev (checks, no\n"
                              ";; optimization), :release (the default) or :fast.\n"
-                             "{:paths [\"src\"]\n :deps {}\n :aliases {:test {:extra-paths [\"test\"]}}}\n"))
+                             "{:paths [\"src\"]\n"
+                             " :deps {;; graphs in a window, (plot/show f): take the ;; off the next two lines\n"
+                             "        ;; clotran/clotran-plot {:git/url \"https://github.com/clotran/clotran-plot\"\n"
+                             "        ;;                       :git/sha \"c5a8f98344f7c3ce90f013b2f7ddefbf52d061c7\"}\n"
+                             "        }\n"
+                             " :aliases {:test {:extra-paths [\"test\"]}}}\n"))
           (clotran-spit (str name "/src/" dir "/core.cljf")
                         (str "(ns " name ".core\n  \"" name ", on clotran.\")\n\n"
                              "(defn greet\n  \"A greeting for who.\"\n  [who]\n  (str \"hello, \" who))\n"))
@@ -107,7 +143,11 @@
                         (str "# " name "\n\nA clotran project: Clojure, hosted on Fortran.\n\n"
                              "    clotran                       # a REPL with src on the path\n"
                              "    clotran -A:test               # with test too\n\n"
-                             "In Emacs with clotran-mode, open src/" dir "/core.cljf and M-x cider-jack-in.\n"))
+                             "For graphs, take the ;; off clotran-plot's two lines in deps.edn, run\n"
+                             "`clotran deps` to fetch it, then at the REPL:\n\n"
+                             "    (require '[clotran.plot :as plot] '[clojure.math :as m])\n"
+                             "    (plot/show m/sin)             ; a window opens with the graph\n\n"
+                             "In Emacs with clotran-mode, open src/" dir "/core.cljf and C-c C-z; in VS Code, the clotran extension.\n"))
           (println (str "made " name ": src/" dir "/core.cljf, test/" dir "/core_test.cljf, deps.edn"))
           (exit! 0))))))
 
@@ -476,6 +516,17 @@
   (some #(when (clotran-file-exists? (str % "/src/clotran/deps.cljf")) (str % "/src"))
         (remove nil? [(getenv "CLOTRAN_DEPS") (str home "/../clotran-deps")])))
 
+(defn- fetch-deps
+  "clotran deps [-A:aliases] [dir]: fetch what the project's deps.edn
+  names -- the one command that downloads (clotran.deps/fetch-main)."
+  [args]
+  (if-let [src (deps-home)]
+    (do (clotran-setenv "CLOTRAN_PATH" src)
+        (require 'clotran.deps)
+        (apply (resolve 'clotran.deps/fetch-main) args)
+        (exit! 0))
+    (do (err "clotran deps: there is no clotran-deps beside this clotran (PACKAGES.md)") (exit! 1))))
+
 (defn- project-path!
   "In a directory with a deps.edn, CLOTRAN_PATH from it (clotran-deps,
   PACKAGES.md), as clj asks tools.deps for a classpath -- not when
@@ -613,8 +664,10 @@
   [args]
   (let [args (vec args)]
     (case (first args)
+      ("--help" "-h" "help") (do (println usage) (exit! 0))
       "--version" (do (println (str "clotran " (clotran.host.system/getProperty "clotran.version"))) (exit! 0))
       "new" (new-project (rest args))
+      "deps" (fetch-deps (rest args))
       "explain" (explain (rest args))
       "bind" (bind (rest args))
       ;; after the project's path: the index covers what deps.edn names
@@ -654,6 +707,6 @@
           ;; clj -e; what clj runs after it (a script, -m) is refused, not guessed at
           (= "-e" (first args)) (if (= 2 (count args)) (answer! args) (do (err "usage: clotran -e EXPR") (exit! 2)))
           (some-> (first args) (str/starts-with? "-"))
-          (do (err (str "clotran: unknown option " (first args) " (a file, -m NS, -e EXPR, --version, or new/compile/test/build)")) (exit! 2))
+          (do (err (str "clotran: unknown option " (first args) " -- clotran --help lists them")) (exit! 2))
           (seq args) (answer! (into ["--run"] args))
           :else (answer! ["--repl"]))))))

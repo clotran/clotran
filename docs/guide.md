@@ -22,7 +22,8 @@ status 1 on a failure:
 $ clotran app.cljf a "b c"            # *command-line-args* is ("a" "b c")
 $ clotran -m my-app.core a b          # (my-app.core/-main "a" "b")
 $ clotran -e '(+ 1 2) (str *ns*)'     # prints 3 and "user", as clj -e (nil not printed)
-$ clotran --version                   # clotran 1.0.0-rc.7
+$ clotran --version                   # clotran 1.0.0-rc.8
+$ clotran --help                      # every command
 $ clotran test                        # every -test namespace under test/
 ```
 
@@ -41,16 +42,27 @@ $ ./my-app a b                        # (my-app.core/-main "a" "b")
 
 ## Dependencies and editors
 
-`make install` installs clotran -- the binary, its heap image, the Clojure sources
-it loads on first use, and the launcher -- under `PREFIX/lib/clotran`,
-built for this machine's architecture, and beside it the package
-manager, `clotran-deps`, from the checkout next to this one
-(`CLOTRAN_DEPS=dir` names another), as the `clj` script ships
-tools.deps. In a directory with a `deps.edn`, `clotran` asks it for the
-project's path; nobody sets `CLOTRAN_PATH` by hand. Everything else --
-packages, and the optional tools (`clotran-nrepl`, `clotran-mode`) --
-comes from a project's `deps.edn` as a `:local/root` or a `:git/url`
-pinned by its full `:git/sha` (`PACKAGES.md`).
+An install -- the README's `install.sh` or `install.ps1`, or `make
+install` from a checkout -- puts clotran (the binary, its heap image,
+the Clojure sources it loads on first use, and the launcher) under
+`PREFIX/lib/clotran`, built for this machine's architecture, and beside
+it the package manager, `clotran-deps` (`make install` takes it from the
+checkout next to this one, or `CLOTRAN_DEPS=dir`), as the `clj` script
+ships tools.deps. In a directory with a `deps.edn`, `clotran` asks it for the
+project's path; nobody sets `CLOTRAN_PATH` by hand. Packages come
+from a project's `deps.edn` as a `:local/root` or a `:git/url`
+pinned by its full `:git/sha` (`PACKAGES.md`). `clotran deps` fetches
+them -- only that commit's tree, never a repository's history, and no
+git needed for GitHub -- and it is the one command that downloads:
+running a program, the REPL or the tests refuses a library not fetched
+yet and says to run it.
+
+```
+$ clotran new my-app                  # deps.edn, src, test
+$ cd my-app                           # take the ;; off clotran-plot in deps.edn
+$ clotran deps                        # ready: clotran/clotran-plot clotran/clotran-ui
+$ clotran                             # (require '[clotran.plot :as plot]) (plot/show clojure.math/sin)
+```
 
 `clotran nrepl [--port N]` starts the nREPL server, `clotran-nrepl`, in a
 clotran for the project here, writes `.nrepl-port`, prints the line an
@@ -59,7 +71,8 @@ same process, so the editor and the prompt share one program. The
 server comes from the checkout beside clotran or from the `tools.edn` an
 installed clotran carries, pinned to a commit, so no project names it
 and no editor has to know where it is. For Emacs, `clotran-mode` opens
-`.cljf` files in clojure-mode and makes `M-x cider-jack-in` run it. Both
+`.cljf` files in clojure-mode and starts it with `C-c C-z` (`M-x
+cider-jack-in` runs it too). Both
 are repositories of their own under github.com/clotran.
 
 `clotran lsp` is the language server, `clotran-ide`, for the project
@@ -108,9 +121,10 @@ server (PLAN step 36) serves it; `clotran index --out defs.edn` writes it
 by hand, and `clotran index path...` indexes just those files or
 directories.
 
-**VS Code, with no extension.** VS Code ships a Clojure grammar and an
-integrated terminal, which is enough to edit and run clotran until the
-clotran extension (PLAN step 36) is out. Three settings, each in the
+**VS Code.** The clotran extension, from the Marketplace (the README's
+Editors), carries clotran and is the way to use it there. Without it,
+VS Code's Clojure grammar and integrated terminal are enough to edit
+and run clotran, with three settings, each in the
 file VS Code keeps for it (Preferences: Open User Settings (JSON),
 Open Keyboard Shortcuts (JSON), and a project's `.vscode/tasks.json`):
 
@@ -138,6 +152,12 @@ definitions and docs without a REPL (`clotran index`), and the debugger.
 
 
 ## What it does
+
+The examples that name `packages/`, `examples/` or `scripts/` run in a
+clone of the repository (`git clone https://github.com/clotran/clotran`),
+and whatever builds Fortran -- a package, `clotran compile`, `clotran
+build` -- needs gfortran or flang on the PATH, which a plain Windows PC
+does not have.
 
 **Real Fortran arrays**, which is the one thing this host has that the
 clj does not:
@@ -367,7 +387,7 @@ functions in place of the interpreted ones. No hints needed:
     (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
 ```
 
-    $ ./clotran compile stats.cljf
+    $ clotran compile stats.cljf
     pure Fortran: total (2 versions)
     compiled: 1 functions; 1 pure Fortran
     wrote stats.dylib
@@ -393,7 +413,7 @@ reported stale and not used until it is recompiled.
 answers, and `scripts/pure-check` runs its cases through the installed
 library against `clj`.
 
-With `CLOTRAN_AUTOCOMPILE=1`, `./clotran` compiles what it loads, in the
+With `CLOTRAN_AUTOCOMPILE=1`, `clotran` compiles what it loads, in the
 background, into the cache (`~/.clotran/cache/build`, a directory per
 compiler; `$CLOTRAN_CACHE` moves the cache), and
 installs a namespace from the cache whenever the same text loads again.
@@ -455,7 +475,7 @@ one ordinary Fortran module, with no clotran runtime at all -- any
 Fortran program can `use` it. Each function gets one generic name and
 one version per argument type:
 
-    $ ./clotran compile --pure test/clj/tiers_sample.cljf ts_pure.f90
+    $ clotran compile --pure test/clj/tiers_sample.cljf ts_pure.f90
     module tiers_sample_pure -> ts_pure.f90
       pure        tiers-sample/count-big (2 versions)
       pure        tiers-sample/mean (2 versions)
