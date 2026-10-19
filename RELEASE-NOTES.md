@@ -1,20 +1,21 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 7 of 1.0.0: `1.0.0-rc.7`. Since rc.6:
-windows (PLAN step 37): the process's first thread serves a mailbox, and
-`fortran/main-thread*` hands it a package's function -- a window
-system's event loop, which macOS runs only there -- so clotran-ui
-(github.com/clotran/clotran-ui, libui-ng) opens native windows from the
-REPL or a program on macOS and Windows, and clotran-plot
-(github.com/clotran/clotran-plot) graphs in them: functions, trace and
-zoom, a graphing calculator, and 3D surfaces turned with the mouse on
-Metal or Vulkan; a program with a window open runs until it closes, as
-clj's does with a JFrame. The ACL2 model is in the gate: every book
-certifies, the generated Fortran is what its books generate, and a
-ratchet fails when code the model describes moves without its books, or
-when the count of parts the model owes grows; the hash map trie and the
-main thread's mailbox are proved. `clotran -e EXPR` prints each form's
-value as `clj -e` does, and `clotran --version` says which clotran.
+This is release candidate 8 of 1.0.0: `1.0.0-rc.8`. Since rc.7: a
+library named in `deps.edn` by `:git/url` and `:git/sha` brings only
+that commit's tree, never the repository's history -- from GitHub its
+archive of the sha, by the curl and tar every system has, so no git is
+needed (a fresh Windows has none), and elsewhere git fetching that one
+commit at depth 1; a `:git/tag` beside the sha is a label, checked to
+name it when it is fetched, and a tag that names another commit is
+refused. So on a plain Windows PC a project whose `deps.edn` names
+clotran-plot opens a graph's window from the REPL with
+`(plot/show m/sin)`, nothing else installed. `clotran deps` is the one command that
+downloads -- a run, the REPL and the tests refuse a library not fetched
+yet and say so -- and fetched trees live under the cache's `tree/`, apart
+from the full clones earlier releases kept in `src/`. `clotran --help`
+lists every command, and `clotran new` writes clotran-plot into the
+project's `deps.edn`, commented out. `clotran < file` at a Windows prompt
+reads the file (the wrapper's code page step no longer reads it first).
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
