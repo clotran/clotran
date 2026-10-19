@@ -21,6 +21,8 @@ status 1 on a failure:
 ```
 $ clotran app.cljf a "b c"            # *command-line-args* is ("a" "b c")
 $ clotran -m my-app.core a b          # (my-app.core/-main "a" "b")
+$ clotran -e '(+ 1 2) (str *ns*)'     # prints 3 and "user", as clj -e (nil not printed)
+$ clotran --version                   # clotran 1.0.0-rc.7
 $ clotran test                        # every -test namespace under test/
 ```
 

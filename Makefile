@@ -245,6 +245,9 @@ endif
 PATH_SEP ?= :
 # what ends a line, line.separator: CR LF on Windows
 LINE_SEP ?= achar(10)
+# a program's output read back as lines, whatever LINE_SEP wrote: the
+# checks compare text through this one filter, never a CR of their own
+LINES = tr -d '\r'
 # a thread's stack size given to pthreads (.false.), or the link's (Windows)
 STACK_BY_LINK ?= .false.
 
@@ -292,7 +295,7 @@ $(ICU_STAMP):
 		--disable-extras --disable-icuio --with-data-packaging=static
 	mkdir -p $(ICU_SRC)/bin $(ICU_SRC)/lib $(ICU_SRC)/data/tmp
 	for d in stubdata common i18n tools; do $(MAKE) -C $(ICU_SRC)/$$d || exit 1; done
-	$(ICU_RUN) $(ICU_SRC)/bin/icupkg -l $(ICU_DAT) | tr -d '\r' | grep -Ev '$(ICU_KEEP)' > $(ICU_SRC)/data/tmp/drop.lst
+	$(ICU_RUN) $(ICU_SRC)/bin/icupkg -l $(ICU_DAT) | $(LINES) | grep -Ev '$(ICU_KEEP)' > $(ICU_SRC)/data/tmp/drop.lst
 	$(ICU_RUN) $(ICU_SRC)/bin/icupkg -r $(abspath $(ICU_SRC))/data/tmp/drop.lst $(ICU_DAT) $(ICU_TRIMMED)
 	$(MAKE) -C $(ICU_SRC)/data ICUDATA_SOURCE_ARCHIVE=$(ICU_TRIMMED)
 	touch $(ICU_STAMP)
@@ -623,7 +626,7 @@ check-new:
 	cd $(B)/new/my-app && CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null 2>&1 | grep -q "^0 failures, 0 errors"
 	cd $(B)/new && ! $(CURDIR)/clotran new Hello 2>/dev/null
 check-program: $(B)/core.image
-	@echo "--- a program: a script's *command-line-args*, -m NS's -main, status 1 on an error, clotran test's status (PLAN step 22) ---"
+	@echo "--- a program: a script's *command-line-args*, -m NS's -main, -e EXPR and --version as clj's, status 1 on an error, clotran test's status (PLAN step 22) ---"
 	@rm -rf $(B)/program && mkdir -p $(B)/program/src/p $(B)/program/test/p
 	@printf '(prn *command-line-args*)\n' > $(B)/program/s.cljf
 	@printf '(ns p.core (:gen-class))\n(defn -main [& args] (prn :main args) (when (= "boom" (first args)) (/ 1 0)) (when (= "how" (first args)) (println (pr-str p.core/-main))))\n' > $(B)/program/src/p/core.cljf
@@ -633,6 +636,10 @@ check-program: $(B)/core.image
 	cd $(B)/program && CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core x </dev/null | grep -qx ':main ("x")'
 	cd $(B)/program && ! CLOTRAN_PATH=src $(CURDIR)/clotran -m p.core boom </dev/null >/dev/null 2>err.txt && grep -qx 'Execution error (arithmetic_exception) at p.core/-main (core.cljf:2).' err.txt && grep -qx 'Divide by zero' err.txt
 	cd $(B)/program && ! CLOTRAN_PATH=src:test $(CURDIR)/clotran test </dev/null >/dev/null 2>&1
+	cd $(B)/program && $(CURDIR)/clotran -e '(+ 1 2) nil (str *ns*)' </dev/null | $(LINES) | tr '\n' ' ' | grep -qx '3 "user" '
+	cd $(B)/program && ! $(CURDIR)/clotran -e '(/ 1 0)' </dev/null >/dev/null 2>&1
+	cd $(B)/program && ! $(CURDIR)/clotran -e '1' s.cljf </dev/null >/dev/null 2>&1
+	$(CURDIR)/clotran --version </dev/null | grep -qx "clotran $$(cat $(CURDIR)/VERSION)"
 	@echo "--- clotran build: one executable that runs where there are no sources (PLAN step 22) ---"
 	cd $(B)/program && CLOTRAN_CACHE=$(CURDIR)/$(B)/program/cache CLOTRAN_PATH=src $(CURDIR)/clotran build -m p.core -o prog >/dev/null
 	mkdir -p $(B)/program/elsewhere && mv $(B)/program/prog $(B)/program/elsewhere/
@@ -716,13 +723,13 @@ check-build-pure:
 	@echo "--- clotran build --pure: a tier-A program as one small executable with no clotran in it (test/clj/pure_main/sums.cljf) ---"
 	rm -f $(B)/sums$(EXE)
 	./clotran-bin$(EXE) --launch build --pure test/clj/pure_main/sums.cljf -o $(B)/sums$(EXE) </dev/null >/dev/null
-	$(B)/sums$(EXE) 10 2.5 | tr -d '\r' | grep -qx 'sum 45'
+	$(B)/sums$(EXE) 10 2.5 | $(LINES) | grep -qx 'sum 45'
 	$(B)/sums$(EXE) 10 2>/dev/null; test $$? = 2
 	! nm $(B)/sums$(EXE) | grep quadmath | grep -v '[_ ]quadmath_snprintf$$'
 	@# fuzz-build-pure's finds (test/clj/pure_main/evaluated.cljf): NaN through min and max, and
 	@# an unused argument that throws still evaluated, as in clj
 	./clotran-bin$(EXE) --launch build --pure test/clj/pure_main/evaluated.cljf -o $(B)/evaluated$(EXE) </dev/null >/dev/null
-	$(B)/evaluated$(EXE) 0.0 2>$(B)/evaluated.err | tr -d '\r' | grep -qx 'min NaN max NaN'
+	$(B)/evaluated$(EXE) 0.0 2>$(B)/evaluated.err | $(LINES) | grep -qx 'min NaN max NaN'
 	grep -q 'Value out of range for long: Infinity' $(B)/evaluated.err
 check-overflow-binding:
 	@echo "--- an overflow caught outside a binding unwinds it, on a small value stack (test/clj/overflow_binding.clj) ---"

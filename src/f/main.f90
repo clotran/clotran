@@ -37,6 +37,8 @@ module clotran_main
   ! status 1, as clj's does on an uncaught exception, after every file has
   ! had its turn (split-forms reads every failure in one pass).
   logical :: load_failed = .false.
+  ! clotran -e: each form's value printed, nil's not, as clj -e prints them
+  logical :: print_values = .false.
   ! Where a load's error goes: the terminal's stream for the REPL and the
   ! harnesses, stderr for a program (--run, -m), as clj reports one.
   integer :: err_unit = 6
@@ -184,7 +186,7 @@ contains
             flush(6)
             if (ec /= 0) stop ec, quiet=.true.
             return
-         case ("--run", "-m")
+         case ("--run", "-m", "-e")
             if (na < 2) then
                write(0, '(A,A,A)') "clotran: ", acts(1)(1:alens(1)), " needs a file or a namespace"
                stop 2, quiet=.true.
@@ -447,6 +449,13 @@ contains
           call vs_leave(lb)
           return
        end if
+       if (print_values) then
+          r = vs_get(lb + 3)
+          if (r%tag /= GCT_NIL) then
+             call gcp_str(r, .true., s=dlt_1)
+             write(6, '(A)') dlt_1
+          end if
+       end if
     end do
     call gc_bindings_set(vs_get(lb + 4))
     call vs_leave(lb)
@@ -661,6 +670,10 @@ contains
     call gce_set_command_line_args(args, lens)
     if (marker(1:ml) == "--run") then
        call load_file(target(1:tl), env)
+    else if (marker(1:ml) == "-e") then
+       print_values = .true.
+       call load_text(target(1:tl), "-e", env)
+       print_values = .false.
     else
        if (verify(target(1:tl), "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-_*+!?<>=") /= 0) then
           write(0, '(A,A)') "clotran: not a namespace name: ", target(1:tl)

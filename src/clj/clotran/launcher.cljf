@@ -613,6 +613,7 @@
   [args]
   (let [args (vec args)]
     (case (first args)
+      "--version" (do (println (str "clotran " (clotran.host.system/getProperty "clotran.version"))) (exit! 0))
       "new" (new-project (rest args))
       "explain" (explain (rest args))
       "bind" (bind (rest args))
@@ -649,7 +650,10 @@
           nrepl? (nrepl args)
           test? (answer! (into ["-m" "clotran.test-runner"] args))
           (= "-m" (first args)) (answer! args)
+          ;; -e EXPR: its forms evaluated in user, each value printed, nil's not, as
+          ;; clj -e; what clj runs after it (a script, -m) is refused, not guessed at
+          (= "-e" (first args)) (if (= 2 (count args)) (answer! args) (do (err "usage: clotran -e EXPR") (exit! 2)))
           (some-> (first args) (str/starts-with? "-"))
-          (do (err (str "clotran: unknown option " (first args) " (a file, -m NS, or new/compile/test/build)")) (exit! 2))
+          (do (err (str "clotran: unknown option " (first args) " (a file, -m NS, -e EXPR, --version, or new/compile/test/build)")) (exit! 2))
           (seq args) (answer! (into ["--run"] args))
           :else (answer! ["--repl"]))))))
