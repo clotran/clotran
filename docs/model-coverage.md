@@ -55,7 +55,7 @@ the commit that moves it.
 |---|---|---|---|---|
 | Persistent vector, subvec | `PersistentVector.f90` (490) | vector | **Modeled**, hand-written | Generating it was planned |
 | Sorted map | `Assoc.f90` (930) | btree | **Modeled**, hand-written | |
-| Hash map trie | `PersistentHashMap.f90` (515) | hashseq covers only its seq | **Owed** | The source cites `model/hashmap.lisp`, which does not exist |
+| Hash map trie | `PersistentHashMap.f90` (515) | hashmap, and hashseq its seq | **Modeled**, hand-written | get, assoc and dissoc, the count they keep, the depth and their step counts (2026-10-19); a bucket is taken as the alist it behaves as |
 | Array map, list, environments, namespaces | ~1k together | none | **Owed** | Small |
 | A string's index | `GC.f90` | string | **Modeled**, hand-written | |
 

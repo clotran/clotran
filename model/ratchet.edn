@@ -1,12 +1,13 @@
 ;; scripts/model-ratchet's record: what the model generates or describes, and
 ;; the books it answers to. scripts/model-ratchet --stamp writes the hashes.
-{:owed 12
+{:owed 11
  :entries
  [{:code "src/f/gen/vm_gen.f90", :model ["vmg" "vmfg"], :code-sha "e82184fc3517aad516f09c11e82713ef446a242d4ac7c94bd7fbd47a42383ecd", :model-sha "e46c59406de6e412498a40f3a93b9c1b28c384e2a8f553aa521f05ac2f107ee3"}
   {:code "src/f/gen/vmc_gen.f90", :model ["vmic" "vmicg"], :code-sha "606b8bdc429e0bb928faf792caf8610d71a3595094f6e097dfbfccae98885feb", :model-sha "d174dfe0c80e790e48724a1ecb994e0e29a2c6cee19b77aa638e6261c9b1a63d"}
   {:code "src/f/gen/heap_gen.inc", :model ["heapg"], :code-sha "2cba6cb7697bd648fd731a050fad14171c9a9db02a158b268ecc19311b8c8eb5", :model-sha "0983947fdb9d1c91e26fd9f6b5472be766dcd79980c6e790431ea18509989266"}
   {:code "src/f/vmjit.inc", :model ["vmj" "vmj2" "jit" "jit2" "jit3"], :code-sha "a70063e43beb6e31416bbbcbf71122af6406af33c0af319eb379a5cac1a2ad75", :model-sha "0fb6a75c210d432c214ef5560ee7756b5df07d52072d815b3ed524e9dff0ec37"}
   {:code "src/f/PersistentVector.f90", :model ["vector"], :code-sha "ee7c0de318a360da5bfe699c2ddbcfcc03d110c22945d4de95471c62d6385880", :model-sha "67d5e06730856d346362cc902df70db65f94e8f9a3deab3e2bfda102c92b642e"}
+  {:code "src/f/PersistentHashMap.f90", :procs ["gch_assoc" "gch_dissoc" "node_find" "node_get" "node_assoc" "split" "node_dissoc"], :model ["hashmap"], :code-sha "c71ba904e6b1f4b486de3980798e7f69af44165ad05b27bd2c9f91380c809eed", :model-sha "77e63f3fce95ad93ad98d33a63ca0a009bee8808ac3af473a2960c5bd4a4a41f"}
   {:code "src/f/Assoc.f90", :procs ["st_make" "st_height" "st_len" "st_cnt" "st_total" "st_first_key" "st_cmp" "st_leaf_search" "st_pick" "st_rank" "st_at" "st_internal" "st_ins" "st_del" "st_rebalance" "st_assoc" "st_dissoc" "st_fill"], :model ["btree"], :code-sha "52af87154eee73b3242c14c4da39a2833adf44ea971b5b63e21d9e470ffdbef4", :model-sha "2ec6dcaad1e425d3930932b87ffe53e556cf6e51a798da608b05d8f971c3e8b2"}
   {:code "src/f/GC.f90", :procs ["str_index"], :model ["string"], :code-sha "5a119b187dc087d121428197d39b24cc990eb517f898ebb768e5c44f8bf12fc0", :model-sha "6516875e0748f58535a078b376af49ad06bec2df6589971c64d79c5580c771f1"}
   {:code "src/f/GC.f90", :procs ["gc_cas_i1" "gc_lazy_wait_add" "gc_lazy_wake"], :model ["lazy-cell"], :code-sha "baf400444ebfb0096c876e925a1cbec6718510c603fdda8a1509143e09491f3b", :model-sha "bd0ccb3b0c8a727c2a92adaac8c2631094bb16199d3127d2ac16ec56bdb25df7"}

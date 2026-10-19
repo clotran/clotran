@@ -18791,7 +18791,7 @@ contains
     end if
   end function seqv_elem
 
-  ! ---- seqs over maps and sets: cursors (model/hashmap.lisp) ---------
+  ! ---- seqs over maps and sets: cursors (model/hashseq.lisp) ---------
   !
   ! An OBJ_SEQ with i2 >= 3 stands on one entry of the map or set in
   ! slot 1, which seq_len counts; i1 is how far along it is, so the

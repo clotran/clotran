@@ -2,7 +2,8 @@
 !
 ! What a real Clojure map promotes into past 8 entries. Five bits of
 ! the hash per level, so a node is 32 slots wide and a lookup is at
-! most seven hops for a 32-bit hash.
+! most seven hops for a 32-bit hash. model/hashmap.lisp proves get,
+! assoc and dissoc, the count they keep, the depth and their step counts.
 !
 ! Shape:
 !
@@ -386,7 +387,7 @@ contains
     end do
   end subroutine walk
 
-  ! --- the cursor (model/hashmap.lisp) ---------------------------------
+  ! --- the cursor (model/hashseq.lisp) ---------------------------------
   !
   ! A seq over the trie, in the order gch_entries walks it, made one
   ! entry at a time where seq_snapshot copied every entry first: (first
