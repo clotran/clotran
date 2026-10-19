@@ -185,7 +185,7 @@
     (when (< (count want) n)
       (println "clj answered" (count want) "of" n ":" (str/join " | " (take 3 (str/split-lines (str (:err c)))))))
     (go (vec (range n)))
-    (let [uuid-refused? (fn [i w gv] (or (and (re-find #"#\s*uuid" (nth texts i))
+    (let [uuid-refused? (fn [i w gv] (or (and (re-find #"#[\s,]*uuid" (nth texts i))
                                               (some #(str/starts-with? (str %) "!error") [w gv]))
                                          ;; DEVIATIONS 14: ICU's dialect refuses or takes
                                          ;; a pattern clj's host does not
