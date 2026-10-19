@@ -5735,6 +5735,35 @@ What core may need on the way (a C callback into the
 evaluator, the main thread given to an event loop) is a core change
 with its own oracle case, as ever.
 
+**What core needed, settled 2026-10-19** (clotran-ui's four questions):
+- *The main thread.* The process's first thread no longer only joins the
+  program's: it SERVES a one-slot mailbox (Threads.f90, `th_main_*`).
+  `(fortran/main-thread* handle "symbol")` hands a package's `void f(void)`
+  to it -- libui-ng's event loop -- and answers whether it will run. The
+  process ends when the program has ended AND what the main thread runs
+  has returned, which is what clj does: a script that opens a JFrame
+  stays alive until it closes. `model/mainbox.lisp` is the design (every
+  accepted function runs exactly once, in order; the main thread waits
+  only for a post; it stops within 4 of its steps once the program ends;
+  clotran-ui's queued jobs are done within k + 1 loop steps), and the
+  language test checks the function runs, once, on the first thread.
+- *C callbacks into clotran.* None: the design needs no re-entry. A
+  window's drawing is a display list (doubles and strings) handed to C
+  and copied; libui-ng's draw callback replays the copy, so a collection
+  never delays a frame, and mouse, key, text and resize callbacks push
+  events onto a queue that a clotran thread drains (a blocking package
+  call, off the mutators as every native call is). A callback that must
+  answer from Clojure synchronously stays future work, and enters through
+  a context like a task when it comes.
+- *Building C.* Without core: clotran-ui builds libui-ng (vendored,
+  sha256-checked) and its shim with the system's C compiler into the
+  cache on first load, and opens the result with `fortran/load-package*`
+  -- a C library exporting `clotran_manifest` and `NAME_shim(argc, argv)`
+  is a package already. A `package.edn` naming C sources and frameworks
+  is the general form, when a second C package wants it.
+- *The frame loop.* Not needed for graphs: redraw is on demand, and the
+  native side never waits on the collector (above).
+
 ### 38. Lemmis: Fortran, extended with Clojure (decided 2026-10-18; queued after 1.0)
 
 James, 2026-10-18: a Fortran-like language with Clojure's idioms, "so

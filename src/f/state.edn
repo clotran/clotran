@@ -11,7 +11,12 @@
  "Threads.f90/tls_next" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
  "Threads.f90/tls_owned" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
  "Threads.f90/tls_owner" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
- "Eval.f90/blocked_dl" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
+ "Threads.f90/mb_lock" {:class :shared, :note "the main thread's mailbox (Threads.f90, th_main_*; model/mainbox.lisp): its lock, initialised before the program's thread starts"}
+ "Threads.f90/mb_cond" {:class :shared, :note "the main thread's mailbox: its condition, initialised before the program's thread starts"}
+ "Threads.f90/mb_fn" {:class :shared, :note "the main thread's mailbox: its one slot, under mb_lock"}
+ "Threads.f90/mb_ended" {:class :shared, :note "the main thread's mailbox: the program has ended, under mb_lock"}
+ "Threads.f90/mb_serving" {:class :shared, :note "the main thread's mailbox: under mb_lock; th_main_post reads it once unlocked first, so a process that never opened the mailbox (an embedding) never takes an uninitialised lock -- it is set before any other thread exists and only cleared later, and is read again under the lock"}
+ "Eval.f90/blocked_dl"{:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
  "Eval.f90/blocked_nodl" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
  "Eval.f90/live_threads" {:class :shared, :note "progress counting for deadlock detection (tasks.inc, block_on): under the state lock"}
  "Eval.f90/mon_depth" {:class :shared, :note "the monitors locking holds (B_MONENTER): under the state lock"}

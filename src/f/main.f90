@@ -19,6 +19,7 @@ module clotran_main
   use NativeArray
   use PersistentList
   use CompiledFn
+  use Threads, only: th_main_ended
   implicit none
   private
   include 'stamp.inc'
@@ -46,6 +47,8 @@ contains
     type(c_ptr), value :: arg
     type(c_ptr) :: r
     call main_body()
+    ! the first thread, serving (Threads.f90), stops once what it runs returns
+    call th_main_ended()
     r = c_null_ptr
   end function main_thread
 
@@ -987,9 +990,14 @@ program clotran
   implicit none
   type(th_thread) :: t
   logical :: ok
+  ! the first thread serves what the program hands it (Threads.f90's
+  ! mailbox: an event loop) until the program has ended and that returned
+  call th_main_open()
   if (th_start_sized(t, c_funloc(main_thread), c_null_ptr, MAIN_STACK_BYTES)) then
+     call th_main_serve()
      ok = th_join(t)
   else
+     call th_main_ended()   ! nothing will serve: a post is refused
      call main_body()   ! no thread: the main thread's stack, as before
   end if
 end program clotran

@@ -528,6 +528,10 @@ embed: examples/embed/heat
 # inside the gate under both compilers.
 # The package the language test loads through the door (DynLoad.f90):
 # a shared library with a manifest and shims, built like any package.
+# a package whose one function runs on the main thread (Threads.f90's
+# mailbox, fortran/main-thread*), for the language test
+$(B)/libmainthread.$(SOEXT): test/c/mainthread.c | $(B)
+	$(CC) -shared -fPIC -o $@ $< -lpthread
 $(B)/libtestpkg.$(SOEXT): $(T)/testpkg.f90 | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -shared -fPIC -o $@ $<
 
@@ -557,7 +561,7 @@ SEED := $(shell od -An -N4 -tu4 /dev/urandom | tr -d ' \n')
 endif
 export SEED
 
-TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) packages examples/embed/heat
+TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(B)/libsamplelib.$(SOEXT) $(B)/libmainthread.$(SOEXT) packages examples/embed/heat
 # THE GATE'S CHECKS, in three groups (James, 2026-10-03: the gate had
 # grown to 15 minutes, every fuzzer run under both compilers):
 #   FIXED   the same every run -- unit, language, oracle, every regression
@@ -1053,7 +1057,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq hashmap btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof agents agents-drive
+MODEL_BOOKS = boundary vector string hashseq hashmap btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof agents agents-drive mainbox
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp

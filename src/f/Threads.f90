@@ -28,6 +28,7 @@ module Threads
   public :: th_start, th_join, th_spawn, th_exit, th_ncpus
   public :: th_key, th_key_create, th_key_set, th_key_get
   public :: th_cond_timedwait, th_sleep_ms, th_wall_ms, PATH_SEP, LINE_SEP
+  public :: th_main_open, th_main_serve, th_main_post, th_main_ended
 
   ! struct timespec: a 64-bit time_t, then a C long of nanoseconds -- 64
   ! bits on macOS and Linux, 32 and padding on Windows. bind(C) lays it
@@ -70,6 +71,26 @@ module Threads
   ! set from any other thread (an embedder's own); from then on every
   ! lookup is pthread's, the owner's included -- the cache still agrees
   ! with it, as the owner keeps updating it.
+  ! THE MAIN THREAD'S MAILBOX (PLAN step 37). The program runs on a
+  ! thread of its own (main.f90), and the process's first thread only
+  ! waited for it -- but a window system wants that first thread: macOS
+  ! draws windows only there. So it serves: each C function handed to it
+  ! (th_main_post, fortran/main-thread*) runs there, one at a time, until
+  ! the program has ended and nothing it was handed is still running. As
+  ! clj keeps the process alive after its program ends while a window is
+  ! open, so does this: the process ends when the program has ended AND
+  ! the main thread's work -- an event loop -- has returned.
+  ! model/mainbox.lisp is the design: one slot, and every function
+  ! accepted is run exactly once, in order, before the thread stops.
+  abstract interface
+     subroutine th_main_fn() bind(C)
+     end subroutine th_main_fn
+  end interface
+  type(th_lock), save :: mb_lock
+  type(th_cond), save :: mb_cond
+  type(c_funptr), save :: mb_fn = c_null_funptr
+  logical, save :: mb_serving = .false., mb_ended = .false.
+
   integer, parameter :: TLS_SLOTS = 16
   type(c_ptr), save :: tls_cache(TLS_SLOTS) = c_null_ptr
   logical, save :: tls_multi = .false.
@@ -380,5 +401,65 @@ contains
     type(th_thread), intent(inout) :: t
     th_join = pthread_join(t%handle, c_null_ptr) == 0
   end function th_join
+
+  ! The mailbox opened, before the program's thread starts: from now on
+  ! th_main_post can succeed.
+  subroutine th_main_open()
+    if (.not. (th_lock_init(mb_lock) .and. th_cond_init(mb_cond))) return
+    mb_serving = .true.
+  end subroutine th_main_open
+
+  ! The main thread's work: run what is posted, one at a time, until the
+  ! program has ended and the slot is empty.
+  subroutine th_main_serve()
+    procedure(th_main_fn), pointer :: f
+    type(c_funptr) :: fp
+    logical :: ok
+    if (.not. mb_serving) return
+    ok = th_lock_acquire(mb_lock)
+    do
+       if (c_associated(mb_fn)) then
+          fp = mb_fn
+          mb_fn = c_null_funptr
+          ok = th_lock_release(mb_lock)
+          call c_f_procpointer(fp, f)
+          call f()
+          ok = th_lock_acquire(mb_lock)
+          cycle
+       end if
+       if (mb_ended) exit
+       ok = th_cond_wait(mb_cond, mb_lock)
+    end do
+    mb_serving = .false.
+    ok = th_lock_release(mb_lock)
+  end subroutine th_main_serve
+
+  ! fn handed to the main thread: .true. when it will run there; .false.
+  ! when nothing serves (no program thread, or the program has ended) or
+  ! the slot still holds a function not yet started.
+  logical function th_main_post(fn)
+    type(c_funptr), value :: fn
+    logical :: ok
+    th_main_post = .false.
+    if (.not. mb_serving) return
+    ok = th_lock_acquire(mb_lock)
+    if (mb_serving .and. .not. mb_ended .and. .not. c_associated(mb_fn)) then
+       mb_fn = fn
+       th_main_post = .true.
+       ok = th_cond_broadcast(mb_cond)
+    end if
+    ok = th_lock_release(mb_lock)
+  end function th_main_post
+
+  ! The program has ended: the main thread stops serving once what it
+  ! runs returns.
+  subroutine th_main_ended()
+    logical :: ok
+    if (.not. mb_serving) return
+    ok = th_lock_acquire(mb_lock)
+    mb_ended = .true.
+    ok = th_cond_broadcast(mb_cond)
+    ok = th_lock_release(mb_lock)
+  end subroutine th_main_ended
 
 end module Threads

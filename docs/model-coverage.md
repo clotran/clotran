@@ -44,6 +44,7 @@ the commit that moves it.
 | Agents and their scheduler | `tasks.inc`, core | agents, agents-drive | **Modeled**, hand-written | |
 | Execution pool | a separate library | pool | **Modeled** | Kept out of clotran's core (PLAN step 32) |
 | Threads: pthreads, a context per thread | `Threads.f90` (380) | none | **Owed** | |
+| The main thread's mailbox: a package's function (a window system's event loop) run on the process's first thread | `Threads.f90` `th_main_*` | mainbox: each accepted function runs once, in order; the main thread stops within 4 of its steps after the end | **Modeled**, hand-written | |
 | Several threads on one heap: per-thread batches, the state lock, stopping every thread for a collection | `GC.f90` | none; the heap books are one thread's view | **Owed** | The largest risk |
 | Lock-free Var reads, atoms' compare-and-swap | `seqlock.c` (80), `Eval.f90` | none | **Owed** | |
 | Futures, promises, latches, a wait's deadlock detection | `tasks.inc` (440) | none | **Owed** | |

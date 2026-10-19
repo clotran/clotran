@@ -264,7 +264,7 @@ module Eval
   ! (clotran-run-pid argv dir out env): clotran-run without waiting, answering
   ! the child's process id; (clotran-kill pid) ends it -- the debug adapter
   ! starts the native debugger so and stops it when the session ends (PLAN 31a)
-  integer, parameter :: B_RUNPID = 471, B_KILL = 472
+  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473
   ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
   integer, parameter :: B_SETMETA = 458
   ! (clotran-resource rel): the file on clotran's path, io/resource's lookup
@@ -1305,6 +1305,7 @@ contains
       ! packages: a shared library opened at run time (DynLoad.f90, clotran.package)
       call bind_builtin(vs_get(vst, base + 3), "load-package*", B_PKGLOAD)
       call bind_builtin(vs_get(vst, base + 3), "call-package*", B_PKGCALL)
+      call bind_builtin(vs_get(vst, base + 3), "main-thread*", B_MAINTHREAD)
       call bind_builtin(vs_get(vst, base + 3), "load-package", B_PKGFN)
       ! The thread primitive's host half, in the namespace the protocol
       ! lives in (src/clj/clotran/thread.cljf; tasks.inc).
@@ -16941,6 +16942,33 @@ contains
        end block
     case (B_PKGCALL)
        out = pkg_call(gcv_nth(args, 0), gcv_nth(args, 1), gcv_nth(args, 2), [vs_get(vst, base + 1)])
+    case (B_MAINTHREAD)
+       ! (main-thread* handle symbol): the package's C function void
+       ! symbol(void) handed to the process's first thread, to run there
+       ! (Threads.f90's mailbox) -- a window system's event loop, which
+       ! macOS allows nowhere else. True when it will run; false when
+       ! nothing serves or a function handed earlier has not started.
+       block
+         integer :: hi
+         type(c_ptr) :: ph
+         type(c_funptr) :: fp
+         character(len=:), allocatable :: sym
+         hi = int(int_of_number(gcv_nth(args, 0)))
+         if (hi < 1 .or. hi > pkg_count) then
+            call fail("main-thread*: no such package handle")
+         else
+            call text_of(gcv_nth(args, 1), s=sym)
+            call gc_state_lock()
+            ph = pkg_handles(hi)
+            call gc_state_unlock()
+            fp = dl_sym(ph, sym)
+            if (.not. c_associated(fp)) then
+               call fail("main-thread*: the package has no " // sym)
+            else
+               out = gc_bool(th_main_post(fp))
+            end if
+         end if
+       end block
     case (B_IDENTITY)
        out = gcv_nth(args, 0)
     case (B_GT, B_LTE, B_GTE)

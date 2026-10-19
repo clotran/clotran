@@ -1292,6 +1292,16 @@
 (check "generated intents from the source" (samplelib.raw/divmod 17 5) {:q 3 :r 2})
 (check "a generated rank-2 argument" (let [m (fortran/make-array "real8" 2 2)] (fortran/aset m 0 0 1.0) (fortran/aset m 1 1 5.0) (samplelib.raw/trace m 2)) {:t 6.0})
 (check "a generated :inout array, in place" (let [a (fortran/make-array "real8" 2)] (fortran/aset a 0 1.0) (fortran/aset a 1 2.0) (samplelib.raw/scale a 2 10.0) [(fortran/aget a 0) (fortran/aget a 1)]) [10.0 20.0])
+;;; ---- the main thread's mailbox (PLAN step 37; Threads.f90, model/mainbox.lisp)
+;; a package's C function handed to the process's first thread runs there,
+;; once: what a window system's event loop needs
+(def mt (fortran/load-package* "build/libmainthread"))
+(defn mt-was [] (fortran/call-package* (:handle mt) (first (:routines (:manifest mt))) []))
+(check "main-thread* hands a function to the first thread" (fortran/main-thread* (:handle mt) "clotran_test_on_main") true)
+(check "which runs it, once, there"
+       (loop [i 0] (let [r (mt-was)] (if (or (pos? (:ran r)) (> i 200)) r (do (clotran.host.thread/sleep 10) (recur (inc i))))))
+       {:ran 1 :main (if (clojure.string/starts-with? (clotran.host.system/getProperty "os.name") "Windows") -1 1)})
+(check "a symbol the package lacks is an error" (try (fortran/main-thread* (:handle mt) "no_such") :ran (catch clotran.host.exception e :no)) :no)
 ;; Every scalar kind crosses unchanged (scripts/fuzz-door checks the
 ;; same routine against the ACL2 model; these are its edges, kept in
 ;; the gate, which has no ACL2). A logical crosses through a temporary
