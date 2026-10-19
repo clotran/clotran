@@ -289,7 +289,12 @@
 (defn lit [x]
   (cond (integer? x) {:stmts [] :type :int
                       ;; the least 64-bit integer has no literal: its negation is past the range
-                      :code (if (= (bigint x) -9223372036854775808N) "(-huge(0_int64) - 1_int64)" (str x "_int64"))}
+                      :code (cond (= (bigint x) -9223372036854775808N) "(-huge(0_int64) - 1_int64)"
+                                  ;; a negative constant in parentheses: standard Fortran allows
+                                  ;; no sign straight after an operator (x + -1), which gfortran
+                                  ;; -std=f2018 refuses -- found by lemmis's fsyn, 2026-10-18
+                                  (neg? x) (str "(" x "_int64)")
+                                  :else (str x "_int64"))}
         (= x 'nil) {:stmts [] :code ".false." :type :bool :sym "nil"}
         (= x 't) {:stmts [] :code ".true." :type :bool :sym "t"}
         (keyword? x) {:stmts [] :code (str "rt_keyword(\"" (name x) "\")") :type :val}

@@ -939,6 +939,12 @@
 ;; format precision
 (format "%.2f" 3.14159)
 
+;; %.0f has no decimal point, and an exact tie rounds away from zero,
+;; as clj's do (clotran-plot's labels, 2026-10-18; DEVIATIONS 83)
+(mapv #(format "%.0f" %) [10.0 2.5 3.5 -2.5 0.5 1.5 0.4 -0.4])
+
+(mapv #(format "%.1f" %) [0.25 -0.25 2.0 0.75])
+
 ;; float width
 (format "%10.3f|%-10.3f|" 3.14159 3.14159)
 

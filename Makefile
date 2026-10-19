@@ -715,6 +715,11 @@ check-build-pure:
 	$(B)/sums$(EXE) 10 2.5 | tr -d '\r' | grep -qx 'sum 45'
 	$(B)/sums$(EXE) 10 2>/dev/null; test $$? = 2
 	! nm $(B)/sums$(EXE) | grep quadmath | grep -v '[_ ]quadmath_snprintf$$'
+	@# fuzz-build-pure's finds (test/clj/pure_main/evaluated.cljf): NaN through min and max, and
+	@# an unused argument that throws still evaluated, as in clj
+	./clotran-bin$(EXE) --launch build --pure test/clj/pure_main/evaluated.cljf -o $(B)/evaluated$(EXE) </dev/null >/dev/null
+	$(B)/evaluated$(EXE) 0.0 2>$(B)/evaluated.err | tr -d '\r' | grep -qx 'min NaN max NaN'
+	grep -q 'Value out of range for long: Infinity' $(B)/evaluated.err
 check-overflow-binding:
 	@echo "--- an overflow caught outside a binding unwinds it, on a small value stack (test/clj/overflow_binding.clj) ---"
 	CLOTRAN_STACK_SLOTS=262144 ./clotran-bin src/clj/clojure/core.clj test/clj/overflow_binding.clj </dev/null 2>&1 | grep -qx '\[:so nil\]'
@@ -1068,7 +1073,7 @@ model-full:
 .PHONY: fuzz-all
 # Every fuzzer, many times make test's sizes, one after another with a
 # deadline each, and a scorecard (PLAN step 29). Hours, not minutes.
-fuzz-all: clotran-bin $(B)/libsamplelib.$(SOEXT)
+fuzz-all: clotran-bin $(B)/core.image $(B)/libsamplelib.$(SOEXT)
 	scripts/fuzz-all --size full
 
 # A fuzzer's case to the debugger (PLAN 31a): clj's answer and clotran's,
@@ -1131,6 +1136,8 @@ check-vm-gen: model | $(B)
 	@cmp -s $(B)/vm_gen.f90 src/f/gen/vm_gen.f90 || { echo "src/f/gen/vm_gen.f90 is not what model/vmg.lisp generates: make gen-vm"; exit 1; }
 	scripts/acl2-fortran -b vmicg -o $(B)/vmc_gen.f90
 	@cmp -s $(B)/vmc_gen.f90 src/f/gen/vmc_gen.f90 || { echo "src/f/gen/vmc_gen.f90 is not what model/vmicg.lisp generates: make gen-vm"; exit 1; }
+	scripts/acl2-fortran -b heapg -o $(B)/heap_gen.inc
+	@cmp -s $(B)/heap_gen.inc src/f/gen/heap_gen.inc || { echo "src/f/gen/heap_gen.inc is not what model/heapg.lisp generates: make gen-vm"; exit 1; }
 	scripts/fuzz-vm-gen -n 300 -s 1
 	scripts/fuzz-vm-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vm-gen -n 100 -s 2 -x

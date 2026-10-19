@@ -104,8 +104,8 @@ contains
         r = .true.
         return
       else
-        if (bnd40p(st%code((-1_int64 + i_)))) then
-          i_1 = (-1_int64 + i_)
+        if (bnd40p(st%code(((-1_int64) + i_)))) then
+          i_1 = ((-1_int64) + i_)
           i_ = i_1
           cycle
         else
@@ -126,9 +126,9 @@ contains
         r = .true.
         return
       else
-        if (bnd40p(st%cln((-1_int64 + c_)))) then
-          if (bnd40p(st%clent((-1_int64 + c_)))) then
-            c_1 = (-1_int64 + c_)
+        if (bnd40p(st%cln(((-1_int64) + c_)))) then
+          if (bnd40p(st%clent(((-1_int64) + c_)))) then
+            c_1 = ((-1_int64) + c_)
             c_ = c_1
             cycle
           else
@@ -153,10 +153,10 @@ contains
         r = .true.
         return
       else
-        if (bnd40p(st%fnfirst((-1_int64 + f_)))) then
-          if (bnd40p(st%fncount((-1_int64 + f_)))) then
-            if ((.not. (size(st%cln, kind=int64) < (st%fnfirst((-1_int64 + f_)) + st%fncount((-1_int64 + f_)))))) then
-              f_1 = (-1_int64 + f_)
+        if (bnd40p(st%fnfirst(((-1_int64) + f_)))) then
+          if (bnd40p(st%fncount(((-1_int64) + f_)))) then
+            if ((.not. (size(st%cln, kind=int64) < (st%fnfirst(((-1_int64) + f_)) + st%fncount(((-1_int64) + f_)))))) then
+              f_1 = ((-1_int64) + f_)
               f_ = f_1
               cycle
             else
@@ -187,24 +187,24 @@ contains
         r = .true.
         return
       else
-        if (bnd40p(st%ca((-1_int64 + j_)))) then
-          if (bnd40p(st%cb((-1_int64 + j_)))) then
-            if (bnd40p(st%cc((-1_int64 + j_)))) then
+        if (bnd40p(st%ca(((-1_int64) + j_)))) then
+          if (bnd40p(st%cb(((-1_int64) + j_)))) then
+            if (bnd40p(st%cc(((-1_int64) + j_)))) then
               if (.true.) then
-                if ((.not. (st%cprev((-1_int64 + j_)) < -1_int64))) then
-                  if ((st%cprev((-1_int64 + j_)) < (-1_int64 + j_))) then
-                    if ((st%ckind((-1_int64 + j_)) == 2_int64)) then
-                      if ((st%cprev((-1_int64 + j_)) < 0_int64)) then
-                        t_1 = (st%cprev((-1_int64 + j_)) < 0_int64)
+                if ((.not. (st%cprev(((-1_int64) + j_)) < (-1_int64)))) then
+                  if ((st%cprev(((-1_int64) + j_)) < ((-1_int64) + j_))) then
+                    if ((st%ckind(((-1_int64) + j_)) == 2_int64)) then
+                      if ((st%cprev(((-1_int64) + j_)) < 0_int64)) then
+                        t_1 = (st%cprev(((-1_int64) + j_)) < 0_int64)
                       else
-                        t_1 = (st%ckind(st%cprev((-1_int64 + j_))) == 2_int64)
+                        t_1 = (st%ckind(st%cprev(((-1_int64) + j_))) == 2_int64)
                       end if
                       t_2 = t_1
                     else
                       t_2 = .true.
                     end if
                     if (t_2) then
-                      j_3 = (-1_int64 + j_)
+                      j_3 = ((-1_int64) + j_)
                       j_ = j_3
                       cycle
                     else
@@ -249,7 +249,7 @@ contains
           if (bnd40p(st%sp)) then
             if ((st%ctop >= 0_int64)) then
               if ((.not. (size(st%ckind, kind=int64) < st%ctop))) then
-                if ((.not. (st%hidx < -1_int64))) then
+                if ((.not. (st%hidx < (-1_int64)))) then
                   if ((st%hidx < st%ctop)) then
                     if ((st%hidx < 0_int64)) then
                       t_1 = (st%hidx < 0_int64)
@@ -457,7 +457,7 @@ contains
         src_2 = var_1
         var_3 = (1_int64 + max(0_int64, dst_))
         dst_4 = var_3
-        k_5 = (-1_int64 + k_)
+        k_5 = ((-1_int64) + k_)
         src_ = src_2
         dst_ = dst_4
         k_ = k_5
@@ -517,7 +517,7 @@ contains
     type(vm_state), intent(inout) :: st
     integer(int64) :: j_2
     integer(int64) :: var_1
-    var_1 = (-1_int64 + max(0_int64, st%ctop))
+    var_1 = ((-1_int64) + max(0_int64, st%ctop))
     j_2 = var_1
     if ((j_2 < 0_int64)) then
     else
@@ -555,7 +555,7 @@ contains
       st%fb = 0_int64
       st%sp = 1_int64
       st%ctop = 0_int64
-      st%hidx = -1_int64
+      st%hidx = (-1_int64)
     else
       h_3 = max(0_int64, st%ca(j_1))
       hfb_4 = max(0_int64, st%cb(j_1))
@@ -584,7 +584,7 @@ contains
     integer(int64) :: var_2
     do
       if ((k_ <= 0_int64)) then
-        r = -1_int64
+        r = (-1_int64)
         return
       else
         if ((.not. (st%clrest(max(0_int64, ci_)) == 1_int64))) then
@@ -598,7 +598,7 @@ contains
         else
           var_2 = (1_int64 + max(0_int64, ci_))
           ci_3 = var_2
-          k_4 = (-1_int64 + k_)
+          k_4 = ((-1_int64) + k_)
           m_5 = m_
           ci_ = ci_3
           k_ = k_4
@@ -622,7 +622,7 @@ contains
     integer(int64) :: var_2
     do
       if ((k_ <= 0_int64)) then
-        r = -1_int64
+        r = (-1_int64)
         return
       else
         if ((st%clrest(max(0_int64, ci_)) == 1_int64)) then
@@ -636,7 +636,7 @@ contains
         else
           var_2 = (1_int64 + max(0_int64, ci_))
           ci_3 = var_2
-          k_4 = (-1_int64 + k_)
+          k_4 = ((-1_int64) + k_)
           m_5 = m_
           ci_ = ci_3
           k_ = k_4
@@ -674,7 +674,7 @@ contains
       r = t_5
       return
     else
-      r = -1_int64
+      r = (-1_int64)
       return
     end if
   end function vmg_pick
@@ -718,11 +718,11 @@ contains
     sp_1 = max(0_int64, st%sp)
     if ((sp_1 < 2_int64)) then
     else
-      var_2 = (-2_int64 + sp_1)
-      var_3 = (-2_int64 + sp_1)
-      var_4 = (-1_int64 + sp_1)
+      var_2 = ((-2_int64) + sp_1)
+      var_3 = ((-2_int64) + sp_1)
+      var_4 = ((-1_int64) + sp_1)
       call vmg_sset(st, var_2, rt_add(vmg_sreg(st, var_3), vmg_sreg(st, var_4)))
-      var_5 = (-1_int64 + sp_1)
+      var_5 = ((-1_int64) + sp_1)
       st%sp = var_5
       var_6 = (1_int64 + max(0_int64, st%pc))
       st%pc = var_6
@@ -740,11 +740,11 @@ contains
     sp_1 = max(0_int64, st%sp)
     if ((sp_1 < 2_int64)) then
     else
-      var_2 = (-2_int64 + sp_1)
-      var_3 = (-2_int64 + sp_1)
-      var_4 = (-1_int64 + sp_1)
+      var_2 = ((-2_int64) + sp_1)
+      var_3 = ((-2_int64) + sp_1)
+      var_4 = ((-1_int64) + sp_1)
       call vmg_sset(st, var_2, rt_lt(vmg_sreg(st, var_3), vmg_sreg(st, var_4)))
-      var_5 = (-1_int64 + sp_1)
+      var_5 = ((-1_int64) + sp_1)
       st%sp = var_5
       var_6 = (1_int64 + max(0_int64, st%pc))
       st%pc = var_6
@@ -761,10 +761,10 @@ contains
     sp_1 = max(0_int64, st%sp)
     if ((sp_1 < 2_int64)) then
     else
-      var_2 = (-2_int64 + sp_1)
-      var_3 = (-1_int64 + sp_1)
+      var_2 = ((-2_int64) + sp_1)
+      var_3 = ((-1_int64) + sp_1)
       call vmg_sset(st, var_2, vmg_sreg(st, var_3))
-      var_4 = (-1_int64 + sp_1)
+      var_4 = ((-1_int64) + sp_1)
       st%sp = var_4
       var_5 = (1_int64 + max(0_int64, st%pc))
       st%pc = var_5
@@ -780,9 +780,9 @@ contains
     sp_1 = max(0_int64, st%sp)
     if ((sp_1 <= 0_int64)) then
     else
-      var_2 = (-1_int64 + sp_1)
+      var_2 = ((-1_int64) + sp_1)
       st%sp = var_2
-      var_3 = (-1_int64 + sp_1)
+      var_3 = ((-1_int64) + sp_1)
       if (rt_truthy(vmg_sreg(st, var_3))) then
         var_4 = (1_int64 + max(0_int64, st%pc))
         st%pc = var_4
@@ -866,7 +866,7 @@ contains
     var_3 = (1_int64 + m_2)
     if ((sp_1 < var_3)) then
     else
-      var_4 = (-1_int64 + sp_1)
+      var_4 = ((-1_int64) + sp_1)
       c_5 = vmg_sreg(st, var_4)
       if ((.not. rt_clop(c_5))) then
         var_6 = (1_int64 + m_2)
@@ -932,13 +932,13 @@ contains
     fb_2 = max(0_int64, st%fb)
     if ((sp_1 <= 0_int64)) then
     else
-      var_3 = (-1_int64 + sp_1)
+      var_3 = ((-1_int64) + sp_1)
       v_4 = vmg_sreg(st, var_3)
       if ((st%ctop <= 0_int64)) then
         call vmg_sset(st, 0_int64, v_4)
         st%sp = 1_int64
       else
-        var_5 = (-1_int64 + st%ctop)
+        var_5 = ((-1_int64) + st%ctop)
         j_6 = var_5
         hp_7 = (st%ckind(j_6) == 2_int64)
         if (hp_7) then
@@ -1028,7 +1028,7 @@ contains
     sp_1 = max(0_int64, st%sp)
     if ((sp_1 <= 0_int64)) then
     else
-      var_2 = (-1_int64 + sp_1)
+      var_2 = ((-1_int64) + sp_1)
       call vmg_unwind(st, vmg_sreg(st, var_2))
     end if
   end subroutine vmg_throw
@@ -1103,7 +1103,7 @@ contains
       if ((n_ <= 0_int64)) then
       else
         call vmg_step(st)
-        n_1 = (-1_int64 + n_)
+        n_1 = ((-1_int64) + n_)
         n_ = n_1
         cycle
       end if
@@ -1639,7 +1639,7 @@ contains
       if ((n_ <= 0_int64)) then
       else
         call vmg_xstep(st)
-        n_1 = (-1_int64 + n_)
+        n_1 = ((-1_int64) + n_)
         n_ = n_1
         cycle
       end if

@@ -241,7 +241,9 @@
           cd (run ["sh" deps-bin pd] {"HOME" home "CLOTRAN" repo} 300)
           clj-refuses (or (nil? cj) (not= 0 (:exit cj)) (str/includes? (str (:err cj)) "Error building classpath"))
           ours-refuses (= 1 (:exit cd))
-          msg (str/trim (str (:err cd)))]
+          ;; clotran's notes (a stale image, a library not used) are on stderr
+          ;; too, before the refusal: the reason is what is left without them
+          msg (str/trim (str/join "\n" (remove #(str/starts-with? % "note: ") (str/split-lines (str (:err cd))))))]
       (swap! kinds update (if clj-refuses :malformed-refused :malformed-accepted) (fnil inc 0))
       (cond
         (nil? cj) (println "  (clj did not answer for" (pr-str text) "-- not compared)")

@@ -1,0 +1,12 @@
+(ns evaluated
+  "fuzz-build-pure's finds of 2026-10-18, for make check-build-pure: min
+  and max of doubles answer NaN when either side is NaN, as clj's do; and
+  an argument whose value is never used is still evaluated -- here it
+  throws, as it does in clj -- which gfortran skipped while the compiled
+  functions were Fortran-pure.")
+
+(defn h0 ^long [^long a0 ^double a1 ^double a2] (long a2))
+
+(defn -main [^double z]
+  (println "min" (min (/ z z) -1.0) "max" (max -1.0 (/ z z)))
+  (println "r" (h0 (h0 5 1.0 (/ 1.0 z)) 0.5 -7.75)))

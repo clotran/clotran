@@ -8437,10 +8437,14 @@ contains
          character(len=16) :: spec
          dp = 6
          if (has_prec) dp = prec
+         ! RC, round compatible: an exact tie goes away from zero, as clj's
+         ! (2.5 -> 3) and cljs's toFixed (2.5 -> 3) both answer; Fortran's
+         ! default may round it to even (2). Other values round their exact
+         ! binary value, as cljs does (DEVIATIONS 83)
          select case (conv)
-         case ("f"); write(spec, '(A,I0,A)') "(F0.", dp, ")"
-         case ("g"); write(spec, '(A,I0,A)') "(G0.", dp, ")"
-         case default; write(spec, '(A,I0,A,I0,A)') "(ES", dp + 8, ".", dp, "E2)"
+         case ("f"); write(spec, '(A,I0,A)') "(RC,F0.", dp, ")"
+         case ("g"); write(spec, '(A,I0,A)') "(RC,G0.", dp, ")"
+         case default; write(spec, '(A,I0,A,I0,A)') "(RC,ES", dp + 8, ".", dp, "E2)"
          end select
          write(buf, spec) num_dbl(a)
          p = trim(adjustl(buf))
@@ -8462,6 +8466,10 @@ contains
                   end block
                end if
             end if
+         end if
+         ! %.0f has no decimal point, as printf's: Fortran's F0.0 writes 2.
+         if (conv == "f" .and. dp == 0 .and. len(p) > 1) then
+            if (p(len(p):len(p)) == ".") p = p(1:len(p) - 1)
          end if
          if (conv == "e") call downcase_in_place(p)
        end block

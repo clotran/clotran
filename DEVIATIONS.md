@@ -109,6 +109,7 @@ Categories:
 | 80 | An input stream's `skip` stops at the end, a file's as an array's | design | -- |
 | 81 | `.hashCode` of a core value is not a member | design | -- |
 | 82 | A symbol's text alone decides its namespace: `(symbol "a" "b/7")` is a/b and 7 | design | `src/f/GC.f90` |
+| 83 | `format`'s `%f`, `%e` and `%g` round the stored double, not its text | design | `src/f/Eval.f90` (format_one) |
 
 ---
 
@@ -204,7 +205,12 @@ instance member, "No matching method jump found taking 1 args for class
 String", so `thrown-with-msg?` can match it.
 
 The exception classes have no hierarchy either, with two edges and a
-ceiling: `Throwable` and `Exception` catch everything; `RuntimeException`
+ceiling: `clotran.host.throwable` and `clotran.host.exception` catch
+everything, and so does ClojureScript's `(catch :default e ...)`, the
+portable way to write it; clj's `Exception` and `Throwable` are not names
+here (DEVIATIONS 79: clj's implicit host imports are not clotran's), so
+`(catch Exception e ...)` is "Unable to resolve classname" (corrected
+2026-10-18, when this paragraph still promised them); `RuntimeException`
 catches every runtime class clotran throws (`is_runtime_class` lists them,
 and a host failure is one); `ArityException` is an
 `IllegalArgumentException`. Since 2026-09-27 a few more parents that
@@ -2631,3 +2637,20 @@ which the reader refuses for every symbol but an array class; only
 **Removal**: the division kept in the symbol (its namespace length,
 beside the interned text) and read wherever `sym_slash` is now. Not
 planned: no code found writes these.
+
+
+## 83. `format`'s `%f`, `%e` and `%g` round the stored double, not its text
+
+clj's `format` is its host's formatter, which rounds the double's shortest
+decimal text half-up: `(format "%.2f" 1.005)` is "1.01" and `(format
+"%.1f" 0.35)` "0.4", though the doubles are 1.00499999999999989... and
+0.34999999999999997... clotran rounds the double itself, with Fortran's
+round-compatible mode (RC): "1.00" and "0.3" -- as ClojureScript's
+`toFixed` does, which decides between a host's convention and Fortran's
+(pure-fortran-conventions). An exact tie -- 2.5, 0.25, -2.5 -- goes away
+from zero, so it agrees with clj ("3", "0.3", "-3"); `%.0f` writes no
+decimal point, as printf's. Both of those were wrong until 2026-10-18
+("2." for 2.5: Fortran's F0.0 and its rounding to even), found by
+clotran-plot's tick labels; the oracle has the tie cases.
+
+**Removal**: none intended: the stored value is what the program holds.

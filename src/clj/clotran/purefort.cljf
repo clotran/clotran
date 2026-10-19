@@ -25,10 +25,12 @@
 
 (defn- support-text
   "The few checked operations every pure module shares, plain Fortran,
-  as module `mod`. STANDALONE (lib? false): every procedure pure, and a
-  failure is Clojure's exception as the program's end, error stop with
-  its message -- pure, since Fortran 2018 allows error stop in a pure
-  procedure, so every helper can be called inside do concurrent; each
+  as module `mod`. STANDALONE (lib? false): a failure is Clojure's
+  exception as the program's end, error stop with its message. Nothing
+  that can fail is pure, there or in a library: Fortran lets a compiler
+  skip a pure function whose value is not needed, and gfortran does, so
+  an unused argument that would throw did not (fuzz-build-pure,
+  2026-10-18) -- Clojure evaluates every argument; each
   compiler prefixes the message its own way (gfortran ERROR STOP, flang
   Fortran ERROR STOP:). IN A LIBRARY (lib? true, PLAN step 13): nothing
   is pure, every procedure that can fail takes a trailing `err`, a
@@ -39,7 +41,7 @@
   runtime, so it runs with the mutators released, as a foreign routine
   does, and never holds up another thread's collection."
   [lib? mod]
-  (let [P (if lib? "" "pure ")
+  (let [P ""
         E (if lib? ", err" "")
         ED (if lib? "    type(cl_err), intent(inout) :: err\n" "")
         fail (fn [msg code] (if lib?
@@ -78,7 +80,7 @@
     err%n = min(len(msg), len(err%msg))
   end subroutine cl_fail
 "
-           "  pure subroutine cl_fail(msg)
+           "  subroutine cl_fail(msg)
     character(len=*), intent(in) :: msg
     error stop msg
   end subroutine cl_fail
@@ -129,6 +131,35 @@
        r = abs(a)
     end if
   end function cl_abs
+  ! Math.min and Math.max, which clj's min and max are: a NaN either
+  ! side answers NaN, and -0.0 is less than 0.0 -- Fortran's min and
+  ! max may answer the other argument for a NaN, and either zero
+  pure function cl_dmin(a, b) result(r)
+    real(real64), intent(in) :: a, b
+    real(real64) :: r
+    if (a /= a) then
+       r = a
+    else if (b /= b) then
+       r = b
+    else if (a == b) then
+       r = merge(a, b, sign(1.0_real64, a) < 0.0_real64)
+    else
+       r = min(a, b)
+    end if
+  end function cl_dmin
+  pure function cl_dmax(a, b) result(r)
+    real(real64), intent(in) :: a, b
+    real(real64) :: r
+    if (a /= a) then
+       r = a
+    else if (b /= b) then
+       r = b
+    else if (a == b) then
+       r = merge(a, b, sign(1.0_real64, a) > 0.0_real64)
+    else
+       r = max(a, b)
+    end if
+  end function cl_dmax
   " P "function cl_quot(a, b" E ") result(r)
     integer(int64), intent(in) :: a, b
 " ED "    integer(int64) :: r
@@ -328,6 +359,18 @@ end module " mod "
             (recur j start out any)))
         :else (recur (inc i) start out any)))))
 
+(defn- can-fail?
+  "Whether Fortran lines call something that can raise Clojure's
+  exception: a checked helper, cl_fail, or any of this file's own
+  functions (`own`, their generic names) -- conservatively, since one
+  may. Only code that cannot fail is Fortran-pure or do concurrent: a
+  compiler may skip a pure reference whose value is unused, and an
+  error Clojure raises must not be skipped (fuzz-build-pure,
+  2026-10-18); code that cannot fail loses nothing by being skipped."
+  [lines own]
+  (let [names (into (conj fallible "cl_fail") own)]
+    (boolean (some #(second (err-calls % names)) lines))))
+
 (defn- with-err
   "A library procedure's body: each statement that calls something
   that can fail passes `err` and is followed by the check. A failed
@@ -437,11 +480,21 @@ end module " mod "
 
 (defn- as-double [e t] (if (= t :long) (str "real(" e ", real64)") e))
 
-(defn- emit-args [nds env st]
+(defn- emit-args
+  "Each argument's lines and expression, in order. Clojure evaluates
+  every argument, left to right; Fortran may skip a function reference
+  whose value is not needed and evaluate operands in any order -- so a
+  numeric or boolean argument that is more than a name or a literal is
+  assigned to a temporary first, and an argument that would throw
+  throws, and throws first, as in clj (fuzz-build-pure, 2026-10-18)."
+  [nds env st]
   (reduce (fn [[ls es ts] nd]
             (let [[l e t] (emit nd env st)]
               (when (= t :none) (decline "recur is not in tail position"))
-              [(into ls l) (conj es e) (conj ts t)]))
+              (if (and (#{:long :double :bool} t) (not (#{:const :local} (:op nd))))
+                (let [v (fresh! st "a" t)]
+                  [(conj (into ls l) (str v " = " e)) (conj es v) (conj ts t)])
+                [(into ls l) (conj es e) (conj ts t)])))
           [[] [] []] nds))
 
 (defn- arith2
@@ -736,7 +789,9 @@ end module " mod "
 
       (#{'max 'min} op)
       (if (and (seq ts) (apply = ts))
-        (done (str (name op) "(" (str/join ", " es) ")") (first ts))
+        (if (= :double (first ts))
+          (done (reduce (fn [a b] (str (if (= op 'min) "cl_dmin(" "cl_dmax(") a ", " b ")")) es) :double)
+          (done (str (name op) "(" (str/join ", " es) ")") (first ts)))
         (decline (str op " of a long and a double: Clojure answers whichever wins, with its own type")))
 
       (#{'< '> '<= '>= '==} op)
@@ -947,28 +1002,33 @@ end module " mod "
             impure? (:impure @st)
             et-ok (or (= et (if (= rt :doubles) :double :long)) (and (= rt :doubles) (= et :long)))]
         (swap! st (fn [s] (assoc s :impure was-impure :decls (subvec (:decls s) 0 before))))
-        ;; in a library the loop is a plain do: nothing impure, and no
-        ;; return, is allowed inside do concurrent, and the error check
-        ;; is both
+        ;; do concurrent only when the body cannot fail: its procedures must
+        ;; be Fortran-pure, and nothing that can fail is (can-fail?); in a
+        ;; library the error check's return is not allowed there either
         ;; the index a local of its own either way: a type in the do
         ;; concurrent header, (integer(int64) :: k = ...), is newer than
         ;; gfortran 14, which refused it (Debian 13's, in the Linux gate)
         (when (and (not impure?) et-ok) (swap! st update :decls conj [k :long]))
         (when (and (not impure?) et-ok)
-          [(concat ll
-                   [(if *library*
-                      (str "do " k " = 0, " le " - 1")
-                      (str "do concurrent (" k " = 0:" le " - 1)"))
-                    "   block"]
-                   (for [[v t] (distinct inner) :when (fort-type t)]
-                     (str "      " (if (#{:doubles :longs} t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
-                   (map #(str "      " %) el)
-                   ;; a hand-written loop may run past the array: Clojure throws there
-                   [(str "      call cl_bounds(" k ", size(" rv ", kind=int64))")
-                    (str "      " rv "(" k " + 1) = " (if (and (= rt :doubles) (= et :long)) (str "real(" ee ", real64)") ee))
-                    "   end block"
-                    "end do"])
-           rv rt])))))
+          (let [conc? (not (or *library* (can-fail? (conj (vec el) ee) (map #(fort-ident (name %)) (keys (:sigs @st))))))
+                n (str "size(" rv ", kind=int64)")]
+            [(concat ll
+                     ;; a hand-written loop may run past the array: Clojure throws at
+                     ;; the first index past it. Concurrent, that check is made once
+                     ;; before the loop, with that same index, so the body cannot fail
+                     (when conc? [(str "if (" le " > " n ") call cl_bounds(" n ", " n ")")])
+                     [(if conc?
+                        (str "do concurrent (" k " = 0:" le " - 1)")
+                        (str "do " k " = 0, " le " - 1"))
+                      "   block"]
+                     (for [[v t] (distinct inner) :when (fort-type t)]
+                       (str "      " (if (#{:doubles :longs} t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
+                     (map #(str "      " %) el)
+                     (when-not conc? [(str "      call cl_bounds(" k ", " n ")")])
+                     [(str "      " rv "(" k " + 1) = " (if (and (= rt :doubles) (= et :long)) (str "real(" ee ", real64)") ee))
+                      "   end block"
+                      "end do"])
+             rv rt]))))))
 
 (defn- emit-tail
   "A node in tail position: its value handed to `finish` (a function
@@ -1182,10 +1242,13 @@ end module " mod "
                          (str "    " (fort-type t) ", allocatable :: " v "(:)")
                          (str "    " (fort-type t) " :: " v)))
           sub? (= rt :nil)
-          ;; PURE, so it can be called inside do concurrent: no printing,
-          ;; no write to a parameter array, nothing impure called
+          ;; pure in Clojure's sense -- no printing, no write to a parameter
+          ;; array, nothing impure called -- which decides what may be lowered
+          ;; inline and dispatched to; Fortran's `pure` besides only when the
+          ;; body cannot fail (can-fail?)
           pure? (and (not (:impure @st)) (empty? (filter (set pnames) written)))
-          pre (if (and pure? (not *library*)) "pure " "")]
+          own (map #(fort-ident (name %)) (keys sigs))
+          pre (if (and pure? (not *library*) (not (can-fail? body-lines own))) "pure " "")]
       ;; :prints -- it writes to standard output, Fortran's way, which a
       ;; library must not (the REPL's *out* would not see it): such a
       ;; version is not dispatched to (clotran.compiler)

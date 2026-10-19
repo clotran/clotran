@@ -287,7 +287,7 @@
       end if
       if (t_2) then
       else
-        sp_3 = (-1_int64 + hs%msp)
+        sp_3 = ((-1_int64) + hs%msp)
         tag_4 = hs%mtag(sp_3)
         ref_5 = hs%mref(sp_3)
         hs%msp = sp_3
@@ -314,7 +314,7 @@
           else
           end if
         end if
-        fuel_9 = (-1_int64 + fuel_)
+        fuel_9 = ((-1_int64) + fuel_)
         fuel_ = fuel_9
         cycle
       end if
@@ -860,7 +860,7 @@
         end if
         if (t_2) then
           call hpg_obj_fill_list(hs)
-          fuel_3 = (-1_int64 + fuel_)
+          fuel_3 = ((-1_int64) + fuel_)
           fuel_ = fuel_3
           cycle
         else
@@ -876,7 +876,7 @@
           end if
           if (t_5) then
             call hpg_obj_fill_end(hs)
-            fuel_6 = (-1_int64 + fuel_)
+            fuel_6 = ((-1_int64) + fuel_)
             fuel_ = fuel_6
             cycle
           else
@@ -901,7 +901,7 @@
     end if
     if (t_2) then
       i_3 = hp_ob(n_1)
-      call hp_set_nob((-1_int64 + n_1))
+      call hp_set_nob(((-1_int64) + n_1))
       r = i_3
     else
       r = 0_int64
@@ -1008,7 +1008,7 @@
         end if
         if (t_2) then
           call hpg_vec_fill_list(hs)
-          fuel_3 = (-1_int64 + fuel_)
+          fuel_3 = ((-1_int64) + fuel_)
           fuel_ = fuel_3
           cycle
         else
@@ -1024,7 +1024,7 @@
           end if
           if (t_5) then
             call hpg_vec_fill_end(hs)
-            fuel_6 = (-1_int64 + fuel_)
+            fuel_6 = ((-1_int64) + fuel_)
             fuel_ = fuel_6
             cycle
           else
@@ -1049,7 +1049,7 @@
     end if
     if (t_2) then
       i_3 = hp_vb(n_1)
-      call hp_set_nvb((-1_int64 + n_1))
+      call hp_set_nvb(((-1_int64) + n_1))
       r = i_3
     else
       r = 0_int64
@@ -1156,7 +1156,7 @@
         end if
         if (t_2) then
           call hpg_str_fill_list(hs)
-          fuel_3 = (-1_int64 + fuel_)
+          fuel_3 = ((-1_int64) + fuel_)
           fuel_ = fuel_3
           cycle
         else
@@ -1172,7 +1172,7 @@
           end if
           if (t_5) then
             call hpg_str_fill_end(hs)
-            fuel_6 = (-1_int64 + fuel_)
+            fuel_6 = ((-1_int64) + fuel_)
             fuel_ = fuel_6
             cycle
           else
@@ -1197,7 +1197,7 @@
     end if
     if (t_2) then
       i_3 = hp_sb(n_1)
-      call hp_set_nsb((-1_int64 + n_1))
+      call hp_set_nsb(((-1_int64) + n_1))
       r = i_3
     else
       r = 0_int64
@@ -1303,7 +1303,7 @@
     integer(int64) :: i_3
     integer(int64) :: v_2
     integer(int64) :: v_4
-    i_1 = (((-1_int64 + c_) * 64_int64) + (1_int64 + n_))
+    i_1 = ((((-1_int64) + c_) * 64_int64) + (1_int64 + n_))
     v_2 = off_
     call hp_set_rb(i_1, v_2)
     i_3 = c_
@@ -1348,7 +1348,7 @@
         n_4 = hp_nrb(c_)
         if ((.not. (n_4 < 0_int64))) then
           if ((n_4 < 64_int64)) then
-            t_5 = ((((-1_int64 + c_) * 64_int64) + (1_int64 + n_4)) < hp_n_rb())
+            t_5 = (((((-1_int64) + c_) * 64_int64) + (1_int64 + n_4)) < hp_n_rb())
           else
             t_5 = .false.
           end if
@@ -1365,7 +1365,7 @@
             call hpg_run_push(hs, c_, n_4, off_8)
             c_9 = c_
             l_10 = l_
-            fuel_11 = (-1_int64 + fuel_)
+            fuel_11 = ((-1_int64) + fuel_)
             c_ = c_9
             l_ = l_10
             fuel_ = fuel_11
@@ -1403,7 +1403,7 @@
       n_3 = hp_nrb(c_)
       if ((0_int64 < n_3)) then
         if ((.not. (64_int64 < n_3))) then
-          t_4 = ((((-1_int64 + c_) * 64_int64) + n_3) < hp_n_rb())
+          t_4 = (((((-1_int64) + c_) * 64_int64) + n_3) < hp_n_rb())
         else
           t_4 = .false.
         end if
@@ -1412,10 +1412,10 @@
         t_5 = .false.
       end if
       if (t_5) then
-        off_6 = hp_rb((((-1_int64 + c_) * 64_int64) + n_3))
+        off_6 = hp_rb(((((-1_int64) + c_) * 64_int64) + n_3))
         if ((0_int64 < off_6)) then
           i_7 = c_
-          v_8 = (-1_int64 + n_3)
+          v_8 = ((-1_int64) + n_3)
           call hp_set_nrb(i_7, v_8)
           r = off_6
         else
@@ -1505,7 +1505,7 @@
       r = hp_otag(j_)
       return
     else
-      r = -1_int64
+      r = (-1_int64)
       return
     end if
   end function hpg_ot
@@ -1524,7 +1524,7 @@
       r = hp_oref(j_)
       return
     else
-      r = -1_int64
+      r = (-1_int64)
       return
     end if
   end function hpg_or
@@ -1543,7 +1543,7 @@
       r = hp_okind(o_)
       return
     else
-      r = -1_int64
+      r = (-1_int64)
       return
     end if
   end function hpg_okd
@@ -1562,7 +1562,7 @@
       r = hp_oi1(o_)
       return
     else
-      r = -1_int64
+      r = (-1_int64)
       return
     end if
   end function hpg_oi
