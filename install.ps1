@@ -5,7 +5,9 @@
 # It downloads the release zip, checks it against the release's SHA256SUMS,
 # unpacks it into $env:LOCALAPPDATA\Programs\clotran (replacing what is
 # there) and puts its bin on the user PATH. CLOTRAN_VERSION picks a release
-# (default: the one this script was written for).
+# (default: the one this script was written for). Its body runs in a
+# scope of its own, so `iex` leaves nothing set in the caller's session.
+& {
 $ErrorActionPreference = 'Stop'
 $version = if ($env:CLOTRAN_VERSION) { $env:CLOTRAN_VERSION } else { '1.0.0-rc.8' }
 $base = if ($env:CLOTRAN_BASE_URL) { $env:CLOTRAN_BASE_URL } else { "https://github.com/clotran/clotran/releases/download/v$version" }
@@ -38,4 +40,5 @@ try {
   Write-Host "installed: $bin\clotran.cmd"
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+}
 }
