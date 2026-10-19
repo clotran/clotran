@@ -86,10 +86,20 @@ the commit that moves it.
 
 ## Keeping it honest
 
-- `make check-vm-gen` compares `vm_gen.f90` and `vmc_gen.f90` with what
-  the model generates and runs them against ACL2. It does not yet
-  compare `heap_gen.inc`.
-- Neither `make model` nor `make check-vm-gen` is in a gate yet: they
-  run when run by hand. Only the macOS machine has ACL2.
+- `make check-vm-gen` compares all three generated files with what the
+  model generates and runs them against ACL2, with negative controls.
+- Both are in the gate: the gfortran half of `make crosscheck`
+  certifies every book (`make model`) and runs `check-vm-gen`
+  (`check-model`). Only macOS has ACL2; there a missing ACL2 fails the
+  gate, and the Linux and Windows gates say they skipped it.
+- `make check-model-ratchet` runs in every gate and needs no ACL2.
+  `model/ratchet.edn` names each generated file and each hand-written
+  part a **Modeled** row describes, with its books and a hash of each
+  side; code that moves while its books do not fails, and so does a
+  change to this table's count of **Owed** rows, which
+  `scripts/model-ratchet --stamp` lowers and never raises. Its
+  negative controls (`--control`) make each drift in memory and must
+  see it caught. A row that moves updates the table, `ratchet.edn` and
+  the books in one commit.
 - On 2026-10-17 all three generated files were regenerated and were
   byte-for-byte what is checked in.

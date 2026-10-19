@@ -1,0 +1,16 @@
+;; scripts/model-ratchet's record: what the model generates or describes, and
+;; the books it answers to. scripts/model-ratchet --stamp writes the hashes.
+{:owed 12
+ :entries
+ [{:code "src/f/gen/vm_gen.f90", :model ["vmg" "vmfg"], :code-sha "e82184fc3517aad516f09c11e82713ef446a242d4ac7c94bd7fbd47a42383ecd", :model-sha "e46c59406de6e412498a40f3a93b9c1b28c384e2a8f553aa521f05ac2f107ee3"}
+  {:code "src/f/gen/vmc_gen.f90", :model ["vmic" "vmicg"], :code-sha "606b8bdc429e0bb928faf792caf8610d71a3595094f6e097dfbfccae98885feb", :model-sha "d174dfe0c80e790e48724a1ecb994e0e29a2c6cee19b77aa638e6261c9b1a63d"}
+  {:code "src/f/gen/heap_gen.inc", :model ["heapg"], :code-sha "2cba6cb7697bd648fd731a050fad14171c9a9db02a158b268ecc19311b8c8eb5", :model-sha "0983947fdb9d1c91e26fd9f6b5472be766dcd79980c6e790431ea18509989266"}
+  {:code "src/f/vmjit.inc", :model ["vmj" "vmj2" "jit" "jit2" "jit3"], :code-sha "a70063e43beb6e31416bbbcbf71122af6406af33c0af319eb379a5cac1a2ad75", :model-sha "0fb6a75c210d432c214ef5560ee7756b5df07d52072d815b3ed524e9dff0ec37"}
+  {:code "src/f/PersistentVector.f90", :model ["vector"], :code-sha "ee7c0de318a360da5bfe699c2ddbcfcc03d110c22945d4de95471c62d6385880", :model-sha "67d5e06730856d346362cc902df70db65f94e8f9a3deab3e2bfda102c92b642e"}
+  {:code "src/f/Assoc.f90", :procs ["st_make" "st_height" "st_len" "st_cnt" "st_total" "st_first_key" "st_cmp" "st_leaf_search" "st_pick" "st_rank" "st_at" "st_internal" "st_ins" "st_del" "st_rebalance" "st_assoc" "st_dissoc" "st_fill"], :model ["btree"], :code-sha "52af87154eee73b3242c14c4da39a2833adf44ea971b5b63e21d9e470ffdbef4", :model-sha "2ec6dcaad1e425d3930932b87ffe53e556cf6e51a798da608b05d8f971c3e8b2"}
+  {:code "src/f/GC.f90", :procs ["str_index"], :model ["string"], :code-sha "5a119b187dc087d121428197d39b24cc990eb517f898ebb768e5c44f8bf12fc0", :model-sha "6516875e0748f58535a078b376af49ad06bec2df6589971c64d79c5580c771f1"}
+  {:code "src/f/GC.f90", :procs ["gc_cas_i1" "gc_lazy_wait_add" "gc_lazy_wake"], :model ["lazy-cell"], :code-sha "baf400444ebfb0096c876e925a1cbec6718510c603fdda8a1509143e09491f3b", :model-sha "bd0ccb3b0c8a727c2a92adaac8c2631094bb16199d3127d2ac16ec56bdb25df7"}
+  {:code "src/f/Eval.f90", :procs ["gce_force"], :model ["lazy-cell"], :code-sha "1231dcf9e0df968678d4db961f641537b7478287918833ccbc127b2f33950f58", :model-sha "bd0ccb3b0c8a727c2a92adaac8c2631094bb16199d3127d2ac16ec56bdb25df7"}
+  {:code "src/c/seqlock.c", :model ["lazy-cell"], :code-sha "15790985c6bde3f4caf43bab5110ee3c6401f7e9f58d1cee154a650a85514fa8", :model-sha "bd0ccb3b0c8a727c2a92adaac8c2631094bb16199d3127d2ac16ec56bdb25df7"}
+  {:code "src/f/Eval.f90", :procs ["agent_dispatch" "agent_enqueue" "sched_init" "sched_queue" "sched_count" "sched_push" "sched_pop" "sched_steal" "sched_any_work" "sched_take" "sched_submit"], :model ["agents" "agents-drive"], :code-sha "a6621b8364235ffbe269d4aa7537bf8d740455a0284d54fe2c7ea0a66695ecd0", :model-sha "24ef3ef1f7b35893ddb4c21a8955bd65f1a16f62fbb9ed3fc517820ede05bd4e"}
+  {:code "src/f/Eval.f90", :procs ["pkg_call"], :model ["boundary"], :code-sha "b79cf9efec35af3383b43ccf865c7f9935c216fd9918ea9c56e6a5cca1704367", :model-sha "2cf4f1905cbb290559fdc4d9c2bb6e1398dc87297ab9cee8538378e7f3c79182"}]}

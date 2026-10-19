@@ -1,0 +1,151 @@
+#!/usr/bin/env bb
+;; model-ratchet: the code the model generates or describes cannot move
+;; without its model moving, and the model's Owed rows can only shrink.
+;;
+;;   scripts/model-ratchet             check (the gate: make check-model-ratchet)
+;;   scripts/model-ratchet --stamp     record the hashes and the Owed count
+;;   scripts/model-ratchet --control   the negative controls: deliberate drifts,
+;;                                     made in memory, must each be caught
+;;
+;; model/ratchet.edn lists each generated file and each hand-written part
+;; the model describes (a whole file, or named Fortran procedures in it),
+;; with the books that say what it is and a sha256 of each side: the
+;; code's text (without full-line Fortran comments and blank lines, so a
+;; comment edit is not a change) and the books' text.
+;;
+;; The check fails on any hash that differs, saying which side moved, and
+;; when docs/model-coverage.md's count of **Owed** rows is not the one
+;; recorded. --stamp then records the new state, but refuses an entry
+;; whose code moved while its books did not -- the drift this exists to
+;; stop -- and an Owed count above the recorded one. The remedy for those
+;; is the model, or putting the code back; hand-editing the hash in
+;; model/ratchet.edn is the override, and shows in the diff.
+;;
+;; It needs no ACL2, so it runs in every gate: on a machine without ACL2
+;; it is what compares the generated files with what the model made.
+(require '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.process :as p] '[babashka.fs :as fs])
+
+(def manifest-file "model/ratchet.edn")
+(def coverage-file "docs/model-coverage.md")
+
+;; a file's text, line endings made \n (a Windows checkout may have \r\n),
+;; through the controls' edits when they make one
+(def ^:dynamic *edit* {})
+(defn text [f] ((get *edit* f identity) (str/replace (slurp f) "\r\n" "\n")))
+
+;; sha256sum (Linux, MSYS2), else macOS's shasum
+(def sha-cmd (if (fs/which "sha256sum") ["sha256sum"] ["shasum" "-a" "256"]))
+(defn sha256 [s]
+  (first (str/split (:out (apply p/shell {:in s :out :string} sha-cmd)) #"\s")))
+
+(defn code-lines [s]
+  (remove #(or (str/blank? %) (re-find #"^\s*!" %)) (str/split-lines s)))
+
+;; a Fortran procedure, from its first line to its end line
+(defn proc-text [file lines name]
+  (let [q (if (re-matches #"\w+" name) name
+            (do (println (str "model-ratchet: " name " is not a Fortran name")) (System/exit 1)))
+        start (re-pattern (str "(?i)^(?!\\s*end\\b).*\\b(subroutine|function)\\s+" q "\\b"))
+        end (re-pattern (str "(?i)^\\s*end\\s+(subroutine|function)\\s+" q "\\b"))
+        body (drop-while #(not (re-find start %)) lines)
+        n (count (take-while #(not (re-find end %)) body))]
+    (when (or (empty? body) (= n (count body)))
+      (println (str "model-ratchet: no procedure " name " in " file)) (System/exit 1))
+    (str/join "\n" (take (inc n) body))))
+
+(defn code-sha [{:keys [code procs]}]
+  (let [lines (code-lines (text code))]
+    (sha256 (if procs (str/join "\n" (map #(proc-text code lines %) procs)) (str/join "\n" lines)))))
+
+(defn model-sha [{:keys [model]}]
+  (sha256 (str/join "\n" (map #(str % "\n" (text (str "model/" % ".lisp"))) model))))
+
+;; the table rows whose Status cell (the fourth) says Owed
+(defn owed-count []
+  (count (filter #(let [cells (str/split % #"\|")]
+                    (and (> (count cells) 4) (str/includes? (nth cells 4) "**Owed**")))
+                 (str/split-lines (text coverage-file)))))
+
+(def manifest (edn/read-string (slurp manifest-file)))
+(defn label [e] (str (:code e) (when (:procs e) (str " " (str/join "," (:procs e))))))
+
+;; the tree as it is against the record: every entry's hashes, which side
+;; moved, the drifted (code moved, model not), and the Owed count
+(defn judge []
+  (let [rows (doall (for [e (:entries manifest)]
+                      (let [c (code-sha e) m (model-sha e)]
+                        (assoc e :c c :m m :code-moved (not= c (:code-sha e)) :model-moved (not= m (:model-sha e))))))]
+    {:rows rows
+     :moved (filter #(or (:code-moved %) (:model-moved %)) rows)
+     :drift (filter #(and (:code-moved %) (not (:model-moved %)) (:code-sha %)) rows)
+     :owed (owed-count)}))
+
+(defn check []
+  (let [{:keys [rows moved owed]} (judge) rec (:owed manifest)]
+    (doseq [e moved]
+      (println (str "model-ratchet: " (label e) ": "
+                    (cond (not (:model-moved e)) (str "the code moved and model/" (str/join ".lisp, model/" (:model e)) ".lisp did not -- DRIFT")
+                          (not (:code-moved e)) "the model moved and the code did not: if it still holds, scripts/model-ratchet --stamp"
+                          :else "both moved: scripts/model-ratchet --stamp"))))
+    (when (not= owed rec)
+      (println (str "model-ratchet: " coverage-file " has " owed " Owed rows, " rec " recorded"
+                    (if (> owed rec) " -- the count only shrinks" ": scripts/model-ratchet --stamp"))))
+    (println (str "model-ratchet: " (- (count rows) (count moved)) "/" (count rows) " entries agree with their model, "
+                  owed " Owed rows (" rec " recorded)"))
+    (and (empty? moved) (= owed rec))))
+
+(defn stamp []
+  (let [{:keys [rows drift owed]} (judge)]
+    (doseq [e drift]
+      (println (str "model-ratchet: refusing " (label e) ": the code moved and model/"
+                    (str/join ".lisp, model/" (:model e)) ".lisp did not")))
+    (when (> owed (:owed manifest))
+      (println (str "model-ratchet: refusing: " coverage-file " has " owed " Owed rows, more than the "
+                    (:owed manifest) " recorded; the count only shrinks")))
+    (if (or (seq drift) (> owed (:owed manifest)))
+      false
+      (do (spit manifest-file
+                (str ";; scripts/model-ratchet's record: what the model generates or describes, and\n"
+                     ";; the books it answers to. scripts/model-ratchet --stamp writes the hashes.\n"
+                     "{:owed " owed "\n :entries\n ["
+                     (str/join "\n  " (for [e rows]
+                                        (pr-str (into (array-map) (filter second)
+                                                      [[:code (:code e)] [:procs (:procs e)] [:model (:model e)]
+                                                       [:code-sha (:c e)] [:model-sha (:m e)]]))))
+                     "]}\n"))
+          (println (str "model-ratchet: stamped " (count rows) " entries, " owed " Owed rows"))
+          true))))
+
+;; each control an edit and what judge must then say: the entries that
+;; moved, the drifted ones, the Owed count. Nothing is written.
+(defn after [s pat add] (str/replace-first s pat (str pat add)))
+(def owed-row "| A control's row | none | none | **Owed** | |\n")
+(def controls
+  [["a generated file edited by hand" {"src/f/gen/vm_gen.f90" #(str % "  x = 1\n")}
+    {:moved ["src/f/gen/vm_gen.f90"] :drift ["src/f/gen/vm_gen.f90"]}]
+   ["a statement added to a modelled procedure, st_del" {"src/f/Assoc.f90" #(str/replace-first % "    call vs_leave(base)\n  end subroutine st_del" "    call vs_leave(base)\n    base = 0\n  end subroutine st_del")}
+    {:moved ["src/f/Assoc.f90"] :drift ["src/f/Assoc.f90"]}]
+   ["... only a comment in st_del (not a change)" {"src/f/Assoc.f90" #(str/replace-first % "  end subroutine st_del" "    ! a comment\n  end subroutine st_del")}
+    {:moved [] :drift []}]
+   ["Eval.f90 outside the modelled procedures (not a change)" {"src/f/Eval.f90" #(str % "\n! the end\ninteger :: unrelated\n")}
+    {:moved [] :drift []}]
+   ["a book changed, its code not (stamp accepts)" {"model/vector.lisp" #(str % "\n; a proof's comment\n")}
+    {:moved ["src/f/PersistentVector.f90"] :drift []}]
+   ["an Owed row added" {coverage-file #(after % "## Concurrency\n\n| Part | Code (lines) | Model | Status | Why |\n|---|---|---|---|---|\n" owed-row)}
+    {:moved [] :drift [] :owed (inc (:owed manifest))}]])
+
+(defn control []
+  (let [base (judge)
+        ok (for [[what edit want] controls]
+             (let [{:keys [moved drift owed]} (binding [*edit* edit] (judge))
+                   got {:moved (mapv :code moved) :drift (mapv :code drift) :owed owed}
+                   edited (every? (fn [[f g]] (not= (text f) (g (text f)))) edit)
+                   pass (and edited (= (merge {:owed (:owed base)} want) got))]
+               (println (str "model-ratchet control: " what ": " (if pass "judged as it should be" (str "WRONG, got " got))))
+               pass))]
+    (and (empty? (:moved base)) (every? true? (doall ok)))))
+
+(System/exit (if ((cond (some #{"--stamp"} *command-line-args*) stamp
+                        (some #{"--control"} *command-line-args*) control
+                        :else check))
+               0 1))

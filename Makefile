@@ -576,7 +576,7 @@ else
 TEST_CHECKS = $(TEST_FIXED)
 endif
 .PHONY: test test-nightly $(TEST_FIXED) $(TEST_FUZZ) $(TEST_NIGHTLY)
-test: $(TEST_CHECKS)
+test: $(TEST_CHECKS) check-model-ratchet
 test-nightly: $(TEST_FIXED) $(TEST_FUZZ) $(TEST_NIGHTLY)
 $(TEST_FIXED) $(TEST_FUZZ) $(TEST_NIGHTLY): $(TEST_DEPS)
 check-unit:
@@ -1034,7 +1034,11 @@ clean:
 # The formal model (PLAN steps 27-28): ACL2 certifies each book, and a
 # book that does not certify fails. ACL2 is built on SBCL outside the
 # tree (its arithmetic-5 book certified once); ACL2=/path overrides.
-# Not in the gate yet: ACL2 is not on every machine the gate runs on.
+# In the gate where ACL2 is: the gfortran half of `make crosscheck`
+# certifies the model and runs check-vm-gen (check-model). Only macOS
+# has ACL2 -- the Linux and Windows gates have none -- so a Mac without
+# it fails the gate and the others say they skipped it; every gate runs
+# check-model-ratchet, which needs no ACL2.
 #
 # Each book's certificate is a target after the certificates of the
 # books it includes ($(B)/model-deps.mk, read from its include-book
@@ -1042,7 +1046,12 @@ clean:
 # independent books side by side. ACL2 checks an included book's
 # certificate against its source too, so a stale one fails rather than
 # passes. `make model-full` re-proves every book from nothing.
-ACL2 ?= $(abspath ..)/acl2/saved_acl2
+# ../acl2 beside the checkout, else ~/clotran/acl2 (a worktree's or the
+# gate's copy has no ../acl2); exported for scripts/acl2-fortran
+ACL2 ?= $(firstword $(wildcard $(abspath ..)/acl2/saved_acl2 $(HOME)/clotran/acl2/saved_acl2))
+ifneq ($(ACL2),)
+export ACL2
+endif
 .PHONY: model model-full
 MODEL_BOOKS = boundary vector string hashseq btree vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof agents agents-drive
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
@@ -1066,6 +1075,29 @@ endif
 model-full:
 	rm -f $(MODEL_CERTS)
 	$(MAKE) model
+
+.PHONY: check-model check-model-ratchet
+ifeq ($(notdir $(FC)),gfortran)
+test: check-model
+endif
+ifneq ($(ACL2),)
+check-model: check-vm-gen
+else ifeq ($(UNAME_S),Darwin)
+check-model:
+	@echo "check-model: no ACL2 at ../acl2 or ~/clotran/acl2 (ACL2=/path/saved_acl2): the macOS gate certifies the model"; exit 1
+else
+check-model:
+	@echo "--- check-model: skipped, no ACL2 here (the macOS gate certifies the model; check-model-ratchet compares the generated files) ---"
+endif
+# The drift ratchet (scripts/model-ratchet): what the model generates or
+# describes moves only with its books, the Owed rows only shrink, and
+# every book in model/ is one `make model` certifies.
+check-model-ratchet:
+	@echo "--- the model's drift ratchet: model/ratchet.edn's code and books, docs/model-coverage.md's Owed rows ---"
+	@test "$(sort $(MODEL_BOOKS))" = "$(sort $(basename $(notdir $(wildcard model/*.lisp))))" || \
+	  { echo "model/*.lisp and MODEL_BOOKS differ: $(filter-out $(MODEL_BOOKS),$(basename $(notdir $(wildcard model/*.lisp)))) $(filter-out $(basename $(notdir $(wildcard model/*.lisp))),$(MODEL_BOOKS))"; exit 1; }
+	scripts/model-ratchet
+	scripts/model-ratchet --control
 
 # The package door against the model: every scalar value the fuzzer
 # makes must cross or be refused exactly as model/boundary.lisp's
