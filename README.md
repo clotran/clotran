@@ -24,8 +24,15 @@ On Windows (x86_64), from PowerShell, into
 > irm https://raw.githubusercontent.com/clotran/clotran/main/install.ps1 | iex
 ```
 
-Each checks the download against the release's `SHA256SUMS`
-(`RELEASE-NOTES.md`). From a checkout, `make && make install` builds it
+If `install.sh` says `~/.local/bin` is not on your PATH, add it and open a
+new terminal -- on macOS (zsh):
+
+```
+$ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
+and on Linux the same line into `~/.bashrc`. Both install scripts check
+the download against the release's `SHA256SUMS` (`RELEASE-NOTES.md`). From a checkout, `make && make install` builds it
 and installs it into `~/.local` (`docs/building.md`).
 
 ## Getting started
