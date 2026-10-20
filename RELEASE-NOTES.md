@@ -1,21 +1,15 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 8 of 1.0.0: `1.0.0-rc.8`. Since rc.7: a
-library named in `deps.edn` by `:git/url` and `:git/sha` brings only
-that commit's tree, never the repository's history -- from GitHub its
-archive of the sha, by the curl and tar every system has, so no git is
-needed (a fresh Windows has none), and elsewhere git fetching that one
-commit at depth 1; a `:git/tag` beside the sha is a label, checked to
-name it when it is fetched, and a tag that names another commit is
-refused. So on a plain Windows PC a project whose `deps.edn` names
-clotran-plot opens a graph's window from the REPL with
-`(plot/show m/sin)`, nothing else installed. `clotran deps` is the one command that
-downloads -- a run, the REPL and the tests refuse a library not fetched
-yet and say so -- and fetched trees live under the cache's `tree/`, apart
-from the full clones earlier releases kept in `src/`. `clotran --help`
-lists every command, and `clotran new` writes clotran-plot into the
-project's `deps.edn`, commented out. `clotran < file` at a Windows prompt
-reads the file (the wrapper's code page step no longer reads it first).
+This is release candidate 9 of 1.0.0: `1.0.0-rc.9`. Since rc.8: the
+REPL has its own line editor, replacing rlwrap on every system --
+Windows, which had none, included: editing keys, history kept across
+sessions with Ctrl-R search, a form spread over lines sent only when the
+reader finds it whole, and Tab completing from what the running REPL
+holds (`alias/` offers that namespace's public vars, nothing seen
+elsewhere); `CLOTRAN_NO_EDITOR=1` reads plainly, as a pipe or a file
+always is. `clotran new` names no library: a library's own README gives
+its `deps.edn` line, so a library moves without a clotran release.
+`install.ps1` leaves nothing set in the PowerShell session that ran it.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
