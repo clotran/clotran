@@ -1,6 +1,6 @@
 ;; scripts/model-ratchet's record: what the model generates or describes, and
 ;; the books it answers to. scripts/model-ratchet --stamp writes the hashes.
-{:owed 10
+{:owed 9
  :entries
  [{:code "src/f/gen/vm_gen.f90", :model ["vmg" "vmfg"], :code-sha "e82184fc3517aad516f09c11e82713ef446a242d4ac7c94bd7fbd47a42383ecd", :model-sha "e46c59406de6e412498a40f3a93b9c1b28c384e2a8f553aa521f05ac2f107ee3"}
   {:code "src/f/gen/vmc_gen.f90", :model ["vmic" "vmicg"], :code-sha "606b8bdc429e0bb928faf792caf8610d71a3595094f6e097dfbfccae98885feb", :model-sha "d174dfe0c80e790e48724a1ecb994e0e29a2c6cee19b77aa638e6261c9b1a63d"}
@@ -20,4 +20,5 @@
   {:code "src/f/PersistentList.f90", :procs ["gcl_empty" "gcl_is" "gcl_count" "gcl_cons" "gcl_first" "gcl_rest"], :model ["arraymap"], :code-sha "bfe142a3f5be448eea71c95696e273255e5434034c096b0928c86ad2ec2f2941", :model-sha "3774d1345e204877007ef8225150a178fa14d0a2b2630221d4e362d0d689fa73"}
   {:code "src/f/Env.f90", :model ["envns"], :code-sha "aa25f548c44ca3aeef19438e362a4dcad621e6306cb4b6f19173756c179bbb02", :model-sha "00540f9027879fdca2ff697555a468517a6a0d7f4687cb5ae382e2fd865d3b85"}
   {:code "src/f/Namespace.f90", :procs ["register" "gcn_slot_assoc" "gcn_slot_dissoc" "gcn_remove" "gcn_find_or_create" "gcn_intern" "gcn_lookup"], :model ["envns" "casloop"], :code-sha "896a1e75caef45f3f6d3aed9a3913151e3593138ab9acfca3e6c4f20bebf290d", :model-sha "9c9a5fb81cc04e1ab58b731f9198ad4068338b5d4c0efeaa66296cfbafff7ced"}
+  {:code "src/f/Eval.f90", :procs ["tx_lock_init" "tx_value" "tx_log" "tx_commit" "tx_notify" "ref_refused"], :model ["stm"], :code-sha "50d800e3438df40de30ea02d991bed7f05aad0067200a7b9e4b7121b5d60c111", :model-sha "373a45657ec9eebc21fe4f361e02ac644e023c0ca2b281fd4e1695fcd60cedcb"}
   {:code "src/f/Eval.f90", :procs ["gce_refer_core"], :model ["envns" "casloop"], :code-sha "83ce92e637a92a4a531e0529c48f2211eead0dac89a672b1f3629193f270bed0", :model-sha "9c9a5fb81cc04e1ab58b731f9198ad4068338b5d4c0efeaa66296cfbafff7ced"}]}

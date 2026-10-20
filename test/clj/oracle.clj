@@ -2698,6 +2698,13 @@
 
 [(let [r (ref 0)] (dosync (alter r inc) (alter r inc)) @r) (try (alter (ref 0) inc) (catch clotran.host.illegal_state_exception e :no-tx)) (try (ref-set (ref 0) 5) (catch clotran.host.illegal_state_exception e :no-tx)) (try (dosync (io! 1)) (catch clotran.host.illegal_state_exception e :io-in-tx)) (let [r (ref 1)] (try (dosync (ref-set r 5) (throw (ex-info "x" {}))) (catch clotran.host.exception e @r))) (let [r (ref 1)] (dosync (ref-set r 5) [@r (ensure r)])) (let [r (ref 1) w (atom [])] (add-watch r :k (fn [k _ o n] (swap! w conj [o n]))) (dosync (alter r + 10) (commute r * 2)) [@r @w]) (let [r (ref 1 :validator pos?)] [(try (dosync (ref-set r -1)) (catch clotran.host.illegal_state_exception e :invalid)) @r]) (let [a (ref 100) b (ref 0)] (dosync (alter a - 30) (alter b + 30)) [@a @b]) (ref-history-count (ref 1)) (ref-min-history (ref 1)) (ref-max-history (ref 1))]
 
+;; a ref is not an atom: swap!, compare-and-set!, reset!, swap-vals! and
+;; reset-vals! refuse it, so nothing writes a ref outside a transaction;
+;; a commit writes every ref before any watch runs, and the watches run
+;; after the lock is released -- one that throws leaves no half commit,
+;; one that runs its own dosync does not wait on itself (model/stm.lisp)
+[(map #(try (% (ref 0)) (catch clotran.host.class_cast_exception e :cce)) [(fn [r] (swap! r inc)) (fn [r] (compare-and-set! r 0 1)) (fn [r] (reset! r 5)) (fn [r] (swap-vals! r inc)) (fn [r] (reset-vals! r 5))]) (let [a (ref 0) b (ref 0)] (add-watch a :w (fn [& _] (throw (ex-info "watch" {})))) [(try (dosync (ref-set a 1) (ref-set b 1) :done) (catch clotran.host.exception e :thrown)) @a @b]) (let [a (ref 0) c (ref 0)] (add-watch a :w (fn [_ _ _ n] (dosync (alter c + n)))) [(dosync (ref-set a 5) :done) @c])]
+
 
 [(str (class (eduction (map inc) [1 2]))) (instance? clojure.core.Eduction (eduction [1])) (pr-str (eduction (map inc) [1 2])) (try (count (eduction (map inc) [1 2])) (catch clotran.host.unsupported_operation_exception e (.getMessage e))) (count (reify clotran.host.i_persistent_collection clotran.host.seqable (seq [_] (seq [1 2 3])))) (try (count (reify clotran.host.seqable (seq [_] (seq [1 2 3])))) (catch clotran.host.unsupported_operation_exception e :unsupported)) (count (reify clotran.host.counted (count [_] 7))) (reduce + (eduction (map inc) [1 2])) (reduce + 10 (eduction (map inc) [1 2])) (into [] (eduction (map inc) (filter even?) (range 10))) (seq (eduction (map inc) [1 2])) (sequential? (eduction [1 2]))]
 

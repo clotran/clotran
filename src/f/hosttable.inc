@@ -573,7 +573,7 @@
        hm("", "setMinHistory", B_REFSETHIST, "clotran-ref-set-history"), &
        hm("", "setMaxHistory", B_REFSETHIST, "clotran-ref-set-history") ]
   type(hm), parameter :: HOST_METHODS_2(79) = [ &
-       hm("", "reset", B_SETVAL, "clotran-set-val"), &
+       hm("", "reset", B_RESETVAL, "clotran-reset-val"), &
        hm("", "bindRoot", B_BINDROOT, "clotran-bind-root"), &
        hm("", "getRawRoot", B_RAWROOT, "clotran-raw-root"), &
        hm("", "getThreadBinding", B_GETTB, "clotran-thread-binding"), &

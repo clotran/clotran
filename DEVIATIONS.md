@@ -402,9 +402,17 @@ part is unchanged below.
 transaction: `alter`, `commute` and `ref-set` write a per-transaction
 log (Eval.f90, `tx_log`), a `deref` inside the transaction reads it
 (`tx_value`), and the commit (`tx_commit`) validates every written ref
-first -- one refusal and nothing is written -- then sets each and runs
-its watches with the old and new values. An exception discards the
-log. `alter` or `ref-set` outside a transaction is Clojure's
+first -- one refusal and nothing is written -- then sets every one;
+the lock is released, then the watches run with the old and new
+values and the sends made inside are dispatched, as
+`LockingTransaction.run` orders them, so a watch that throws leaves no
+half commit and one that runs its own `dosync` does not wait on itself
+(both were wrong until 2026-10-19). An exception discards the log. A
+ref is not an atom: `swap!`, `compare-and-set!`, `reset!`,
+`swap-vals!` and `reset-vals!` refuse it with clj's ClassCastException,
+so nothing writes a ref outside a transaction (they wrote it, until
+2026-10-19). model/stm.lisp proves the design: serializable,
+all-or-none commits, no deadlock on the one lock. `alter` or `ref-set` outside a transaction is Clojure's
 IllegalStateException "No transaction running"; `io!` inside one throws,
 since `LockingTransaction/isRunning` answers. A `dosync` inside a
 `dosync` is the same transaction.

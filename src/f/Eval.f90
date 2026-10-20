@@ -264,7 +264,7 @@ module Eval
   ! (clotran-run-pid argv dir out env): clotran-run without waiting, answering
   ! the child's process id; (clotran-kill pid) ends it -- the debug adapter
   ! starts the native debugger so and stops it when the session ends (PLAN 31a)
-  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473
+  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473, B_RESETVAL = 474
   ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
   integer, parameter :: B_SETMETA = 458
   ! (clotran-resource rel): the file on clotran's path, io/resource's lookup
@@ -14517,10 +14517,20 @@ contains
          tctx%tx_depth = tctx%tx_depth - 1
          if (tctx%tx_depth == 0) then
             call vs_set(vst, base + 2, out)
-            if (.not. tctx%has_error) call tx_commit()
+            ! the log and the values it replaced, kept for the watches
+            call vs_set(vst, base + 3, gc_nil())
+            call vs_set(vst, base + 4, gc_nil())
+            if (.not. tctx%has_error) then
+               if (gc_root_live(tctx%tx_root)) call vs_set(vst, base + 3, gc_root_get(tctx%tx_root))
+               call vs_set(vst, base + 4, tx_commit())
+            end if
             out = vs_get(vst, base + 2)
             call gc_global_keep(tctx%tx_root, gc_nil())
             ok = th_lock_release(tx_lk)
+            ! the watches after the release, as LockingTransaction.run: a
+            ! watch's own dosync takes the lock again, and one that throws
+            ! comes after every ref is written (model/stm.lisp)
+            if (.not. tctx%has_error) call tx_notify(vs_get(vst, base + 3), vs_get(vst, base + 4))
             ! sends made inside: dispatched after the commit, dropped
             ! by an abort (LockingTransaction.run)
             if (tctx%has_error) then
@@ -14784,8 +14794,14 @@ contains
             call mark_entry(out)
          end if
        end block
-    case (B_SETVAL, B_RESETVALS)
+    case (B_SETVAL, B_RESETVAL, B_RESETVALS)
        a = gcv_nth(args, 0)
+       if (id /= B_SETVAL) then
+          if (ref_refused(a, [vs_get(vst, base + 1)])) then
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        if (gc_kind(a) == OBJ_MULTIFN) then
           ! MultiFn.reset, behind remove-all-methods: methods, preferences and cache
           call gc_set_slot(a, 4, gca_empty([vs_get(vst, base + 1)]))
@@ -14855,6 +14871,10 @@ contains
        block
          type(gc_value) :: fargs, pair
          integer :: lb, j
+         if (ref_refused(gcv_nth(args, 0), [vs_get(vst, base + 1)])) then
+            call vs_leave(vst, base)
+            return
+         end if
          lb = vs_enter(vst, 4)
          call vs_set(vst, lb + 1, strip_meta(gcv_nth(args, 0)))
          do
@@ -16088,6 +16108,10 @@ contains
        ! immediate -- which is how a promise delivers exactly once.
        a = strip_meta(gcv_nth(args, 0))
        out = gc_bool(.false.)
+       if (ref_refused(a, [vs_get(vst, base + 1)])) then
+          call vs_leave(vst, base)
+          return
+       end if
        if (gc_kind(a) == OBJ_ATOM .and. n >= 3) then
           if (gc_cell_cas(a, 1, gcv_nth(args, 1), gcv_nth(args, 2))) then
              call gc_state_notify()   ! a promise delivered: its waiters go on
@@ -19340,16 +19364,18 @@ contains
   end subroutine tx_log
 
   ! The commit: every ref in the log validated first -- a refusal fails
-  ! the whole transaction, nothing written -- then each set, under the
-  ! state lock, and its watches run with the old and new values.
-  recursive subroutine tx_commit()
+  ! the whole transaction, nothing written -- then every one set, under
+  ! the state lock. Answers the values they held, in the log's entry
+  ! order, for tx_notify; nil when nothing was written.
+  recursive function tx_commit() result(olds)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value) :: lg
+    type(gc_value) :: lg, olds
     type(gc_value), allocatable :: ks(:), vs(:)
     integer :: base, i
     tctx => ctx_self()
     vst => gc_my_stack()
+    olds = gc_nil()
     if (.not. gc_root_live(tctx%tx_root)) return
     lg = gc_root_get(tctx%tx_root)
     if (.not. gca_is(lg)) return
@@ -19364,16 +19390,58 @@ contains
           return
        end if
     end do
+    call vs_set(vst, base + 2, gcv_empty([vs_get(vst, base + 1)]))
     do i = 1, size(ks)
-       if (tctx%has_error) exit
-       call vs_set(vst, base + 2, gc_cell_get(ks(i), 1))
+       call vs_set(vst, base + 2, gcv_conj(vs_get(vst, base + 2), gc_cell_get(ks(i), 1), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+    end do
+    ! every ref written, none skipped: all or none (model/stm.lisp)
+    do i = 1, size(ks)
        call gc_state_lock()
        call gc_set_slot(ks(i), 1, vs(i))
        call gc_state_unlock()
-       call notify_watches(ks(i), vs_get(vst, base + 2), vs(i), [vs_get(vst, base + 1)])
+    end do
+    olds = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
+  end function tx_commit
+
+  ! The committed refs' watches, the lock released, in the log's order;
+  ! one that throws ends them, the sends then dropped (LockingTransaction.run).
+  recursive subroutine tx_notify(lg, olds)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: lg, olds
+    type(gc_value), allocatable :: ks(:), vs(:)
+    integer :: base, i
+    tctx => ctx_self()
+    vst => gc_my_stack()
+    if (.not. gca_is(lg) .or. .not. gcv_is(olds)) return
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, lg)
+    call vs_set(vst, base + 2, olds)
+    call gca_entries(vs_get(vst, base + 1), ks, vs)
+    do i = 1, min(size(ks), gcv_count(vs_get(vst, base + 2)))
+       if (tctx%has_error) exit
+       call notify_watches(ks(i), gcv_nth(vs_get(vst, base + 2), i - 1), vs(i), &
+            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     end do
     call vs_leave(vst, base)
-  end subroutine tx_commit
+  end subroutine tx_notify
+
+  ! A ref handed to an atom's own operation (swap!, compare-and-set!,
+  ! reset!, swap-vals!, reset-vals!): refused as clj refuses it -- a Ref
+  ! is not an IAtom -- rather than written outside any transaction.
+  logical function ref_refused(a0, roots)
+    type(gc_value), intent(in) :: a0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: a
+    a = strip_meta(a0)
+    ref_refused = (gc_kind(a) == OBJ_ATOM)
+    if (.not. ref_refused) return
+    ref_refused = (gc_i1(a) == 1)
+    if (ref_refused) call raise_class("clotran.host.class_cast_exception", &
+         "class clotran.host.ref cannot be cast to class clotran.host.i_atom", roots)
+  end function ref_refused
 
   ! Clojure's truthiness: everything except nil and false.
   ! The type of a value, as a keyword. Everything else that asks

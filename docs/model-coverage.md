@@ -48,7 +48,7 @@ the commit that moves it.
 | Several threads on one heap: per-thread batches, the state lock, stopping every thread for a collection | `GC.f90` | none; the heap books are one thread's view | **Owed** | The largest risk |
 | Lock-free Var reads, atoms' compare-and-swap | `seqlock.c` (80), `Eval.f90` | none | **Owed** | |
 | Futures, promises, latches, a wait's deadlock detection | `tasks.inc` (440) | none | **Owed** | |
-| Transactions (STM) | `Eval.f90` | none | **Owed** | Serialised under one lock today (DEVIATIONS 10), so small to model |
+| Transactions (STM) | `Eval.f90` `tx_*`, B_RUNTX | stm: serializable in lock order, a read seeing the serial run's value, all-or-none commits, each thread's transactions once in order, the holder never waits and only an idle thread waits for another's lock, the release within its length + 2 holder steps | **Modeled**, hand-written | Serialised under one lock (DEVIATIONS 10); modelling it found three bugs, fixed 2026-10-19: swap!/compare-and-set! wrote a ref outside any transaction, a throwing watch left half a commit, a watch's own dosync deadlocked on the held lock |
 
 ## Data structures
 
