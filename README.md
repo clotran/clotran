@@ -79,8 +79,8 @@ $ clotran                             # then, at its prompt:
 
 ```clojure
 (require '[clotran.plot :as plot])
-(plot/y= (* x x))                     ; a window with the parabola, in front
-(plot/y= (sin x) (/ x 4))             ; the same window, two curves
+(plot/plot (fn [x] (* x x)))          ; a window with the parabola, in front
+(plot/plot [clojure.math/sin #(/ % 4)]) ; the same window, two curves
 ```
 
 No compiler and no git are needed for it, on macOS or Windows.

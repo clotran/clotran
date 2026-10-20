@@ -99,7 +99,7 @@
 
 A library goes in deps.edn, as :git/url and :git/sha:
   {:deps {clotran/clotran-plot {:git/url \"https://github.com/clotran/clotran-plot\"
-                                :git/sha \"c5a8f98344f7c3ce90f013b2f7ddefbf52d061c7\"}}}
+                                :git/sha \"fc0e70a9e8610af85906a0eb23d4d27451596798\"}}}
 then clotran deps. More: https://github.com/clotran/clotran/blob/main/docs/guide.md")
 
 ;; --- clotran new NAME -----------------------------------------------------
@@ -126,9 +126,9 @@ then clotran deps. More: https://github.com/clotran/clotran/blob/main/docs/guide
                              ";; :clotran/profile picks how Fortran is compiled: :dev (checks, no\n"
                              ";; optimization), :release (the default) or :fast.\n"
                              "{:paths [\"src\"]\n"
-                             " :deps {;; graphs in a window, (plot/show f): take the ;; off the next two lines\n"
+                             " :deps {;; graphs in a window, (plot/plot f): take the ;; off the next two lines\n"
                              "        ;; clotran/clotran-plot {:git/url \"https://github.com/clotran/clotran-plot\"\n"
-                             "        ;;                       :git/sha \"c5a8f98344f7c3ce90f013b2f7ddefbf52d061c7\"}\n"
+                             "        ;;                       :git/sha \"fc0e70a9e8610af85906a0eb23d4d27451596798\"}\n"
                              "        }\n"
                              " :aliases {:test {:extra-paths [\"test\"]}}}\n"))
           (clotran-spit (str name "/src/" dir "/core.cljf")
@@ -146,7 +146,7 @@ then clotran deps. More: https://github.com/clotran/clotran/blob/main/docs/guide
                              "For graphs, take the ;; off clotran-plot's two lines in deps.edn, run\n"
                              "`clotran deps` to fetch it, then at the REPL:\n\n"
                              "    (require '[clotran.plot :as plot] '[clojure.math :as m])\n"
-                             "    (plot/show m/sin)             ; a window opens with the graph\n\n"
+                             "    (plot/plot m/sin)             ; a window opens with the graph\n\n"
                              "In Emacs with clotran-mode, open src/" dir "/core.cljf and C-c C-z; in VS Code, the clotran extension.\n"))
           (println (str "made " name ": src/" dir "/core.cljf, test/" dir "/core_test.cljf, deps.edn"))
           (exit! 0))))))

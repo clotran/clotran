@@ -61,7 +61,7 @@ yet and says to run it.
 $ clotran new my-app                  # deps.edn, src, test
 $ cd my-app                           # take the ;; off clotran-plot in deps.edn
 $ clotran deps                        # ready: clotran/clotran-plot clotran/clotran-ui
-$ clotran                             # (require '[clotran.plot :as plot]) (plot/show clojure.math/sin)
+$ clotran                             # (require '[clotran.plot :as plot]) (plot/plot clojure.math/sin)
 ```
 
 `clotran nrepl [--port N]` starts the nREPL server, `clotran-nrepl`, in a
