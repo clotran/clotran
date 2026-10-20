@@ -12,9 +12,15 @@
 
 static _Atomic int64_t clotran_seq = 0;
 
-/* the outermost acquire of the state lock: the counter goes odd */
+/* the outermost acquire of the state lock: the counter goes odd. The
+ * fence keeps the writer's stores after it for a reader that sees one of
+ * them -- the release fence of Boehm's seqlock writer ("Can seqlocks get
+ * along with programming language memory models?", 2012); the RMW's own
+ * release orders only what came BEFORE it. model/seqlock.lisp proves the
+ * protocol on the interleavings these orders allow. */
 void clotran_seq_begin(void) {
   atomic_fetch_add_explicit(&clotran_seq, 1, memory_order_acq_rel);
+  atomic_thread_fence(memory_order_release);
 }
 
 /* the outermost release: even again, after the writer's stores */

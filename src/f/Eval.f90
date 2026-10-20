@@ -16152,8 +16152,8 @@ contains
                gcv_nth(args, 1), [vs_get(vst, base + 1)])) then
              continue   ! the validator's refusal stands and the agent stays failed
           else
-             call gc_set_slot(a, 5, gc_nil())
-             if (n >= 2) call gc_set_slot(a, 1, gcv_nth(args, 1))
+             call gc_cell_set(a, 5, gc_nil())
+             if (n >= 2) call gc_cell_set(a, 1, gcv_nth(args, 1))   ! under the state lock: deref takes none
              out = gc_slot(a, 1)
              ! the actions queued behind the failure were kept (B_AGENTPOP
              ! stops at a failed agent): :clear-actions drops them, else
@@ -16402,7 +16402,7 @@ contains
                  ! :continue forgets the failure; :fail keeps it
                  if (gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
                       gc_key("fail", [vs_get(vst, base + 1), vs_get(vst, eb + 1)]))) &
-                      call gc_set_slot(vs_get(vst, base + 2), 5, vs_get(vst, eb + 1))
+                      call gc_cell_set(vs_get(vst, base + 2), 5, vs_get(vst, eb + 1))
                  call vs_leave(vst, eb)
                end block
             else if (.not. validate_ref(vs_get(vst, base + 2), &
@@ -16419,7 +16419,7 @@ contains
                  call gce_clear_error()
                  if (gc_equal(gc_slot(vs_get(vst, base + 2), 3), &
                       gc_key("fail", [vs_get(vst, base + 1), vs_get(vst, eb + 1)]))) &
-                      call gc_set_slot(vs_get(vst, base + 2), 5, vs_get(vst, eb + 1))
+                      call gc_cell_set(vs_get(vst, base + 2), 5, vs_get(vst, eb + 1))
                  call vs_leave(vst, eb)
                end block
             else
@@ -16427,7 +16427,7 @@ contains
                ! notifies them
                res = vs_get(vst, base + 3)
                call vs_set(vst, base + 3, gc_slot(vs_get(vst, base + 2), 1))
-               call gc_set_slot(vs_get(vst, base + 2), 1, res)
+               call gc_cell_set(vs_get(vst, base + 2), 1, res)   ! deref reads it with no lock (model/seqlock.lisp)
                call notify_watches(vs_get(vst, base + 2), vs_get(vst, base + 3), res, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                call release_sends(tctx%nested_root)
             end if
