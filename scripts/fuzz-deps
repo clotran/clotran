@@ -137,7 +137,7 @@
       ;; THE MODEL: breadth first; the project's own :deps chosen first
       (let [proj-named (set (keys proj-deps))
             dir-of (fn [lib c] (if-let [sha (:git/sha c)]
-                                 (str (fs/home) "/.clotran/cache/src/" lib "/" sha)
+                                 (str (fs/home) "/.clotran/cache/tree/" lib "/" sha)
                                  (str (fs/canonicalize (:local/root c)))))
             result
             (loop [q (vec (for [[l c] proj-deps] [l c "project"])) chosen [] where {} err nil]
@@ -269,7 +269,7 @@
           cs (g/generate g-case 10 (+ seed c))
           _ (fs/create-dirs dir)
           {:keys [project alias? expect loads]} (with-redefs [fs/home (constantly home)] (build! dir cs))
-          _ (swap! kinds update (or (:error expect) (if (some #(str/includes? % ".clotran/cache/src") (:path expect)) :path-with-git :path)) (fnil inc 0))
+          _ (swap! kinds update (or (:error expect) (if (some #(str/includes? % ".clotran/cache/tree") (:path expect)) :path-with-git :path)) (fnil inc 0))
           r (run (cond-> ["sh" deps-bin] alias? (conj "-A:dev") true (conj project)) {"HOME" home "CLOTRAN" repo} 300)]
       (cond
         (:timeout r) (problem "TIMEOUT case" c ": clotran-deps did not answer in 300 s")

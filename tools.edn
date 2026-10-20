@@ -7,7 +7,7 @@
 ;; CLOTRAN_NREPL / CLOTRAN_IDE / CLOTRAN_CLJFMT, is used instead when there
 ;; is one. No project names them.
 {clotran/clotran-nrepl {:git/url "https://github.com/clotran/clotran-nrepl.git"
-                        :git/sha "211616104c225498b794edbf3f6002dcc52c873f"}
+                        :git/sha "1fbe8dbfe83d09bb8f20baf2f4b50c3e2a538558"}
  clotran/clotran-ide {:git/url "https://github.com/clotran/clotran-ide.git"
                       :git/sha "a87df973d53504e76643f37fbf94b3e8be5ac00b"}
  clotran/cljfmt {:git/url "https://github.com/clotran/cljfmt.git"
