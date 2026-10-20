@@ -15,6 +15,9 @@
 ! leave the original untouched. Unlike the refcounted version there is
 ! no per-entry bookkeeping to get right -- the old runs simply become
 ! unreachable when nothing refers to them.
+!
+! Formally: model/arraymap.lisp -- get, assoc, dissoc either way and the
+! positional edits, as the loops below run them, and their step counts.
 module PersistentArrayMap
   use GC
   implicit none
@@ -157,9 +160,6 @@ contains
     call gc_set_i1(out, n)
   end function gcm_assoc
 
-  ! Removing the LAST entry into the hole left by the removed one,
-  ! rather than shifting the tail down: a map is unordered, so the
-  ! cheap move is the correct one. Clojure's own array map does this.
   ! swap: the last entry fills the hole, as a TRANSIENT's dissoc! does
   ! (TransientArrayMap.doWithout); without it the entries after the hole
   ! close it up in order, as PersistentArrayMap.without does

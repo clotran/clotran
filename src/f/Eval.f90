@@ -1808,34 +1808,40 @@ contains
     core = gcn_find("clojure.core")
     if (gc_kind(core) /= OBJ_NS) return
     if (gc_identical(core, nsv)) return
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, nsv)
     call vs_set(vst, base + 2, core)
-    call vs_set(vst, base + 3, gc_cell_get(nsv, 2))
-    if (.not. gca_is(vs_get(vst, base + 3))) call vs_set(vst, base + 3, gca_empty([vs_get(vst, base + 1)]))
-    ! ks and vls are held by core's map, which core holds
-    call gca_entries(gc_cell_get(vs_get(vst, base + 2), 2), ks, vls)
-    do i = 1, size(ks)
-       if (.not. gcn_is_var(vls(i))) cycle
-       owner = gc_slot(vls(i), 3)
-       if (.not. gc_identical(owner, vs_get(vst, base + 2))) cycle
-       ! refer maps only public Vars, whatever namespace is current; and a
-       ! Var made private since it was referred -- a builtin core.clj
-       ! redefines ^:private (reduce1, spread, sigs) -- loses that refer
-       if (var_private(vls(i))) then
-          if (gc_identical(gca_get(vs_get(vst, base + 3), ks(i)), vls(i))) then
-             m = gca_dissoc(vs_get(vst, base + 3), ks(i), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-             call vs_set(vst, base + 3, m)
+    ! a compare-and-swap of the mappings, retried from what is there now,
+    ! as Namespace.reference: a store of the snapshot lost an intern made
+    ! meanwhile (model/envns.lisp)
+    do
+       call vs_set(vst, base + 4, gc_cell_get(vs_get(vst, base + 1), 2))
+       call vs_set(vst, base + 3, vs_get(vst, base + 4))
+       if (.not. gca_is(vs_get(vst, base + 3))) call vs_set(vst, base + 3, gca_empty([vs_get(vst, base + 1)]))
+       ! ks and vls are held by core's map, which core holds
+       call gca_entries(gc_cell_get(vs_get(vst, base + 2), 2), ks, vls)
+       do i = 1, size(ks)
+          if (.not. gcn_is_var(vls(i))) cycle
+          owner = gc_slot(vls(i), 3)
+          if (.not. gc_identical(owner, vs_get(vst, base + 2))) cycle
+          ! refer maps only public Vars, whatever namespace is current; and a
+          ! Var made private since it was referred -- a builtin core.clj
+          ! redefines ^:private (reduce1, spread, sigs) -- loses that refer
+          if (var_private(vls(i))) then
+             if (gc_identical(gca_get(vs_get(vst, base + 3), ks(i)), vls(i))) then
+                m = gca_dissoc(vs_get(vst, base + 3), ks(i), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                call vs_set(vst, base + 3, m)
+             end if
+             cycle
           end if
-          cycle
-       end if
-       ! the namespace's own interns and earlier refers win, as refer's
-       ! check for a name already mapped keeps them
-       if (gca_contains(vs_get(vst, base + 3), ks(i))) cycle
-       m = gca_assoc(vs_get(vst, base + 3), ks(i), vls(i), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-       call vs_set(vst, base + 3, m)
+          ! the namespace's own interns and earlier refers win, as refer's
+          ! check for a name already mapped keeps them
+          if (gca_contains(vs_get(vst, base + 3), ks(i))) cycle
+          m = gca_assoc(vs_get(vst, base + 3), ks(i), vls(i), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 3, m)
+       end do
+    if (gc_cell_cas(vs_get(vst, base + 1), 2, vs_get(vst, base + 4), vs_get(vst, base + 3))) exit
     end do
-    call gc_set_slot(vs_get(vst, base + 1), 2, vs_get(vst, base + 3))
     call vs_leave(vst, base)
   contains
     logical function var_private(var)
@@ -14030,14 +14036,11 @@ contains
        ! (.unmap ns sym): the mapping goes, the Var itself stays
        ! wherever else it is referred from. Namespace.unmap.
        block
-         type(gc_value) :: nsv, m
+         type(gc_value) :: nsv
          nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          if (gc_kind(nsv) == OBJ_NS) then
-            call vs_set(vst, base + 2, nsv)
-            m = gca_dissoc(gc_slot(vs_get(vst, base + 2), 2), strip_meta(gcv_nth(args, 1)), &
-                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-            call gc_set_slot(vs_get(vst, base + 2), 2, m)
+            call gcn_slot_dissoc(nsv, 2, strip_meta(gcv_nth(args, 1)))
             ! Namespace.unmap is void: ns-unmap answers nil
          end if
        end block
@@ -14565,18 +14568,11 @@ contains
        ! a Var under a name, not a NAMESPACE under a name. Sharing them
        ! put every :as alias into the bindings map, where nothing looks.
        block
-         type(gc_value) :: nsv, m
+         type(gc_value) :: nsv
          nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          if (gc_kind(nsv) == OBJ_NS) then
-            call vs_set(vst, base + 2, nsv)
-            m = gc_slot(vs_get(vst, base + 2), 3)
-            if (.not. gca_is(m)) m = gca_empty([vs_get(vst, base + 1)])
-            call vs_set(vst, base + 3, m)
-            m = gca_assoc(vs_get(vst, base + 3), strip_meta(gcv_nth(args, 1)), &
-                 gcv_nth(args, 2), &
-                 [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-            call gc_set_slot(vs_get(vst, base + 2), 3, m)
+            call gcn_slot_assoc(nsv, 3, strip_meta(gcv_nth(args, 1)), gcv_nth(args, 2))
          end if
        end block
     case (B_NSREFER)
@@ -14584,16 +14580,12 @@ contains
        ! another namespace -- which is all refer is. addAlias is the
        ! same operation on slot 3.
        block
-         type(gc_value) :: nsv, m
+         type(gc_value) :: nsv
          nsv = strip_meta(gcv_nth(args, 0))
          out = gc_nil()
          if (gc_kind(nsv) == OBJ_NS) then
             call vs_set(vst, base + 2, nsv)
-            m = gc_slot(vs_get(vst, base + 2), 2)
-            if (.not. gca_is(m)) m = gca_empty([vs_get(vst, base + 1)])
-            m = gca_assoc(m, strip_meta(gcv_nth(args, 1)), gcv_nth(args, 2), &
-                 [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-            call gc_set_slot(vs_get(vst, base + 2), 2, m)
+            call gcn_slot_assoc(nsv, 2, strip_meta(gcv_nth(args, 1)), gcv_nth(args, 2))
             out = vs_get(vst, base + 2)
          end if
        end block

@@ -1159,6 +1159,28 @@
 (check "a frame names its file" (boolean (re-find #"language_test" (str (.getFileName (aget st-trace 1))))) true)
 (check "a frame has a line" (pos? (.getLineNumber (aget st-trace 1))) true)
 
+;;; ---- namespaces from several threads at once ------------------
+;;
+;; Every write of the namespace registry and of a namespace's mappings is
+;; a compare-and-swap retried from what is there now, as clj's Namespace
+;; (model/envns.lisp): a read, an assoc and a store lost ~40% of these
+;; create-ns and ~13% of these interns and refers.
+(let [fs (mapv (fn [t] (future (doseq [i (range 50)] (create-ns (symbol (str "lt-rz" t "-" i)))))) (range 8))]
+  (run! deref fs)
+  (check "create-ns from eight futures: every namespace registered"
+         (count (remove #(find-ns (symbol %)) (for [t (range 8) i (range 50)] (str "lt-rz" t "-" i)))) 0))
+(create-ns 'lt-rmap)
+(let [n (the-ns 'lt-rmap)
+      v (intern 'user 'lt-shared-v 1)
+      fs (concat (mapv (fn [t] (future (doseq [i (range 100)] (intern n (symbol (str "iv" t "-" i)) i)))) (range 4))
+                 (mapv (fn [t] (future (doseq [i (range 100)] (.refer n (symbol (str "rf" t "-" i)) v)))) (range 4)))]
+  (run! deref fs)
+  (check "interns racing refers in one namespace: every mapping kept"
+         (count (remove #(get (ns-map n) (symbol %))
+                        (concat (for [t (range 4) i (range 100)] (str "iv" t "-" i))
+                                (for [t (range 4) i (range 100)] (str "rf" t "-" i)))))
+         0))
+
 ;;; ---- tasks: futures that yield ------------------------------------
 ;;
 ;; A future is a task on a thread of its own (tasks.inc), running at

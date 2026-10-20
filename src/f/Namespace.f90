@@ -19,6 +19,11 @@
 ! program has defined hangs off them. That is also the semantics --
 ! Clojure's namespaces live as long as the process and are dropped
 ! only by remove-ns.
+!
+! Several threads write the registry and a namespace's slots at once;
+! each write is a compare-and-swap retried from what is there now, as
+! clj's Namespace, proved linearizable, exactly once and lock-free in
+! model/casloop.lisp and model/envns.lisp.
 module Namespace
   use GC
   use Assoc
@@ -36,7 +41,7 @@ module Namespace
 
   public :: gcn_reset, gcn_current, gcn_set_current, gcn_find_or_create, gcn_find, gcn_remove
   public :: gcn_intern, gcn_lookup, gcn_var_value, gcn_set_var, gcn_is_var
-  public :: gcn_binding_box, gcn_var_set
+  public :: gcn_binding_box, gcn_var_set, gcn_slot_assoc, gcn_slot_dissoc
   public :: gcn_name, gcn_all
   public :: gcn_image_write, gcn_image_read
 
@@ -73,7 +78,7 @@ contains
     call gc_global_keep(registry_root, vs_get(base + 1))
     ns = make_ns("user", [roots, vs_get(base + 1)])
     call vs_set(base + 2, ns)
-    call register(ns)
+    ns = register(ns)
     call gc_global_keep(current_root, vs_get(base + 2))
     call vs_leave(base)
   end subroutine gcn_reset
@@ -93,18 +98,78 @@ contains
     call vs_leave(base)
   end function make_ns
 
-  subroutine register(ns)
+  ! ns into the registry, or the namespace another thread registered
+  ! under its name first, as Namespace.findOrCreate's putIfAbsent: a
+  ! compare-and-swap of the registry, retried from what is there now
+  ! (model/envns.lisp, model/casloop.lisp) -- a read, an assoc and a
+  ! store lost 40% of eight threads' create-ns.
+  function register(ns) result(out)
     type(gc_value), intent(in) :: ns
-    type(gc_value) :: reg
+    type(gc_value) :: out, cur
     integer :: base
-    base = vs_enter(1)
+    base = vs_enter(3)
     call vs_set(base + 1, ns)
-    reg = gc_root_get(registry_root)
-    reg = gca_assoc(reg, gc_slot(vs_get(base + 1), 1), vs_get(base + 1), &
-         [vs_get(base + 1), reg])
-    call gc_global_keep(registry_root, reg)
+    do
+       call vs_set(base + 2, gc_root_get(registry_root))
+       cur = gca_get(vs_get(base + 2), gc_slot(vs_get(base + 1), 1))
+       if (gc_kind(cur) == OBJ_NS) then
+          out = cur
+          exit
+       end if
+       call vs_set(base + 3, gca_assoc(vs_get(base + 2), gc_slot(vs_get(base + 1), 1), vs_get(base + 1), &
+            [vs_get(base + 1), vs_get(base + 2)]))
+       if (gc_root_cas(registry_root, vs_get(base + 2), vs_get(base + 3))) then
+          out = vs_get(base + 1)
+          exit
+       end if
+    end do
     call vs_leave(base)
-  end subroutine register
+  end function register
+
+  ! k -> v into slot i of ns -- 2 its mappings, 3 its aliases -- as
+  ! Namespace.reference and addAlias: a compare-and-swap retried from
+  ! what is there now, so a concurrent intern is never overwritten
+  ! (model/envns.lisp)
+  subroutine gcn_slot_assoc(ns, i, k, v)
+    type(gc_value), intent(in) :: ns, k, v
+    integer, intent(in) :: i
+    type(gc_value) :: m
+    integer :: base
+    if (gc_kind(ns) /= OBJ_NS) return
+    base = vs_enter(4)
+    call vs_set(base + 1, ns)
+    call vs_set(base + 2, k)
+    call vs_set(base + 3, v)
+    do
+       call vs_set(base + 4, gc_cell_get(vs_get(base + 1), i))
+       m = vs_get(base + 4)
+       if (.not. gca_is(m)) m = gca_empty([vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+       m = gca_assoc(m, vs_get(base + 2), vs_get(base + 3), &
+            [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3), vs_get(base + 4)])
+       if (gc_cell_cas(vs_get(base + 1), i, vs_get(base + 4), m)) exit
+    end do
+    call vs_leave(base)
+  end subroutine gcn_slot_assoc
+
+  ! k out of slot i of ns, as Namespace.unmap and removeAlias
+  subroutine gcn_slot_dissoc(ns, i, k)
+    type(gc_value), intent(in) :: ns, k
+    integer, intent(in) :: i
+    type(gc_value) :: m
+    integer :: base
+    if (gc_kind(ns) /= OBJ_NS) return
+    base = vs_enter(3)
+    call vs_set(base + 1, ns)
+    call vs_set(base + 2, k)
+    do
+       call vs_set(base + 3, gc_cell_get(vs_get(base + 1), i))
+       if (.not. gca_is(vs_get(base + 3))) exit
+       m = gca_dissoc(vs_get(base + 3), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)])
+       if (gc_identical(m, vs_get(base + 3))) exit
+       if (gc_cell_cas(vs_get(base + 1), i, vs_get(base + 3), m)) exit
+    end do
+    call vs_leave(base)
+  end subroutine gcn_slot_dissoc
 
   function gcn_current(roots) result(ns)
     type(gc_value), intent(in) :: roots(:)
@@ -205,21 +270,32 @@ contains
   end function gcn_find
 
   ! Namespace.remove: the namespace that was registered under name,
-  ! taken out of the registry; nil when there was none.
+  ! taken out of the registry; nil when there was none. A
+  ! compare-and-swap, as register's.
   function gcn_remove(name) result(ns)
     character(len=*), intent(in) :: name
-    type(gc_value) :: ns, key, reg
+    type(gc_value) :: ns, key
     type(gc_value) :: none(0)
     integer :: base
-    ns = gcn_find(name)
-    if (gc_kind(ns) /= OBJ_NS) return
-    base = vs_enter(2)
-    call vs_set(base + 1, ns)
+    ns = gc_nil()
+    if (.not. roots_live()) return
+    base = vs_enter(3)
     key = gc_str(name, none)
-    call vs_set(base + 2, key)
-    reg = gca_dissoc(gc_root_get(registry_root), vs_get(base + 2), [vs_get(base + 1), vs_get(base + 2)])
-    call gc_global_keep(registry_root, reg)
-    ns = vs_get(base + 1)
+    call vs_set(base + 1, key)
+    do
+       call vs_set(base + 2, gc_root_get(registry_root))
+       ns = gca_get(vs_get(base + 2), vs_get(base + 1))
+       if (gc_kind(ns) /= OBJ_NS) then
+          ns = gc_nil()
+          exit
+       end if
+       call vs_set(base + 3, ns)
+       if (gc_root_cas(registry_root, vs_get(base + 2), &
+            gca_dissoc(vs_get(base + 2), vs_get(base + 1), [vs_get(base + 1), vs_get(base + 2), vs_get(base + 3)]))) then
+          ns = vs_get(base + 3)
+          exit
+       end if
+    end do
     call vs_leave(base)
   end function gcn_remove
 
@@ -238,7 +314,7 @@ contains
     ns = gca_get(vs_get(base + 2), vs_get(base + 1))
     if (gc_kind(ns) /= OBJ_NS) then
        ns = make_ns(name, [roots, vs_get(base + 1), vs_get(base + 2)])
-       call register(ns)
+       ns = register(ns)
     end if
     call vs_leave(base)
   end function gcn_find_or_create

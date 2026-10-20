@@ -57,7 +57,7 @@ the commit that moves it.
 | Persistent vector, subvec | `PersistentVector.f90` (490) | vector | **Modeled**, hand-written | Generating it was planned |
 | Sorted map | `Assoc.f90` (930) | btree | **Modeled**, hand-written | |
 | Hash map trie | `PersistentHashMap.f90` (515) | hashmap, and hashseq its seq | **Modeled**, hand-written | get, assoc and dissoc, the count they keep, the depth and their step counts (2026-10-19); a bucket is taken as the alist it behaves as |
-| Array map, list, environments, namespaces | ~1k together | none | **Owed** | Small |
+| Array map, list, environments, namespaces | `PersistentArrayMap.f90`, `PersistentList.f90`, `Env.f90`, `Namespace.f90` (~1k) | arraymap, envns, and casloop for the registry's and mappings' compare-and-swap | **Modeled**, hand-written | Array map get/assoc/dissoc (both ways) and the positional edits as their loops run, the list's cached count, an env's walk and what a set shows through shared frames, intern keeping a Var, one namespace a name; every registry and mappings write linearizable, exactly once, lock-free (2026-10-19) -- the read-assoc-store before it lost ~40% of concurrent create-ns |
 | A string's index | `GC.f90` | string | **Modeled**, hand-written | |
 
 ## The package boundary

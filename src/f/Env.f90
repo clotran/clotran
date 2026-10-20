@@ -19,6 +19,9 @@
 ! That is deliberate: `def` and `let*` add to the
 ! frame a closure may already be holding, and everything sharing that
 ! frame must see the binding.
+!
+! Formally: model/envns.lisp -- the walk ends (outers point only older),
+! what a set shows through every frame that shares it, and its steps.
 module Env
   use GC
   use PersistentArrayMap

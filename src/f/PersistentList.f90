@@ -14,6 +14,9 @@
 ! more than allocation: `()` must be identical to `()` everywhere, and
 ! an empty list is not nil -- (seq ()) is nil but () itself is a list,
 ! which is why this is a real object and not GCT_NIL.
+!
+! Formally: model/arraymap.lisp proves the cached count is the chain's
+! length, and what first and rest of a cons answer.
 module PersistentList
   use GC
   implicit none
