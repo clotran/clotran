@@ -67,12 +67,11 @@ every command.
 
 **Libraries and graphs.** A library goes in the project's `deps.edn`,
 pinned to a commit by its `:git/sha`, and `clotran deps` fetches it --
-the one command that downloads. `clotran new` writes
-[clotran-plot](https://github.com/clotran/clotran-plot) there, commented
-out:
+the one command that downloads. For graphs, add the line
+[clotran-plot](https://github.com/clotran/clotran-plot)'s README gives:
 
 ```
-$ clotran new graphs && cd graphs     # take the ;; off clotran-plot's two lines in deps.edn
+$ clotran new graphs && cd graphs     # add clotran-plot's line from its README to deps.edn
 $ clotran deps                        # ready: clotran/clotran-plot clotran/clotran-ui
 $ clotran                             # then, at its prompt:
 ```

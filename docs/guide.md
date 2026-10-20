@@ -59,7 +59,7 @@ yet and says to run it.
 
 ```
 $ clotran new my-app                  # deps.edn, src, test
-$ cd my-app                           # take the ;; off clotran-plot in deps.edn
+$ cd my-app                           # add clotran-plot's line (its README) to deps.edn
 $ clotran deps                        # ready: clotran/clotran-plot clotran/clotran-ui
 $ clotran                             # (require '[clotran.plot :as plot]) (plot/plot clojure.math/sin)
 ```
