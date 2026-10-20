@@ -73,6 +73,7 @@ the commit that moves it.
 | Analyzer and tree evaluator | `analyze.inc`, `exec.inc` (7.4k) | the VM model covers the core language's machine | **Owed** | Stage 2 of the generation plan |
 | Flat interpreter | `flat.inc` (2k) | none | **Owed**, or retired | The VM is meant to replace it |
 | Ahead-of-time compiler to Fortran | `compiler.cljf`, `purefort.cljf` (3.4k) | none | **Owed** | Checked today by comparing compiled, interpreted and `clj`; a model would look like vmic's |
+| The REPL's line editor: the input and its cursor, the history, completion | `lineedit.cljf` (520), `tty_shim.c` (190) | lineedit: the cursor stays within the text, an edit changes only its span, the history gives the draft back, completion leaves the candidate in the word's place; each key linear in the input | **Modeled**, hand-written | The terminal itself -- raw mode, the bytes, the width -- is the OS's |
 
 ## Not modeled, on purpose
 

@@ -1,0 +1,40 @@
+(ns clotran.complete
+  "What a name typed so far can complete to, in a namespace: the one
+  answer the REPL's line editor (clotran.lineedit) and clotran-nrepl's
+  completions op both give.
+
+  A prefix with a / is alias/name: the publics of the namespace the alias
+  names (or the namespace of that name), nothing else. Without one: the
+  Vars the namespace maps, clojure.core's publics too -- clotran resolves
+  an unreferred symbol there rather than referring them (DEVIATIONS 3) --
+  then the namespace's aliases and every namespace's name."
+  (:require [clojure.string :as str]))
+
+(defn- var-type [v]
+  (let [m (meta v)]
+    (cond (:macro m) "macro"
+          (fn? @v) "function"
+          :else "var")))
+
+(defn candidates
+  "The symbols, aliased names and namespaces starting with prefix in ns,
+  each {:candidate s :type t :ns n}, sorted by candidate; :type is
+  \"function\", \"macro\", \"var\" or \"namespace\"."
+  [ns prefix]
+  (let [[alias-part name-part] (when (str/includes? prefix "/")
+                                 [(subs prefix 0 (str/index-of prefix "/"))
+                                  (subs prefix (inc (str/index-of prefix "/")))])]
+    (sort-by :candidate
+             (if alias-part
+               (when-let [target (or (get (ns-aliases ns) (symbol alias-part)) (find-ns (symbol alias-part)))]
+                 (for [[s v] (ns-publics target)
+                       :when (str/starts-with? (str s) name-part)]
+                   {:candidate (str alias-part "/" s) :type (var-type v) :ns (str (ns-name target))}))
+               (concat
+                (for [[s v] (merge (ns-publics (the-ns 'clojure.core)) (ns-map ns))
+                      :when (and (var? v) (str/starts-with? (str s) prefix))]
+                  {:candidate (str s) :type (var-type v) :ns (str (ns-name (:ns (meta v))))})
+                (for [[a _] (ns-aliases ns) :when (str/starts-with? (str a) prefix)]
+                  {:candidate (str a) :type "namespace"})
+                (for [n (all-ns) :let [s (str (ns-name n))] :when (str/starts-with? s prefix)]
+                  {:candidate s :type "namespace"}))))))

@@ -1,0 +1,289 @@
+#!/usr/bin/env bb
+;; lineedit-check: the REPL's line editor (src/clj/clotran/lineedit.cljf)
+;; driven under a real pseudo-terminal -- keys typed in, the screen read
+;; back -- one case per feature.
+;;
+;;   scripts/lineedit-check PTYDRIVE OUTDIR CMD ARG...
+;;
+;; PTYDRIVE is test/c/ptydrive built (forkpty, or a ConPTY on Windows);
+;; CMD the clotran command. Each case's keys go through ptydrive, and the
+;; screen is what a small terminal (below) makes of the output: the rows
+;; as they stand, and the cursor. A case passes when its checks do, and
+;; the run fails on the first that does not, printing that screen.
+(require '[babashka.fs :as fs] '[babashka.process :as p] '[clojure.string :as str])
+
+(def args *command-line-args*)
+(def ptydrive (str (fs/absolutize (first args))))
+(def outdir (str (fs/absolutize (second args))))
+(def cmd (vec (drop 2 args)))
+(def windows? (fs/windows?))
+
+;;; ---- a terminal, as much of one as the editor and ConPTY write --------
+
+;; the editor's own table (lineedit/width): what takes two columns
+(def wide [[0x1100 0x115F] [0x2E80 0x303E] [0x3041 0x33FF] [0x3400 0x4DBF] [0x4E00 0x9FFF]
+           [0xA000 0xA4CF] [0xAC00 0xD7A3] [0xF900 0xFAFF] [0xFE30 0xFE4F] [0xFF00 0xFF60]
+           [0xFFE0 0xFFE6] [0x1F300 0x1F64F] [0x1F900 0x1F9FF] [0x20000 0x3FFFD]])
+(defn cwidth [cp] (if (some (fn [[a b]] (<= a cp b)) wide) 2 1))
+
+(defn utf8-cps
+  "bytes (signed) as code points"
+  [bs]
+  (loop [i 0 acc []]
+    (if (>= i (count bs)) acc
+        (let [b (bit-and (nth bs i) 0xFF)
+              k (cond (< b 0x80) 1 (>= b 0xF0) 4 (>= b 0xE0) 3 (>= b 0xC0) 2 :else 1)]
+          (if (> (+ i k) (count bs)) acc
+              (recur (+ i k)
+                     (conj acc (if (= k 1) b
+                                   (reduce (fn [a x] (bit-or (bit-shift-left a 6) (bit-and x 0x3F)))
+                                           (bit-and b (case k 2 0x1F 3 0x0F 4 0x07))
+                                           (map #(nth bs %) (range (inc i) (+ i k))))))))))))
+
+(defn blank-row [cols] (vec (repeat cols " ")))
+
+(defn screen
+  "What a terminal of cols x rows shows after cps: {:rows [string] :cursor [r c]}."
+  [cps cols rows]
+  (let [cps (vec cps) n (count cps)]
+    (loop [i 0 g (vec (repeat rows (blank-row cols))) r 0 c 0 wrap false]
+      (if (>= i n)
+        {:rows (mapv #(str/trimr (apply str %)) g) :cursor [r c]}
+        (let [x (cps i)
+              scroll (fn [g r] (if (>= r rows) [(conj (subvec g 1) (blank-row cols)) (dec rows)] [g r]))]
+          (cond
+            (= x 27)
+            (let [y (get cps (inc i))]
+              (cond
+                (= y 91) ;; CSI
+                (let [j (loop [j (+ i 2)] (if (and (< j n) (not (<= 0x40 (cps j) 0x7E))) (recur (inc j)) j))
+                      ps (apply str (map char (subvec cps (+ i 2) (min j n))))
+                      priv (str/starts-with? ps "?")
+                      nums (mapv #(or (parse-long %) 0) (str/split (str/replace ps #"^[?>=]" "") #";"))
+                      a (max 1 (get nums 0 1)) f (when (< j n) (char (cps j)))
+                      clr (fn [g r c0 c1] (update g r #(into (into (subvec % 0 c0) (repeat (- c1 c0) " ")) (subvec % c1))))]
+                  (if priv
+                    (recur (inc j) g r c false)
+                    (case f
+                      \A (recur (inc j) g (max 0 (- r a)) c false)
+                      \B (recur (inc j) g (min (dec rows) (+ r a)) c false)
+                      \C (recur (inc j) g r (min (dec cols) (+ c a)) false)
+                      \D (recur (inc j) g r (max 0 (- c a)) false)
+                      \G (recur (inc j) g r (min (dec cols) (dec a)) false)
+                      \d (recur (inc j) g (min (dec rows) (dec a)) c false)
+                      (\H \f) (recur (inc j) g (min (dec rows) (dec (max 1 (get nums 0 1)))) (min (dec cols) (dec (max 1 (get nums 1 1)))) false)
+                      \J (let [m (get nums 0 0)]
+                           (recur (inc j)
+                                  (case m
+                                    0 (reduce (fn [g k] (assoc g k (blank-row cols))) (clr g r c cols) (range (inc r) rows))
+                                    1 (reduce (fn [g k] (assoc g k (blank-row cols))) (clr g r 0 (inc c)) (range 0 r))
+                                    (vec (repeat rows (blank-row cols))))
+                                  r c false))
+                      \K (let [m (get nums 0 0)]
+                           (recur (inc j) (case m 0 (clr g r c cols) 1 (clr g r 0 (inc c)) (clr g r 0 cols)) r c false))
+                      \X (recur (inc j) (clr g r c (min cols (+ c a))) r c false)
+                      \P (recur (inc j) (update g r #(into (into (subvec % 0 c) (subvec % (min cols (+ c a)))) (repeat (- cols (max c (- cols a))) " "))) r c false)
+                      \@ (recur (inc j) (update g r #(vec (take cols (concat (subvec % 0 c) (repeat a " ") (subvec % c))))) r c false)
+                      (recur (inc j) g r c wrap))))
+                (= y 93) ;; OSC, to BEL or ST
+                (let [j (loop [j (+ i 2)] (cond (>= j n) j (= (cps j) 7) (inc j) (and (= (cps j) 27) (= (get cps (inc j)) 92)) (+ j 2) :else (recur (inc j))))]
+                  (recur j g r c wrap))
+                :else (recur (+ i 2) g r c wrap)))
+            (= x 13) (recur (inc i) g r 0 false)
+            (= x 10) (let [[g r] (scroll g (inc r))] (recur (inc i) g r c false))
+            (= x 8) (recur (inc i) g r (max 0 (dec c)) false)
+            (< x 32) (recur (inc i) g r c wrap)
+            :else
+            (let [w (cwidth x)
+                  [g r c] (if (or wrap (> (+ c w) cols)) (let [[g r] (scroll g (inc r))] [g r 0]) [g r c])
+                  g (assoc-in g [r c] (String. (Character/toChars x)))
+                  g (if (= w 2) (assoc-in g [r (inc c)] "") g)
+                  c2 (+ c w)]
+              (if (>= c2 cols) (recur (inc i) g r (dec cols) true) (recur (inc i) g r c2 false)))))))))
+
+;;; ---- a case -------------------------------------------------------------
+
+(defn hex [s] (apply str (map #(format "%02x" (bit-and % 0xFF)) (.getBytes ^String s "UTF-8"))))
+
+(def ESC "\u001b")
+(def keys* {:left (str ESC "[D") :right (str ESC "[C") :up (str ESC "[A") :down (str ESC "[B")
+            :home (str ESC "[H") :end (str ESC "[F") :delete (str ESC "[3~")
+            :ctrl-left (str ESC "[1;5D") :ctrl-right (str ESC "[1;5C") :alt-b (str ESC "b") :alt-f (str ESC "f")
+            :enter "\r" :tab "\t" :bs "\u007f" :ctrl-a "\u0001" :ctrl-c "\u0003" :ctrl-d "\u0004" :ctrl-e "\u0005"
+            :ctrl-k "\u000b" :ctrl-l "\u000c" :ctrl-r "\u0012" :ctrl-u "\u0015" :ctrl-w "\u0017"
+            :paste-start (str ESC "[200~") :paste-end (str ESC "[201~")})
+
+(def prompt "user=> ")
+
+(defn steps-text
+  "A case's steps: a string or key types it (each key its own write, a
+  pause after, as a person types), [:until s] waits for s, [:mark] records
+  the screen now, [:wait ms], [:resize c r], [:signal n]."
+  [steps]
+  (str/join
+   (for [s steps]
+     (cond (string? s) (str "S " (hex s) "\nW 120\n")
+           (keyword? s) (str "S " (hex (keys* s)) "\nW 120\n")
+           :else (let [[op a b] s]
+                   (case op
+                     :until (str "U " (hex a) " " (or b 60000) "\n")
+                     :mark "W 150\nM\n"
+                     :send-mark (str "S " (hex a) "\nW 100\nM\n")
+                     :wait (str "W " a "\n")
+                     :raw (str "S " (hex a) "\nW 150\n")
+                     :resize (str "R " a " " b "\n")
+                     :signal (str "K " a "\n")))))))
+
+(def failures (atom 0))
+
+(defn run-case
+  [{:keys [name steps cols rows env argv check] :or {cols 80 rows 24} :as c}]
+  (let [dir (str outdir "/" name)
+        _ (fs/create-dirs dir)
+        home (str outdir "/" (or (:home-of c) name) "/home")
+        _ (fs/create-dirs home)
+        stepf (str dir "/steps") outf (str dir "/out")]
+    (spit stepf (steps-text (concat [[:until (str/trimr prompt) 120000]] steps)))
+    (let [r (p/process {:cmd (concat [ptydrive (str cols) (str rows) stepf outf] (or argv cmd))
+                        :extra-env (merge {"HOME" home "USERPROFILE" home "TERM" "xterm"} env)
+                        :out :string :err :string :dir dir})
+          res (deref r 300000 ::timeout)
+          _ (when (= res ::timeout) (p/destroy-tree r))
+          bs (if (fs/exists? outf) (vec (fs/read-all-bytes outf)) [])
+          marks (if (fs/exists? (str outf ".marks"))
+                  (mapv parse-long (str/split-lines (slurp (str outf ".marks")))) [])
+          abs (fn [k] (screen (utf8-cps (subvec bs 0 (min (count bs) (marks k)))) cols rows))
+          ;; the input as it stands at mark k: from its prompt's row, the cursor from there
+          at (fn [k] (let [{rs :rows [r c] :cursor} (abs k)
+                           p (or (last (filter #(str/starts-with? (rs %) prompt) (range (inc r)))) 0)]
+                       {:rows (vec (reverse (drop-while str/blank? (reverse (subvec rs p))))) :cursor [(- r p) c]}))
+          final (screen (utf8-cps bs) cols rows)
+          ctx {:screen final :at at :abs abs :raw (String. (byte-array bs) "UTF-8") :exit (when (map? res) (:exit res))
+               :home home :err (when (map? res) (:err res))}
+          problems (try (check ctx) (catch Exception e [(str "check threw: " (ex-message e))]))]
+      (if (and (map? res) (empty? problems))
+        (println (str "ok   " name))
+        (do (swap! failures inc)
+            (println (str "FAIL " name ": " (if (map? res) (str/join "; " problems) "no answer in 300 s")))
+            (when (map? res) (print (:err res)))
+            (println "  screen:")
+            (doseq [row (:rows final)] (println (str "  |" row)))
+            (println "  cursor:" (:cursor final)))))))
+
+;; check helpers: each answers a problem, or nil
+(defn rows-of [ctx] (:rows (:screen ctx)))
+(defn has-row [ctx s] (when-not (some #(= (str/trimr s) %) (rows-of ctx)) (str "no row " (pr-str s))))
+(defn has-text [ctx s] (when-not (str/includes? (str/join "\n" (rows-of ctx)) s) (str "no " (pr-str s) " on the screen")))
+(defn lacks-text [ctx s] (when (str/includes? (str/join "\n" (rows-of ctx)) s) (str (pr-str s) " should not be on the screen")))
+(defn exited [ctx n] (when-not (= n (:exit ctx)) (str "exit " (:exit ctx) ", not " n)))
+(defn all [& ps] (vec (remove nil? ps)))
+
+;; the row a result is printed on, after the input's
+(defn result-after [ctx input value]
+  (let [rows (rows-of ctx)
+        i (or (first (keep-indexed (fn [k r] (when (= r (str prompt input)) k)) rows)) -1)]
+    (cond (neg? i) (str "no input row " (pr-str (str prompt input)))
+          (not= value (get rows (inc i))) (str "after " (pr-str input) " came " (pr-str (get rows (inc i))) ", not " (pr-str value)))))
+
+(defn res
+  "waits for a value printed on its own row"
+  [v] [:until (str "\n" v "\r\n")])
+
+(def cases
+  [{:name "eval" :steps ["(+ 1 2)" :enter (res "3") :ctrl-d]
+    :check #(all (result-after % "(+ 1 2)" "3") (exited % 0))}
+   {:name "left-right-insert" :steps ["(* 6 )" :left "7" :enter (res "42") :ctrl-d]
+    :check #(all (result-after % "(* 6 7)" "42"))}
+   {:name "home-end-ctrl-a-e" :steps ["+ 1 2" :home "(" :end ")" :ctrl-a :ctrl-e :enter (res "3") :ctrl-d]
+    :check #(all (result-after % "(+ 1 2)" "3"))}
+   {:name "word-left-right" :steps ["(str :aa :bb)" :ctrl-left :ctrl-w :alt-b :alt-f :ctrl-right :enter (res "\":bb\"") :ctrl-d]
+    :check #(all (result-after % "(str :bb)" "\":bb\""))}
+   {:name "backspace-delete" :steps ["(+ 1 23)" :left :left :bs :home :right :delete "*" :enter (res "3") :ctrl-d]
+    :check #(all (result-after % "(* 1 3)" "3"))}
+   {:name "ctrl-k-u-w" :steps ["junk" :ctrl-u "(inc 41)xyz" :left :left :left :ctrl-k :enter (res "42") "(str 1 2" :ctrl-w "3)" :enter (res "\"13\"") :ctrl-d]
+    :check #(all (result-after % "(inc 41)" "42") (result-after % "(str 1 3)" "\"13\""))}
+   {:name "ctrl-c-abandons" :steps ["(+ 1" :ctrl-c "(+ 2 3)" :enter (res "5") :ctrl-d]
+    :check #(all (has-row % (str prompt "(+ 1^C")) (result-after % "(+ 2 3)" "5") (lacks-text % "error"))}
+   {:name "ctrl-d-ends" :steps [:ctrl-d] :check #(all (exited % 0))}
+   {:name "ctrl-l-clears" :steps ["(+ 1 1)" :enter (res "2") :ctrl-l "(+ 2 2)" [:mark] :ctrl-c :ctrl-d]
+    :check #(let [s ((:abs %) 0)] (all (when-not (= (str prompt "(+ 2 2)") (first (:rows s))) "the prompt is not on the first row")))}
+   {:name "multiline-continuation" :steps ["(+ 1" :enter [:mark] "2)" :enter (res "3") :ctrl-d]
+    :check #(let [s ((:at %) 0)]
+              (all (when-not (= [(str prompt "(+ 1") "  #_=>"] (take 2 (:rows s))) "no continuation prompt")
+                   (when-not (= [1 7] (:cursor s)) "the cursor is not after the continuation prompt")
+                   (has-row % (str prompt "(+ 1")) (has-row % "  #_=> 2)") (has-text % "\n3")))}
+   {:name "complete-by-reader" :steps ["\"(\"" :enter (res "\"(\"") "(str \\()" :enter (res "\"(\"") "(+ 1 ; )" :enter [:mark] "2)" :enter (res "3") :ctrl-d]
+    :check #(all (result-after % "\"(\"" "\"(\"") (result-after % "(str \\()" "\"(\"")
+                 (when-not (= "  #_=>" (second (:rows ((:at %) 0)))) "a comment's ) closed the form")
+                 (has-row % "  #_=> 2)"))}
+   {:name "up-down-within-input" :steps ["(+ 1" :enter "2)" :up " 10" :down :end :enter (res "13") :ctrl-d]
+    :check #(all (has-row % (str prompt "(+ 10 1")) (has-row % "  #_=> 2)"))}
+   {:name "history" :steps ["(+ 1 1)" :enter (res "2") "(+ 1" :enter "2)" :enter (res "3")
+                            :up :up :enter (res "2") :up :enter (res "2") "(+ 7 7)" :up :down :enter (res "14") :ctrl-d]
+    :check #(let [h (str (:home %) "/.clotran/repl-history")
+                  lines (when (fs/exists? h) (str/split-lines (slurp h)))]
+              (all (when-not (= lines ["\"(+ 1 1)\"" "\"(+ 1\\n2)\"" "\"(+ 1 1)\"" "\"(+ 7 7)\""])
+                     (str "history file holds " (pr-str lines)))
+                   (result-after % "(+ 7 7)" "14")))}
+   {:name "history-persists" :home-of "history" :steps [:up :up :enter (res "2") :ctrl-d]
+    :check #(all (result-after % "(+ 1 1)" "2"))}
+   {:name "reverse-search" :steps ["(+ 40 2)" :enter (res "42") "(+ 1 1)" :enter (res "2") :ctrl-r "40" [:mark] :enter (res "42") :ctrl-d]
+    :check #(let [s ((:abs %) 0)]
+              (all (when-not (some #{"(reverse-i-search)`40': (+ 40 2)"} (:rows s)) "no search line")
+                   (when-not (= 2 (count (filter #{"42"} (rows-of %)))) "the found input did not run")))}
+   {:name "tab-one" :steps ["(def zebra-unique 7)" :enter (res "#'user/zebra-unique") "zebra-u" :tab :enter (res "7") :ctrl-d]
+    :check #(all (result-after % "zebra-unique" "7"))}
+   {:name "tab-alias-publics" :steps ["(require '[clojure.string :as s])" :enter (res "nil") "(s/upper-c" :tab " \"a\")" :enter (res "\"A\"") "plot/" :tab [:mark] :ctrl-c :ctrl-d]
+    :check #(all (result-after % "(s/upper-case \"a\")" "\"A\"")
+                 (when-not (= [(str prompt "plot/")] (:rows ((:at %) 0))) "plot/ was completed to something"))}
+   {:name "tab-several-lists" :steps ["(def qq-alpha 1) (def qq-beta 2)" :enter (res "user=> #'user/qq-beta") "qq-" :tab :tab [:mark] :ctrl-c :ctrl-d]
+    :check #(all (has-row % "#'user/qq-alpha") (has-row % (str prompt "#'user/qq-beta"))
+                 (when-not (some (fn [r] (re-matches #"qq-alpha +qq-beta" r)) (:rows ((:abs %) 0))) "no listing of qq-alpha qq-beta")
+                 (when-not (= [(str prompt "qq-")] (:rows ((:at %) 0))) "the input is not drawn again below the listing"))}
+   {:name "paren-blink" :steps ["(+ 1 (* 2 3" [:send-mark ")"] [:wait 600] [:mark] ")" :enter (res "7") :ctrl-d]
+    :check #(all (when-not (= [0 12] (:cursor ((:at %) 0))) (str "the cursor is at " (:cursor ((:at %) 0)) " while the ) shows its opener, not [0 12]"))
+                 (when-not (= [0 19] (:cursor ((:at %) 1))) (str "the cursor came back to " (:cursor ((:at %) 1)) ", not [0 19]")))}
+   {:name "bracketed-paste" :steps [[:raw (str (keys* :paste-start) "(+ 1\r2)\r(+ 3 4)" (keys* :paste-end))] [:mark] :enter (res "user=> 7") :ctrl-d]
+    :check #(let [s ((:at %) 0)]
+              (all (when-not (= [(str prompt "(+ 1") "  #_=> 2)" "  #_=> (+ 3 4)"] (take 3 (:rows s))) "the paste is not the input")
+                   (has-row % "3") (has-row % (str prompt "7"))))}
+   {:name "paste-without-brackets" :steps [[:raw "(+ 1 2)\r(+ 3 4)"] [:mark] :enter (res "user=> 7") :ctrl-d]
+    :check #(all (when-not (= [(str prompt "(+ 1 2)") "  #_=> (+ 3 4)"] (:rows ((:at %) 0))) "a line ran before Enter")
+                 (has-row % "3") (has-row % (str prompt "7")))}
+   {:name "utf8-wide" :steps ["\"é😀中\"" :left :left :bs [:mark] :enter (res "\"é中\"") :ctrl-d]
+    :check #(all (when-not (= [0 9] (:cursor ((:at %) 0))) (str "cursor at " (:cursor ((:at %) 0)) ", not [0 9] (é one column, 中 two)"))
+                 (result-after % "\"é中\"" "\"é中\""))}
+   {:name "wide-at-the-edge" :cols 12 :steps ["\"中中中\"" [:mark] :enter (res "\"中中中\"") :ctrl-d]
+    ;; user=> "中中 is 12 columns, and the third 中 would cross the edge: the next row
+    :check #(let [s ((:at %) 0)]
+              (all (when-not (= [(str prompt "\"中中") "中\""] (take 2 (:rows s))) "the wide character is not moved to the next row")
+                   (when-not (= [1 3] (:cursor s)) (str "cursor at " (:cursor s) ", not [1 3]"))))}
+   {:name "long-line-wraps" :cols 20
+    :steps ["(+ 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1)" :ctrl-a "(inc " :ctrl-e ")" [:wait 600] [:mark] :enter (res "17") :ctrl-d]
+    :check #(let [s ((:at %) 0) want (str prompt "(inc (+ 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1))")]
+              (all (when-not (= (map str/trimr (map (fn [i] (subs want (* 20 i) (min (count want) (* 20 (inc i))))) (range 3)))
+                                (take 3 (:rows s)))
+                     "the input does not wrap at 20 columns")
+                   (when-not (= [2 8] (:cursor s)) (str "cursor at " (:cursor s) ", not [2 8]"))
+                   (has-row % "17")))}
+   {:name "resize" :steps ["(+ 1 2" [:resize 40 24] [:wait 600] ")" :enter (res "3") "(clotran-tty 3)" :enter (res "40") :ctrl-d]
+    :check #(all (has-row % "40"))}
+   {:name "no-editor-env" :env {"CLOTRAN_NO_EDITOR" "1"} :steps ["(+ 1 2)" :enter [:until "3"] :ctrl-d]
+    :check #(all (when (str/includes? (:raw %) "\u001b[?2004h") "the editor ran") (has-text % "3"))}])
+
+(def posix-cases
+  [{:name "restored-after-exit" :argv ["sh" "-c" (str (str/join " " (map #(str "'" % "'") cmd)) "; stty -a")]
+    :steps [:ctrl-d [:until "speed"]]
+    :check #(all (when-not (re-find #"[^-]icanon" (:raw %)) "the terminal was left without icanon")
+                 (when-not (re-find #"[^-]echo\b" (:raw %)) "the terminal was left without echo"))}
+   {:name "restored-after-signal" :argv ["sh" "-c" (str "trap 'echo trapped' TERM; " (str/join " " (map #(str "'" % "'") cmd)) "; stty -a")]
+    :steps ["(+ 1" [:signal 15] [:until "speed"]]
+    :check #(all (when-not (re-find #"[^-]icanon" (:raw %)) "the terminal was left raw after SIGTERM"))}
+   {:name "dumb-terminal" :env {"TERM" "dumb"} :steps ["(+ 1 2)" :enter [:until "3"] :ctrl-d]
+    :check #(all (when (str/includes? (:raw %) "\u001b[?2004h") "the editor ran on a dumb terminal"))}])
+
+(fs/create-dirs outdir)
+(doseq [c (concat cases (when-not windows? posix-cases))] (run-case c))
+(let [n (count (concat cases (when-not windows? posix-cases)))]
+  (println (str "line editor: " (- n @failures) "/" n " cases"))
+  (System/exit (if (zero? @failures) 0 1)))

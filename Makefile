@@ -311,6 +311,9 @@ $(B)/socket_shim.o: src/c/socket_shim.c src/c/socket_shim.h | $(B) $(FCSTAMP)
 $(B)/fs_shim.o: src/c/fs_shim.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
+$(B)/tty_shim.o: src/c/tty_shim.c | $(B) $(FCSTAMP)
+	$(CC) -O2 -c $< -o $@
+
 $(B)/proc_shim.o: src/c/proc_shim.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
 
@@ -450,7 +453,7 @@ compiled-objects = $(B)/CompiledFn.o
 $(B)/DynLoad.o: $(B)/GC.o
 $(B)/CompiledFn.o: $(B)/GC.o $(B)/PersistentVector.o $(B)/DynLoad.o
 # TCP sockets: the shim holds what differs between POSIX and Winsock
-socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o $(B)/proc_shim.o
+socket-objects = $(B)/Socket.o $(B)/socket_shim.o $(B)/fs_shim.o $(B)/proc_shim.o $(B)/tty_shim.o
 $(B)/Socket.o: $(B)/GC.o
 eval-objects = $(data-objects) $(B)/Env.o $(B)/Namespace.o $(reader-objects) $(B)/DynLoad.o $(compiled-objects) $(socket-objects) $(vm-objects) $(B)/Eval.o \
 	$(B)/ClotranABI.o
@@ -573,7 +576,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-language check-index check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-lineedit check-language check-index check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
 TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
@@ -710,6 +713,13 @@ check-tree:
 	@echo "--- language_test with every body a tree (CLOTRAN_FLAT=0): the walker the flat form stands beside ---"
 	CLOTRAN_FLAT=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null > $(B)/language_tree.out 2>&1; \
 	  grep -q "^LANGUAGE TESTS PASSED" $(B)/language_tree.out || { grep -E "FAIL|FAILED" $(B)/language_tree.out | head -20; exit 1; }
+# the pseudo-terminal the line editor check types into: forkpty (-lutil on
+# Linux), a ConPTY on Windows (10 1809 on)
+$(B)/ptydrive$(EXE): test/c/ptydrive.c | $(B)
+	$(CC) -O2 $(if $(filter Windows,$(OS_TARGET)),-D_WIN32_WINNT=0x0A00) -o $@ $< $(if $(filter Linux,$(OS_TARGET)),-lutil)
+check-lineedit: $(B)/ptydrive$(EXE)
+	@echo "--- the REPL's line editor under a pseudo-terminal, keys typed in and the screen read back: editing, history, completion, paste, UTF-8, wrapping, resize, the terminal restored (src/clj/clotran/lineedit.cljf) ---"
+	rm -rf $(B)/lineedit && bb scripts/lineedit-check $(B)/ptydrive$(EXE) $(B)/lineedit $(CURDIR)/clotran-bin$(EXE) --launch
 check-banner:
 	@echo "--- the REPL's banner is for a terminal only: a pipe must never see it ---"
 	! (printf '(+ 1 2)\n' | ./clotran-bin src/clj/clojure/core.clj 2>&1 | grep -q 'based on Clojure')
@@ -1069,7 +1079,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof agents agents-drive mainbox
+MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof agents agents-drive mainbox lineedit
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp

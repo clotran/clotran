@@ -16,6 +16,14 @@
   ["--repl"])
 
 (defn- answer! [a] (alter-var-root #'action (constantly a)) nil)
+
+;; the REPL, with its line editor (clotran.lineedit) when there is a terminal
+;; to edit in; on a pipe nothing is loaded and the REPL reads lines
+(defn- repl! []
+  (when (clotran-tty 0)
+    (require (quote clotran.lineedit))
+    ((resolve (quote clotran.lineedit/install!))))
+  (answer! ["--repl"]))
 (defn- exit! [n] (answer! ["--exit" (str n)]))
 
 (def ^:private home (clotran.host.system/getProperty "clotran.home"))
@@ -600,7 +608,7 @@ gives the line -- then clotran deps fetches it. More: https://github.com/clotran
             (println (str "nREPL server started on port " p " on host localhost - nrepl://localhost:" p))
             (flush)
             (if (= "true" (clotran.host.system/getProperty "clotran.tty"))
-              (answer! ["--repl"])
+              (repl!)
               @(promise)))))))
 
 ;; --- clotran lsp: the language server (clotran-ide) over this process's stdio
@@ -701,4 +709,4 @@ gives the line -- then clotran deps fetches it. More: https://github.com/clotran
           (some-> (first args) (str/starts-with? "-"))
           (do (err (str "clotran: unknown option " (first args) " -- clotran --help lists them")) (exit! 2))
           (seq args) (answer! (into ["--run"] args))
-          :else (answer! ["--repl"]))))))
+          :else (repl!))))))

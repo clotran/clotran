@@ -12,19 +12,10 @@
 #   clotran compile foo.cljf    the namespace compiled to a library
 #   clotran build -m NS         one executable
 #
-# This script only adds rlwrap to the REPL when there is a terminal to edit
-# in -- the same flags clj itself uses: -m multi-line, -r remember words,
-# -q/-b tuned for Lisp -- and not where TERM is dumb, as Emacs sets it for
-# a subprocess, whose zero-width "terminal" rlwrap refuses. On Windows the
-# command is bin\clotran.cmd, which runs clotran-bin.exe --launch itself.
+# The REPL edits its own input on a terminal (clotran.lineedit: history,
+# completion from the running REPL, multi-line forms); CLOTRAN_NO_EDITOR=1
+# reads plain lines instead. On Windows the command is bin\clotran.cmd,
+# which runs clotran-bin.exe --launch itself.
 bin="$(cd "$(dirname "$0")" && pwd)/clotran-bin"
 [ -x "$bin" ] || { echo "build first: make" >&2; exit 1; }
-repl=
-case "$1" in "") repl=1 ;; -A*) [ $# -eq 1 ] && repl=1 ;; esac
-if [ -n "$repl" ] && [ -t 0 ] && [ "${TERM:-dumb}" != dumb ]; then
-  if type rlwrap >/dev/null 2>&1; then
-    exec rlwrap -m -r -q '"' -b "(){}[],^%#@\";:'" "$bin" --launch "$@"
-  fi
-  echo "note: install rlwrap for line editing and history" >&2
-fi
 exec "$bin" --launch "$@"

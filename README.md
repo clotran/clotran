@@ -52,6 +52,11 @@ user=> (clojure-version)
 "1.12.6"
 ```
 
+On a terminal the REPL edits its own input on every system: the arrows
+and Emacs keys, Enter running a form once it is whole, Up and Ctrl-R
+through the history (`~/.clotran/repl-history`), Tab completing from
+what the REPL has loaded. `CLOTRAN_NO_EDITOR=1` reads plain lines.
+
 A file is a program, run as with `clj -M`; a project has a `deps.edn`:
 
 ```

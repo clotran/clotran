@@ -1,8 +1,8 @@
 ! clotran-bin: load the files named on the command line, then a REPL.
-! ./clotran, the launcher, wraps this in rlwrap and hands it core.clj.
+! ./clotran, the launcher, runs this with --launch and core.clj.
 !
-! Reads a form per line, evaluates, prints. No line editing of its own
-! -- the launcher supplies rlwrap.
+! Reads a form at a time, evaluates, prints. On a terminal the clotran
+! command gives the REPL its line editor (clotran.lineedit, repl.inc).
 ! The program is run on a thread of its own with a large stack: the
 ! evaluator recurses in Fortran (a builtin calling apply calling a
 ! builtin), and under flang call_builtin's frame is about 176 KB, which

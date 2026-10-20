@@ -30,13 +30,15 @@
     character(len=4096) :: buf
     character(len=16) :: dbuf
     integer :: base, ios, size_read
+    logical :: plain
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
     tctx => ctx_self()
     vst => tctx%stk
     repl_depth = repl_depth + 1
-    base = vs_enter(vst, 3)
+    base = vs_enter(vst, 4)
+    plain = .false.
     call vs_set(vst, base + 1, gc_root_get(global_env_root))
     if (repl_depth > 1) then
        if (gca_is(bm)) call write_break(bm, 6, 8)
@@ -59,18 +61,58 @@
              prompt = "[" // trim(dbuf) // "] " // prompt
           end if
        end if
-       write(*, '(A)', advance='no') prompt
-       flush(6)
-       ! out of the running mutators while it waits for a line: a
-       ! collection another thread needs must not wait for the keyboard
-       call gc_mutator_leave()
-       read(*, '(A)', iostat=ios, size=size_read, advance='no') buf
-       call gc_mutator_enter()
-       ! End of file, or a read error -- gfortran reports a read AFTER
-       ! the end as a positive code, and looping on it never ends. An
-       ! empty line is end of RECORD with size 0, which is a line.
-       if (is_iostat_end(ios) .or. ios > 0) exit
-       line = trim(buf(1:max(size_read, 0)))
+       ! The line editor, when the clotran command set one on a terminal
+       ! (clotran.lineedit/*reader*): it draws the prompt and answers a
+       ! form's text, or nil at the end of input. Should it fail, the
+       ! plain reading below takes over for the rest of this REPL.
+       if (.not. plain) then
+          block
+            type(gc_value) :: ens, evar
+            call vs_set(vst, base + 4, gc_nil())
+            ens = gcn_find("clotran.lineedit", [vs_get(vst, base + 1)])
+            if (gc_kind(ens) == OBJ_NS) then
+               call vs_set(vst, base + 4, ens)
+               evar = gcn_lookup(vs_get(vst, base + 4), gc_sym("*reader*", [vs_get(vst, base + 1), vs_get(vst, base + 4)]))
+               call vs_set(vst, base + 4, gc_nil())
+               if (gcn_is_var(evar)) call vs_set(vst, base + 4, gcn_var_value(evar))
+            end if
+            evar = vs_get(vst, base + 4)
+            plain = evar%tag == GCT_NIL
+          end block
+       end if
+       if (.not. plain) then
+          call gce_clear_error()
+          result = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 4)])
+          call vs_set(vst, base + 3, result)
+          result = gc_str(prompt, [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+          result = gcv_conj(vs_get(vst, base + 3), result, [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+          result = apply(vs_get(vst, base + 4), result)
+          if (tctx%has_error) then
+             block
+                call gce_error(s=dlt_1)
+                print '(A,A)', "line editor: ", dlt_1
+             end block
+             call gce_clear_error()
+             plain = .true.
+             cycle
+          end if
+          if (result%tag == GCT_NIL) exit
+          call text_of(result, s=dlt_1)
+          line = dlt_1
+       else
+          write(*, '(A)', advance='no') prompt
+          flush(6)
+          ! out of the running mutators while it waits for a line: a
+          ! collection another thread needs must not wait for the keyboard
+          call gc_mutator_leave()
+          read(*, '(A)', iostat=ios, size=size_read, advance='no') buf
+          call gc_mutator_enter()
+          ! End of file, or a read error -- gfortran reports a read AFTER
+          ! the end as a positive code, and looping on it never ends. An
+          ! empty line is end of RECORD with size 0, which is a line.
+          if (is_iostat_end(ios) .or. ios > 0) exit
+          line = trim(buf(1:max(size_read, 0)))
+       end if
        if (len(pending) == 0 .and. len(line) == 0) cycle
        if (len(pending) == 0) then
           pending = line

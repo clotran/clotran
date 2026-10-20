@@ -264,7 +264,7 @@ module Eval
   ! (clotran-run-pid argv dir out env): clotran-run without waiting, answering
   ! the child's process id; (clotran-kill pid) ends it -- the debug adapter
   ! starts the native debugger so and stops it when the session ends (PLAN 31a)
-  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473, B_RESETVAL = 474
+  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473, B_RESETVAL = 474, B_TTY = 475
   ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
   integer, parameter :: B_SETMETA = 458
   ! (clotran-resource rel): the file on clotran's path, io/resource's lookup
@@ -1360,6 +1360,7 @@ contains
     call bind_builtin(core, "clotran-sb-set-length", B_SBSETLEN)
     call bind_builtin(core, "clotran-stdin-read-bytes", B_STDINREADB)
     call bind_builtin(core, "clotran-stdout-write-bytes", B_STDOUTWRITEB)
+    call bind_builtin(core, "clotran-tty", B_TTY)
     call bind_builtin(core, "clotran-installed-libraries", B_INSTALLED)
     call bind_builtin(core, "clotran-library-manifest", B_LIBMANIFEST)
     call bind_builtin(core, "count", B_COUNT)
@@ -12299,6 +12300,89 @@ contains
             if (ln > 0) n = c_stdout_write(p(off + 1:off + ln), int(ln, c_long))
             if (n < 0) call fail_as("clotran.host.io_exception", "standard output could not be written", [vs_get(vst, base + 1)])
          end if
+       end block
+    case (B_TTY)
+       ! (clotran-tty op [bytes]): the terminal under the REPL's line
+       ! editor (src/c/tty_shim.c, clotran.lineedit): op 0 whether stdin
+       ! and stdout are terminals, 1 raw mode on, 2 off (as it was), 3 the
+       ! width in columns, 4 the keys typed into the byte array -- how
+       ! many, -1 at end of input, -2 when the window changed size --
+       ! 5 Ctrl-Z's suspend, and (clotran-tty 6 ms) whether a key comes
+       ! within ms.
+       block
+         interface
+            function c_tty_is() bind(C, name="clotran_tty_is") result(r)
+              import :: c_int
+              integer(c_int) :: r
+            end function c_tty_is
+            function c_tty_raw(on) bind(C, name="clotran_tty_raw") result(r)
+              import :: c_int
+              integer(c_int), value :: on
+              integer(c_int) :: r
+            end function c_tty_raw
+            function c_tty_cols() bind(C, name="clotran_tty_cols") result(r)
+              import :: c_int
+              integer(c_int) :: r
+            end function c_tty_cols
+            function c_tty_read(b, cap) bind(C, name="clotran_tty_read") result(r)
+              import :: c_long, c_int8_t
+              integer(c_int8_t), intent(inout) :: b(*)
+              integer(c_long), value :: cap
+              integer(c_long) :: r
+            end function c_tty_read
+            subroutine c_tty_suspend() bind(C, name="clotran_tty_suspend")
+            end subroutine c_tty_suspend
+            function c_tty_wait(ms) bind(C, name="clotran_tty_wait") result(r)
+              import :: c_int
+              integer(c_int), value :: ms
+              integer(c_int) :: r
+            end function c_tty_wait
+         end interface
+         type(gc_value) :: arr
+         integer(1), pointer, contiguous :: p(:)
+         logical :: ok
+         character(len=:), allocatable :: kn
+         integer(c_long) :: n
+         select case (int(int_of_number(gcv_nth(args, 0))))
+         case (0)
+            out = gc_bool(c_tty_is() == 1)
+         case (1)
+            out = gc_bool(c_tty_raw(1_c_int) == 0)
+         case (2)
+            out = gc_bool(c_tty_raw(0_c_int) == 0)
+         case (3)
+            out = gc_int(int(c_tty_cols(), gc_ip))
+         case (4)
+            arr = strip_meta(gcv_nth(args, 1))
+            ok = gc_kind(arr) == OBJ_ARRAY
+            if (ok) then
+               call gcna_kind(gc_i1(arr), kn)
+               ok = kn == "int1" .and. gc_i2(arr) == -1
+            end if
+            if (ok) call gcna_int1_ptr(gc_i1(arr), p, ok)
+            if (.not. ok) then
+               call raise_class("clotran.host.illegal_argument_exception", "not a byte array", [vs_get(vst, base + 1)])
+            else
+               flush(6)
+               call gc_mutator_leave()
+               n = c_tty_read(p, int(size(p), c_long))
+               call gc_mutator_enter()
+               if (n == 0) n = -1
+               out = gc_int(int(n, gc_ip))
+            end if
+         case (5)
+            flush(6)
+            call c_tty_suspend()
+            out = gc_nil()
+         case (6)
+            flush(6)
+            call gc_mutator_leave()
+            ok = c_tty_wait(int(int_of_number(gcv_nth(args, 1)), c_int)) == 1
+            call gc_mutator_enter()
+            out = gc_bool(ok)
+         case default
+            call raise_class("clotran.host.illegal_argument_exception", "clotran-tty: no such op", [vs_get(vst, base + 1)])
+         end select
        end block
     case (B_SOCKREADB, B_SOCKWRITEB)
        ! (clotran-socket-read-bytes h bytes off len ms): up to len bytes into

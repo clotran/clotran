@@ -1,0 +1,525 @@
+(ns clotran.lineedit
+  "The REPL's line editor, on a terminal: the clotran command installs it
+  (install!) when standard input and output are both terminals, TERM is
+  not dumb and CLOTRAN_NO_EDITOR is not set; the REPL (src/f/repl.inc)
+  then asks *reader* for each form's text instead of reading lines.
+
+  Editing: left/right (Ctrl-B/F), Home/End and Ctrl-A/E (the line's ends),
+  a word left/right (Alt-B/F, Ctrl-left/right), Backspace, Delete, Ctrl-K
+  and Ctrl-U (to the line's end, from its start), Ctrl-W and Alt-Backspace
+  (the word before), Alt-D (the word after), Ctrl-L (clear), Ctrl-C (the
+  input abandoned, a fresh prompt), Ctrl-D (end of input on an empty
+  line, else Delete), Ctrl-Z (suspend; on Windows end of input on an
+  empty line, as its consoles mean it), Alt-Enter (a newline whatever the
+  input is). Enter submits once the input reads as whole forms -- the
+  REPL's own reader decides, so strings, comments and \\( are understood
+  -- and is a newline before that, under the continuation prompt. Up and
+  down move between the input's lines, else through the history; Ctrl-R
+  searches it backward. A closing bracket typed shows its opener for a
+  moment. Tab completes from the running REPL (clotran.complete): one
+  candidate is inserted, several their common prefix, a second Tab lists
+  them. A paste is inserted, not run line by line.
+
+  History: ~/.clotran/repl-history (%USERPROFILE%\\.clotran on Windows),
+  each input one line, a Clojure string literal; the same input twice in
+  a row is kept once, the newest 1000 kept.
+
+  The host's part is src/c/tty_shim.c through (clotran-tty op): raw mode
+  on and off, the keys as UTF-8 bytes, the width. The editing itself --
+  the buffer, the cursor and the history -- is the state machine
+  model/lineedit.lisp proves: the cursor stays within the text, an edit
+  changes only what it says, the history gives back the draft, completion
+  inserts a candidate's suffix."
+  (:require [clojure.string :as str]
+            [clotran.complete :as complete]))
+
+(def ^:dynamic *reader*
+  "What the REPL calls with its prompt for the next form's text (nil at
+  the end of input); nil, the REPL reads lines itself."
+  nil)
+
+;;; ---- the state machine (model/lineedit.lisp) ----------------------------
+;;
+;; The input is a vector of characters (code points, as clotran's are) and
+;; a cursor 0..count; every edit is a function of that state.
+
+(defn- clamp [buf p] (max 0 (min (count buf) p)))
+
+(defn insert
+  "cs (characters) put in at the cursor, the cursor after them."
+  [{:keys [buf pos] :as st} cs]
+  (assoc st :buf (-> (subvec buf 0 pos) (into cs) (into (subvec buf pos))) :pos (+ pos (count cs))))
+
+(defn- cut
+  "The characters from a to b (a <= b) taken out, the cursor at a."
+  [{:keys [buf] :as st} a b]
+  (assoc st :buf (into (subvec buf 0 a) (subvec buf b)) :pos a))
+
+(defn delete-back [{:keys [pos] :as st}] (if (pos? pos) (cut st (dec pos) pos) st))
+(defn delete-forward [{:keys [buf pos] :as st}] (if (< pos (count buf)) (cut st pos (inc pos)) st))
+(defn move [{:keys [buf] :as st} p] (assoc st :pos (clamp buf p)))
+
+(defn line-start [buf pos] (loop [p pos] (if (and (pos? p) (not= \newline (buf (dec p)))) (recur (dec p)) p)))
+(defn line-end [buf pos] (loop [p pos] (if (and (< p (count buf)) (not= \newline (buf p))) (recur (inc p)) p)))
+
+(defn kill-to-end
+  "Ctrl-K: to the line's end; at the end, the newline (the lines joined)."
+  [{:keys [buf pos] :as st}]
+  (let [e (line-end buf pos)] (cut st pos (if (and (= e pos) (< e (count buf))) (inc e) e))))
+
+(defn kill-to-start [{:keys [buf pos] :as st}] (cut st (line-start buf pos) pos))
+
+(def ^:private delimiters (set "()[]{}\"',;@^`~"))
+(def ^:private spaces #{\space \tab \newline \return \formfeed})
+(defn- word-char? [c] (not (or (spaces c) (delimiters c))))
+(defn- space? [c] (contains? spaces c))
+
+(defn word-left [buf pos]
+  (let [p (loop [p pos] (if (and (pos? p) (not (word-char? (buf (dec p))))) (recur (dec p)) p))]
+    (loop [p p] (if (and (pos? p) (word-char? (buf (dec p)))) (recur (dec p)) p))))
+
+(defn word-right [buf pos]
+  (let [n (count buf)
+        p (loop [p pos] (if (and (< p n) (not (word-char? (buf p)))) (recur (inc p)) p))]
+    (loop [p p] (if (and (< p n) (word-char? (buf p))) (recur (inc p)) p))))
+
+(defn kill-word-back
+  "Ctrl-W: the spaces before the cursor, then what is not space."
+  [{:keys [buf pos] :as st}]
+  (let [p (loop [p pos] (if (and (pos? p) (space? (buf (dec p)))) (recur (dec p)) p))
+        p (loop [p p] (if (and (pos? p) (not (space? (buf (dec p))))) (recur (dec p)) p))]
+    (cut st p pos)))
+
+(defn kill-word-forward [{:keys [buf pos] :as st}] (cut st pos (word-right buf pos)))
+
+(defn line-up
+  "The cursor on the line above, at the same column or that line's end;
+  nil on the first line."
+  [{:keys [buf pos] :as st}]
+  (let [s (line-start buf pos)]
+    (when (pos? s)
+      (let [ps (line-start buf (dec s))]
+        (assoc st :pos (min (+ ps (- pos s)) (dec s)))))))
+
+(defn line-down [{:keys [buf pos] :as st}]
+  (let [s (line-start buf pos) e (line-end buf pos)]
+    (when (< e (count buf))
+      (let [ns (inc e)]
+        (assoc st :pos (min (+ ns (- pos s)) (line-end buf ns)))))))
+
+(defn- text [st] (apply str (:buf st)))
+(defn- with-text [st s] (assoc st :buf (vec s) :pos (count s)))
+
+(defn history-back
+  "The history entry before the one shown; leaving the draft (:hidx at
+  the end) keeps it in :draft. nil when there is none older."
+  [{:keys [hist hidx] :as st}]
+  (when (pos? hidx)
+    (-> (if (= hidx (count hist)) (assoc st :draft (:buf st)) st)
+        (assoc :hidx (dec hidx))
+        (with-text (hist (dec hidx))))))
+
+(defn history-forward
+  "The entry after; past the newest, the draft as it was left."
+  [{:keys [hist hidx draft] :as st}]
+  (when (< hidx (count hist))
+    (let [i (inc hidx)]
+      (if (= i (count hist))
+        (assoc st :hidx i :buf draft :pos (count draft))
+        (-> st (assoc :hidx i) (with-text (hist i)))))))
+
+(defn word-before
+  "The name being typed: the word characters before the cursor."
+  [{:keys [buf pos]}]
+  (apply str (subvec buf (loop [p pos] (if (and (pos? p) (word-char? (buf (dec p)))) (recur (dec p)) p)) pos)))
+
+(defn common-prefix [ss]
+  (reduce (fn [a b] (subs a 0 (count (take-while true? (map = a b))))) ss))
+
+(defn complete-with
+  "The completion of the word before the cursor among cands (strings
+  starting with it): their common prefix's rest inserted."
+  [st cands]
+  (let [w (word-before st)]
+    (if (seq cands) (insert st (vec (subs (common-prefix cands) (count w)))) st)))
+
+;;; ---- the screen ---------------------------------------------------------
+
+;; Columns a character takes: the East Asian wide and fullwidth blocks and
+;; the emoji take two, combining marks and joiners none.
+;; ponytail: the common ranges, not Unicode's whole EastAsianWidth table
+(def ^:private wide
+  [[0x1100 0x115F] [0x2E80 0x303E] [0x3041 0x33FF] [0x3400 0x4DBF] [0x4E00 0x9FFF]
+   [0xA000 0xA4CF] [0xAC00 0xD7A3] [0xF900 0xFAFF] [0xFE30 0xFE4F] [0xFF00 0xFF60]
+   [0xFFE0 0xFFE6] [0x1F300 0x1F64F] [0x1F900 0x1F9FF] [0x20000 0x3FFFD]])
+(def ^:private zero [[0x0300 0x036F] [0x200B 0x200F] [0x20D0 0x20FF] [0xFE00 0xFE0F]])
+(defn- in? [ranges c] (some (fn [[a b]] (<= a c b)) ranges))
+(defn width [ch]
+  (let [c (int ch)]
+    (cond (< c 32) 1 (< c 0x300) 1 (in? zero c) 0 (in? wide c) 2 :else 1)))
+(defn- str-width [s] (reduce + (map width s)))
+
+(defn- shown [ch] (if (< (int ch) 32) \space ch))
+
+(defn- prompts [st]
+  (let [p (or (:search-prompt st) (:prompt st))
+        w (str-width (:prompt st))
+        c (if (>= w 5) (str (apply str (repeat (- w 5) \space)) "#_=> ") "#_=> ")]
+    [p c]))
+
+(defn layout
+  "Where each position 0..count of the buffer is on the screen, as
+  [row col] from the input's first row, and the rows it takes: wrapped at
+  cols, a wide character that would cross the edge moved to the next row
+  as a terminal moves it."
+  [cols st]
+  (let [[p0 pc] (prompts st)
+        buf (:buf st)]
+    (loop [i 0 row 0 c (str-width p0) acc (transient []) ends []]
+      (let [at [(+ row (quot c cols)) (rem c cols)]]
+        (if (= i (count buf))
+          {:at (persistent! (conj! acc at)) :rows (inc (first at)) :ends (conj ends c)}
+          (let [ch (buf i)]
+            (if (= ch \newline)
+              (recur (inc i) (inc (first at)) (str-width pc) (conj! acc at) (conj ends c))
+              (let [w (width ch)
+                    c (if (> (+ (rem c cols) w) cols) (* cols (inc (quot c cols))) c)]
+                (recur (inc i) row (+ c w) (conj! acc [(+ row (quot c cols)) (rem c cols)]) ends)))))))))
+
+(defn- out! [s]
+  (let [b (clotran-utf8-bytes s)]
+    (clotran-stdout-write-bytes b 0 (count b))))
+
+(defn- render
+  "The input drawn again from its first row, the cursor at position at
+  (the cursor's, unless given); answers st with the cursor's row."
+  ([st] (render st (:pos st)))
+  ([st at]
+   (let [cols (:cols st)
+         [p0 pc] (prompts st)
+         {pos-at :at ends :ends} (layout cols st)
+         lines (str/split (text st) #"\n" -1)
+         sb (clotran.host.string_builder.)]
+     (when (pos? (:crow st)) (.append sb (str "\u001b[" (:crow st) "A")))
+     (.append sb "\r\u001b[J")
+     (doseq [[k line] (map-indexed vector lines)]
+       (when (pos? k) (.append sb "\r\n"))
+       (.append sb (str (if (zero? k) p0 pc) (apply str (map shown line))))
+       ;; a line that ends at the right edge: the terminal waits there to
+       ;; wrap, and layout counts the row below as the line's
+       (let [e (ends k)]
+         (when (and (pos? e) (zero? (rem e cols))) (.append sb "\r\n"))))
+     (let [[er _] (peek pos-at)
+           [r c] (pos-at at)]
+       (when (> er r) (.append sb (str "\u001b[" (- er r) "A")))
+       (.append sb "\r")
+       (when (pos? c) (.append sb (str "\u001b[" c "C")))
+       (out! (str sb))
+       (assoc st :crow r)))))
+
+(defn- below
+  "The cursor moved past the input, onto a fresh line."
+  [st]
+  (render st (count (:buf st)))
+  (out! "\r\n")
+  (assoc st :crow 0))
+
+(defn- end!
+  "The input over: the cursor past it, bracketed paste off again for
+  what the program reads, then nl -- a fresh line for the value; at the
+  end of input none, the REPL ends the line itself."
+  [st nl]
+  (render st (count (:buf st)))
+  (out! (str "\u001b[?2004l" nl)))
+
+(defn- list-candidates [st cands]
+  (let [st (below st)
+        w (+ 2 (apply max (map str-width cands)))
+        ncol (max 1 (quot (:cols st) w))
+        nrow (quot (+ (count cands) (dec ncol)) ncol)
+        v (vec cands)]
+    (doseq [r (range nrow)]
+      (out! (str (str/join (for [c (range ncol) :let [i (+ r (* c nrow))] :when (< i (count v))]
+                             (let [s (v i)] (str s (apply str (repeat (- w (str-width s)) \space))))))
+                 "\r\n")))
+    st))
+
+;;; ---- the reader's view --------------------------------------------------
+
+(defn forms
+  "The texts of the forms text holds, in order -- read by the REPL's own
+  reader, so a string, a comment or \\( is understood; :incomplete when
+  it ends inside one; the whole text as one when it does not read (the
+  REPL says why)."
+  [s]
+  (let [r (clotran.io/line-numbering-reader (clotran.io/text-reader s))]
+    (binding [*read-eval* false]
+      (try
+        (loop [acc []]
+          (let [[f t] (read+string r false ::eof)]
+            (if (= f ::eof) acc (recur (conj acc t)))))
+        (catch clotran.host.throwable e
+          (if (str/starts-with? (str (ex-message e)) "EOF while reading") :incomplete [s]))))))
+
+(defn match-open
+  "The position of the bracket the one at i closes, or nil -- strings,
+  comments and character literals skipped."
+  [buf i]
+  (let [pairs {\) \( \] \[ \} \{}]
+    (loop [p 0 stack () in-str false]
+      (if (>= p i)
+        (when (and (seq stack) (= (pairs (buf i)) (buf (first stack)))) (first stack))
+        (let [c (buf p)]
+          (cond
+            in-str (cond (= c \\) (recur (+ p 2) stack true)
+                         (= c \") (recur (inc p) stack false)
+                         :else (recur (inc p) stack true))
+            (= c \\) (recur (+ p 2) stack false)
+            (= c \") (recur (inc p) stack true)
+            (= c \;) (recur (line-end buf p) stack false)
+            (#{\( \[ \{} c) (recur (inc p) (conj stack p) false)
+            (#{\) \] \}} c) (recur (inc p) (if (seq stack) (rest stack) stack) false)
+            :else (recur (inc p) stack false)))))))
+
+;;; ---- history ------------------------------------------------------------
+
+(def ^:private history-max 1000)
+(defonce ^:private history (atom nil))
+
+(defn- history-file []
+  (let [home (some #(let [v (clotran.host.system/getenv %)] (when-not (str/blank? v) v)) ["HOME" "USERPROFILE"])]
+    (when home (str (str/replace home "\\" "/") "/.clotran/repl-history"))))
+
+(defn- load-history []
+  (or @history
+      (reset! history
+              (let [f (history-file)
+                    items (if (and f (clotran-file-exists? f))
+                            (vec (keep #(let [v (try (read-string %) (catch clotran.host.throwable _ nil))] (when (string? v) v))
+                                       (str/split-lines (slurp f))))
+                            [])]
+                (if (> (count items) history-max)
+                  (let [kept (subvec items (- (count items) history-max))]
+                    (try (spit f (str (str/join "\n" (map pr-str kept)) "\n")) (catch clotran.host.throwable _ nil))
+                    kept)
+                  items)))))
+
+(defn- remember! [s]
+  (let [items (load-history)]
+    (when-not (or (str/blank? s) (= s (peek items)))
+      (swap! history conj s)
+      (when-let [f (history-file)]
+        (try (clotran-mkdirs (subs f 0 (str/last-index-of f "/")))
+             (spit f (str (pr-str s) "\n") :append true)
+             (catch clotran.host.throwable _ nil))))))
+
+;;; ---- keys -----------------------------------------------------------------
+
+(def ^:private controls
+  {1 :line-start 2 :left 3 :cancel 4 :ctrl-d 5 :line-end 6 :right 7 :abort 8 :backspace 9 :tab
+   10 :lf 11 :kill-end 12 :clear 13 :enter 14 :down 16 :up 18 :search 21 :kill-start
+   23 :kill-word-back 26 :suspend 127 :backspace})
+
+(defn- csi-key [params final]
+  (case final
+    \A :up \B :down
+    \C (if (re-find #";[35]$" params) :word-right :right)
+    \D (if (re-find #";[35]$" params) :word-left :left)
+    \H :line-start \F :line-end
+    \~ (case params ("1" "7") :line-start ("4" "8") :line-end "3" :delete "200" :paste-start "201" :paste-end :ignore)
+    :ignore))
+
+(defn decode
+  "The next key in bytes (unsigned) from i: [key next-i], or nil when
+  the bytes end inside one. A key is a character, or a keyword."
+  [bs i]
+  (let [n (count bs) b (bs i)]
+    (cond
+      (= b 27)
+      (when (< (inc i) n)
+        (let [c (bs (inc i))]
+          (case (int c)
+            91 (loop [j (+ i 2)]
+                 (when (< j n)
+                   (let [x (bs j)]
+                     (if (<= 0x40 x 0x7E)
+                       [(csi-key (apply str (map char (subvec bs (+ i 2) j))) (char x)) (inc j)]
+                       (recur (inc j))))))
+            79 (when (< (+ i 2) n) [(csi-key "" (char (bs (+ i 2)))) (+ i 3)])
+            (98 66) [:word-left (+ i 2)]
+            (102 70) [:word-right (+ i 2)]
+            100 [:kill-word-forward (+ i 2)]
+            (127 8) [:kill-word-back (+ i 2)]
+            13 [:newline (+ i 2)]
+            [:ignore (+ i 2)])))
+      (or (< b 32) (= b 127)) [(controls b :ignore) (inc i)]
+      (< b 0x80) [(char b) (inc i)]
+      :else
+      (let [k (cond (>= b 0xF0) 4 (>= b 0xE0) 3 (>= b 0xC0) 2 :else 1)]
+        (cond (= k 1) [:ignore (inc i)]
+              (> (+ i k) n) nil
+              :else (let [cp (reduce (fn [a x] (bit-or (bit-shift-left a 6) (bit-and x 0x3F)))
+                                     (bit-and b (case k 2 0x1F 3 0x0F 4 0x07))
+                                     (subvec bs (inc i) (+ i k)))]
+                      [(char cp) (+ i k)]))))))
+
+;;; ---- one key ----------------------------------------------------------------
+
+(def ^:private windows? (str/starts-with? (str (clotran.host.system/getProperty "os.name")) "Windows"))
+
+(defn- reset-input [st]
+  (assoc st :buf [] :pos 0 :hidx (count (:hist st)) :draft [] :search nil :search-prompt nil))
+
+(defn- search-from
+  "The newest entry at or before index i holding q: [index position]."
+  [hist q i]
+  (some (fn [k] (when-let [p (str/index-of (hist k) q)] [k p])) (range (min i (dec (count hist))) -1 -1)))
+
+(defn- show-search [st]
+  (let [{:keys [q]} (:search st)]
+    (assoc st :search-prompt (str "(reverse-i-search)`" q "': "))))
+
+(defn- search-key
+  "A key while Ctrl-R searches: the query grows or shrinks, Ctrl-R looks
+  further back, Ctrl-G or Ctrl-C puts the input back; anything else takes
+  the entry found and is then the key it is."
+  [st k]
+  (let [{:keys [q at orig]} (:search st)
+        hist (:hist st)
+        find (fn [st q from]
+               (if-let [[i p] (search-from hist q from)]
+                 (-> st (assoc :search {:q q :at i :orig orig} :hidx i) (with-text (hist i)) (assoc :pos p) show-search)
+                 (-> st (assoc-in [:search :q] q) show-search)))]
+    (cond
+      (char? k) [(find st (str q k) (or at (dec (count hist)))) nil]
+      (= k :backspace) [(find st (subs q 0 (max 0 (dec (count q)))) (or at (dec (count hist)))) nil]
+      (= k :search) [(find st q (if at (dec at) (dec (count hist)))) nil]
+      (#{:abort :cancel} k) [(-> st (assoc :buf orig :pos (count orig) :hidx (count hist)) (assoc :search nil :search-prompt nil)) nil]
+      :else [(assoc st :search nil :search-prompt nil) k])))
+
+(defn- step
+  "One key: answers the state, with :done [:submit text] or [:eof] once
+  the input is over. last? -- no key follows in what was read, so an
+  Enter is a person's, not a paste's."
+  [st k last?]
+  (let [[st k] (if (:search st) (search-key st k) [st k])
+        {:keys [buf pos]} st
+        st (if (= k :tab) st (assoc st :tabbed nil))
+        ;; an entry just recalled: up and down go on through the history
+        recalled (:recalled st)
+        st (dissoc st :recalled)
+        back #(some-> (history-back st) (assoc :recalled true))
+        fwd #(some-> (history-forward st) (assoc :recalled true))]
+    (if (:paste st)
+      ;; a paste's lines end \r, \n or \r\n: each one newline
+      (let [cr (:cr st) st (assoc st :cr nil)]
+        (case k
+          :paste-end (assoc st :paste nil)
+          :enter (assoc (insert st [\newline]) :cr true)
+          :lf (if cr st (insert st [\newline]))
+          :tab (insert st [\tab])
+          (if (char? k) (insert st [k]) st)))
+      (if (and (:cr st) (= k :lf)) (dissoc st :cr) (let [st (dissoc st :cr)] (case k
+        nil st
+        :paste-start (assoc st :paste true)
+        :left (move st (dec pos))
+        :right (move st (inc pos))
+        :line-start (move st (line-start buf pos))
+        :line-end (move st (line-end buf pos))
+        :word-left (move st (word-left buf pos))
+        :word-right (move st (word-right buf pos))
+        :backspace (delete-back st)
+        :delete (delete-forward st)
+        :kill-end (kill-to-end st)
+        :kill-start (kill-to-start st)
+        :kill-word-back (kill-word-back st)
+        :kill-word-forward (kill-word-forward st)
+        :up (or (when-not recalled (line-up st)) (back) st)
+        :down (or (when-not recalled (line-down st)) (fwd) st)
+        :newline (insert st [\newline])
+        :clear (do (out! "\u001b[H\u001b[2J") (assoc st :crow 0))
+        :cancel (do (render st (count buf)) (out! "^C\r\n")
+                    (reset-input (assoc st :crow 0)))
+        :ctrl-d (if (empty? buf) (assoc st :done [:eof]) (delete-forward st))
+        :suspend (cond (not windows?) (do (below st) (clotran-tty 5) (assoc st :crow 0))
+                       (empty? buf) (assoc st :done [:eof])
+                       :else st)
+        :search (let [st (assoc st :search {:q "" :at nil :orig buf})] (show-search st))
+        :tab (let [w (word-before st)
+                   cands (when (seq w) (distinct (map :candidate (complete/candidates *ns* w))))
+                   st2 (complete-with st cands)]
+               (cond (not= (:buf st2) buf) (assoc st2 :tabbed true)
+                     (and (:tabbed st) (next cands)) (assoc (list-candidates st cands) :tabbed nil)
+                     :else (assoc st :tabbed true)))
+        (:enter :lf) (if (and last? (not= (forms (text st)) :incomplete))
+                 (assoc st :done [:submit (text st)])
+                 (assoc (insert st [\newline]) :cr (= k :enter)))
+        (if (and (char? k) (>= (int k) 32))
+          (let [st (insert st [k])]
+            (if (and last? (#{\) \] \}} k)) (assoc st :blink (match-open (:buf st) (dec (:pos st)))) st))
+          st)))))))
+
+;;; ---- the loop -----------------------------------------------------------------
+
+(defonce ^:private queued (atom []))
+
+(defn- edit [prompt]
+  (let [hist (load-history)
+        bytes (byte-array 4096)
+        st0 (reset-input {:prompt prompt :hist hist :crow 0 :cols (clotran-tty 3)})]
+    (clotran-tty 1)
+    (try
+      (out! "\u001b[?2004h")
+      (loop [st (render st0) pending []]
+        (let [n (clotran-tty 4 bytes)]
+          (cond
+            (= n -1) (do (end! st "") nil)
+            (= n -2) (recur (render (assoc st :cols (clotran-tty 3))) pending)
+            :else
+            (let [bs (into pending (map #(bit-and % 0xFF)) (take n bytes))
+                  keys (loop [i 0 acc []]
+                         (if-let [[k j] (when (< i (count bs)) (decode bs i))]
+                           (recur j (conj acc k))
+                           [acc (subvec bs i)]))
+                  [ks rest-bytes] keys
+                  st (reduce (fn [st [k last?]]
+                               (let [st (step st k last?)] (if (:done st) (reduced st) st)))
+                             st
+                             (map vector ks (concat (repeat (dec (count ks)) false) [true])))]
+              (if-let [[what s] (:done st)]
+                (do (end! (assoc st :search-prompt nil) (if (= what :submit) "\r\n" "")) (when (= what :submit) s))
+                (let [st (if-let [o (:blink st)]
+                           (let [rows (:rows (layout (:cols st) st))]
+                             (if (<= rows 20)
+                               (let [st (render st o)] (clotran-tty 6 500) (dissoc st :blink))
+                               (dissoc st :blink)))
+                           st)]
+                  (recur (render st) rest-bytes)))))))
+      (catch clotran.host.throwable e
+        (out! "\u001b[?2004l\r\n")
+        (throw e))
+      (finally
+        (clotran-tty 2)))))
+
+(defn read-input
+  "The REPL's next form's text, its prompt drawn; nil at the end of
+  input. An input of several forms answers them one by one, each after
+  its own prompt, as clj's REPL does."
+  [prompt]
+  (if-let [f (first @queued)]
+    (do (swap! queued subvec 1) (out! prompt) f)
+    (when-let [s (edit prompt)]
+      (remember! (str/trim s))
+      (let [fs (forms s)]
+        (cond (= fs :incomplete) s
+              (empty? fs) ""
+              :else (do (reset! queued (subvec fs 1)) (first fs)))))))
+
+(defn install!
+  "The editor under the REPL, when there is a terminal to edit in: stdin
+  and stdout terminals, TERM not dumb, CLOTRAN_NO_EDITOR not set."
+  []
+  (when (and (clotran-tty 0)
+             (not= "dumb" (clotran.host.system/getenv "TERM"))
+             (str/blank? (clotran.host.system/getenv "CLOTRAN_NO_EDITOR")))
+    (alter-var-root #'*reader* (constantly read-input))))

@@ -171,8 +171,9 @@ to distinguish it from: `GCEval.f90` is `Eval.f90`, `GCReader` is
 `LispReader`, `GCVector` is `PersistentVector`, and so on -- Clojure's
 own names, as the deleted modules were called. Only the collector
 itself keeps the name, because it IS the GC. The binary is
-`clotran-bin` and `./clotran` at the root is the launcher: rlwrap and
-core.clj, from any directory. Procedure prefixes (`gce_`,
+`clotran-bin` and `./clotran` at the root is the launcher: core.clj,
+from any directory (rlwrap until 2026-10-19, when the REPL got its own
+line editor). Procedure prefixes (`gce_`,
 `gcv_`, `gcl_`, ...) stay: they are short namespaces, and renaming a
 few thousand call sites buys nothing until step 5 rewrites them anyway.
 
@@ -5452,8 +5453,8 @@ needed the release's dylibs. James chose, in order:
   `clotran-delete`). The loader's background build is a clotran
   process too (`compile --cache`), which finishes the cache after its
   program ends, as the shell's background job did. `./clotran` on macOS
-  and Linux is only the rlwrap decision; `bin\clotran.cmd` runs the
-  binary. `scripts/fuzz-run` fuzzes the argument passing (nightly).
+  and Linux only runs the binary (it chose rlwrap until the REPL's own
+  line editor, 2026-10-19); `bin\clotran.cmd` runs the binary. `scripts/fuzz-run` fuzzes the argument passing (nightly).
 - *clotran-deps its own public repository* (github.com/clotran/clotran-deps),
   its `.clotran-cache` check moved from its sh script into
   `clotran.deps/cached-path`, which the launcher calls in-process.

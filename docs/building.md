@@ -53,9 +53,10 @@ core and `clotran.launcher` reads the arguments (`new`, `compile`,
 the Fortran compiler, a clotran of its own -- from an argument list
 (`clotran-run`), never through a shell.
 
-`./clotran` only adds `rlwrap` to the REPL, when there is a terminal and
-`rlwrap` is installed, for history and arrow-key editing, as Clojure's
-own `clj` wraps `clojure`; then it runs `clotran-bin --launch`. It works
+`./clotran` runs `clotran-bin --launch`. On a terminal the REPL edits
+its own input -- history, Tab completion from the running REPL,
+multi-line forms (`src/clj/clotran/lineedit.cljf`); `CLOTRAN_NO_EDITOR=1`
+reads plain lines instead. It works
 from any directory: the binary finds its home, image and sources from
 its own path. `./clotran-bin` without `--launch` is the interpreter
 alone, a plain stdin/stdout REPL that loads only the files named on its
@@ -112,5 +113,5 @@ runs the same forms through, and `bb` (babashka) runs the scripts.
   notices a release carries.
 - `examples/` and `bench/` -- what the README and `guide.md` run, and
   what `scripts/bench` and `scripts/bench-langs` time.
-- `clotran` -- the rlwrap wrapper, and `clotran-bin` the binary it runs
+- `clotran` -- the command, and `clotran-bin` the binary it runs
   (see above).
