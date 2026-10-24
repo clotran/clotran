@@ -5828,6 +5828,54 @@ check; the proof when Lemmis's Stage A (step 38: Fortran's subset in
 ACL2) gives the target a meaning -- the compiler's source side is the
 VM model, its target side Stage A.
 
+### 40. Calls into Fortran: sizes checked, what a routine needs said (decided 2026-10-24; next, before the proof rows resume)
+
+Calling a package's routine wrongly, measured on `examples/mylib`
+(`scale(n, a, x)`, `real(8) :: a`, `real(8), intent(inout) :: x(n)`):
+a map, vector or nil for `x` is refused before Fortran runs, but as
+"call-package*: mylib_scale_shim: argument 3 must be an array" --
+the argument's position and an internal name, not what to pass; a
+`long-array` is refused well ("not a real8 array ... fortran/make-array
+makes typed ones"), a string for `a` too ("argument a is a real8: pass a
+real"); **but `n` = 1000 with a 3-element `x` is accepted and Fortran
+writes 997 values past the array** -- memory corruption, silent. The
+same for matrices whose extents disagree (a BLAS call). And `(doc
+mylib.raw/scale)` shows only `[n a x]`. James: "we need this to be part
+of the plan".
+
+Everything needed is in hand: the binder reads each routine's
+declarations (types, kinds, rank, explicit-shape bounds, intent) to make
+the shims. So:
+
+1. **Sizes checked before the call.** For an explicit-shape dummy --
+   `x(n)`, `a(m,k)`, `b(k,n)`, `c(0:n-1)` -- evaluate its bounds from the
+   other arguments' values and refuse when the array passed holds fewer
+   elements than the declaration reaches (Fortran's own rule: a dummy
+   may be smaller than its actual, never larger, F2018 15.5.2.11). A
+   dimension named by several dummies (`k` in `a(m,k)` and `b(k,n)`) is
+   matrix conformance, checked by the same rule. Bounds the binder cannot
+   evaluate (a function call, a module variable) are said once at bind
+   time, not guessed. Assumed-shape dummies (`x(:)`) carry their own
+   shape; which shapes must agree is the routine's business, so they stay
+   with the `:dev` profile's bounds checks.
+2. **One way of refusing.** Every refusal names the argument, its
+   declaration and how to make one, in clotran's words: "x:
+   `real(8), dimension(n), intent(inout)` -- pass a double-array of
+   length n, or (fortran/make-array \"real8\" n); got a map". No shim or
+   internal names. The type checks that exist move to the same messages.
+3. **What a routine needs, said.** Each package Var's `:doc` carries the
+   Fortran signature -- every argument's type, kind, shape and intent,
+   the result, and the file and line it is declared at -- so `(doc ...)`,
+   editor hover (clotran-ide) and the REPL show it.
+
+The model moves with it: model/boundary.lisp (step 27) gets the size
+rule -- a call the check accepts touches only elements inside the arrays
+passed, and one it refuses would have touched outside -- with a cost
+theorem (the check is linear in the declaration's bounds), and the
+binder's check is registered with the ratchet. A fuzzer (fuzz-bind) is
+extended with wrong sizes and wrong types, each expected refused with
+its message, never run.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule
