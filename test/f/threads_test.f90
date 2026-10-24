@@ -1,6 +1,7 @@
 ! threads_test -- the Threads module (src/f/Threads.f90) on its own:
 ! a strict hand-off between two threads, and many threads counting under
-! one lock, and a key whose slot each thread sees as its own. Run under
+! one lock, and a key whose slot each thread sees as its own -- the
+! main-thread mailbox's posted function included. Run under
 ! both compilers by `make test`.
 module threads_test_work
   use iso_c_binding
@@ -10,8 +11,27 @@ module threads_test_work
   type(th_cond), save :: cv
   integer, save :: turn = 0, log_n = 0, log(20) = 0
   integer(c_int64_t), save :: counter = 0, key_wrong = 0
-  type(th_key), save :: key
+  type(th_key), save :: key, mkey
+  integer, target, save :: mbox = 7
+  logical, save :: asked_own = .false., prog_done = .false.
 contains
+  ! the main-thread mailbox's case: the program's thread (started by
+  ! th_start_sized, cache left on) sets mkey, then posts `asker` to the
+  ! first thread, which has set nothing: its slot must read null, not
+  ! the program thread's (model/threads.lisp, old-serve-reads-the-owners)
+  subroutine asker() bind(C)
+    asked_own = .not. c_associated(th_key_get(mkey))
+  end subroutine asker
+  function prog(arg) result(r) bind(C)
+    type(c_ptr), value :: arg
+    type(c_ptr) :: r
+    logical :: ok
+    ok = th_key_set(mkey, c_loc(mbox))
+    if (.not. th_main_post(c_funloc(asker))) asked_own = .false.
+    call th_main_ended()
+    prog_done = .true.
+    r = arg
+  end function prog
   ! thread 2's half of the hand-off: waits for its turn five times
   function pinger(arg) result(r) bind(C)
     type(c_ptr), value :: arg
@@ -71,6 +91,21 @@ program threads_test
   integer :: i, fails
   logical :: ok
   fails = 0
+  ! FIRST, while the key cache is still on: no th_start has run yet
+  if (.not. th_key_create(mkey)) fails = fails + 1
+  call th_main_open()
+  if (.not. th_start_sized(t, c_funloc(prog), c_null_ptr, 8388608_c_size_t)) fails = fails + 1
+  call th_main_serve()
+  if (.not. th_join(t)) fails = fails + 1
+  if (.not. asked_own) then
+     print '(a)', 'FAIL - a posted function read the program thread''s key slot'
+     fails = fails + 1
+  end if
+  ! th_join returns after the thread's exit: its last store is seen
+  if (.not. prog_done) then
+     print '(a)', 'FAIL - th_join returned before the thread ended'
+     fails = fails + 1
+  end if
   if (.not. th_lock_init(lk)) fails = fails + 1
   if (.not. th_cond_init(cv)) fails = fails + 1
 

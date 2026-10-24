@@ -422,6 +422,11 @@ contains
           fp = mb_fn
           mb_fn = c_null_funptr
           ok = th_lock_release(mb_lock)
+          ! a second thread runs code now: the cache is the program
+          ! thread's, so from here every key lookup is pthread's -- a
+          ! posted function that called back into clotran read that
+          ! thread's value stack (model/threads.lisp, old-serve-reads-the-owners)
+          tls_multi = .true.
           call c_f_procpointer(fp, f)
           call f()
           ok = th_lock_acquire(mb_lock)
