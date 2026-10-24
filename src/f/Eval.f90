@@ -694,6 +694,12 @@ module Eval
      ! unrealised, for its prologue's clotran_rest_args; 0 when none
      integer :: rest_slot = 0
      integer :: worker = 0        ! the pool worker this thread is, or 0
+     ! what this thread sleeps on with no deadline, for the deadlock verdict
+     ! (tasks.inc, any_waiter_ready): 0 nothing, 1 wait_target (block_on),
+     ! 2 pool work (sched_take). Set and cleared by the thread itself under
+     ! the state lock; wait_target is rooted by block_on's caller.
+     integer :: wait_kind = 0
+     type(gc_value) :: wait_target
   end type eval_ctx
   ! the VM program's functions: each one's first instruction and name, for a
   ! trace (vm.inc vm_fn_at)
@@ -6003,7 +6009,9 @@ contains
           cycle
        end if
        blocked_nodl = blocked_nodl + 1
+       tctx%wait_kind = 2
        call gc_state_wait(-1_8)
+       tctx%wait_kind = 0
        blocked_nodl = blocked_nodl - 1
        call gc_state_unlock()
     end do

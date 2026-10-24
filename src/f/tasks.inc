@@ -334,16 +334,13 @@
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: target
     integer(gc_ip), intent(in) :: deadline
-    logical :: ready, dead, cancelled, suspect
+    logical :: ready, dead, cancelled
     integer(gc_ip) :: left
-    integer :: seen
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     ready = .false.
     dead = .false.
-    suspect = .false.
-    seen = 0
     call gc_state_lock()
     do
        if (satisfied(target)) then
@@ -357,25 +354,19 @@
        cancelled = .false.
        if (gc_kind(tctx%cur_task) == OBJ_TASK) cancelled = gc_i1(tctx%cur_task) == TASK_CANCELLED
        if (cancelled) exit
-       ! Every live thread waiting, none with a deadline, looks like a
-       ! deadlock -- but a waiter whose target was just made ready still
-       ! counts as blocked until it wakes and takes the lock. So the verdict
-       ! stands only if it holds again after a short wait in which nothing
-       ! was announced (notify_gen unchanged): a thread that was about to
-       ! run would have run, and announced it, by then.
+       ! Every live thread waiting, none with a deadline, and none of
+       ! their targets ready: a deadlock. A waiter whose target was just
+       ! made ready still counts as blocked until it wakes and takes the
+       ! lock, so the waiters' own targets are asked (any_waiter_ready)
+       ! -- the verdict once took 100 ms with nothing announced to mean that,
+       ! and on a loaded machine said deadlock to a program going on
+       ! (model/waits.lisp, old-verdict-is-wrong)
        if (deadline < 0 .and. blocked_dl == 0 .and. blocked_nodl + 1 >= live_threads) then
-          if (suspect .and. gc_notify_gen() == seen) then
+          if (.not. any_waiter_ready()) then
              dead = .true.
              exit
           end if
-          suspect = .true.
-          seen = gc_notify_gen()
-          blocked_dl = blocked_dl + 1
-          call gc_state_wait(100_8)
-          blocked_dl = blocked_dl - 1
-          cycle
        end if
-       suspect = .false.
        ! PARKED while it waits -- what a task's state reports (thread.cljf)
        ! -- and running again after, unless it was cancelled meanwhile
        if (gc_kind(tctx%cur_task) == OBJ_TASK) then
@@ -388,7 +379,10 @@
           ! and the verdict would never be reached. The thread is blocked
           ! either way; the re-check is what the verdict costs.
           blocked_nodl = blocked_nodl + 1
+          tctx%wait_target = target
+          tctx%wait_kind = 1
           call gc_state_wait(200_8)
+          tctx%wait_kind = 0
           blocked_nodl = blocked_nodl - 1
        else
           blocked_dl = blocked_dl + 1
@@ -409,6 +403,29 @@
        end block
     end if
   end function block_on
+
+  ! Whether a thread asleep with no deadline is about to go on: its
+  ! target ready, its own task cancelled, or, a parked pool worker, work
+  ! to take. Under the state lock, which every setter of a target holds.
+  logical function any_waiter_ready()
+    integer :: k
+    any_waiter_ready = .false.
+    call gc_state_lock()
+    do k = 1, n_ctx
+       if (.not. associated(ctxs(k)%c)) cycle
+       select case (ctxs(k)%c%wait_kind)
+       case (1)
+          any_waiter_ready = satisfied(ctxs(k)%c%wait_target)
+          if (gc_kind(ctxs(k)%c%cur_task) == OBJ_TASK) then
+             if (gc_i1(ctxs(k)%c%cur_task) == TASK_CANCELLED) any_waiter_ready = .true.
+          end if
+       case (2)
+          any_waiter_ready = sched_any_work() .or. sched_shutdown
+       end select
+       if (any_waiter_ready) exit
+    end do
+    call gc_state_unlock()
+  end function any_waiter_ready
 
   ! ---- native calls (PLAN.md step 11, stage 2; step 14f) ---------------
   !
