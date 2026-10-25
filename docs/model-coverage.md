@@ -65,6 +65,7 @@ the commit that moves it.
 | Part | Code (lines) | Model | Status | Why |
 |---|---|---|---|---|
 | The door: integers cross exactly, UTF-8, handles, array aliasing | `DynLoad.f90`, `ClotranABI.f90`, `NativeArray.f90` (~2.3k) | boundary | **Modeled**, hand-written | The book proves the decisions (PLAN step 27), not this code |
+| A call's sizes, checked before the call: an explicit-shape dummy reaches no further than the array passed | `package.cljf` `check-call` (~200), the bounds from `bind.cljf` | boundary, section 8: an accepted call reaches only inside its arrays, a refused one would have reached past one; the check linear in the declaration | **Modeled**, hand-written | PLAN step 40 (2026-10-24); assumed-size and unevaluable bounds are said, not checked |
 
 ## The language and its compilers
 

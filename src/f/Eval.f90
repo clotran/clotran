@@ -20826,10 +20826,12 @@ contains
        allocate(hnd(nspec))
        hnd = 0
        ti = 0; tl = 0; tr = 0.0_c_double; tb = .false.; td = 0
-       ! the call's arguments are the manifest's, less the :out ones
+       ! the call's arguments are the manifest's, less the :out scalars:
+       ! an :out ARRAY is passed, and written in place (it was counted out
+       ! as a scalar is, so no call could pass one -- PLAN step 40)
        j = 0
        do i = 1, nspec
-          if (it(i) /= "out") j = j + 1
+          if (it(i) /= "out" .or. rk(i) > 0) j = j + 1
        end do
        if (j /= ncall) then
           write(cbuf1, '(I0)') j
@@ -20843,7 +20845,7 @@ contains
        j = 0
        do i = 1, nspec
           tv = gc_nil()
-          if (it(i) /= "out") then
+          if (it(i) /= "out" .or. rk(i) > 0) then
              tv = strip_meta(gcv_nth(vs_get(vst, base + 2), j))
              j = j + 1
           end if
@@ -20859,7 +20861,7 @@ contains
              case ("real8")
                 if (it(i) /= "out") then
                    if (tv%tag /= GCT_REAL) then
-                      call refuse(i, "is a real8: pass a real, not ", tv)
+                      call refuse(i, "pass a double; got ", tv)
                       exit once
                    end if
                    tr(i) = real(gc_rval(tv), c_double)
@@ -20868,12 +20870,12 @@ contains
              case ("int4")
                 if (it(i) /= "out") then
                    if (.not. (tv%tag == GCT_INT .or. tv%tag == GCT_BIG)) then
-                      call refuse(i, "is an int4: pass an integer, not ", tv)
+                      call refuse(i, "pass an integer from -2147483648 to 2147483647; got ", tv)
                       exit once
                    end if
                    call door_integer(tv, iv, ok)
                    if (.not. ok .or. iv < -2147483648_gc_ip .or. iv > 2147483647_gc_ip) then
-                      call refuse(i, "is an int4, -2147483648..2147483647: out of range, ", tv)
+                      call refuse(i, "pass an integer from -2147483648 to 2147483647; got ", tv)
                       exit once
                    end if
                    ti(i) = int(iv, c_int)
@@ -20882,12 +20884,12 @@ contains
              case ("int8")
                 if (it(i) /= "out") then
                    if (.not. (tv%tag == GCT_INT .or. tv%tag == GCT_BIG)) then
-                      call refuse(i, "is an int8: pass an integer, not ", tv)
+                      call refuse(i, "pass an integer from -9223372036854775808 to 9223372036854775807; got ", tv)
                       exit once
                    end if
                    call door_integer(tv, iv, ok)
                    if (.not. ok) then
-                      call refuse(i, "is an int8, -9223372036854775808..9223372036854775807: out of range, ", tv)
+                      call refuse(i, "pass an integer from -9223372036854775808 to 9223372036854775807; got ", tv)
                       exit once
                    end if
                    tl(i) = int(iv, c_int64_t)
@@ -20896,7 +20898,7 @@ contains
              case ("logical")
                 if (it(i) /= "out") then
                    if (tv%tag /= GCT_BOOL) then
-                      call refuse(i, "is a logical: pass true or false, not ", tv)
+                      call refuse(i, "pass true or false; got ", tv)
                       exit once
                    end if
                    tb(i) = logical(truthy(tv), c_bool)
@@ -20924,16 +20926,16 @@ contains
           else
              ! an array: the registry buffer, then its extents
              if (gc_kind(tv) /= OBJ_ARRAY) then
-                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " must be an array")
+                call refuse(i, "pass an array; got ", tv)
                 exit once
              end if
              if (gc_i2(tv) /= -1) then
-                call fail("call-package*: " // sym // ": a slice is not contiguous; pass a whole array")
+                call refuse(i, "pass a whole array: a slice is not contiguous; got a slice of ", tv)
                 exit once
              end if
              ext = gcna_extents(gc_i1(tv))
              if (size(ext) /= rk(i)) then
-                call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " has the wrong rank")
+                call refuse(i, "pass an array of rank " // trim(cbuf_of(rk(i))) // "; got ", tv)
                 exit once
              end if
              ok = .false.
@@ -20954,8 +20956,8 @@ contains
              if (.not. ok) then
                 block
                    call gcna_kind(gc_i1(tv), s=dlt_1)
-                   call fail("call-package*: " // sym // ": argument " // trim(cbuf_of(i)) // " is not a " // trim(ty(i)) // &
-                        " array (it is a " // dlt_1 // " array; fortran/make-array makes typed ones)")
+                   call refuse(i, "pass a " // trim(ty(i)) // " array, as (fortran/make-array """ // trim(ty(i)) // &
+                        """ ...) makes; got ", tv)
                 end block
                 exit once
              end if
@@ -20979,12 +20981,13 @@ contains
              if (j /= i .and. hnd(j) == hnd(i)) exit
           end do
           block
-            character(len=:), allocatable :: ni, nj
+            character(len=:), allocatable :: ni, nj, di
             call arg_name(i, ni)
             call arg_name(j, nj)
-            call raise_class("clotran.host.illegal_argument_exception", rname // ": argument " // ni // &
-                 " may be written, and the same array is also argument " // nj // &
-                 "; Fortran forbids the aliasing -- pass a copy", [roots])
+            call arg_decl(i, di)
+            call raise_class("clotran.host.illegal_argument_exception", rname // ": " // ni // " is " // di // &
+                 " -- pass a copy: it may be written, and the same array is also " // nj // &
+                 ", which Fortran forbids (aliasing)", [roots])
           end block
           exit once
        end do
@@ -21100,22 +21103,48 @@ contains
       nm = strip_meta(gca_get(a, gc_key("name", [roots, a])))
       call text_of(nm, s=an)
     end subroutine arg_name
-    ! A value refused at the door: the routine, the argument by its
-    ! manifest name, what it needs, and what it was given
+    ! argument i's Fortran declaration, as the manifest gives it (clotran
+    ! bind writes it), else its type, rank and intent
+    subroutine arg_decl(i, decl)
+      integer, intent(in) :: i
+      character(len=:), allocatable, intent(out) :: decl
+      type(gc_value) :: a, dv
+      a = strip_meta(gcv_nth(vs_get(vst, base + 3), i - 1))
+      dv = strip_meta(gca_get(a, gc_key("decl", [roots, a])))
+      if (dv%tag == GCT_NIL) then
+         decl = trim(ty(i))
+         if (rk(i) > 0) decl = decl // ", rank " // trim(cbuf_of(rk(i)))
+         decl = decl // ", intent(" // trim(it(i)) // ")"
+      else
+         call text_of(dv, s=decl)
+      end if
+    end subroutine arg_decl
+    ! A value refused at the door, as clotran.package words it before
+    ! the call (PLAN step 40): the routine, the argument by its manifest
+    ! name and Fortran declaration, what to pass, and what it was given
     subroutine refuse(i, what, given)
       integer, intent(in) :: i
       character(len=*), intent(in) :: what
       type(gc_value), intent(in) :: given
       type(gc_value) :: a, nm
-      character(len=:), allocatable :: an, cn, shown
+      character(len=:), allocatable :: an, cn, shown, decl
       a = strip_meta(gcv_nth(vs_get(vst, base + 3), i - 1))
       nm = strip_meta(gca_get(a, gc_key("name", [roots, a, given])))
       call text_of(nm, s=an)
-      call class_name_of(given, s=cn)
-      call gcp_str(given, .true., s=shown)
-      if (len(cn) > 0) shown = shown // " (" // cn // ")"
+      call arg_decl(i, decl)
+      if (gc_kind(given) == OBJ_ARRAY) then
+         ! an array by its kind and rank, not its host class
+         call gcna_kind(gc_i1(given), s=cn)
+         shown = "a "
+         if (index("aeiou", cn(1:1)) > 0) shown = "an "
+         shown = shown // cn // " array of rank " // trim(cbuf_of(size(gcna_extents(gc_i1(given)))))
+      else
+         call class_name_of(given, s=cn)
+         call gcp_str(given, .true., s=shown)
+         if (len(cn) > 0) shown = shown // " (" // cn // ")"
+      end if
       call raise_class("clotran.host.illegal_argument_exception", &
-           rname // ": argument " // an // " " // what // shown, [roots, given])
+           rname // ": " // an // " is " // decl // " -- " // what // shown, [roots, given])
     end subroutine refuse
   end function pkg_call
 

@@ -534,3 +534,200 @@
 
 (defthm f-hash-cost-ignores-contents
   (equal (f-hash-cost (list ty sh c1)) (f-hash-cost (list ty sh c2))))
+
+; ---- 8. sizes: what a call reaches (PLAN step 40) ----------------------
+;
+; An explicit-shape dummy x(lo_1:hi_1, ..., lo_r:hi_r) is associated
+; with the element sequence of the array passed (F2018 15.5.2.11): it
+; may be smaller than its actual, never larger. Its bounds are integer
+; expressions over the call's integer arguments (clotran bind writes
+; them into the manifest as EDN; clotran.package evaluates them), each
+; extent is max(0, hi - lo + 1), and the routine reaches the elements at
+; column-major offsets of the in-bounds subscripts (section 1). THE
+; CHECK, clotran.package's check-call: the product of the extents is at
+; most the number of elements the array passed holds. A character
+; dummy's length against the string's bytes is the same rule at rank 1.
+; A dimension several dummies share -- k in a(m,k) and b(k,n) -- is
+; matrix conformance, and is checked by this rule for each of them.
+;
+; A bound: an integer, an argument's name (a symbol), or (op x y) with
+; op :add :sub :mul :quot, or (:neg x). quot truncates, as Fortran's
+; integer / does; a zero divisor answers 0 here (clotran.package throws
+; and nothing is called).
+
+(defun bexpr-eval (e env)
+  (cond ((integerp e) e)
+        ((atom e) (ifix (cdr (assoc-equal e env))))
+        ((eq (car e) :neg) (- (bexpr-eval (cadr e) env)))
+        (t (let ((x (bexpr-eval (cadr e) env))
+                 (y (bexpr-eval (caddr e) env)))
+             (case (car e)
+               (:add (+ x y))
+               (:sub (- x y))
+               (:mul (* x y))
+               (:quot (if (equal y 0) 0 (truncate x y)))
+               (otherwise 0))))))
+
+(defthm bexpr-eval-integer
+  (integerp (bexpr-eval e env))
+  :rule-classes (:rewrite :type-prescription))
+
+; a declaration's bounds: ((lo . hi) ...), first dimension first
+(defun decl-lows (bounds env)
+  (if (endp bounds) nil
+    (cons (bexpr-eval (car (car bounds)) env) (decl-lows (cdr bounds) env))))
+
+(defun decl-exts (bounds env)
+  (if (endp bounds) nil
+    (cons (max 0 (+ 1 (- (bexpr-eval (cdr (car bounds)) env)
+                         (bexpr-eval (car (car bounds)) env))))
+          (decl-exts (cdr bounds) env))))
+
+(defun nat-list-p (xs)
+  (if (endp xs) (null xs) (and (natp (car xs)) (nat-list-p (cdr xs)))))
+
+(defthm decl-exts-nat (nat-list-p (decl-exts bounds env)))
+(defthm decl-lows-lows (lows-p (decl-lows bounds env)))
+(defthm decl-exts-len (equal (len (decl-exts bounds env)) (len bounds)))
+(defthm decl-lows-len (equal (len (decl-lows bounds env)) (len bounds)))
+
+(defthm total-nat
+  (implies (nat-list-p exts) (natp (total exts)))
+  :rule-classes (:rewrite :type-prescription))
+
+; THE CHECK: n is the number of elements in the array passed
+(defun size-ok (bounds env n)
+  (<= (total (decl-exts bounds env)) n))
+
+; an in-bounds subscript exists only when every extent is positive
+(defthm in-bounds-positive-extents
+  (implies (and (in-bounds subs lows exts) (nat-list-p exts))
+           (extents-p exts)))
+
+; ACCEPTED: every element the routine can reach through the dummy is
+; inside the array passed.
+(defthm size-ok-reaches-inside
+  (implies (and (size-ok bounds env n)
+                (in-bounds subs (decl-lows bounds env) (decl-exts bounds env)))
+           (and (<= 0 (cm-offset subs (decl-lows bounds env) (decl-exts bounds env)))
+                (< (cm-offset subs (decl-lows bounds env) (decl-exts bounds env)) n)))
+  :hints (("Goal" :in-theory (disable cm-offset-in-buffer cm-offset-nonnegative)
+                  :use ((:instance cm-offset-in-buffer
+                         (lows (decl-lows bounds env)) (exts (decl-exts bounds env)))
+                        (:instance cm-offset-nonnegative
+                         (lows (decl-lows bounds env)) (exts (decl-exts bounds env)))))))
+
+; the dummy's last element, (hi_1, ..., hi_r)
+(defun last-subs (lows exts)
+  (if (endp lows) nil
+    (cons (+ (car lows) (car exts) -1) (last-subs (cdr lows) (cdr exts)))))
+
+(defthm last-subs-in-bounds
+  (implies (and (lows-p lows) (extents-p exts) (equal (len lows) (len exts)))
+           (in-bounds (last-subs lows exts) lows exts)))
+
+(defthm last-subs-offset
+  (implies (and (lows-p lows) (extents-p exts) (equal (len lows) (len exts)))
+           (equal (cm-offset (last-subs lows exts) lows exts)
+                  (1- (total exts)))))
+
+; a nat list whose product is past n (>= 0) has no zero extent
+(defthm product-positive-factors
+  (implies (and (natp a) (natp b) (< 0 (* a b)))
+           (and (< 0 a) (< 0 b)))
+  :rule-classes nil
+  :hints (("Goal" :nonlinearp t)))
+
+(defthm total-positive-extents
+  (implies (and (nat-list-p exts) (< 0 (total exts)))
+           (extents-p exts))
+  :hints (("Subgoal *1/2" :use ((:instance product-positive-factors
+                                 (a (car exts)) (b (total (cdr exts))))))))
+
+(defthm total-past-n-positive
+  (implies (and (nat-list-p exts) (natp n) (< n (total exts)))
+           (extents-p exts))
+  :hints (("Goal" :use total-positive-extents
+                  :in-theory (disable total-positive-extents))))
+
+; REFUSED: the call would have reached outside -- the dummy's last
+; element is in its bounds and lies at or past the array's end.
+; the same for any shape: past n, the last element is in bounds and at
+; or past offset n
+(defthm refused-reaches-outside
+  (implies (and (lows-p lows) (nat-list-p exts) (equal (len lows) (len exts))
+                (natp n) (< n (total exts)))
+           (and (in-bounds (last-subs lows exts) lows exts)
+                (<= n (cm-offset (last-subs lows exts) lows exts))))
+  :hints (("Goal" :in-theory (disable last-subs-offset last-subs-in-bounds total-past-n-positive)
+                  :use (total-past-n-positive last-subs-offset last-subs-in-bounds))))
+
+(defthm size-refused-reaches-outside
+  (implies (and (natp n) (not (size-ok bounds env n)))
+           (let ((lows (decl-lows bounds env)) (exts (decl-exts bounds env)))
+             (and (in-bounds (last-subs lows exts) lows exts)
+                  (<= n (cm-offset (last-subs lows exts) lows exts)))))
+  :hints (("Goal" :in-theory (disable refused-reaches-outside decl-exts decl-lows)
+                  :use ((:instance refused-reaches-outside
+                         (lows (decl-lows bounds env)) (exts (decl-exts bounds env)))))))
+
+; A CALL: each explicit-shape array argument as (bounds . n). The call
+; is accepted when every one is; then no argument's reach leaves its
+; array, and a refused call has one whose reach would have.
+(defun call-size-ok (args env)
+  (if (endp args) t
+    (and (size-ok (car (car args)) env (cdr (car args)))
+         (call-size-ok (cdr args) env))))
+
+(defthm call-size-ok-each
+  (implies (and (call-size-ok args env) (member-equal a args))
+           (size-ok (car a) env (cdr a))))
+
+(defun first-refused (args env)
+  (cond ((endp args) nil)
+        ((size-ok (car (car args)) env (cdr (car args))) (first-refused (cdr args) env))
+        (t (car args))))
+
+(defthm first-refused-is-refused
+  (implies (not (call-size-ok args env))
+           (and (member-equal (first-refused args env) args)
+                (not (size-ok (car (first-refused args env)) env
+                              (cdr (first-refused args env)))))))
+
+; COST, counted: the evaluator visits each node of a bound once, and
+; the check evaluates each dimension's two bounds, then multiplies and
+; compares once -- linear in the declaration, whatever the arguments'
+; values or the arrays' sizes.
+(defun bexpr-size (e)
+  (cond ((atom e) 1)
+        ((eq (car e) :neg) (+ 1 (bexpr-size (cadr e))))
+        (t (+ 1 (bexpr-size (cadr e)) (bexpr-size (caddr e))))))
+
+(defun bexpr-steps (e env)
+  ; the calls bexpr-eval makes, counted as it makes them: none depends on env
+  (declare (irrelevant env))
+  (cond ((integerp e) 1)
+        ((atom e) 1)
+        ((eq (car e) :neg) (+ 1 (bexpr-steps (cadr e) env)))
+        (t (+ 1 (bexpr-steps (cadr e) env) (bexpr-steps (caddr e) env)))))
+
+(defun bounds-size (bounds)
+  (if (endp bounds) 0
+    (+ (bexpr-size (car (car bounds))) (bexpr-size (cdr (car bounds)))
+       (bounds-size (cdr bounds)))))
+
+(defun size-check-steps (bounds env n)
+  (declare (ignorable n))
+  (if (endp bounds) 1
+    (+ 1 (bexpr-steps (car (car bounds)) env) (bexpr-steps (cdr (car bounds)) env)
+       (size-check-steps (cdr bounds) env n))))
+
+(defthm bexpr-steps-size
+  (equal (bexpr-steps e env) (bexpr-size e)))
+
+(defthm size-check-linear
+  (equal (size-check-steps bounds env n)
+         (+ 1 (len bounds) (bounds-size bounds))))
+
+(defthm size-check-ignores-values
+  (equal (size-check-steps bounds env1 n1) (size-check-steps bounds env2 n2)))

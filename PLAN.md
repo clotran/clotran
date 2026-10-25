@@ -5876,6 +5876,22 @@ binder's check is registered with the ratchet. A fuzzer (fuzz-bind) is
 extended with wrong sizes and wrong types, each expected refused with
 its message, never run.
 
+As built (2026-10-24): `clotran bind` writes each argument's declaration
+(`:decl`), an explicit-shape array's bounds as EDN over the integer
+arguments (`:bounds`, `x(0:n-1)` is `[[0 (- n 1)]]`), a character
+dummy's length (`:len`; plain `character` is 1), or `:unchecked` with the
+reason -- assumed-size `*`, a module variable, a call -- said on *err*
+when the package is built and in the shims' header. clotran.package's
+`check-call` checks every argument before `call-package*`; the door's own
+refusals (pkg_call) moved to the same words, the aliasing one too. The
+doc (`doc-of`) is also the index's, so clotran-ide's hover shows it
+(clotran-ide feat/fortran-hover puts it in a text block). Found on the
+way and fixed: an `intent(out)` ARRAY was counted out of the call like a
+scalar, so no call could pass one. Not checked, said: netlib's DGEMM
+declares `A(LDA,*)`, so `blas.raw/dgemm` with a k that disagrees is DGEMM's
+to trust; `blas/dgemm` checks the shapes itself. Assumed-shape stays
+with the `:dev` profile.
+
 ### 29. Fuzz everything (begun 2026-10-02)
 
 James: "fuzz everything at this point and going forward". The rule

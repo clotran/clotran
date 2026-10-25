@@ -10,7 +10,179 @@
 
   A directory holding a package.edn is a package DECLARED, not built
   (clotran.bind): loading it builds the library into the cache first,
-  unless the same sources were built before.")
+  unless the same sources were built before.
+
+  Before Fortran runs, every argument is checked against the manifest --
+  its type, and for an explicit-shape array that it holds as many
+  elements as the declaration reaches (PLAN step 40) -- and each Var's
+  doc is the routine's Fortran signature."
+  (:require [clojure.string :as str]))
+
+;; ---- before the call: what a routine needs, checked and said (PLAN 40) ----
+;;
+;; A refusal names the argument, its Fortran declaration and what to pass:
+;;
+;;   scale: x is real(8), dimension(n), intent(inout) -- n = 1000 needs
+;;   1000 elements, the double-array passed has 3
+;;
+;; The types are the door's own rule (model/boundary.lisp `cross`; the
+;; door, pkg_call in Eval.f90, checks them again as it marshals); the
+;; sizes are section 8's `size-ok`: an explicit-shape dummy reaches the
+;; product of its extents, which the array passed must hold (F2018
+;; 15.5.2.11), and a character dummy's length the string's bytes
+;; (15.5.2.4).
+
+(def ^:private int-window {"int4" [-2147483648 2147483647] "int8" [-9223372036854775808 9223372036854775807]})
+(def ^:private array-word {"real8" "double-array" "int4" "int-array" "int8" "long-array"})
+(def ^:private fortran-type {"real8" "real(8)" "int4" "integer" "int8" "integer(8)" "logical" "logical" "string" "character(len=*)"})
+
+(defn- a-an [w] (str (if (re-find #"^[aeiou]" w) "an " "a ") w))
+(defn- array? [v] (and (some? v) (some? (.getComponentType (class v)))))
+
+(defn- described
+  "A value as a refusal names what it was given."
+  [v]
+  (cond (nil? v) "nil"
+        (boolean? v) (str v)
+        (string? v) (str "the string " (pr-str v))
+        (array? v) (let [sh (fortran/array-shape v) k (fortran/array-kind v)]
+                     (if (and (= 1 (count sh)) (array-word k))
+                       (str (a-an (array-word k)) " of " (first sh))
+                       (str (a-an (str k " array")) " of " (str/join " by " sh))))
+        (map? v) "a map" (vector? v) "a vector" (set? v) "a set" (seq? v) "a list"
+        (float? v) (str v ", a double")
+        (integer? v) (str (pr-str v) ", an integer")
+        (ratio? v) (str v ", a ratio")
+        (keyword? v) (str "the keyword " v)
+        (symbol? v) (str "the symbol " v)
+        :else (str (pr-str v) ", " (a-an (str (class v))))))
+
+(defn- bound-text
+  "A bound's EDN as Fortran writes it."
+  [f]
+  (if (seq? f)
+    (let [[op x y] f]
+      (if (nil? y) (str "-" (bound-text x))
+        (str (bound-text x) (get {'quot "/"} op op) (bound-text y))))
+    (str f)))
+
+(defn- extent-text [[lo hi]]
+  (cond (= 1 lo) (bound-text hi)
+        (and (= 0 lo) (seq? hi) (= '- (first hi)) (= 1 (nth hi 2 nil))) (bound-text (second hi))
+        :else (str (bound-text hi) "-" (bound-text lo) "+1")))
+
+(defn- arg-decl [a]
+  (or (:decl a)
+      (str (fortran-type (name (:type a)))
+           (when (pos? (:rank a)) (str ", dimension(" (str/join "," (repeat (:rank a) "*")) ")"))
+           (when (:intent a) (str ", intent(" (name (:intent a)) ")")))))
+
+(defn- wanted
+  "What argument a takes, in clotran's words: a double, a double-array of
+  length n, or (fortran/make-array \"real8\" n), ..."
+  [a]
+  (let [t (name (:type a)) r (:rank a)]
+    (if (zero? r)
+      (case t
+        "real8" "a double"
+        ("int4" "int8") (let [[lo hi] (int-window t)] (str "an integer from " lo " to " hi))
+        "logical" "true or false"
+        "string" (if (:len a) (str "a string of at least " (bound-text (:len a)) " bytes") "a string")
+        (str "a " t))
+      (let [known (cond (:bounds a) (map extent-text (:bounds a))
+                       ;; as declared, a dimension it does not say as ...
+                       (:dims a) (map #(if (re-find #"[*:]" %) "..." %) (re-seq #"(?:[^,(]|\([^)]*\))+" (:dims a)))
+                       :else nil)
+            exts (or known (repeat r "n"))
+            mk (str "(fortran/make-array \"" t "\" " (str/join " " exts) ")")]
+        (if (and (= 1 r) (array-word t))
+          (str (a-an (array-word t)) (when (and known (not= "..." (first exts))) (str " of length " (first exts))) ", or " mk)
+          (str (a-an (str t " array")) " of " (str/join " by " exts) ", " mk))))))
+
+(defn- refuse [r a msg]
+  (throw (clotran.host.illegal_argument_exception. (str (:name r) ": " (:name a) " is " (arg-decl a) " -- " msg))))
+
+(defn- type-ok? [a v]
+  (let [t (name (:type a))]
+    (if (pos? (:rank a))
+      (and (array? v) (= t (fortran/array-kind v)) (= (:rank a) (count (fortran/array-shape v))))
+      (case t
+        "real8" (float? v)
+        ("int4" "int8") (and (integer? v) (let [[lo hi] (int-window t)] (<= lo v hi)))
+        "logical" (boolean? v)
+        "string" (string? v)
+        true))))
+
+(defn- bound-val [f env]
+  (cond (integer? f) f
+        (symbol? f) (get env f)
+        :else (let [[op x y] f
+                    x (bound-val x env)]
+                (if (nil? y) (-' x)
+                  (let [y (bound-val y env)]
+                    (case op + (+' x y) - (-' x y) * (*' x y) quot (quot x y)))))))
+
+(defn- names-in [f] (distinct (filter symbol? (tree-seq seq? rest f))))
+
+(defn- check-call
+  "Refuses the call of r with vals, the arguments it takes in order (ins),
+  before Fortran runs; nil when every one is what the declaration needs.
+  A count the routine does not take is left to the door's arity error."
+  [r ins vals]
+  (when (= (count ins) (count vals))
+    (doseq [[a v] (map vector ins vals)]
+      (when-not (type-ok? a v)
+        (refuse r a (str "pass " (wanted a) "; got " (described v)))))
+    (let [env (zipmap (map (comp symbol :name) ins) vals)]
+      (doseq [[a v] (map vector ins vals)]
+        (cond
+          (:bounds a)
+          (let [need (reduce *' 1 (for [[lo hi] (:bounds a)] (max 0 (inc (- (bound-val hi env) (bound-val lo env))))))
+                have (reduce * 1 (fortran/array-shape v))]
+            (when (< have need)
+              (let [ns (distinct (mapcat names-in (apply concat (:bounds a))))]
+                (refuse r a (str (if (seq ns)
+                                   (str/join ", " (for [n ns] (str n " = " (get env n))))
+                                   (str "dimension(" (str/join "," (map extent-text (:bounds a))) ")"))
+                                 " needs " need " elements, the "
+                                 (if (= 1 (:rank a))
+                                   (array-word (name (:type a)))
+                                   (str (name (:type a)) " array, " (str/join " by " (fortran/array-shape v)) ","))
+                                 " passed has " have)))))
+          (:len a)
+          (let [need (bound-val (:len a) env)
+                have (alength (clotran-utf8-bytes v))]
+            (when (< have need)
+              (refuse r a (str "len=" (bound-text (:len a)) (when-not (integer? (:len a)) (str " = " need))
+                               " needs " need " bytes, the string passed has " have)))))))))
+
+(defn doc-of
+  "The Fortran signature as a Var's doc: each argument's declaration and
+  what to pass, what the call answers, where the routine is declared."
+  [r]
+  (let [fname (fn [s] (str/replace s "-" "_"))
+        args (:args r)
+        written? (fn [a] (not= :in (:intent a)))
+        outs (filter #(and (zero? (:rank %)) (written? %) (not= :string (:type %))) args)
+        line (fn [a]
+               (str "    " (fname (:name a)) "  " (arg-decl a) " -- "
+                    (cond (and (= :out (:intent a)) (zero? (:rank a))) (str "not passed: answered as " (keyword (:name a)))
+                          (= :out (:intent a)) (str (wanted a) "; written")
+                          :else (str (wanted a) (when (and (pos? (:rank a)) (written? a)) "; written in place")))
+                    (when (:unchecked a) (str "; size not checked: " (:unchecked a)))))
+        ret (when (:returns r) (or (:returns-decl r) (fortran-type (name (:returns r)))))]
+    (str (when (:doc r) (str (:doc r) "\n\n"))
+         "Fortran " (if ret "function " "subroutine ") (fname (:name r))
+         "(" (str/join ", " (map (comp fname :name) args)) ")"
+         (when (:module r) (str " in module " (:module r)))
+         (when (:file r) (str ", " (:file r) ":" (:line r)))
+         "\n" (str/join "\n" (map line args))
+         "\n  Answers "
+         (cond (and ret (seq outs)) (str "a map of :return (" ret ") and " (str/join " " (map (comp keyword :name) outs)))
+               ret (a-an ret)
+               (seq outs) (str "a map of " (str/join " " (map (comp keyword :name) outs)))
+               :else "nil")
+         ". Types and sizes are checked before the call.")))
 
 (defonce ^:private loaded
   ;; package namespace -> the library its routines come from now
@@ -35,11 +207,15 @@
         pkg-ns (create-ns ns-sym)
         ;; a declared package's sources are named relative to its directory
         file-of (fn [r] (when-let [f (:file r)] (if (and declared? (not (re-find #"^(/|[A-Za-z]:[/\\])" f))) (str path "/" f) f)))]
-    (doseq [r (:routines manifest)]
+    (doseq [r (:routines manifest)
+            :let [ins (vec (remove #(and (= :out (:intent %)) (zero? (:rank %))) (:args r)))]]
       (intern pkg-ns (with-meta (symbol (:name r))
-                       (cond-> {:doc (:doc r) :arglists (list (mapv (comp symbol :name) (remove #(= :out (:intent %)) (:args r))))}
+                       (cond-> {:doc (doc-of r) :arglists (list (mapv (comp symbol :name) ins))}
                          (:file r) (assoc :file (file-of r) :line (:line r))))
-              (fn [& args] (fortran/call-package* handle r (vec args)))))
+              (fn [& args]
+                (let [args (vec args)]
+                  (check-call r ins args)
+                  (fortran/call-package* handle r args)))))
     (swap! loaded assoc ns-sym lib)
     (when (and before (not= before lib))
       (println (str "clotran: " (:package manifest) " rebuilt from its sources: "

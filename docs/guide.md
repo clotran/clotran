@@ -211,6 +211,44 @@ byte. The arrays cross as the same buffers the Fortran writes into,
 with no copy. `clotran bind` writes the shims and manifest for a library from its own signatures, so a package is declared rather than hand-bound: a `package.edn` naming the sources is the whole declaration, and the library is built into the cache on first load (the README's `examples/mylib`). PLAN.md step 7
 records what the library dictated for it.
 
+**A call is checked before Fortran runs, and a routine says what it
+needs.** Every argument is checked against the routine's own
+declaration -- its type, and for an explicit-shape array (`x(n)`,
+`a(m,k)`, `c(0:n-1)`) that it holds as many elements as the bounds,
+evaluated from the call's other arguments, reach: Fortran's rule, a
+dummy may be smaller than its array, never larger (F2018 15.5.2.11).
+With `examples/mylib`'s `scale(n, a, x)`:
+
+```clojure
+(mylib.raw/scale 1000 2.0 (double-array 3))
+;; scale: x is real(8), dimension(n), intent(inout) -- n = 1000 needs
+;; 1000 elements, the double-array passed has 3
+(mylib.raw/scale 3 2.0 {})
+;; scale: x is real(8), dimension(n), intent(inout) -- pass a
+;; double-array of length n, or (fortran/make-array "real8" n); got a map
+(mylib.raw/scale 3.0 2.0 (double-array 3))
+;; scale: n is integer, intent(in) -- pass an integer from -2147483648
+;; to 2147483647; got 3.0, a double
+(doc mylib.raw/scale)
+;; mylib.raw/scale
+;; ([n a x])
+;;   Fortran subroutine scale(n, a, x) in module mylib, mylib.f90:4
+;;     n  integer, intent(in) -- an integer from -2147483648 to 2147483647
+;;     a  real(8), intent(in) -- a double
+;;     x  real(8), dimension(n), intent(inout) -- a double-array of length n, or (fortran/make-array "real8" n); written in place
+;;   Answers nil. Types and sizes are checked before the call.
+```
+
+A dimension two arrays share -- `k` in `a(m,k)` and `b(k,n)` -- is checked
+the same way, which is matrix conformance; a `character(len=4)` dummy
+needs four bytes. What the declaration does not bound is said, not
+guessed: an assumed-size `A(LDA,*)`, as netlib's DGEMM declares its
+matrices, reaches as far as the routine is told (`blas/dgemm` checks the
+shapes itself), and a bound that is a module variable or a function call
+is named when the package is built and in the Var's doc. Assumed-shape
+arrays (`x(:)`) carry their own shape. The same signature is the
+editor's hover.
+
 **A Fortran program can embed clotran.** `examples/embed/heat.f90` is
 a heat solver that owns `main` and its time loop and links the runtime
 in (the same objects as `clotran-bin`), booting it through the C

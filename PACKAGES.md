@@ -32,6 +32,27 @@ builds its shims, manifest and library together into the cache
 the sources' hash, so nothing there is ever stale against the sources;
 edit the Fortran and the next load builds again (PLAN step 36).
 
+The manifest carries each argument's Fortran declaration as written and,
+for an explicit-shape array, its bounds as EDN over the integer
+arguments (`x(0:n-1)` is `:bounds [[0 (- n 1)]]`). Before Fortran runs,
+clotran.package checks every argument against them (PLAN step 40;
+model/boundary.lisp section 8): the type, and that an array holds as
+many elements as its declaration reaches, so a dimension two arrays
+share is matrix conformance. One way of refusing, naming the argument,
+its declaration and what to pass, never a shim:
+
+    scale: x is real(8), dimension(n), intent(inout) -- n = 1000 needs 1000 elements, the double-array passed has 3
+    scale: x is real(8), dimension(n), intent(inout) -- pass a double-array of length n, or (fortran/make-array "real8" n); got a map
+    mm: b is real(8), dimension(k,n), intent(in) -- k = 3, n = 2 needs 6 elements, the real8 array, 2 by 2, passed has 4
+
+A bound `clotran bind` cannot evaluate -- a module variable, a function
+call, an assumed-size `*` -- is said when the package is built (`clotran
+bind: blas: dgemm: size not checked -- a(lda,*) is assumed-size ...`)
+and in the Var's doc, and not checked. Each Var's `:doc` is the routine's
+Fortran signature -- every argument's declaration and what to pass, what
+the call answers, the file and line -- for `(doc ...)` and the editor's
+hover.
+
 A namespace compiled by `clotran compile` goes through the same door: a
 library with a `clotran_manifest`, installed over the functions its
 source defined (src/clj/clotran/loader.cljf).

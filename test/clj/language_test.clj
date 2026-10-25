@@ -1109,8 +1109,15 @@
          (= (mapv #(flat (blas/dgemm % %)) ms)
             (mapv (comp flat deref) (mapv (fn [m] (future (blas/dgemm m m))) ms))))
        true)
-(check "dgemm refuses mismatched shapes"
-       (try (blas/dgemm dgA dgA) (catch clotran.host.throwable t :refused)) :refused)
+(check "dgemm refuses mismatched shapes, saying what to pass"
+       (try (blas/dgemm dgA dgA) (catch clotran.host.illegal_argument_exception t (ex-message t)))
+       "dgemm: b is a real8 array of k by n, k = 3 (a's columns) -- pass a real8 array of 3 by n, as (fortran/make-array \"real8\" 3 n) makes; got a real8 array of 2 by 3")
+;; netlib declares DGEMM's matrices assumed-size, A(LDA,*): how far it
+;; reads is DGEMM's to say, not the declaration's, and blas.raw/dgemm's
+;; doc says so (blas/dgemm checks the shapes itself)
+(check "blas.raw/dgemm's doc says its sizes are not checked, and why"
+       (clojure.string/includes? (:doc (meta #'blas.raw/dgemm)) "a  double precision, dimension(lda,*) -- a real8 array of lda by ..., (fortran/make-array \"real8\" lda ...); size not checked: a(lda,*) is assumed-size")
+       true)
 ;; NUMBERS NEVER MIX at the door (PLAN step 27; model/boundary.lisp
 ;; `cross`). Each of these once crossed silently: 2.0 as m went in as
 ;; its IEEE bits and dgemm answered zeros; 2^32+2 wrapped to 2.
@@ -1119,23 +1126,23 @@
 (let [a (fb/make-array "real8" 2 2) b (fb/make-array "real8" 2 2) c (fb/make-array "real8" 2 2)]
   (check "a real is refused as an int4"
          (door-refusal #(blas.raw/dgemm "N" "N" 2.0 2 2 1.0 a 2 b 2 0.0 c 2))
-         "dgemm: argument m is an int4: pass an integer, not 2.0 (clotran.host.real8)")
+         "dgemm: m is integer -- pass an integer from -2147483648 to 2147483647; got 2.0, a double")
   (check "an integer outside int4's window is refused"
          (door-refusal #(blas.raw/dgemm "N" "N" 4294967298 2 2 1.0 a 2 b 2 0.0 c 2))
-         "dgemm: argument m is an int4, -2147483648..2147483647: out of range, 4294967298 (clotran.host.int8)")
+         "dgemm: m is integer -- pass an integer from -2147483648 to 2147483647; got 4294967298, an integer")
   (check "the window's edge crosses"
          (door-refusal #(blas.raw/dgemm "N" "N" 2147483647 0 0 1.0 a 2147483647 b 2 0.0 c 2147483647))
          :crossed)
   (check "an integer is refused as a real8"
          (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1 a 2 b 2 0.0 c 2))
-         "dgemm: argument alpha is a real8: pass a real, not 1 (clotran.host.int8)")
+         "dgemm: alpha is double precision -- pass a double; got 1, an integer")
   ;; ALIASING (F2018 15.5.2.13; model `alias-ok`): c is written, so it
   ;; may not also be a or b -- it crossed, and dgemm answered [3 8 3 8]
   ;; for [3 3 3 3]. a and b are only read (clotran bind infers :in for
   ;; an array the F77 body never writes), so A x A crosses.
   (check "an array written and bound twice is refused"
          (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1.0 c 2 b 2 1.0 c 2))
-         "dgemm: argument c may be written, and the same array is also argument a; Fortran forbids the aliasing -- pass a copy")
+         "dgemm: c is double precision, dimension(ldc,*) -- pass a copy: it may be written, and the same array is also a, which Fortran forbids (aliasing)")
   (check "the same array twice, only read, crosses"
          (door-refusal #(blas.raw/dgemm "N" "N" 2 2 2 1.0 a 2 a 2 0.0 c 2))
          :crossed))
@@ -1314,6 +1321,66 @@
 (check "generated intents from the source" (samplelib.raw/divmod 17 5) {:q 3 :r 2})
 (check "a generated rank-2 argument" (let [m (fortran/make-array "real8" 2 2)] (fortran/aset m 0 0 1.0) (fortran/aset m 1 1 5.0) (samplelib.raw/trace m 2)) {:t 6.0})
 (check "a generated :inout array, in place" (let [a (fortran/make-array "real8" 2)] (fortran/aset a 0 1.0) (fortran/aset a 1 2.0) (samplelib.raw/scale a 2 10.0) [(fortran/aget a 0) (fortran/aget a 1)]) [10.0 20.0])
+
+;; CALLS INTO FORTRAN, SIZES CHECKED (PLAN step 40; model/boundary.lisp
+;; section 8, `size-ok`): an explicit-shape dummy may be smaller than the
+;; array passed, never larger (F2018 15.5.2.11). Each of these was
+;; accepted, and Fortran wrote or read past the array: n = 1000 with three
+;; elements, a b whose k disagreed with a's. Every refusal names the
+;; argument, its declaration, and what to pass -- no shim, no position.
+(check "n larger than the array is refused before the call"
+       (door-refusal #(samplelib.raw/scale (double-array 3) 1000 2.0))
+       "scale: a is real(8), dimension(n), intent(inout) -- n = 1000 needs 1000 elements, the double-array passed has 3")
+(check "and the array is as it was: the routine never ran"
+       (let [a (double-array [1 2 3])] (door-refusal #(samplelib.raw/scale a 4 2.0)) (vec a))
+       [1.0 2.0 3.0])
+(check "a map for an array says what to pass"
+       (door-refusal #(samplelib.raw/scale {} 3 2.0))
+       "scale: a is real(8), dimension(n), intent(inout) -- pass a double-array of length n, or (fortran/make-array \"real8\" n); got a map")
+(check "an array of the wrong kind"
+       (door-refusal #(samplelib.raw/scale (long-array 3) 3 2.0))
+       "scale: a is real(8), dimension(n), intent(inout) -- pass a double-array of length n, or (fortran/make-array \"real8\" n); got a long-array of 3")
+(check "an array of the wrong rank"
+       (door-refusal #(samplelib.raw/scale (fortran/make-array "real8" 3 1) 3 2.0))
+       "scale: a is real(8), dimension(n), intent(inout) -- pass a double-array of length n, or (fortran/make-array \"real8\" n); got a real8 array of 3 by 1")
+(check "a smaller dummy than its array is Fortran's own rule: it crosses"
+       (let [a (double-array [1 2 3])] (samplelib.raw/scale a 2 10.0) (vec a))
+       [10.0 20.0 3.0])
+(let [a (fortran/make-array "real8" 2 3) b (fortran/make-array "real8" 3 2) c (fortran/make-array "real8" 2 2)]
+  (dotimes [i 2] (dotimes [j 3] (fortran/aset a i j (double (+ 1 j (* 3 i))))))
+  (dotimes [i 3] (dotimes [j 2] (fortran/aset b i j (double (+ 7 j (* 2 i))))))
+  (check "matrix conformance: k shared by a(m,k) and b(k,n)"
+         (door-refusal #(samplelib.raw/mm 2 3 2 a c c))
+         "mm: b is real(8), dimension(k,n), intent(in) -- k = 3, n = 2 needs 6 elements, the real8 array, 2 by 2, passed has 4")
+  (check "an intent(out) array is passed, and written in place"
+         (do (samplelib.raw/mm 2 3 2 a b c) (vec (for [i (range 2) j (range 2)] (fortran/aget c i j))))
+         [58.0 64.0 139.0 154.0])
+  (check "its arglists name it" (:arglists (meta #'samplelib.raw/mm)) '([m k n a b c])))
+(check "a zero-based dimension, 0:n-1, reaches n elements"
+       [(door-refusal #(samplelib.raw/fill0 4 (double-array 3)))
+        (let [x (double-array 3)] (samplelib.raw/fill0 3 x) (vec x))]
+       ["fill0: x is real(8), dimension(0:n-1), intent(out) -- n = 4 needs 4 elements, the double-array passed has 3"
+        [7.0 7.0 7.0]])
+(check "a character(len=4) dummy needs four bytes (F2018 15.5.2.4)"
+       [(door-refusal #(samplelib.raw/fourth "abc")) (samplelib.raw/fourth "abcd") (samplelib.raw/fourth "\u00e9\u00e9")]
+       ["fourth: s is character(len=4), intent(in) -- len=4 needs 4 bytes, the string passed has 3" 100 169])
+(check "a bound the binder cannot evaluate is said, not guessed"
+       (clojure.string/includes? (:doc (meta #'samplelib.raw/fill-max)) "size not checked: y(nmax): nmax is not an integer argument of fill_max")
+       true)
+;; WHAT A ROUTINE NEEDS, SAID: each package Var's doc is its Fortran
+;; signature, as (doc ...) and the editor's hover show it
+(check "a package Var's doc is the routine's Fortran signature"
+       (:doc (meta #'samplelib.raw/divmod))
+       (str "Fortran subroutine divmod(a, b, q, r) in module samplelib, test/f/samplelib.f90:"
+            (let [t (slurp "test/f/samplelib.f90")] (inc (count (re-seq #"\n" (subs t 0 (clojure.string/index-of t "subroutine divmod"))))))
+            "\n    a  integer, intent(in) -- an integer from -2147483648 to 2147483647"
+            "\n    b  integer, intent(in) -- an integer from -2147483648 to 2147483647"
+            "\n    q  integer, intent(out) -- not passed: answered as :q"
+            "\n    r  integer, intent(out) -- not passed: answered as :r"
+            "\n  Answers a map of :q :r. Types and sizes are checked before the call."))
+(check "a hand-written manifest's arguments are said from their types"
+       (door-refusal #(testpkg/sum-arr 1.0))
+       "sum-arr: a is real(8), dimension(*), intent(in) -- pass a double-array, or (fortran/make-array \"real8\" n); got 1.0, a double")
 ;;; ---- the main thread's mailbox (PLAN step 37; Threads.f90, model/mainbox.lisp)
 ;; a package's C function handed to the process's first thread runs there,
 ;; once: what a window system's event loop needs
@@ -1337,10 +1404,10 @@
        {:oi4 5 :oi8 -9223372036854775808 :or8 2.5 :ol false})
 (check "a BigInt past int8's window is refused"
        (door-refusal #(samplelib.raw/echo-kinds 0 9223372036854775808N 0.0 false))
-       "echo-kinds: argument i8 is an int8, -9223372036854775808..9223372036854775807: out of range, 9223372036854775808N (clotran.host.bigint)")
+       "echo-kinds: i8 is integer(8), intent(in) -- pass an integer from -9223372036854775808 to 9223372036854775807; got 9223372036854775808N, an integer")
 (check "nil is not a logical"
        (door-refusal #(samplelib.raw/echo-kinds 0 0 0.0 nil))
-       "echo-kinds: argument l is a logical: pass true or false, not nil")
+       "echo-kinds: l is logical, intent(in) -- pass true or false; got nil")
 
 ;; The decimal's working precision. The oracle compares with-precision
 ;; against real Clojure form by form; what it cannot check is the part

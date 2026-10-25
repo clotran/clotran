@@ -29,7 +29,8 @@
   the file is not registered with the reader, so an index of a thousand
   files costs the reader one slot."
   (:require [clojure.string :as str]
-            [clotran.bind :as bind]))
+            [clotran.bind :as bind]
+            [clotran.package :as package]))
 
 (def ^:private heads
   {"def" :def "defonce" :def "defn" :defn "defn-" :defn "definline" :defn "defmacro" :defmacro
@@ -122,7 +123,9 @@
   "The routines of the package DIR/package.edn declares, from its sources:
   bound ones as clotran names them (mylib.raw/scale), with the file and
   line each is declared at, and the ones clotran bind does not bind,
-  marked, so an editor can still go to them. texts, a map of path to
+  marked, so an editor can still go to them. A bound one's :doc is its
+  Fortran signature, as its Var's (clotran.package/doc-of), for the
+  editor's hover. texts, a map of path to
   text, is read in place of those files: an editor's unsaved buffers."
   ([dir] (fortran-defs dir nil))
   ([dir texts]
@@ -134,8 +137,9 @@
                :let [bound? (bind/bindable? r)]]
            (cond-> {:ns pkg-ns :name (symbol (bind/edn-name (:name r))) :kind :fortran :file path :line (:line r) :column 1
                     :private false :module (:module r) :bound bound?
-                    :arglists (list (mapv (comp symbol bind/edn-name :name) (remove #(= "out" (:intent %)) (:args r))))}
-             (:rspec r) (assoc :returns (:type (:rspec r)))))))))
+                    :arglists (list (mapv (comp symbol bind/edn-name :name) (remove #(and (= "out" (:intent %)) (zero? (:rank %))) (:args r))))}
+             (:rspec r) (assoc :returns (:type (:rspec r)))
+             bound? (assoc :doc (package/doc-of (assoc (bind/manifest-routine name r) :file rel)))))))))
 
 (defn- clojure-file? [p] (re-find #"\.(cljf|cljc|clj)$" p))
 

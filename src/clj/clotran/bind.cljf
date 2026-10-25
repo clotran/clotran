@@ -24,6 +24,13 @@
   BLAS's dgemm(a, a) must not be refused because F77 has no intent
   statement.
 
+  Each argument's declaration goes into the manifest as written (:decl),
+  and an explicit-shape array's bounds as EDN over the integer arguments
+  (:bounds), a character dummy's length too (:len), for clotran.package
+  to check the call against before Fortran runs (PLAN step 40); a bound
+  it cannot evaluate is :unchecked, said in the output's header and on
+  *err* when the package is built.
+
   What it does not bind, it lists in a comment at the top of the output
   rather than guessing: derived types, optional, pointer and allocatable
   dummies, procedure arguments, kinds it does not carry. `routines` is the
@@ -48,7 +55,7 @@
 
 ;; bumped when the shims or the manifest change shape: a library built by
 ;; an older generator is built again
-(def generator-version 2)
+(def generator-version 3)
 
 ;; the C kind each type crosses as (DynLoad's pointers point at these);
 ;; int8 is c_int64_t, not c_long, which is 4 bytes on Windows
@@ -100,6 +107,28 @@
                        (recur (rest ls) (conj acc [(or (first cur) n) (str (second cur) l)]) nil)))))]
     (mapv (fn [[n l]] [n (str/lower-case (str/trim l))]) joined)))
 
+(defn- split-top
+  "s split at c outside parentheses."
+  [s c]
+  (loop [cs (seq s) depth 0 cur "" out []]
+    (if (empty? cs) (conj out cur)
+      (let [x (first cs)]
+        (cond (= x \() (recur (rest cs) (inc depth) (str cur x) out)
+              (= x \)) (recur (rest cs) (dec depth) (str cur x) out)
+              (and (= x c) (zero? depth)) (recur (rest cs) depth "" (conj out cur))
+              :else (recur (rest cs) depth (str cur x) out))))))
+
+(defn- paren-body
+  "The text inside the first parenthesis of s and its match, or nil."
+  [s]
+  (when-let [i (str/index-of s "(")]
+    (loop [j (inc i) depth 1]
+      (when (< j (count s))
+        (case (nth s j)
+          \( (recur (inc j) (inc depth))
+          \) (if (= 1 depth) (subs s (inc i) j) (recur (inc j) (dec depth)))
+          (recur (inc j) depth))))))
+
 (defn- split-args [s] (when-not (str/blank? s) (map str/trim (str/split s #","))))
 
 ;; "real(8), intent(in) :: a(n), b" -> [{:type "real8" :intent "in"} ["a(n)" "b"]]
@@ -124,7 +153,7 @@
                            (re-find #"^procedure" spec) "procedure argument"
                            (nil? type) (str "kind " spec)
                            :else nil)
-          dim (second (re-find #"dimension\(([^)]*)\)" spec))
+          dim (some-> (re-find #"dimension\(.*" spec) paren-body)
           ;; split names on commas outside parentheses
           names (loop [cs (seq names) depth 0 cur "" out []]
                   (if (empty? cs) (map str/trim (remove str/blank? (conj out cur)))
@@ -133,11 +162,11 @@
                             (= c \)) (recur (rest cs) (dec depth) (str cur c) out)
                             (and (= c \,) (zero? depth)) (recur (rest cs) depth "" (conj out cur))
                             :else (recur (rest cs) depth (str cur c) out)))))]
-      [{:type type :intent intent :unbindable unbindable :dim dim :ftype (first (str/split spec #","))} names])))
+      [{:type type :intent intent :unbindable unbindable :dim dim :ftype (first (split-top spec \,))} names])))
 
 (defn- rank-of [name-with-dims dim]
-  (let [d (or (second (re-find #"\(([^)]*)\)" name-with-dims)) dim)]
-    (if d (inc (count (re-seq #"," d))) 0)))
+  (let [d (or (paren-body name-with-dims) dim)]
+    (if d (count (split-top d \,)) 0)))
 
 (defn- bare-name [n] (str/replace n #"\(.*$" ""))
 
@@ -182,6 +211,87 @@
                              (recur)))))))))
      lines)))
 
+(defn edn-name "A Fortran name as clotran spells it: scale_by is scale-by." [n] (str/replace n "_" "-"))
+
+;; ---- what a dummy reaches (PLAN step 40) -----------------------------------
+;;
+;; An explicit-shape dummy -- x(n), a(m,k), c(0:n-1) -- may be smaller than
+;; the array passed, never larger (F2018 15.5.2.11), and a character
+;; dummy's length no longer than the string's (15.5.2.4). Its bounds are
+;; turned into EDN the door evaluates from the call's own arguments
+;; (clotran.package): integers, the names of integer arguments, + - * and
+;; quot (Fortran's integer / truncates, as quot does). A bound that is
+;; anything else -- a function call, a module variable, a parameter -- is
+;; :unchecked with the reason, said when the package is built, never
+;; guessed. model/boundary.lisp, section 8, is the rule.
+
+(defn- bound-form
+  "The Fortran integer expression s as EDN over the integer arguments ints
+  (Fortran names), or an ex-info whose message says why it cannot be."
+  [s ints routine]
+  (let [toks (vec (re-seq #"\d+|[a-z_][a-z0-9_]*|\*\*|\S" s))
+        pos (atom 0)
+        look (fn [] (get toks @pos))
+        take! (fn [] (let [t (look)] (swap! pos inc) t))
+        no (fn [why] (throw (ex-info why {})))]
+    (letfn [(primary []
+              (let [t (take!)]
+                (cond (nil? t) (no (str s " ends early"))
+                      (re-matches #"\d+" t) (parse-long t)
+                      (= t "(") (let [e (sum)] (if (= ")" (take!)) e (no (str s " has an unclosed parenthesis"))))
+                      (re-matches #"[a-z_][a-z0-9_]*" t)
+                      (cond (= "(" (look)) (no (str t "(...) is a call, which the binder does not evaluate"))
+                            (contains? ints t) (symbol (edn-name t))
+                            :else (no (str t " is not an integer argument of " routine)))
+                      :else (no (str s " is not + - * / over integers and arguments")))))
+            (unary [] (case (look) "-" (do (take!) (list '- (unary))) "+" (do (take!) (unary)) (primary)))
+            (product [] (loop [a (unary)]
+                          (case (look)
+                            "*" (do (take!) (recur (list '* a (unary))))
+                            "/" (do (take!) (recur (list 'quot a (unary))))
+                            "**" (no (str s " has a power, which the binder does not evaluate"))
+                            a)))
+            (sum [] (loop [a (product)]
+                      (case (look)
+                        "+" (do (take!) (recur (list '+ a (product))))
+                        "-" (do (take!) (recur (list '- a (product))))
+                        a)))]
+      (let [e (sum)] (if (look) (no (str s " is not + - * / over integers and arguments")) e)))))
+
+(defn- reach
+  "What a dummy's declaration says it reaches: {:bounds [[lo hi] ...]}
+  for explicit shape, {:unchecked why} when the size is not the
+  declaration's to say or the binder cannot evaluate it, {} for assumed
+  shape (the array carries its own)."
+  [a ints routine]
+  (let [ds (mapv #(str/replace % #"\s+" "") (split-top (:dims a) \,))
+        lohi (mapv #(split-top % \:) ds)]
+    (cond (some #(= 2 (count %)) (filter #(str/blank? (peek %)) lohi)) {}
+          (some #(= ":" %) ds) {}
+          (= "*" (peek (peek lohi))) {:unchecked (str (:name a) "(" (:dims a) ") is assumed-size: the routine reaches as far as it is told")}
+          :else (try {:bounds (mapv (fn [[lo hi]] (if hi [(bound-form lo ints routine) (bound-form hi ints routine)] [1 (bound-form lo ints routine)])) lohi)}
+                     (catch clotran.host.exception e {:unchecked (str (:name a) "(" (:dims a) "): " (ex-message e))})))))
+
+(defn- pretty-type [ftype]
+  (-> ftype (str/replace #"^doubleprecision" "double precision")))
+
+(defn- with-reach
+  "Argument a with its declaration as Fortran text, and what it reaches."
+  [a args routine]
+  (if (or (:unbindable a) (nil? (:type a))) a
+    (let [ints (set (for [b args :when (and (zero? (:rank b)) (#{"int4" "int8"} (:type b)) (not= "out" (:intent b)))] (:name b)))
+          decl (str (pretty-type (:ftype a))
+                    (when (pos? (:rank a)) (str ", dimension(" (str/replace (:dims a) #"\s+" "") ")"))
+                    (when (:intent a) (str ", intent(" (:intent a) ")")))
+          len (when (= "string" (:type a))
+                ;; plain character is character(len=1)
+                (if (= "character" (:ftype a)) "1"
+                  (second (or (re-find #"^character\((?:len=)?([^,)]+)" (:ftype a)) (re-find #"^character\*(\d+)" (:ftype a))))))]
+      (cond-> (assoc a :decl decl)
+        (pos? (:rank a)) (merge (reach a ints routine))
+        (and len (not (#{"*" ":"} len)))
+        (merge (try {:len (bound-form len ints routine)} (catch clotran.host.exception e {:unchecked (str (:name a) "'s length " len ": " (ex-message e))})))))))
+
 (defn routines
   "The routines a Fortran source declares, bound or not:
   [{:module m :name n :kind :subroutine|:function :file path :line l
@@ -205,26 +315,26 @@
                   decls (keep parse-decl body-lines)
                   wanted (set (map str/lower-case (concat (:params m) (when (= :function (:kind m)) [(:result m)]))))
                   info (reduce (fn [acc [spec names]]
-                                 (reduce (fn [acc n] (let [b (bare-name n)] (if (contains? wanted b) (assoc acc b (assoc spec :rank (rank-of n (:dim spec)) :dims (or (second (re-find #"\(([^)]*)\)" n)) (:dim spec)))) acc))) acc names))
+                                 (reduce (fn [acc n] (let [b (bare-name n)] (if (contains? wanted b) (assoc acc b (assoc spec :rank (rank-of n (:dim spec)) :dims (or (paren-body n) (:dim spec)))) acc))) acc names))
                                {} decls)
                   rspec (when (= :function (:kind m))
                           (or (get info (:result m))
                               (when-let [[spec _] (and (:rtype-spec m) (parse-decl (str (:rtype-spec m) " :: " (:result m))))] (assoc spec :rank 0))))
                   args (mapv (fn [p] (merge {:name p :rank 0} (get info p {:unbindable "undeclared"}))) (:params m))
+                  ;; the declaration as written, before an F77 array's intent is inferred
+                  args (mapv #(with-reach % args (:name m)) args)
                   body (remove parse-decl body-lines)
                   arrays (set (map :name (filter #(pos? (:rank %)) args)))
                   args (mapv (fn [a] (if (and (nil? (:intent a)) (pos? (:rank a)) (never-written? (:name a) body arrays))
                                        (assoc a :intent "in") a))
                              args)]
-              (recur end (conj out (assoc m :module module :file path :line (first (ls i)) :args args :rspec rspec))))))))))
+              (recur end (conj out (assoc m :module module :file path :line (first (ls i)) :args args :rspec (some-> rspec (assoc :decl (pretty-type (:ftype rspec))))))))))))))
 
 (defn bindable? [r]
   (and (every? #(and (nil? (:unbindable %)) (:type %)) (:args r))
        (or (= :subroutine (:kind r)) (and (:rspec r) (nil? (:unbindable (:rspec r))) (not= "string" (:type (:rspec r))) (zero? (:rank (:rspec r)))))
        (not-any? #(and (= "string" (:type %)) (pos? (:rank %))) (:args r))
        (not-any? #(and (= "string" (:type %)) (= "out" (:intent %))) (:args r))))
-
-(defn edn-name "A Fortran name as clotran spells it: scale_by is scale-by." [n] (str/replace n "_" "-"))
 
 (defn- ftype-decl [a]
   (let [ft (case (:type a) "real8" "double precision" "int4" "integer" "int8" "integer(8)" "logical" "logical" "string" "character(len=*)")]
@@ -241,21 +351,42 @@
          (when (= :function (:kind r)) (str (ftype-decl (assoc (:rspec r) :name (:result r) :rank 0)) "\n"))
          "     end " (name (:kind r)) " " (:name r) "\n")))
 
+(defn manifest-routine
+  "A bound routine as the manifest names it: its shim's symbol, each
+  argument's type, intent, rank, declaration and reach, the result, and
+  where it is declared -- what the door marshals by, and what a Var's doc
+  and the editor's hover say (clotran.package/doc-of)."
+  [pkg r]
+  (cond-> {:name (edn-name (:name r)) :symbol (str pkg "_" (:name r) "_shim")
+           :args (vec (for [a (:args r)]
+                        (cond-> {:name (edn-name (:name a)) :type (keyword (:type a))
+                                 :intent (keyword (or (:intent a) (if (= "string" (:type a)) "in" "inout"))) :rank (:rank a)}
+                          (:decl a) (assoc :decl (:decl a))
+                          (pos? (:rank a)) (assoc :dims (str/replace (:dims a) #"\s+" ""))
+                          (:bounds a) (assoc :bounds (:bounds a))
+                          (:len a) (assoc :len (:len a))
+                          (:unchecked a) (assoc :unchecked (:unchecked a)))))}
+    (:rspec r) (assoc :returns (keyword (:type (:rspec r))))
+    (:decl (:rspec r)) (assoc :returns-decl (:decl (:rspec r)))
+    (:module r) (assoc :module (:module r))
+    (:file r) (assoc :file (:file r) :line (:line r))))
+
 (defn manifest
   "The EDN a package's clotran_manifest answers: its name, and each bound
-  routine with its shim's symbol, arguments, result, and where it is
-  declared."
+  routine (manifest-routine)."
   [pkg rs]
-  (str "{:package \"" pkg ".raw\" :routines ["
-       (str/join " "
-         (for [r rs]
-           (str "{:name \"" (edn-name (:name r)) "\" :symbol \"" pkg "_" (:name r) "_shim\" :args ["
-                (str/join " " (for [a (:args r)] (str "{:name \"" (edn-name (:name a)) "\" :type :" (:type a) " :intent :" (or (:intent a) (if (= "string" (:type a)) "in" "inout")) " :rank " (:rank a) "}")))
-                "]" (when (:rspec r) (str " :returns :" (:type (:rspec r))))
-                (when (:module r) (str " :module \"" (:module r) "\""))
-                (when (:file r) (str " :file " (pr-str (:file r)) " :line " (:line r)))
-                "}")))
+  (str "{:package " (pr-str (str pkg ".raw")) " :routines ["
+       (str/join " " (map #(pr-str (manifest-routine pkg %)) rs))
        "]}"))
+
+(defn unchecked
+  "One line per bound routine with an argument whose size is not
+  checked, and why: said when a package is built, not guessed at."
+  [pkg rs]
+  (for [r (filter bindable? rs)
+        :let [us (keep :unchecked (:args r))]
+        :when (seq us)]
+    (str pkg ": " (:name r) ": size not checked -- " (str/join "; " us))))
 
 (defn- fortran-string-lines [s]
   ;; the EDN as a Fortran character parameter, in pieces a free-form line can hold
@@ -304,6 +435,7 @@
         modules (distinct (keep :module ok))]
     (str "! GENERATED by clotran bind for package " pkg " from " (str/join ", " srcs) ".\n"
          "! The manifest and one shim per routine (src/f/DynLoad.f90). Do not edit;\n! regenerate.\n"
+         (str/join (map #(str "! " % "\n") (unchecked pkg rs)))
          (when (seq skipped) (str "! Not bound: " (str/join "; " (for [r skipped] (str (:name r) " (" (str/join ", " (distinct (keep (fn [a] (or (:unbindable a) (when (and (= "string" (:type a)) (pos? (:rank a))) "character array"))) (conj (vec (:args r)) (:rspec r))))) ")"))) "\n"))
          "module " pkg "_pkg\n  use iso_c_binding\n"
          (str/join "\n" (for [m modules] (str "  use " m ", only: " (str/join ", " (map :name (filter #(= m (:module %)) ok))))))
@@ -323,10 +455,15 @@
 
 (defn- read-routines [srcs] (vec (mapcat (fn [f] (routines (clotran-slurp f) f)) srcs)))
 
+(defn- say-unchecked [pkg rs]
+  (binding [*out* *err*] (doseq [l (unchecked pkg rs)] (println (str "clotran bind: " l)))))
+
 (defn write-binding
   "`clotran bind --package NAME --out FILE.f90 SRC...`: FILE.f90 written."
   [pkg out srcs]
-  (clotran-spit out (generate pkg (read-routines srcs) srcs))
+  (let [rs (read-routines srcs)]
+    (clotran-spit out (generate pkg rs srcs))
+    (say-unchecked pkg rs))
   (println "wrote" out "for" pkg "from" (str/join ", " srcs)))
 
 ;; ---- a package declared by package.edn, built into the cache -------------
@@ -404,6 +541,7 @@
             fc (fortran-compiler)
             log (str out "/build.log")]
         (clotran-spit shims (generate name rs sources))
+        (say-unchecked name rs)
         (clotran-spit (str out "/manifest.edn") (manifest name (filter bindable? rs)))
         ;; compiled to objects in the cache, then linked: the objects stay,
         ;; since on macOS a library's DWARF lives in the objects it was

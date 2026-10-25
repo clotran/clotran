@@ -3,6 +3,7 @@
 ! build/libsamplelib and the language test calls them through the door.
 module samplelib
   implicit none
+  integer :: nmax = 4
 contains
   subroutine double_it(x, y)
     real(8), intent(in) :: x
@@ -73,5 +74,34 @@ contains
        t = t + m(i, i)
     end do
   end subroutine trace
+
+  ! C = A x B with explicit shapes: k is a's columns and b's rows, the
+  ! matrix conformance the door checks before the call (PLAN step 40);
+  ! c is intent(out), passed and written in place
+  subroutine mm(m, k, n, a, b, c)
+    integer, intent(in) :: m, k, n
+    real(8), intent(in) :: a(m, k), b(k, n)
+    real(8), intent(out) :: c(m, n)
+    c = matmul(a, b)
+  end subroutine mm
+
+  ! a zero-based dimension, and a character length the string must reach
+  subroutine fill0(n, x)
+    integer, intent(in) :: n
+    real(8), intent(out) :: x(0:n-1)
+    x = 7
+  end subroutine fill0
+
+  function fourth(s) result(c)
+    character(len=4), intent(in) :: s
+    integer :: c
+    c = ichar(s(4:4))
+  end function fourth
+
+  ! a bound that is a module variable: the binder says so, never guesses
+  subroutine fill_max(y)
+    real(8), intent(out) :: y(nmax)
+    y = 1
+  end subroutine fill_max
 
 end module samplelib
