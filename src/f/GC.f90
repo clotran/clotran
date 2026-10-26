@@ -2325,7 +2325,7 @@ contains
   subroutine clear_batches(s)
     type(gc_stack), pointer, intent(in) :: s
     s%n_obj_b = 0; s%n_vec_b = 0; s%n_str_b = 0; s%n_run_b = 0
-    s%naspare = 0
+    s%nspare = 0; s%naspare = 0   ! spares name the old heap's vectors (heaprt: spare-survives-reset-is-stale)
     s%np_obj = 0; s%np_vec = 0; s%np_str = 0; s%cp_obj = 0; s%cp_vec = 0; s%cp_str = 0
     s%n_defer = 0; s%n_loose = 0
     s%n_y_obj = 0; s%n_y_vec = 0; s%n_y_str = 0

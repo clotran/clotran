@@ -31,6 +31,7 @@ program gc_test
   call check_value_stack()
   call check_global_root_growth()
   call check_write_barrier()
+  call check_spare_frames_reset()
 
   if (all_ok) then
      print *, ""
@@ -664,5 +665,27 @@ contains
        call ok("18d. ...and the heap is still sound: ", dlt_1 == "")
     end block
   end subroutine check_global_root_growth
+
+  ! A spare frame is not a root: every collection empties the spares
+  ! (forget_young), so one handed out is never one the sweep freed
+  ! (model/heaprt.lisp, spare-taken-is-live). A new heap -- gc_init, an
+  ! image read -- is the same: stack 1 outlives it, and a spare it kept
+  ! named a vector of the old heap, which the new heap hands to someone
+  ! else (spare-survives-reset-is-stale).
+  subroutine check_spare_frames_reset()
+    type(gc_stack), pointer :: s
+    type(gc_value) :: v, fr
+    call gc_init(64)
+    s => gc_my_stack()
+    v = gc_vec(3, no_roots)
+    call gc_frame_give(s, v)
+    fr = gc_frame_take(s, 3)
+    call ok("20a. a frame given back is taken again: ", fr%tag == GCT_VEC .and. fr%ref == v%ref)
+    call gc_frame_give(s, v)
+    call gc_init(64)
+    s => gc_my_stack()
+    fr = gc_frame_take(s, 3)
+    call ok("20b. a new heap hands out no spare frame of the old one: ", fr%tag == GCT_NIL)
+  end subroutine check_spare_frames_reset
 
 end program gc_test
