@@ -4,14 +4,15 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
 ;; vmg), vmicg, the compiler (src/f/gen/vmc_gen.f90), heapg, the
 ;; collector (src/f/gen/heap_gen.inc), vmrt, the VM runtime's reads of
-;; clotran's values (src/f/gen/vmrt_gen.inc), or anpass, the analyzer's
-;; passes over its tree (src/f/gen/anpass_gen.inc).
+;; clotran's values (src/f/gen/vmrt_gen.inc), anpass, the analyzer's
+;; passes over its tree (src/f/gen/anpass_gen.inc), or anlocal, its locals
+;; (src/f/gen/anlocal_gen.inc).
 ;;
 ;; ACL2 itself hands over each function in its translated form -- no
 ;; macros, only lambda, if, quoted constants and calls -- with its
@@ -215,7 +216,37 @@
               "  ! sets and marks of its meaning (anp-live-spec, anpass-proof.lisp), that no"
               "  ! read marked for clearing is followed by another of its slot in any run"
               "  ! (tr-sound, anp-clears-sound: anpass-sound.lisp), and that a body the"
-              "  ! tail check passes recurs only as the last thing it does (tr-tail)."]}})
+              "  ! tail check passes recurs only as the last thing it does (tr-tail)."]}
+    "anlocal"
+    {:out "src/f/gen/anlocal_gen.inc" :include true
+     :fns [anl-odd anl-shape anl-name-code anl-pans anl-pw anl-params
+           anl-g-fctr anl-s-fctr anl-g-fout anl-s-fout anl-g-fcap anl-s-fcap anl-g-fvar anl-s-fvar anl-g-fah anl-s-fah anl-g-fnl anl-s-fnl anl-g-bpar anl-s-bpar anl-g-bfn anl-s-bfn anl-g-bhead anl-s-bhead anl-g-xnm anl-s-xnm anl-g-xsl anl-s-xsl anl-g-xblk anl-s-xblk anl-g-xnext anl-s-xnext anl-g-cnm anl-s-cnm anl-g-cout anl-s-cout anl-g-cin anl-s-cin anl-g-cbx anl-s-cbx anl-g-cnext anl-s-cnext anl-g-nsl anl-s-nsl anl-g-nnm anl-s-nnm anl-g-nnext anl-s-nnext anl-g-an anl-s-an anl-g-anext anl-s-anext anl-g-ev anl-s-ev anl-g-es anl-s-es
+           anl-grow-f anl-grow-b anl-grow-x anl-grow-c anl-grow-a anl-grow-n anl-grow-e
+           anl-new-fn anl-child anl-nslots anl-reserve anl-cin-has anl-push-n anl-bind anl-xfind anl-chain-find anl-cfind
+           anl-push-c anl-lookup anl-has-fixed anl-gt-fixed anl-push-a anl-arity anl-arity-end
+           anl-ev-find anl-push-e anl-env-put anl-env-x anl-env-c anl-env-b anl-env-from anl-env anl-caps-c anl-caps-of
+           anl-names-n anl-names-of]
+     :stobjs {anls "ls"} :stobj-types {"ls" "anl_state"}
+     :fields {anl-nf ["ls" "nf"] anl-nb ["ls" "nb"] anl-nx ["ls" "nx"] anl-nc ["ls" "nc"] anl-na ["ls" "na"] anl-nn ["ls" "nn"] anl-nev ["ls" "nev"] anl-err ["ls" "err"]}
+     :array-names {"ls" ["fctr" "fout" "fcap" "fvar" "fah" "fnl" "bpar" "bfn" "bhead" "xnm" "xsl" "xblk" "xnext" "cnm" "cout" "cin" "cbx" "cnext" "nsl" "nnm" "nnext" "an" "anext" "ev" "es"]} :prefix {"ls" "anl-"}
+     :value-arrays #{}
+     :value-formals {anl-shape #{bv} anl-name-code #{x} anl-pw #{pv} anl-params #{pv}}
+     :value-fns #{}
+     :bool-fns #{anl-cin-has anl-has-fixed anl-gt-fixed}
+     ;; a form is a value of clotran's heap, read by analyze.inc's shims
+     :val-type "gc_value"
+     :rt {frm-kind ["frm_kind" [:val] :int] frm-count ["frm_count" [:val] :int] frm-nth ["frm_nth" [:val :int] :val]
+          frm-qual ["frm_qual" [:val] :int] frm-amp ["frm_amp" [:val] :int]}
+     :header ["  ! GENERATED from model/anlocal.lisp by scripts/acl2-fortran -b anlocal. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the analyzer's locals -- the binding-form checks clj's"
+              "  ! Compiler makes (anl_shape, anl_name_code, anl_params, anl_arity), the"
+              "  ! scopes (anl_new_fn, anl_child, anl_reserve, anl_bind), name resolution with"
+              "  ! its captures (anl_lookup) and what the analyzer reads back (anl_env,"
+              "  ! anl_caps_of, anl_names_of) -- guard-verified, reading forms through"
+              "  ! analyze.inc's frm_* shims. anlocal-proof.lisp proves a name resolves to"
+              "  ! its innermost binding and a fn captures exactly the names it uses from"
+              "  ! outside; anlocal-cost.lisp counts the steps."]}})
 
 (def cfg (or (books book) (do (println (str "acl2-fortran: no book " book)) (System/exit 1))))
 (def out-file (get args "-o" (:out cfg)))

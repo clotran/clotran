@@ -298,5 +298,16 @@
  ;; clj's compiler: clotran took all of these, and ran them wrong
  ;; (scripts/fuzz-recur, seed 1; model/anpass.lisp's tail check)
  (mapv #(try (eval %) :accepted (catch clotran.host.throwable t :refused)) '[(fn [x] (recur (recur 1))) (fn [x] (do (recur 1) 2)) (fn [x] (if (recur 1) 1 2)) (fn [x] (let [a (recur 1)] a)) (fn [x] (loop [z (recur x)] :k)) (fn [x] (try (recur 1) (finally 2))) (fn [x] (try (recur 1))) (fn [x] (try 1 (catch clotran.host.exception e (recur 1)))) (fn [x] (try 1 (finally (recur 1)))) (fn [x] (try (loop [] (recur)) (finally 2))) (fn [x] [(recur 1)]) (fn [x] {:a (recur 1)}) (fn [x] (case (recur 2) 1 2 3)) (fn [x] (case x 1 (recur 2) 3)) (fn [x] (def y (recur 1))) (fn [x] (throw (recur 1))) (fn [x] (binding [*out* *out*] (recur 1))) (fn [x] (locking x (recur 1))) (fn [x] (loop [] (try (recur) (finally 1)))) (fn [x] (letfn [(g [] 1)] (if x (recur false) (g)))) (fn [x] (loop [a 1] (case a 1 (recur 2) (recur 1)))) (fn [x] (when x (recur false)))])
+ ;; binding forms refused as clj's Compiler refuses them, by class and
+ ;; message: clotran took a qualified parameter, [& &], two methods of one
+ ;; arity, two variadic ones, a fixed arity above the variadic one, 21
+ ;; parameters and a catch of a non-symbol, refused [x &], checked a let's
+ ;; name after its init, and said everything in its own words
+ ;; (scripts/fuzz-binds, seed 1: 60 of 300 differed; model/anlocal.lisp)
+ (mapv #(try (eval %) :accepted (catch clotran.host.throwable t (let [c (or (ex-cause t) t)] [(instance? clotran.host.illegal_argument_exception c) (ex-message c)]))) '[(let* x 1) (let* [a] a) (let* [1 2] 3) (let* [nil 1] 1) (let* ["s" 1] 1) (let* [a/b 1] 2) (let* [1 (undefined-thing)] 1) (loop* [(quote a) 1] 1) (letfn* [b] 1) (letfn* [a/b (fn* [] 1)] 1) (fn* [1] 1) (fn* [a/b] 1) (fn* [& a b] 1) (fn* [& &] 1) (fn* [a &] 1) (fn* ([a] 1) ([b] 2)) (fn* ([& a] 1) ([& b] 2)) (fn* ([a & b] 1) ([c d] 2)) (fn* [p0 p1 p2 p3 p4 p5 p6 p7 p8 p9 p10 p11 p12 p13 p14 p15 p16 p17 p18 p19 p20] 1) (try 1 (catch clotran.host.exception "s" 2)) (try 1 (catch clotran.host.exception a/b 2)) (loop* [a 1] (if (< a 3) (recur 1 2) a))])
+ ;; names resolve to their innermost binding through lets, loops, fns,
+ ;; letfn and catch, and a closure captures what it uses from outside
+ ;; (scripts/fuzz-binds; model/anlocal.lisp's anl-lookup)
+ (let* [a 1 b 2 c 3] [((fn* [a] (+ a (letfn* [g (fn* [b] (+ a b c))] (g 10)))) 5) (let* [a 10 a (+ a 1)] ((fn* f [b c] (+ a b c)) 100 1000)) (loop* [b (let* [c 7] ((fn* [] c)))] (+ b c)) (try (throw (ex-info "x" {})) (catch clotran.host.exception a (let* [b a] (+ c (count (ex-data b))))))])
 ]
 

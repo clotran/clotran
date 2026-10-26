@@ -1,0 +1,202 @@
+#!/usr/bin/env bb
+;; fuzz-anlocal-gen: the GENERATED analyzer locals (src/f/gen/anlocal_gen.inc,
+;; written by scripts/acl2-fortran -b anlocal from model/anlocal.lisp)
+;; against the ACL2 they were generated from.
+;;
+;;   scripts/fuzz-anlocal-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random sequences of the operations the analyzer makes -- fns written in
+;; blocks, nested blocks, slots reserved, names bound (to reserved slots,
+;; and to slots never reserved or a capture's), names looked up through
+;; fns into captures, arities, and the env, captures and slot names read
+;; back -- with ids in range and out of it, beside the binding-form checks
+;; on random forms (vectors of symbols, &, qualified names, others). ACL2
+;; answers with the model's functions; test/anlocal/anlocal_check with the
+;; generated ones, through mock reads of the same forms. Every answer, and
+;; the state's counts after each operation, must agree, case for case.
+;;
+;; -x is the NEGATIVE CONTROL: the generated side reads qualified flipped
+;; and looks up the next name, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-anlocal-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+;; ---- the cases --------------------------------------------------------------------------
+;;
+;; forms: rows {:kind :qual :amp :kids}, 1-based ids, 0 the other kind.
+;; Vectors are made after their elements, so a row's kids are below it.
+
+(defn gen-forms []
+  (let [syms (vec (for [_ (range (+ 2 (rnd 6)))] {:kind 2 :qual (pick [0 0 0 0 1]) :amp (pick [0 0 0 1]) :kids []}))
+        base (conj syms {:kind 0 :qual 0 :amp 0 :kids []})
+        nv (+ 1 (rnd 6))]
+    (reduce (fn [rows _]
+              (let [k (pick [0 1 2 3 4 4 5 21 22])]
+                (conj rows {:kind 1 :qual 0 :amp 0
+                            :kids (vec (repeatedly k #(pick (concat [0] (range 1 (inc (count rows)))
+                                                                 (range 1 (inc (count syms))) (range 1 (inc (count syms)))))))})))
+            base (range nv))))
+
+;; the analyzer's way, mostly: a block's fn, each fn's slots so far, and
+;; what was reserved but not bound -- with a few ids, slots and counts
+;; that are wrong. Op 15 clears the error flag, as the shim does.
+(defn gen-ops [nforms]
+  (let [nops (+ 5 (rnd 80))]
+    (loop [ops [] bfn [] fctr [] free [] i 0]
+      (if (>= i nops) ops
+          (let [nb (count bfn)
+                ;; the newest blocks the most: the analyzer works at the innermost
+                blk #(if (pos? (rnd 10)) (max 0 (- nb 1 (rnd (min nb (pick [1 2 3 nb]))))) (pick [-1 nb (+ nb 3)]))
+                nm #(rnd 4)
+                op (if (zero? nb) 1 (pick [1 1 2 2 2 3 3 3 3 4 4 4 4 4 4 4 4 5 5 5 5 5 5 5 5 6 6 7 8 9 10 11 12 13 14 15]))]
+            (case op
+              1 (let [o (if (or (zero? nb) (zero? (rnd 6))) -1 (if (pos? (rnd 8)) (blk) (+ nb 2)))]
+                  (recur (conj ops [1 o 0 0]) (conj bfn (count fctr)) (conj fctr 0) free (inc i)))
+              2 (let [p (blk) f (get bfn p)]
+                  (if f (recur (conj ops [2 p 0 0]) (conj bfn f) fctr free (inc i))
+                      (recur (conj ops [2 p 0 0]) bfn fctr free (inc i))))
+              3 (let [b (blk) k (pick [0 1 2 2 3 3 -1]) f (get bfn b)]
+                  (if (and f (>= k 0))
+                    (recur (conj ops [3 b k 0]) bfn (update fctr f + k)
+                           (into free (for [s (range (nth fctr f) (+ (nth fctr f) k))] [f s])) (inc i))
+                    (recur (conj ops [3 b k 0]) bfn fctr free (inc i))))
+              4 (let [b (blk) f (get bfn b)
+                      mine (filter #(= f (first %)) free)
+                      s (if (and (seq mine) (pos? (rnd 6))) (second (pick mine)) (pick [0 1 (rnd 8) -1]))]
+                  (recur (conj ops [4 b (nm) s]) bfn fctr (vec (remove #{[f s]} free)) (inc i)))
+              (recur (conj ops (case op
+                                 5 [5 (blk) (nm) 0]
+                                 6 [6 (blk) (rnd 4) (pick [0 0 1 2])]
+                                 (7 8 9 10 11 15) [op (blk) 0 0]
+                                 (12 13) [op (rnd (inc nforms)) 0 0]
+                                 14 [14 (rnd (inc nforms)) (rnd 4) 0]))
+                     bfn fctr free (inc i))))))))
+
+(defn gen-case [] (let [forms (gen-forms)] {:forms forms :ops (gen-ops (count forms))}))
+(def cases (vec (repeatedly n gen-case)))
+
+;; ---- ACL2 -------------------------------------------------------------------------------
+
+(defn acl2-form [forms id]
+  (if (zero? id) "0"
+      (let [r (nth forms (dec id))]
+        (case (:kind r)
+          1 (str "(list :vec " (str/join " " (map #(acl2-form forms %) (:kids r))) ")")
+          2 (str "(list :sym " id " " (:qual r) " " (:amp r) ")")
+          "0"))))
+
+(def driver
+  (str "(include-book \"anlocal\")\n"
+       "(set-print-case :downcase state)\n"
+       "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       "(defun evs (i n anls) (declare (xargs :stobjs anls :mode :program))\n"
+       "  (if (>= i n) nil (list* (anl-g-ev i anls) (anl-g-es i anls) (evs (1+ i) n anls))))\n"
+       "(defun st (anls) (declare (xargs :stobjs anls :mode :program))\n"
+       "  (list (anl-err anls) (anl-nf anls) (anl-nb anls) (anl-nx anls) (anl-nc anls) (anl-na anls) (anl-nn anls) (anl-nev anls)))\n"
+       "(defun out (c k r1 r2 op anls) (declare (xargs :stobjs anls :mode :program))\n"
+       "  (cw \"CASE ~x0 ~x1~%\" c (append (list k r1 r2) (st anls) (if (and (<= 8 op) (<= op 10)) (evs 0 (anl-nev anls) anls) nil))))\n"
+       "(defun run-op (c k op a b x anls) (declare (xargs :stobjs anls :mode :program))\n"
+       "  (case op\n"
+       "    (1 (mv-let (r anls) (anl-new-fn a anls) (prog2$ (out c k r 0 op anls) anls)))\n"
+       "    (2 (mv-let (r anls) (anl-child a anls) (prog2$ (out c k r 0 op anls) anls)))\n"
+       "    (3 (mv-let (r anls) (anl-reserve a b anls) (prog2$ (out c k r 0 op anls) anls)))\n"
+       "    (4 (let ((anls (anl-bind a b x anls))) (prog2$ (out c k 0 0 op anls) anls)))\n"
+       "    (5 (mv-let (r1 r2 anls) (anl-lookup a b anls) (prog2$ (out c k r1 r2 op anls) anls)))\n"
+       "    (6 (mv-let (r anls) (anl-arity a b x anls) (prog2$ (out c k r 0 op anls) anls)))\n"
+       "    (7 (prog2$ (out c k (anl-arity-end a anls) 0 op anls) anls))\n"
+       "    (8 (let ((anls (anl-env a anls))) (prog2$ (out c k 0 0 op anls) anls)))\n"
+       "    (9 (let ((anls (anl-caps-of a anls))) (prog2$ (out c k 0 0 op anls) anls)))\n"
+       "    (10 (let ((anls (anl-names-of a anls))) (prog2$ (out c k 0 0 op anls) anls)))\n"
+       "    (11 (prog2$ (out c k (anl-nslots a anls) 0 op anls) anls))\n"
+       "    (15 (let ((anls (update-anl-err 0 anls))) (prog2$ (out c k 0 0 op anls) anls)))\n"
+       "    (t anls)))\n"
+       "(defun run-ops (c k ops anls) (declare (xargs :stobjs anls :mode :program))\n"
+       "  (if (endp ops) anls\n"
+       "    (let* ((o (car ops)) (op (nth 0 o)) (a (nth 1 o)) (b (nth 2 o)) (x (nth 3 o))\n"
+       "           (anls (cond ((equal op 12) (prog2$ (out c k (anl-shape a) 0 op anls) anls))\n"
+       "                       ((equal op 13) (prog2$ (out c k (anl-name-code a) 0 op anls) anls))\n"
+       "                       ((equal op 14) (prog2$ (out c k (anl-params a b) 0 op anls) anls))\n"
+       "                       (t (run-op c k op a b x anls)))))\n"
+       "      (run-ops c (1+ k) (cdr ops) anls))))\n"
+       "(defun fresh (anls) (declare (xargs :stobjs anls :mode :program))\n"
+       "  (let* ((anls (update-anl-nf 0 anls)) (anls (update-anl-nb 0 anls)) (anls (update-anl-nx 0 anls))\n"
+       "         (anls (update-anl-nc 0 anls)) (anls (update-anl-na 0 anls)) (anls (update-anl-nn 0 anls))\n"
+       "         (anls (update-anl-nev 0 anls)) (anls (update-anl-err 0 anls))\n"
+       (str/join (for [a ["fctr" "fout" "fcap" "fvar" "fah" "fnl" "bpar" "bfn" "bhead" "xnm" "xsl" "xblk" "xnext" "cnm" "cout" "cin" "cbx" "cnext" "nsl" "nnm" "nnext" "an" "anext" "ev" "es"]]
+                   (str "         (anls (resize-anl-" a " 0 anls))\n")))
+       "         ) anls))\n"
+       (str/join (map-indexed
+                  (fn [ci {:keys [forms ops]}]
+                    (str "(let ((anls (fresh anls))) (run-ops " ci " 0 (list "
+                         (str/join " " (for [[op a b x] ops]
+                                         (if (#{12 13 14} op)
+                                           (str "(list " op " " (acl2-form forms a) " " b " " x ")")
+                                           (str "(list " op " " a " " b " " x ")"))))
+                         ") anls))\n"))
+                  cases))
+       "(good-bye)\n"))
+
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (reduce (fn [m [_ c l]] (update m (parse-long c) (fnil conj []) (vec (edn/read-string l))))
+          {} (re-seq #"CASE (\d+) (\([^)]*\))" out)))
+(when (not= (count expected) n)
+  (println (str "fuzz-anlocal-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+
+;; ---- the generated code -----------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "anlocal" "-o" (str work "/anlocal_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "test/anlocal/anlocal_check.f90" (str work "/anlocal_check.f90"))
+(def exe (str work "/anlocal_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc (concat ["-O2"] (when (= fc "gfortran") ["-frecursive"]) ["-o" exe "anlocal_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(defn case-file [k {:keys [forms ops]}]
+  (let [f (str work "/case" k ".txt")]
+    (spit f (str (count forms) " " (count ops) "\n"
+                 (str/join "\n" (for [r forms]
+                                  (let [vs (concat [(:kind r) (:qual r) (:amp r) (count (:kids r))] (:kids r))]
+                                    (str (count vs) " " (str/join " " vs)))))
+                 "\n"
+                 (str/join "\n" (for [o ops] (str/join " " o)))
+                 "\n"))
+    f))
+
+(def results
+  (vec (for [[k c] (map-indexed vector cases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+               got (vec (for [l (str/split-lines (:out r)) :when (not (str/blank? l))] (vec (edn/read-string l))))
+               want (vec (expected k))]
+           {:k k :got got :want want :ok (= got want)
+            :first (first (for [i (range (max (count got) (count want))) :when (not= (get got i) (get want i))] i))}))))
+
+(def bad (remove :ok results))
+(def all-ops (mapcat :ops cases))
+(println (str n " cases, seed " seed (when broken " (negative control: qualified flipped, the next name looked up)")))
+(println (str "  " (count all-ops) " operations, " (count (filter #(= 5 (first %)) all-ops)) " of them lookups; "
+              (reduce + (map #(nth (peek (:want %)) 7 0) results)) " captures made, "
+              (count (filter #(pos? (nth (peek (:want %)) 3 0)) results)) " cases ending with the error flag set"))
+(println (str "generated analyzer locals against ACL2's: " (count bad) " cases differ"))
+(doseq [b (take 2 bad)]
+  (println "  case" (:k b) "at operation" (:first b) (pr-str (get (:ops (nth cases (:k b))) (:first b))))
+  (println "    ACL2     " (pr-str (get (:want b) (:first b))))
+  (println "    generated" (pr-str (get (:got b) (:first b)))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

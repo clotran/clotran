@@ -52,7 +52,7 @@ module Eval
   use PersistentVector
   use Assoc
   use PersistentArrayMap, only: gcm_is, gcm_dissoc
-  use PersistentHashMap, only: gch_is, gch_cursor_first, gch_cursor_next, gch_cursor_key, gch_cursor_val
+  use PersistentHashMap, only: gch_is, gch_empty, gch_get, gch_assoc, gch_cursor_first, gch_cursor_next, gch_cursor_key, gch_cursor_val
   use Env
   use Namespace
   use Printer
@@ -63,7 +63,7 @@ module Eval
   use DynLoad
   use Socket
   use Threads
-  use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword, vm_prim_n
+  use vm_runtime, only: rt_resize_int, vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword, vm_prim_n
   use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_fortran_env, only: int64
@@ -610,6 +610,20 @@ module Eval
      integer(int64) :: nmk = 0, err = 0
   end type anp_state
 
+  ! The analyzer's locals (model/anlocal.lisp's stobj anls;
+  ! src/f/gen/anlocal_gen.inc), one per context, for the top-level form
+  ! being analysed and any analysed inside it (a macro's expansion
+  ! evaluated): fns, blocks, bindings, captures, slot names, arities, each
+  ! a record below its count in 0-based arrays the generated code grows
+  ! (rt_resize_int); ev / es what it reads back. A record is never changed
+  ! by the analysis of a form inside another, so analyze_top drops what
+  ! its own form added by restoring the counts.
+  type :: anl_state
+     integer(int64), pointer, contiguous :: fctr(:) => null(), fout(:) => null(), fcap(:) => null(), fvar(:) => null(), fah(:) => null(), fnl(:) => null(), bpar(:) => null(), bfn(:) => null(), bhead(:) => null()
+     integer(int64), pointer, contiguous :: xnm(:) => null(), xsl(:) => null(), xblk(:) => null(), xnext(:) => null(), cnm(:) => null(), cout(:) => null(), cin(:) => null(), cbx(:) => null(), cnext(:) => null(), nsl(:) => null(), nnm(:) => null(), nnext(:) => null(), an(:) => null(), anext(:) => null(), ev(:) => null(), es(:) => null()
+     integer(int64) :: nf = 0, nb = 0, nx = 0, nc = 0, na = 0, nn = 0, nev = 0, err = 0
+  end type anl_state
+
   ! The executor's continuation stack (exec.inc, `run`): one entry per
   ! node being evaluated. Its values live in a K_SLOTS-wide region of
   ! the value stack at `base` -- node, frame, aux, argv, restart -- so
@@ -714,6 +728,10 @@ module Eval
      ! a recur whose argument count is wrong, held until the tail check
      ! has seen it: clj refuses a recur out of tail position first
      character(len=:), allocatable :: recur_pend
+     ! the analyzer's locals (anl_state), and its symbols by id: a vector
+     ! of them and a map back, in one object rooted here (anl_sym_id)
+     type(anl_state) :: anl
+     type(gc_root) :: anl_root
   end type eval_ctx
   ! the VM program's functions: each one's first instruction and name, for a
   ! trace (vm.inc vm_fn_at)
@@ -24436,6 +24454,7 @@ contains
 
   include "analyze.inc"
   include "gen/anpass_gen.inc"
+  include "gen/anlocal_gen.inc"
   include "exec.inc"
   include "rational.inc"
   include "flat.inc"

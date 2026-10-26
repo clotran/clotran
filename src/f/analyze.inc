@@ -16,110 +16,303 @@
   ! the two places that rebind -- recur and letfn -- are handled by
   ! the executor writing the slots.
   !
-  ! Scope objects are GC objects too (K_SCOPE, K_FNINFO), because the
-  ! analyser allocates constantly and everything it holds must be
-  ! rootable. Same rule as everywhere: an intermediate lives in a value
-  ! stack slot, never in a bare local across an allocation.
+  ! The names, slots and captures are the generated analyzer locals'
+  ! (src/f/gen/anlocal_gen.inc, model/anlocal.lisp): integers in the
+  ! context's anl_state, nothing there for the collector. Scope objects
+  ! are GC objects (K_SCOPE) for what else a block holds -- its recur
+  ! target, its kinds and array hints -- because the analyser allocates
+  ! constantly and everything it holds must be rootable. Same rule as
+  ! everywhere: an intermediate lives in a value stack slot, never in a
+  ! bare local across an allocation.
   ! ===================================================================
 
   ! --- scopes --------------------------------------------------------
+  !
+  ! The names, slots and captures are the GENERATED analyzer locals'
+  ! (src/f/gen/anlocal_gen.inc, from model/anlocal.lisp): this context's
+  ! anl_state holds a record per fn, block, binding and capture, and
+  ! anlocal-proof.lisp proves a name resolves to its innermost binding
+  ! and a fn captures exactly the names it uses from outside. A scope is
+  ! still a heap object (K_SCOPE) for what the model does not hold: i2
+  ! its block's record, slot 2 the enclosing block's scope (nil at a fn's
+  ! root), slot 3 the fn's info, slot 4 a recur target, slot 5 the
+  ! block's notes (kinds, array hints). The fn info: slot 2 the scope the
+  ! fn is written in, slot 5 a deftype method's fields, i2 the self slot.
+  !
+  ! What is hand-written here is the shims the generated code is run
+  ! through: the form reads (frm_*), the symbols' ids (anl_sym_id), the
+  ! refusals' words and classes (anl_refuse), and turning what it reads
+  ! back into the maps and vectors the analyzer keeps.
 
-  ! A fresh fn scope: a FNINFO for the fn and its root block. `outer` is
-  ! the block scope the fn is written in, or nil at top level.
+  ! The context's analyzer locals, their arrays made on first use.
+  function anl_ls() result(ls)
+    type(eval_ctx), pointer :: tctx
+    type(anl_state), pointer :: ls
+    tctx => ctx_self()
+    ls => tctx%anl
+    if (.not. associated(ls%fctr)) then
+       call anl_alloc(ls%fctr); call anl_alloc(ls%fout); call anl_alloc(ls%fcap); call anl_alloc(ls%fvar)
+       call anl_alloc(ls%fah); call anl_alloc(ls%fnl); call anl_alloc(ls%bpar); call anl_alloc(ls%bfn)
+       call anl_alloc(ls%bhead); call anl_alloc(ls%xnm); call anl_alloc(ls%xsl); call anl_alloc(ls%xblk)
+       call anl_alloc(ls%xnext); call anl_alloc(ls%cnm); call anl_alloc(ls%cout); call anl_alloc(ls%cin)
+       call anl_alloc(ls%cbx); call anl_alloc(ls%cnext); call anl_alloc(ls%nsl); call anl_alloc(ls%nnm)
+       call anl_alloc(ls%nnext); call anl_alloc(ls%an); call anl_alloc(ls%anext); call anl_alloc(ls%ev)
+       call anl_alloc(ls%es)
+    end if
+  contains
+    subroutine anl_alloc(a)
+      integer(int64), pointer, contiguous, intent(inout) :: a(:)
+      call rt_resize_int(a, 64_int64)
+    end subroutine anl_alloc
+  end function anl_ls
+
+  ! A generated operation ran out of room past 2^40 records, or was asked
+  ! to bind a slot it never reserved: the analyzer's own bug, said so.
+  logical function anl_ok()
+    type(anl_state), pointer :: ls
+    character(len=24) :: buf
+    ls => anl_ls()
+    anl_ok = (ls%err == 0)
+    if (.not. anl_ok) then
+       write (buf, '(i0)') ls%err
+       call fail("internal error: the analyzer's locals refused an operation (anlocal err " // trim(buf) // ")")
+       ls%err = 0
+    end if
+  end function anl_ok
+
+  ! The form reads model/anlocal.lisp's frm-* decode a form by.
+  integer(int64) function frm_kind(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frm_kind = 0
+    if (gcv_is(v)) then
+       frm_kind = 1
+    else if (v%tag == GCT_SYM) then
+       frm_kind = 2
+    end if
+  end function frm_kind
+
+  integer(int64) function frm_count(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frm_count = 0
+    if (gcv_is(v)) frm_count = gcv_count(v)
+  end function frm_count
+
+  function frm_nth(x, i) result(e)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: i
+    type(gc_value) :: e, v
+    v = strip_meta(x)
+    e = gc_nil()
+    if (gcv_is(v) .and. i >= 0) then
+       if (i < gcv_count(v)) e = gcv_nth(v, int(i))
+    end if
+  end function frm_nth
+
+  ! a symbol with a namespace: clj's getNamespace() /= null
+  integer(int64) function frm_qual(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    character(len=:), allocatable :: kt
+    integer :: slash
+    v = strip_meta(x)
+    frm_qual = 0
+    if (v%tag /= GCT_SYM) return
+    call gc_ref_text(v%ref, s=kt)
+    slash = sym_slash(kt)
+    if (slash > 1 .and. slash < len(kt)) frm_qual = 1
+  end function frm_qual
+
+  integer(int64) function frm_amp(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frm_amp = 0
+    if (v%tag /= GCT_SYM) return
+    if (gc_ref_is(v%ref, "&")) frm_amp = 1
+  end function frm_amp
+
+  ! The id of a symbol, as model/anlocal.lisp's names are: one per symbol
+  ! text, per context, kept in a vector of the symbols and a map back
+  ! (anl_root); metadata is not part of a name.
+  function anl_tab(roots) result(t)
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: t, m, v
+    tctx => ctx_self()
+    if (.not. gc_root_live(tctx%anl_root)) then
+       m = gch_empty(roots)
+       v = gcv_empty([roots, m])
+       t = gc_obj(OBJ_AST, [m, v, gc_nil(), gc_nil()], [roots, m, v])
+       call gc_global_keep(tctx%anl_root, t)
+    end if
+    t = gc_root_get(tctx%anl_root)
+  end function anl_tab
+
+  integer(int64) function anl_sym_find(sym)
+    type(gc_value), intent(in) :: sym
+    type(gc_value) :: t, k, hit
+    anl_sym_find = -1
+    k = strip_meta(sym)
+    if (k%tag /= GCT_SYM) return
+    t = anl_tab([k])
+    hit = gch_get(gc_slot(t, 1), k)
+    if (hit%tag == GCT_INT) anl_sym_find = hit%ival
+  end function anl_sym_find
+
+  integer(int64) function anl_sym_id(sym)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: sym
+    type(gc_value) :: t, m, v
+    integer :: base
+    anl_sym_id = anl_sym_find(sym)
+    if (anl_sym_id >= 0) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 3)
+    call vs_set(vst, base + 1, strip_meta(sym))
+    t = anl_tab([vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, t)
+    anl_sym_id = gcv_count(gc_slot(t, 2))
+    v = gcv_conj(gc_slot(vs_get(vst, base + 2), 2), vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, v)
+    call gc_set_slot(vs_get(vst, base + 2), 2, vs_get(vst, base + 3))
+    m = gch_assoc(gc_slot(vs_get(vst, base + 2), 1), vs_get(vst, base + 1), gc_int(anl_sym_id), &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call gc_set_slot(vs_get(vst, base + 2), 1, m)
+    call vs_leave(vst, base)
+  end function anl_sym_id
+
+  function anl_sym_of(id) result(sym)
+    integer(int64), intent(in) :: id
+    type(gc_value) :: sym, t
+    t = anl_tab([gc_nil()])
+    sym = gc_nil()
+    if (id >= 0 .and. id < gcv_count(gc_slot(t, 2))) sym = gcv_nth(gc_slot(t, 2), int(id))
+  end function anl_sym_of
+
+  ! A refusal the generated checks decided (model/anlocal.lisp's codes),
+  ! in clj's words and class; x the form it is about. A catch's name is
+  ! "bind", not "let", as CatchExpr says it.
+  subroutine anl_refuse(code, x, catch)
+    integer(int64), intent(in) :: code
+    type(gc_value), intent(in) :: x
+    logical, intent(in) :: catch
+    character(len=:), allocatable :: s
+    type(gc_value) :: v
+    character(len=*), parameter :: iae = "clotran.host.illegal_argument_exception"
+    ! as clj's message writes it, by string concatenation: a string as
+    ! its text, nil as null, anything else as printed
+    v = strip_meta(x)
+    if (v%tag == GCT_NIL) then
+       s = "null"
+    else
+       call gcp_str(v, v%tag /= GCT_STR, s=s)
+    end if
+    select case (code)
+    case (1)
+       call raise_class(iae, "Bad binding form, expected vector", [x])
+    case (2)
+       call raise_class(iae, "Bad binding form, expected matched symbol expression pairs", [x])
+    case (3)
+       call raise_class(iae, "Bad binding form, expected symbol, got: " // s, [x])
+    case (4)
+       if (catch) then
+          call fail("Can't bind qualified name:" // s)
+       else
+          call fail("Can't let qualified name: " // s)
+       end if
+    case (5)
+       call raise_class(iae, "fn params must be Symbols", [x])
+    case (6)
+       call fail("Can't use qualified name as parameter: " // s)
+    case (7)
+       call fail("Invalid parameter list")
+    case (8)
+       call fail("Unexpected parameter")
+    case (9)
+       call fail("Can't specify more than 20 params")
+    case (10)
+       call fail("Can't have more than 1 variadic overload")
+    case (11)
+       call fail("Can't have 2 overloads with same arity")
+    case (12)
+       call fail("Can't have fixed arity function with more params than variadic function")
+    end select
+  end subroutine anl_refuse
+
+  ! A fresh fn scope: its info and its root block. `outer` is the block
+  ! scope the fn is written in, or nil at top level.
   function new_fn_scope(outer, roots) result(sc)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: outer
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: sc, info, caps, cmap, names
+    type(gc_value) :: sc, info
     integer :: base
+    integer(int64) :: ob, b
     vst => gc_my_stack()
-    base = vs_enter(vst, 4)
+    base = vs_enter(vst, 2)
     call vs_set(vst, base + 1, outer)
-    caps = gcv_empty([roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, caps)
-    cmap = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 3, cmap)
-    info = gc_obj(OBJ_AST, [vs_get(vst, base + 2), vs_get(vst, base + 1), vs_get(vst, base + 3), gc_nil()], &
-         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-    ! i1 is the SLOT COUNTER, from zero. It was set to K_FNINFO (101) as
-    ! a kind tag nothing ever read, and reserve_slots counted on from
-    ! there: every frame in the system had 101 slots nobody used, a
-    ! 128-slot arena run per call, and memory to match.
-    call gc_set_i1(info, 0)
+    ob = -1
+    if (gc_kind(outer) == OBJ_AST) ob = gc_i2(outer)
+    call anl_new_fn(anl_ls(), ob, b)
+    info = gc_obj(OBJ_AST, [gc_nil(), vs_get(vst, base + 1), gc_nil(), gc_nil()], [roots, vs_get(vst, base + 1)])
     call gc_set_i2(info, -1)          ! self slot: none
-    call vs_set(vst, base + 4, info)
-    names = gca_empty([roots, vs_get(vst, base + 4)])
-    call vs_set(vst, base + 3, names)
-    sc = gc_obj(OBJ_AST, [vs_get(vst, base + 3), gc_nil(), vs_get(vst, base + 4), gc_nil()], &
-         [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
+    call vs_set(vst, base + 2, info)
+    sc = gc_obj(OBJ_AST, [gc_nil(), gc_nil(), vs_get(vst, base + 2), gc_nil()], [roots, vs_get(vst, base + 2)])
     call gc_set_i1(sc, K_SCOPE)
+    call gc_set_i2(sc, int(b))
     call vs_leave(vst, base)
   end function new_fn_scope
 
-  ! A nested block in the same fn: empty names, same fninfo, the
-  ! parent's recur target unless the caller replaces it.
+  ! A nested block in the same fn: the parent's recur target unless the
+  ! caller replaces it.
   function child_scope(parent, roots) result(sc)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: parent
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: sc, names
+    type(gc_value) :: sc
     integer :: base
+    integer(int64) :: b
     vst => gc_my_stack()
-    base = vs_enter(vst, 2)
+    base = vs_enter(vst, 1)
     call vs_set(vst, base + 1, parent)
-    names = gca_empty([roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, names)
-    sc = gc_obj(OBJ_AST, [vs_get(vst, base + 2), vs_get(vst, base + 1), &
+    call anl_child(anl_ls(), int(gc_i2(vs_get(vst, base + 1)), int64), b)
+    sc = gc_obj(OBJ_AST, [gc_nil(), vs_get(vst, base + 1), &
          gc_slot(vs_get(vst, base + 1), 3), gc_slot(vs_get(vst, base + 1), 4)], &
-         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+         [roots, vs_get(vst, base + 1)])
     call gc_set_i1(sc, K_SCOPE)
+    call gc_set_i2(sc, int(b))
     call vs_leave(vst, base)
   end function child_scope
 
   ! Every local visible in scope sc, name -> slot, the innermost binding
   ! of a name winning: this fn's blocks, what it captured, and the fns
-  ! around it.
-  recursive function locals_env(sc, roots) result(env)
+  ! around it (anl_env).
+  function locals_env(sc, roots) result(env)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: sc
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: env, blk, info
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: base, i
+    type(gc_value) :: env
+    type(anl_state), pointer :: ls
+    integer :: base
+    integer(int64) :: i
     vst => gc_my_stack()
-    base = vs_enter(vst, 2)
-    call vs_set(vst, base + 1, sc)
-    env = gca_empty([roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, env)
-    blk = sc
-    do while (gc_kind(blk) == OBJ_AST)
-       call add_names(gc_slot(blk, 1))
-       blk = gc_slot(blk, 2)
-    end do
+    base = vs_enter(vst, 1)
+    env = gca_empty(roots)
+    call vs_set(vst, base + 1, env)
     if (gc_kind(sc) == OBJ_AST) then
-       info = scope_info(sc)
-       if (gc_kind(info) /= GCT_NIL .and. info%tag == GCT_OBJ) then
-          call add_names(gc_slot(info, 3))
-          if (gc_kind(gc_slot(info, 2)) == OBJ_AST) then
-             blk = locals_env(gc_slot(info, 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-             call add_names(blk)
-          end if
-       end if
+       ls => anl_ls()
+       call anl_env(ls, int(gc_i2(sc), int64))
+       do i = 0, ls%nev - 1
+          env = gca_assoc(vs_get(vst, base + 1), anl_sym_of(ls%ev(i)), gc_int(ls%es(i)), [roots, vs_get(vst, base + 1)])
+          call vs_set(vst, base + 1, env)
+       end do
     end if
-    env = vs_get(vst, base + 2)
+    env = vs_get(vst, base + 1)
     call vs_leave(vst, base)
-  contains
-    subroutine add_names(m)
-      type(gc_value), intent(in) :: m
-      type(gc_value) :: e
-      if (.not. gca_is(m)) return
-      call gca_entries(m, ks, vls)
-      do i = 1, size(ks)
-         if (gca_contains(vs_get(vst, base + 2), ks(i))) cycle
-         e = gca_assoc(vs_get(vst, base + 2), ks(i), vls(i), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), m])
-         call vs_set(vst, base + 2, e)
-      end do
-    end subroutine add_names
   end function locals_env
 
   function scope_info(sc) result(info)
@@ -128,37 +321,104 @@
     info = gc_slot(sc, 3)
   end function scope_info
 
+  ! The frame's size so far, of the fn scope sc is in.
+  integer function scope_nslots(sc)
+    type(gc_value), intent(in) :: sc
+    scope_nslots = int(anl_nslots(anl_ls(), int(gc_i2(sc), int64)))
+  end function scope_nslots
+
+  ! Its captures, as the template keeps them: (outer, inner) slot pairs,
+  ! flattened, in the order they were taken.
+  function scope_caps(sc, roots) result(v)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: sc
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: v
+    type(anl_state), pointer :: ls
+    integer :: base
+    integer(int64) :: i
+    integer(int64), allocatable :: os(:), is(:)
+    ls => anl_ls()
+    call anl_caps_of(ls, int(gc_i2(sc), int64))
+    os = ls%ev(0:ls%nev - 1)
+    is = ls%es(0:ls%nev - 1)
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
+    v = gcv_empty(roots)
+    call vs_set(vst, base + 1, v)
+    do i = size(os, kind=int64), 1, -1
+       v = gcv_conj(vs_get(vst, base + 1), gc_int(os(i)), [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, v)
+       v = gcv_conj(vs_get(vst, base + 1), gc_int(is(i)), [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, v)
+    end do
+    v = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
+  end function scope_caps
+
+  ! slot -> name, for every named slot of the fn, in the order they were
+  ! named, so a paused frame can report its locals (exec.inc
+  ! break_frames); nil when it has none.
+  function scope_slot_names(sc, roots) result(m)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: sc
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: m
+    type(anl_state), pointer :: ls
+    integer :: base
+    integer(int64) :: i
+    integer(int64), allocatable :: nms(:), sls(:)
+    ls => anl_ls()
+    call anl_names_of(ls, int(gc_i2(sc), int64))
+    nms = ls%ev(0:ls%nev - 1)
+    sls = ls%es(0:ls%nev - 1)
+    m = gc_nil()
+    if (size(nms) == 0) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 1)
+    m = gca_empty(roots)
+    call vs_set(vst, base + 1, m)
+    do i = size(nms, kind=int64), 1, -1
+       m = gca_assoc(vs_get(vst, base + 1), gc_int(sls(i)), anl_sym_of(nms(i)), [roots, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, m)
+    end do
+    m = vs_get(vst, base + 1)
+    call vs_leave(vst, base)
+  end function scope_slot_names
+
   ! Reserves n consecutive slots in the fn and returns the first.
   function reserve_slots(sc, n) result(start)
     type(gc_value), intent(in) :: sc
     integer, intent(in) :: n
     integer :: start
-    type(gc_value) :: info
-    info = scope_info(sc)
-    start = gc_i1(info)
-    call gc_set_i1(info, start + n)
+    integer(int64) :: s
+    call anl_reserve(anl_ls(), int(gc_i2(sc), int64), int(n, int64), s)
+    start = int(s)
   end function reserve_slots
 
   ! Makes `sym` name `slot` in this block.
   subroutine bind_name(sc, sym, slot, roots)
-    type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: sc, sym
     integer, intent(in) :: slot
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: names
-    integer :: base
-    vst => gc_my_stack()
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, sc)
-    call vs_set(vst, base + 2, sym)
-    names = gca_assoc(gc_slot(vs_get(vst, base + 1), 1), vs_get(vst, base + 2), gc_int(slot), &
-         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call gc_set_slot(vs_get(vst, base + 1), 1, names)
-    ! ...and the other way round, at the FN level.
-    call vs_set(vst, base + 3, scope_info(vs_get(vst, base + 1)))
-    call note_slot_name(vs_get(vst, base + 3), slot, vs_get(vst, base + 2), [roots, vs_get(vst, base + 1)])
-    call vs_leave(vst, base)
+    integer(int64) :: id
+    id = anl_sym_id(sym)
+    call anl_bind(anl_ls(), int(gc_i2(sc), int64), id, int(slot, int64))
   end subroutine bind_name
+
+  ! The slot sym is bound to in this very block, or -1 (the walks of
+  ! local_array_hint and captured_kind ask it of each block in turn).
+  integer function bound_here(sc, sym)
+    type(gc_value), intent(in) :: sc, sym
+    type(anl_state), pointer :: ls
+    integer(int64) :: id, x
+    bound_here = -1
+    id = anl_sym_find(sym)
+    if (id < 0) return
+    ls => anl_ls()
+    x = anl_xfind(ls, anl_g_bhead(ls, int(gc_i2(sc), int64)), id)
+    if (x >= 0) bound_here = int(anl_g_xsl(ls, x))
+  end function bound_here
 
   ! --- array hints ---------------------------------------------------
   !
@@ -271,22 +531,21 @@
   ! enclosing fn's: the walk local_array_hint makes, outward.
   recursive integer function captured_kind(sc0, sym) result(k)
     type(gc_value), intent(in) :: sc0, sym
-    type(gc_value) :: sc, hit
+    type(gc_value) :: sc
     logical :: crossed
+    integer :: hit
     k = 0
     if (sym%tag /= GCT_SYM) return
     sc = sc0
     crossed = .false.
     do while (gc_kind(sc) == OBJ_AST)
-       if (gca_is(gc_slot(sc, 1))) then
-          if (gca_contains(gc_slot(sc, 1), sym)) then
-             ! bound in this very fn: local_kind already answered
-             if (.not. crossed) return
-             hit = gca_get(gc_slot(sc, 1), sym)
-             k = local_kind(sc, int(hit%ival))
-             if (k == 0) k = captured_kind(sc, sym)
-             return
-          end if
+       hit = bound_here(sc, sym)
+       if (hit >= 0) then
+          ! bound in this very fn: local_kind already answered
+          if (.not. crossed) return
+          k = local_kind(sc, hit)
+          if (k == 0) k = captured_kind(sc, sym)
+          return
        end if
        if (gc_kind(gc_slot(sc, 2)) == OBJ_AST) then
           sc = gc_slot(sc, 2)
@@ -909,13 +1168,11 @@
     h = gc_nil()
     sc = sc0
     do while (gc_kind(sc) == OBJ_AST)
-       if (gca_is(gc_slot(sc, 1))) then
-          if (gca_contains(gc_slot(sc, 1), sym)) then
-             m = gc_slot(sc, 5)
-             if (gca_is(m)) h = gca_get(m, sym)
-             if (h%tag /= GCT_KEY) h = gc_nil()
-             return
-          end if
+       if (bound_here(sc, sym) >= 0) then
+          m = gc_slot(sc, 5)
+          if (gca_is(m)) h = gca_get(m, sym)
+          if (h%tag /= GCT_KEY) h = gc_nil()
+          return
        end if
        if (gc_kind(gc_slot(sc, 2)) == OBJ_AST) then
           sc = gc_slot(sc, 2)
@@ -989,21 +1246,6 @@
     call vs_leave(vst, base)
   end function cast_array_arg
 
-  ! slot -> name at the FN level, for every block of the fn and for its
-  ! captures, so a paused frame can report its locals by name (the
-  ! debugger, exec.inc break_frames). The scope maps are per block and
-  ! gone after analysis; this one rides on the template.
-  subroutine note_slot_name(info, slot, sym, roots)
-    type(gc_value), intent(in) :: info, sym
-    integer, intent(in) :: slot
-    type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: names
-    names = gc_slot(info, 4)
-    if (.not. gca_is(names)) names = gca_empty([roots, info, sym])
-    names = gca_assoc(names, gc_int(slot), sym, [roots, info, sym])
-    call gc_set_slot(info, 4, names)
-  end subroutine note_slot_name
-
   ! Declares a new local: one slot, bound in this block.
   function declare_local(sc, sym, roots) result(slot)
     type(gc_value), intent(in) :: sc, sym
@@ -1013,54 +1255,21 @@
     call bind_name(sc, sym, slot, roots)
   end function declare_local
 
-  ! The slot a symbol names, or -1. Walks the blocks of this fn, then the
-  ! fn's captures, then the ENCLOSING fn -- and a hit there becomes a
-  ! capture: a fresh slot in this fn, filled from the outer slot when
-  ! the closure is made. Transitive through any depth of nesting, since
-  ! the enclosing fn resolves the same way.
-  recursive function lookup_local(sc, sym) result(slot)
-    type(gc_stack), pointer :: vst
+  ! The slot a symbol names, or -1 (anl_lookup): the blocks of this fn,
+  ! then the fn's captures, then the ENCLOSING fn -- and a hit there
+  ! becomes a capture, a fresh slot in this fn filled from the outer slot
+  ! when the closure is made, transitively. A symbol no local was ever
+  ! bound to has no id, and names no local.
+  function lookup_local(sc, sym) result(slot)
     type(gc_value), intent(in) :: sc, sym
     integer :: slot
-    type(gc_value) :: blk, info, hit, caps, cmap
-    integer :: outer, base
-
-    vst => gc_my_stack()
+    integer(int64) :: id, k, bx
     slot = -1
-    blk = sc
-    do while (gc_kind(blk) == OBJ_AST)
-       if (gca_contains(gc_slot(blk, 1), sym)) then
-          hit = gca_get(gc_slot(blk, 1), sym)
-          slot = int(hit%ival, kind=4)
-          return
-       end if
-       blk = gc_slot(blk, 2)
-    end do
-    info = scope_info(sc)
-    if (gca_contains(gc_slot(info, 3), sym)) then
-       hit = gca_get(gc_slot(info, 3), sym)
-       slot = int(hit%ival, kind=4)
-       return
-    end if
-    if (gc_kind(gc_slot(info, 2)) /= OBJ_AST) return
-    outer = lookup_local(gc_slot(info, 2), sym)
-    if (outer < 0) return
-
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, info)
-    call vs_set(vst, base + 2, sym)
-    slot = gc_i1(vs_get(vst, base + 1))
-    call gc_set_i1(vs_get(vst, base + 1), slot + 1)
-    caps = gcv_conj(gc_slot(vs_get(vst, base + 1), 1), gc_int(outer), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 3, caps)
-    caps = gcv_conj(vs_get(vst, base + 3), gc_int(slot), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call gc_set_slot(vs_get(vst, base + 1), 1, caps)
-    cmap = gca_assoc(gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 2), gc_int(slot), &
-         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call gc_set_slot(vs_get(vst, base + 1), 3, cmap)
-    ! a captured value is a local of every arity's frame; name it too
-    call note_slot_name(vs_get(vst, base + 1), slot, vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
+    if (gc_kind(sc) /= OBJ_AST) return
+    id = anl_sym_find(sym)
+    if (id < 0) return
+    call anl_lookup(anl_ls(), int(gc_i2(sc), int64), id, k, bx)
+    if (bx >= 0) slot = int(k)
   end function lookup_local
 
   ! A deftype method's field, by name: [this mutable?] from the table
@@ -2908,20 +3117,16 @@
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
-    binds = strip_meta(gcl_first(rest))
-    if (.not. gcv_is(binds)) then
-       call fail("let needs a vector of bindings")
+    ! LetExpr.Parser's checks (model/anlocal.lisp anl-shape, anl-name-code)
+    binds = gcl_first(rest)
+    if (anl_shape(binds) /= 0) then
+       call anl_refuse(anl_shape(binds), binds, .false.)
        call vs_leave(vst, base)
        return
     end if
+    binds = strip_meta(binds)
     call vs_set(vst, base + 3, binds)
-    n = gcv_count(binds)
-    if (mod(n, 2) /= 0) then
-       call fail("let* needs an even number of binding forms")
-       call vs_leave(vst, base)
-       return
-    end if
-    n = n / 2
+    n = gcv_count(binds) / 2
     blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, blk)
     start = reserve_slots(vs_get(vst, base + 4), n)
@@ -2938,6 +3143,13 @@
     kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 4)])
     call vs_set(vst, base + 5, kids)
     do i = 0, n - 1
+       ! the name is checked before its init is analysed, as clj does
+       k = gcv_nth(vs_get(vst, base + 3), 2 * i)
+       if (anl_name_code(k) /= 0) then
+          call anl_refuse(anl_name_code(k), k, .false.)
+          call vs_leave(vst, base)
+          return
+       end if
        ! Compiler.LetExpr.Parser: analyze(init, sym.name)
        k = strip_meta(gcv_nth(vs_get(vst, base + 3), 2 * i))
        if (k%tag == GCT_SYM) then
@@ -2978,28 +3190,6 @@
          call bind_local_kind(vs_get(vst, base + 4), start + i, pk, [vs_get(vst, base + 1), vs_get(vst, base + 5)])
        end block
        k = strip_meta(gcv_nth(vs_get(vst, base + 3), 2 * i))
-       if (k%tag /= GCT_SYM) then
-          call fail("let* needs a symbol to bind")
-          call vs_leave(vst, base)
-          return
-       end if
-       ! Compiler.LetExpr.Parser: a qualified symbol names a Var, not a
-       ! local -- it was bound as written, and the body's x then
-       ! resolved to nothing. (& is an ordinary local at 1.12.6.)
-       block
-         character(len=:), allocatable :: kt
-         integer :: slash
-         block
-            call gc_ref_text(k%ref, s=dlt_1)
-            kt = dlt_1
-         end block
-         slash = sym_slash(kt)
-         if (slash > 1 .and. slash < len(kt)) then
-            call fail("Can't let qualified name: " // kt)
-            call vs_leave(vst, base)
-            return
-         end if
-       end block
        call bind_name(vs_get(vst, base + 4), k, start + i, [vs_get(vst, base + 1), vs_get(vst, base + 5)])
        call bind_array_hint(vs_get(vst, base + 4), k, gcv_nth(vs_get(vst, base + 3), 2 * i), &
             [vs_get(vst, base + 1), vs_get(vst, base + 5)])
@@ -3069,30 +3259,27 @@
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
-    binds = strip_meta(gcl_first(rest))
-    if (.not. gcv_is(binds)) then
-       call fail("letfn* needs a vector of bindings")
+    ! LetFnExpr.Parser's checks (model/anlocal.lisp anl-shape, anl-name-code)
+    binds = gcl_first(rest)
+    if (anl_shape(binds) /= 0) then
+       call anl_refuse(anl_shape(binds), binds, .false.)
        call vs_leave(vst, base)
        return
     end if
+    binds = strip_meta(binds)
     call vs_set(vst, base + 3, binds)
-    n = gcv_count(binds)
-    if (mod(n, 2) /= 0) then
-       call fail("letfn* needs an even number of binding forms")
-       call vs_leave(vst, base)
-       return
-    end if
-    n = n / 2
+    n = gcv_count(binds) / 2
     blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, blk)
     start = reserve_slots(vs_get(vst, base + 4), n)
     do i = 0, n - 1
-       k = strip_meta(gcv_nth(vs_get(vst, base + 3), 2 * i))
-       if (k%tag /= GCT_SYM) then
-          call fail("letfn* needs a symbol to bind")
+       k = gcv_nth(vs_get(vst, base + 3), 2 * i)
+       if (anl_name_code(k) /= 0) then
+          call anl_refuse(anl_name_code(k), k, .false.)
           call vs_leave(vst, base)
           return
        end if
+       k = strip_meta(k)
        call bind_name(vs_get(vst, base + 4), k, start + i, [vs_get(vst, base + 1)])
     end do
     kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 4)])
@@ -3143,7 +3330,7 @@
     hints = .not. tctx%analyzing_method
     tctx%analyzing_method = .false.
     nd = gc_nil()
-    base = vs_enter(vst, 8)
+    base = vs_enter(vst, 9)
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
     head = strip_meta(gcl_first(rest))
@@ -3196,11 +3383,31 @@
           call vs_leave(vst, base)
           return
        end if
+       ! FnExpr.parse, after each method: one variadic, each fixed arity
+       ! once (model/anlocal.lisp anl-arity)
+       block
+         integer(int64) :: code
+         call anl_arity(anl_ls(), int(gc_i2(vs_get(vst, base + 5)), int64), int(int_of(gcv_nth(ar, 0)), int64), &
+              merge(1_int64, 0_int64, truthy(gcv_nth(ar, 1))), code)
+         if (code /= 0) then
+            call anl_refuse(code, gc_nil(), .false.)
+            tctx%fn_path = saved
+            call vs_leave(vst, base)
+            return
+         end if
+       end block
        arities = gcv_conj(vs_get(vst, base + 7), ar, [vs_get(vst, base + 1), vs_get(vst, base + 5), ar])
        call vs_set(vst, base + 7, arities)
        walk = gcl_rest(vs_get(vst, base + 8), [vs_get(vst, base + 7)])
        call vs_set(vst, base + 8, walk)
     end do
+
+    if (anl_arity_end(anl_ls(), int(gc_i2(vs_get(vst, base + 5)), int64)) /= 0) then
+       call anl_refuse(12_int64, gc_nil(), .false.)
+       tctx%fn_path = saved
+       call vs_leave(vst, base)
+       return
+    end if
 
     ! every recur in tail position of its target (the tail check), then
     ! locals clearing, per arity, now that the frame size is known
@@ -3216,8 +3423,9 @@
           return
        end if
     end do
+    call vs_set(vst, base + 9, scope_caps(vs_get(vst, base + 5), [vs_get(vst, base + 1), vs_get(vst, base + 7)]))
     do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
-       call apply_clears(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), gc_i1(scope_info(vs_get(vst, base + 5))))
+       call apply_clears(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), scope_nslots(vs_get(vst, base + 5)))
     end do
 
     ! with CLOTRAN_VM=1, the fn one function of the generated VM's program
@@ -3229,8 +3437,8 @@
          type(gc_value) :: consts, nm
          nm = gc_str(tctx%fn_path, [vs_get(vst, base + 5), vs_get(vst, base + 7)])
          call vs_set(vst, base + 8, nm)
-         vmfid = vm_compile_fn(vs_get(vst, base + 7), gc_i1(scope_info(vs_get(vst, base + 5))), &
-              gc_slot(scope_info(vs_get(vst, base + 5)), 1), self_slot, vs_get(vst, base + 8), vmci, consts, &
+         vmfid = vm_compile_fn(vs_get(vst, base + 7), scope_nslots(vs_get(vst, base + 5)), &
+              vs_get(vst, base + 9), self_slot, vs_get(vst, base + 8), vmci, consts, &
               [vs_get(vst, base + 5), vs_get(vst, base + 7), vs_get(vst, base + 8)])
          if (vmfid >= 0) then
             call vs_set(vst, base + 6, consts)
@@ -3268,7 +3476,7 @@
          type(gc_value) :: fl, ar2
          integer :: nt
          nt = 0
-         fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), gc_i1(scope_info(vs_get(vst, base + 5))), nt, &
+         fl = flat_compile(gcv_nth(vs_get(vst, base + 7), i), scope_nslots(vs_get(vst, base + 5)), nt, &
               [vs_get(vst, base + 5), vs_get(vst, base + 7)])
          if (fl%tag /= GCT_NIL) then
             call vs_set(vst, base + 8, fl)
@@ -3288,9 +3496,9 @@
     call vs_set(vst, base + 8, tmpl)
     tmpl = gcv_conj(vs_get(vst, base + 8), vs_get(vst, base + 7), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
-    tmpl = gcv_conj(vs_get(vst, base + 8), gc_slot(scope_info(vs_get(vst, base + 5)), 1), [vs_get(vst, base + 5)])
+    tmpl = gcv_conj(vs_get(vst, base + 8), vs_get(vst, base + 9), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
-    tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(gc_i1(scope_info(vs_get(vst, base + 5))) + nflat), [vs_get(vst, base + 5)])
+    tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(scope_nslots(vs_get(vst, base + 5)) + nflat), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
     tmpl = gcv_conj(vs_get(vst, base + 8), gc_int(self_slot), [vs_get(vst, base + 5)])
     call vs_set(vst, base + 8, tmpl)
@@ -3298,7 +3506,7 @@
     ! named locals at all
     block
       type(gc_value) :: nm
-      nm = gc_slot(scope_info(vs_get(vst, base + 5)), 4)
+      nm = scope_slot_names(vs_get(vst, base + 5), [vs_get(vst, base + 8)])
       if (.not. gca_is(nm)) nm = gca_empty([vs_get(vst, base + 5), vs_get(vst, base + 8)])
       tmpl = gcv_conj(vs_get(vst, base + 8), nm, [vs_get(vst, base + 5)])
       call vs_set(vst, base + 8, tmpl)
@@ -3306,7 +3514,7 @@
     ! the builtin this fn only wraps, or nil (wrapper_builtin)
     block
       type(gc_value) :: wb
-      wb = wrapper_builtin(vs_get(vst, base + 7), gc_slot(scope_info(vs_get(vst, base + 5)), 1))
+      wb = wrapper_builtin(vs_get(vst, base + 7), vs_get(vst, base + 9))
       tmpl = gcv_conj(vs_get(vst, base + 8), wb, [vs_get(vst, base + 5), wb])
       call vs_set(vst, base + 8, tmpl)
     end block
@@ -3504,38 +3712,22 @@
        return
     end if
     call vs_set(vst, base + 3, params)
-    n = gcv_count(params)
-    amp = -1
-    do i = 0, n - 1
-       p = strip_meta(gcv_nth(params, i))
-       if (p%tag == GCT_SYM) then
-          if (gc_ref_is(p%ref, "&")) then
-             amp = i
-             exit
-          end if
-       end if
-    end do
-    variadic = (amp >= 0)
-    if (variadic) then
-       if (amp + 2 /= n) then
-          call fail("& must be followed by exactly one name")
-          call vs_leave(vst, base)
-          return
-       end if
-       nfixed = amp
-    else
-       nfixed = n
+    ! FnMethod.parse's walk (model/anlocal.lisp anl-params): the required
+    ! parameters, then & and at most one rest parameter
+    if (anl_params(params, 0_int64) /= 0) then
+       call anl_refuse(anl_params(params, 0_int64), frm_nth(params, anl_params(params, 1_int64)), .false.)
+       call vs_leave(vst, base)
+       return
     end if
+    n = gcv_count(params)
+    nfixed = int(anl_params(params, 2_int64))
+    variadic = (anl_params(params, 3_int64) == 1)
+    amp = nfixed
     blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     call vs_set(vst, base + 4, blk)
     start = reserve_slots(vs_get(vst, base + 4), merge(nfixed + 1, nfixed, variadic))
     do i = 0, nfixed - 1
        p = strip_meta(gcv_nth(vs_get(vst, base + 3), i))
-       if (p%tag /= GCT_SYM) then
-          call fail("fn* parameter must be a symbol")
-          call vs_leave(vst, base)
-          return
-       end if
        call bind_name(vs_get(vst, base + 4), p, start + i, [vs_get(vst, base + 1)])
        call bind_array_hint(vs_get(vst, base + 4), p, gcv_nth(vs_get(vst, base + 3), i), [vs_get(vst, base + 1)])
     end do
@@ -3864,6 +4056,12 @@
                   return
                end if
              end block
+          end if
+          ! CatchExpr's name check (model/anlocal.lisp anl-name-code)
+          if (anl_name_code(nth_of(vs_get(vst, base + 4), 2)) /= 0) then
+             call anl_refuse(anl_name_code(nth_of(vs_get(vst, base + 4), 2)), nth_of(vs_get(vst, base + 4), 2), .true.)
+             call vs_leave(vst, base)
+             return
           end if
           blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 7)])
           call vs_set(vst, base + 8, blk)
@@ -4530,7 +4728,9 @@
     recur_count_ok = .true.
     if (allocated(cx%recur_pend)) then
        pm = cx%recur_pend
-       call fail(pm)
+       deallocate(cx%recur_pend)
+       ! an IllegalArgumentException, as RecurExpr.Parser throws it
+       call raise_class("clotran.host.illegal_argument_exception", pm, [gc_nil()])
        recur_count_ok = .false.
     end if
   end function recur_count_ok
@@ -4587,7 +4787,23 @@
   ! NOT analysed as a unit: Compiler.eval evaluates its subforms one by
   ! one, each analysed after the previous has run, so an (ns ...) or a
   ! def earlier in the same do is visible to the rest.
+  ! A top-level form's analysis, and of any analysed while it is (a
+  ! macro's expansion evaluated): the analyzer locals' records it adds
+  ! are dropped when it is done -- none older is changed by it -- so
+  ! the context's arrays hold one nest of top-level forms at a time.
   recursive function analyze_top(form0) result(nd)
+    type(gc_value), intent(in) :: form0
+    type(gc_value) :: nd
+    type(anl_state), pointer :: ls
+    integer(int64) :: nf, nb, nx, nc, na, nn
+    ls => anl_ls()
+    nf = ls%nf; nb = ls%nb; nx = ls%nx; nc = ls%nc; na = ls%na; nn = ls%nn
+    nd = analyze_top1(form0)
+    if (.not. anl_ok()) nd = gc_nil()
+    ls%nf = nf; ls%nb = nb; ls%nx = nx; ls%nc = nc; ls%na = na; ls%nn = nn
+  end function analyze_top
+
+  recursive function analyze_top1(form0) result(nd)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: form0
@@ -4632,18 +4848,18 @@
        call vs_leave(vst, base)
        return
     end if
-    call apply_clears(vs_get(vst, base + 3), gc_i1(scope_info(vs_get(vst, base + 2))))
+    call apply_clears(vs_get(vst, base + 3), scope_nslots(vs_get(vst, base + 2)))
     ! the flat form beside the tree (flat.inc): a loop typed at the
     ! REPL runs as one in a fn does; its temporaries widen the frame
     block
       type(gc_value) :: fl
       integer :: nt
-      fl = flat_compile_body(vs_get(vst, base + 3), gc_i1(scope_info(vs_get(vst, base + 2))), nt, &
+      fl = flat_compile_body(vs_get(vst, base + 3), scope_nslots(vs_get(vst, base + 2)), nt, &
            [vs_get(vst, base + 1), vs_get(vst, base + 2)])
       call vs_set(vst, base + 4, fl)
       nd = mk_node(N_TOP, gc_nil(), vs_get(vst, base + 3), vs_get(vst, base + 4), &
-           gc_i1(scope_info(vs_get(vst, base + 2))) + nt, &
+           scope_nslots(vs_get(vst, base + 2)) + nt, &
            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
     end block
     call vs_leave(vst, base)
-  end function analyze_top
+  end function analyze_top1

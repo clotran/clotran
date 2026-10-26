@@ -44,6 +44,7 @@
    ["fuzz-hints" "fuzz-hints"  ["-n" "60"]               ["-n" "2000"]             60]
    ["fuzz-bytes" "fuzz-bytes"  ["-n" "30"]               ["-n" "600"]              60]
    ["fuzz-read" "fuzz-read"     ["-n" "400"]              ["-n" "5000"]             60]
+   ["fuzz-binds" "fuzz-binds"   ["-n" "300"]              ["-n" "5000"]             60]
    ["fuzz-threads" "fuzz-threads"  ["-n" "20"]               ["-n" "300"]               60]
    ["fuzz-pure" "fuzz-pure"     ["-n" "30"]               ["-n" "300"]               60]
    ["fuzz-gc" "fuzz-gc"       ["-n" "10"]               ["-n" "100"]              120]
