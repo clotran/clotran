@@ -137,10 +137,13 @@
   (declare (xargs :guard (and (sb64p ta) (sb64p ia) (sb64p tb) (sb64p ib))))
   (< (vrt-ifix ta ia) (vrt-ifix tb ib)))
 
-; a + b inside 64 bits, asked without computing it
+; a + b inside 64 bits, asked without computing it, and without negating
+; anything that can be the least word: -b is UB in Fortran for b = -2^63, so
+; b > 0 asks a <= MAX - b (-b in [-MAX, -1]) and b <= 0 asks a >= MIN - b
+; written as -MAX - (b + 1) (b + 1 in [MIN + 1, 1], its negation in [-1, MAX])
 (defun vrt-add-fits (a b)
   (declare (xargs :guard (and (sb64p a) (sb64p b))))
-  (if (< 0 b) (<= a (- 9223372036854775807 b)) (<= (- -9223372036854775808 b) a)))
+  (if (< 0 b) (<= a (- 9223372036854775807 b)) (<= (- -9223372036854775807 (+ b 1)) a)))
 
 (defun vrt-add (ta ia tb ib)
   (declare (xargs :guard (and (sb64p ta) (sb64p ia) (sb64p tb) (sb64p ib))))

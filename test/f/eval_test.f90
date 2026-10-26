@@ -968,6 +968,15 @@ contains
     call vm_add_throws("vmadd-e. min + -1 ", mn, -1_int64)
     call vm_add_throws("vmadd-f. max + max ", mx, mx)
     call vm_add_throws("vmadd-g. min + min ", mn, mn)
+    ! b the least long: the overflow test negates nothing that can be it
+    ! (vrt-add-fits; -b there was UB that gfortran -O2 happened to wrap)
+    r = rt_add(gc_int(1_int64), gc_int(mn))
+    call ok("vmadd-h. 1 + min is a number: ", .not. rt_throwp(r) .and. r%ival == mn + 1_int64)
+    r = rt_add(gc_int(0_int64), gc_int(mn))
+    call ok("vmadd-i. 0 + min is a number: ", .not. rt_throwp(r) .and. r%ival == mn)
+    r = rt_add(gc_int(mx), gc_int(mn))
+    call ok("vmadd-j. max + min is a number: ", .not. rt_throwp(r) .and. r%ival == -1_int64)
+    call vm_add_throws("vmadd-k. -1 + min ", -1_int64, mn)
   end subroutine check_vm_add_overflow
 
   subroutine vm_add_throws(label, a, b)

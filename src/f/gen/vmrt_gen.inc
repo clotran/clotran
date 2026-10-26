@@ -336,7 +336,7 @@
       r = (.not. ((9223372036854775807_int64 + (-b_)) < a_))
       return
     else
-      r = (.not. (a_ < ((-huge(0_int64) - 1_int64) + (-b_))))
+      r = (.not. (a_ < ((-9223372036854775807_int64) + (-(b_ + 1_int64)))))
       return
     end if
   end function vrt_add_fits
