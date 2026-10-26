@@ -4124,3 +4124,32 @@ a writer, on stderr) showed the prints never happened, which separated
 and splits a two-allocation argument list in the scan;
 `test/clj/torture_check.clj` reads map literals with a collection at
 every object allocation, in `make test`.
+
+## The analyzer's passes, generated, and the recur they let through
+
+The passes analyze.inc runs over a fn body once it is built -- locals
+clearing (has_fn_recur, reads_in, liveness, apply_clears) -- are now
+GENERATED from model/anpass.lisp, together with a new one, the tail
+check. The tree reaches the model through ten reads of a node (its
+kind, i2, children, slot 3, a fn's captures, a node's alternatives, a
+recur's target), thin shims in analyze.inc; everything else is
+generated. Liveness's live sets became regions of one array, an
+alternative's set a copy above the current one or-ed back, where the
+hand-written pass allocated two logical arrays an `if`.
+
+Writing down exec.inc's run of a node to prove the clearing sound
+(model/anpass-runs.lisp's tr) asked where a recur can be, and the
+answer was anywhere: the analyzer gave a recur the target of the scope
+it was written in, tail or not, so `(fn [x] (do (recur 1) 2))`, a recur
+in a let's init, an argument, a catch, a finally or a try's body all
+compiled -- and ran, the recur marker going wherever exec.inc let it.
+clj refuses each ("Can only recur from tail position", "Cannot recur
+across try"). The tail check (anp-tc) is clj's compiler's rule on the
+tree, and tr-tail proves what it buys: a body it passes makes a recur
+only as the last thing it does, to its own target, so restarting the
+loop or the fn loses nothing. scripts/fuzz-recur compares the places
+with clj; on the old analyzer 40 of 200 differed. One difference
+remains in the words, not the verdict: clotran checks a recur's
+argument count while analyzing it and the place after, so
+`(loop [] (recur (recur 1)))` is refused for its count, clj for its
+place.

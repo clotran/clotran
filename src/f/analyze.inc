@@ -3202,7 +3202,15 @@
        call vs_set(vst, base + 8, walk)
     end do
 
+    ! every recur in tail position of its target (the tail check), then
     ! locals clearing, per arity, now that the frame size is known
+    do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
+       if (.not. tail_ok(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), 1)) then
+          tctx%fn_path = saved
+          call vs_leave(vst, base)
+          return
+       end if
+    end do
     do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
        call apply_clears(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), gc_i1(scope_info(vs_get(vst, base + 5))))
     end do
@@ -4378,263 +4386,136 @@
     call vs_leave(vst, base)
   end function analyze_setbang
 
-  ! --- locals clearing -----------------------------------------------
+  ! --- the passes over the tree: tail check, locals clearing ---------
   !
-  ! A local is nil-ed after its LAST read, as Clojure's compiler does
-  ! ("locals clearing"), so a frame does not pin what it no longer
-  ! needs: reduce's own `coll` parameter held the head of the whole
-  ! realised range for the length of the reduce, 640 MB at 100000
-  ! elements. Conservative rules, each a way a later read could exist:
+  ! GENERATED (src/f/gen/anpass_gen.inc, from model/anpass.lisp, included
+  ! below in Eval.f90): the tail check (anp_tc) and locals clearing --
+  ! has_fn_recur (anp_hfr), reads_in (anp_rd), liveness (anp_live),
+  ! apply_clears (anp_clears). A local is nil-ed after its LAST read, as
+  ! Clojure's compiler does ("locals clearing"), so a frame does not pin
+  ! what it no longer needs: reduce's own `coll` parameter held the head
+  ! of the whole realised range for the length of the reduce, 640 MB at
+  ! 100000 elements. Conservative rules, each a way a later read could
+  ! exist: a read inside a loop body is never the clearing read (the body
+  ! runs again); a body that recurs to its fn is not cleared at all; a
+  ! slot an inner fn captures is read when the closure is made (and again
+  ! by letfn); among alternatives the after-sets are merged, so nothing is
+  ! cleared early on any path. anpass.lisp proves it (tr-sound): no read
+  ! marked for clearing is followed, on any run exec.inc can make, by
+  ! another read of its slot.
   !
-  !   - a read inside a loop body is never the clearing read, and it
-  !     forbids clearing at any earlier read: the body runs again;
-  !   - a fn body containing a `recur` to the fn re-runs too, so no
-  !     clearing at all in such a body (its parameters are rewritten
-  !     by the recur, but a capture is not);
-  !   - a slot an inner fn captures is read when the closure is made,
-  !     and letfn reads captures a second time, so those slots are
-  !     left alone;
-  !   - among alternatives (if branches, case branches, catch bodies)
-  !     the textually last read wins and the others are not cleared,
-  !     which leaks nothing across the whole form and never clears
-  !     early on any path.
-  !
-  ! The pass records the last reading node per slot, then marks it
-  ! (slot 3 = true on the N_LOCAL) for the executor to clear.
+  ! What is hand-written here is the passes' reads of a node, each
+  ! answering what model/anpass.lisp's ast-* answers of the node it
+  ! decodes to, and the driver that sizes the live sets' array.
 
-  ! Backwards liveness. `live(s)` on entry says slot s is read AFTER
-  ! this node; on exit it says s is read after OR within it. A read of
-  ! a slot that is not live afterwards is the clearing read -- on every
-  ! path, since alternatives are processed against the same
-  ! after-set and merged.
-  recursive subroutine liveness(nd, live)
+  integer(int64) function ast_kind(nd)
     type(gc_value), intent(in) :: nd
-    logical, intent(inout) :: live(:)
-    logical, allocatable :: l1(:), l2(:), reads(:)
-    type(gc_value) :: kids, tmpl, caps, catches, cl, spec, fns, mp, entry
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: i, n, s, kind
+    ast_kind = 0
+    if (gc_kind(nd) == OBJ_AST) ast_kind = gc_i1(nd)
+  end function ast_kind
 
-    if (gc_kind(nd) /= OBJ_AST) return
-    kind = gc_i1(nd)
-    kids = gc_slot(nd, 1)
-    select case (kind)
-    case (N_LOCAL)
-       s = gc_i2(nd) + 1
-       if (s >= 1 .and. s <= size(live)) then
-          if (.not. live(s)) call gc_set_slot(nd, 3, gc_bool(.true.))
-          live(s) = .true.
-       end if
-    case (N_FN, N_LAZY)
-       ! the closure reads its captures when it is made
-       tmpl = gc_slot(nd, 2)
-       caps = gcv_nth(tmpl, 2)
-       do i = 0, gcv_count(caps) / 2 - 1
-          s = int_of(gcv_nth(caps, 2 * i)) + 1
-          if (s >= 1 .and. s <= size(live)) live(s) = .true.
-       end do
-    case (N_DEFTYPE)
-       spec = gc_slot(nd, 2)
-       fns = gcv_nth(spec, 4)
-       do i = gcv_count(fns) - 1, 0, -1
-          call liveness(gcv_nth(fns, i), live)
-       end do
-    case (N_IF)
-       l1 = live
-       l2 = live
-       call liveness(gcv_nth(kids, 1), l1)
-       if (gcv_count(kids) > 2) call liveness(gcv_nth(kids, 2), l2)
-       live = l1 .or. l2
-       call liveness(gcv_nth(kids, 0), live)
-    case (N_CASE)
-       l1 = live
-       mp = gc_slot(nd, 2)
-       call gca_entries(mp, ks, vls)
-       do i = 1, size(ks)
-          entry = strip_meta(vls(i))
-          if (gcv_is(entry)) then
-             l2 = live
-             call liveness(gcv_nth(entry, 1), l2)
-             l1 = l1 .or. l2
-          end if
-       end do
-       l2 = live
-       call liveness(gcv_nth(kids, 1), l2)
-       live = l1 .or. l2
-       call liveness(gcv_nth(kids, 0), live)
-    case (N_TRY)
-       ! finally runs after everything; a catch body can follow any
-       ! point of the body
-       if (gc_kind(gcv_nth(kids, 1)) == OBJ_AST) call liveness(gcv_nth(kids, 1), live)
-       l1 = live
-       catches = gc_slot(nd, 2)
-       do i = 0, gcv_count(catches) - 1
-          cl = gcv_nth(catches, i)
-          l2 = live
-          call liveness(gcv_nth(cl, 2), l2)
-          l1 = l1 .or. l2
-       end do
-       live = l1
-       call liveness(gcv_nth(kids, 0), live)
-    case (N_LOOP)
-       ! every slot read in the body is live throughout the body -- it
-       ! is read again next iteration -- so no read inside is a last
-       ! one, and none before the loop is either
-       n = gc_i2(nd)
-       allocate(reads(size(live)))
-       reads = .false.
-       call reads_in(gcv_nth(kids, n), reads)
-       live = live .or. reads
-       call liveness(gcv_nth(kids, n), live)
-       do i = n - 1, 0, -1
-          call liveness(gcv_nth(kids, i), live)
-       end do
-    case (N_LETFN)
-       n = gc_i2(nd)
-       call liveness(gcv_nth(kids, n), live)
-       ! the second copy of the captures happens after every fn is made
-       do i = 0, n - 1
-          tmpl = gc_slot(gcv_nth(kids, i), 2)
-          if (.not. gcv_is(tmpl)) cycle
-          caps = gcv_nth(tmpl, 2)
-          do s = 0, gcv_count(caps) / 2 - 1
-             if (int_of(gcv_nth(caps, 2 * s)) + 1 <= size(live)) live(int_of(gcv_nth(caps, 2 * s)) + 1) = .true.
-          end do
-       end do
-       do i = n - 1, 0, -1
-          call liveness(gcv_nth(kids, i), live)
-       end do
-    case (N_DEF)
-       if (gc_kind(gc_slot(nd, 3)) == OBJ_AST) call liveness(gc_slot(nd, 3), live)
-       if (gcv_is(kids)) then
-          do i = gcv_count(kids) - 1, 0, -1
-             call liveness(gcv_nth(kids, i), live)
-          end do
-       end if
-    case default
-       ! children in evaluation order, so processed backwards
-       if (gcv_is(kids)) then
-          do i = gcv_count(kids) - 1, 0, -1
-             call liveness(gcv_nth(kids, i), live)
-          end do
-       end if
-    end select
-  end subroutine liveness
-
-  ! Every slot read anywhere under nd, nested fns excluded (they read
-  ! only their captures, at creation, which N_FN accounts for).
-  recursive subroutine reads_in(nd, reads)
+  integer(int64) function ast_i2(nd)
     type(gc_value), intent(in) :: nd
-    logical, intent(inout) :: reads(:)
-    type(gc_value) :: kids, tmpl, caps, catches, cl, spec, fns, mp, entry
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: i, s
+    ast_i2 = 0
+    if (gc_kind(nd) == OBJ_AST) ast_i2 = gc_i2(nd)
+  end function ast_i2
+
+  integer(int64) function ast_nkids(nd)
+    type(gc_value), intent(in) :: nd
+    ast_nkids = 0
+    if (gc_kind(nd) == OBJ_AST) ast_nkids = gcv_count(gc_slot(nd, 1))
+  end function ast_nkids
+
+  function ast_kid(nd, i) result(k)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: i
+    type(gc_value) :: k
+    k = gc_nil()
+    if (gc_kind(nd) == OBJ_AST .and. i >= 0 .and. i < huge(0)) k = gcv_nth(gc_slot(nd, 1), int(i))
+  end function ast_kid
+
+  ! slot 3: a def's metadata node
+  function ast_s3(nd) result(k)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: k
+    k = gc_nil()
+    if (gc_kind(nd) == OBJ_AST) k = gc_slot(nd, 3)
+  end function ast_s3
+
+  ! a fn's capture pairs (outer slot, inner slot), in its template's third
+  integer(int64) function ast_ncaps(nd)
+    type(gc_value), intent(in) :: nd
+    ast_ncaps = 0
+    if (gc_kind(nd) == OBJ_AST) ast_ncaps = gcv_count(gcv_nth(gc_slot(nd, 2), 2)) / 2
+  end function ast_ncaps
+
+  integer(int64) function ast_cap(nd, i)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: i
+    ast_cap = 0
+    if (gc_kind(nd) == OBJ_AST .and. i >= 0 .and. i < huge(0) / 2) &
+         ast_cap = int_of(gcv_nth(gcv_nth(gc_slot(nd, 2), 2), 2 * int(i)))
+  end function ast_cap
+
+  ! the alternatives: a case's branch bodies (its map's entries, in the
+  ! order gca_entries gives them), a try's catch bodies, a deftype's fns
+  integer(int64) function ast_nalts(nd)
+    type(gc_value), intent(in) :: nd
+    ast_nalts = 0
     if (gc_kind(nd) /= OBJ_AST) return
-    kids = gc_slot(nd, 1)
     select case (gc_i1(nd))
-    case (N_LOCAL)
-       s = gc_i2(nd) + 1
-       if (s >= 1 .and. s <= size(reads)) reads(s) = .true.
-    case (N_FN, N_LAZY)
-       tmpl = gc_slot(nd, 2)
-       caps = gcv_nth(tmpl, 2)
-       do i = 0, gcv_count(caps) / 2 - 1
-          s = int_of(gcv_nth(caps, 2 * i)) + 1
-          if (s >= 1 .and. s <= size(reads)) reads(s) = .true.
-       end do
+    case (N_CASE)
+       ast_nalts = gca_count(gc_slot(nd, 2))
+    case (N_TRY)
+       ast_nalts = gcv_count(gc_slot(nd, 2))
     case (N_DEFTYPE)
-       spec = gc_slot(nd, 2)
-       fns = gcv_nth(spec, 4)
-       do i = 0, gcv_count(fns) - 1
-          call reads_in(gcv_nth(fns, i), reads)
-       end do
-    case (N_TRY)
-       call reads_in(gcv_nth(kids, 0), reads)
-       catches = gc_slot(nd, 2)
-       do i = 0, gcv_count(catches) - 1
-          cl = gcv_nth(catches, i)
-          call reads_in(gcv_nth(cl, 2), reads)
-       end do
-       if (gc_kind(gcv_nth(kids, 1)) == OBJ_AST) call reads_in(gcv_nth(kids, 1), reads)
-    case (N_CASE)
-       call reads_in(gcv_nth(kids, 0), reads)
-       call reads_in(gcv_nth(kids, 1), reads)
-       mp = gc_slot(nd, 2)
-       call gca_entries(mp, ks, vls)
-       do i = 1, size(ks)
-          entry = strip_meta(vls(i))
-          if (gcv_is(entry)) call reads_in(gcv_nth(entry, 1), reads)
-       end do
-    case (N_DEF)
-       if (gc_kind(gc_slot(nd, 3)) == OBJ_AST) call reads_in(gc_slot(nd, 3), reads)
-       if (gcv_is(kids)) then
-          do i = 0, gcv_count(kids) - 1
-             call reads_in(gcv_nth(kids, i), reads)
-          end do
-       end if
-    case default
-       if (gcv_is(kids)) then
-          do i = 0, gcv_count(kids) - 1
-             call reads_in(gcv_nth(kids, i), reads)
-          end do
-       end if
+       ast_nalts = gcv_count(gcv_nth(gc_slot(nd, 2), 4))
     end select
-  end subroutine reads_in
+  end function ast_nalts
 
-  ! Whether a fn-level recur occurs under nd (nested fns excluded).
-  recursive function has_fn_recur(nd) result(yes)
+  function ast_alt(nd, i) result(k)
     type(gc_value), intent(in) :: nd
-    logical :: yes
-    type(gc_value) :: kids, catches, cl, mp, entry
+    integer(int64), intent(in) :: i
+    type(gc_value) :: k, entry
     type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: i
-    yes = .false.
-    if (gc_kind(nd) /= OBJ_AST) return
-    kids = gc_slot(nd, 1)
+    k = gc_nil()
+    if (gc_kind(nd) /= OBJ_AST .or. i < 0 .or. i >= huge(0)) return
     select case (gc_i1(nd))
-    case (N_FN, N_LAZY, N_LOCAL, N_CONST, N_VAR, N_DEFTYPE)
-       return
-    case (N_RECUR)
-       yes = (int_of(gcv_nth(gc_slot(nd, 2), 0)) /= 0)
-       return
-    case (N_TRY)
-       yes = has_fn_recur(gcv_nth(kids, 0))
-       if (yes) return
-       catches = gc_slot(nd, 2)
-       do i = 0, gcv_count(catches) - 1
-          cl = gcv_nth(catches, i)
-          yes = has_fn_recur(gcv_nth(cl, 2))
-          if (yes) return
-       end do
-       if (gc_kind(gcv_nth(kids, 1)) == OBJ_AST) yes = has_fn_recur(gcv_nth(kids, 1))
-       return
     case (N_CASE)
-       mp = gc_slot(nd, 2)
-       call gca_entries(mp, ks, vls)
-       do i = 1, size(ks)
-          entry = strip_meta(vls(i))
-          if (gcv_is(entry)) then
-             yes = has_fn_recur(gcv_nth(entry, 1))
-             if (yes) return
-          end if
-       end do
-    case (N_DEF)
-       if (gc_kind(gc_slot(nd, 3)) == OBJ_AST) then
-          yes = has_fn_recur(gc_slot(nd, 3))
-          if (yes) return
+       call gca_entries(gc_slot(nd, 2), ks, vls)
+       if (i < size(vls)) then
+          entry = strip_meta(vls(i + 1))
+          if (gcv_is(entry)) k = gcv_nth(entry, 1)
        end if
+    case (N_TRY)
+       k = gcv_nth(gcv_nth(gc_slot(nd, 2), int(i)), 2)
+    case (N_DEFTYPE)
+       k = gcv_nth(gcv_nth(gc_slot(nd, 2), 4), int(i))
     end select
-    if (gcv_is(kids)) then
-       do i = 0, gcv_count(kids) - 1
-          yes = has_fn_recur(gcv_nth(kids, i))
-          if (yes) return
-       end do
+  end function ast_alt
+
+  ! a recur's target: nonzero the fn, 0 a loop
+  integer(int64) function ast_rfn(nd)
+    type(gc_value), intent(in) :: nd
+    ast_rfn = 0
+    if (gc_kind(nd) == OBJ_AST) then
+       if (gc_i1(nd) == N_RECUR) ast_rfn = int_of(gcv_nth(gc_slot(nd, 2), 0))
     end if
-  end function has_fn_recur
+  end function ast_rfn
 
-  ! Runs the pass over one body with `nslots` slots and marks the reads.
-  ! A body that recurs to its fn re-runs from the top with its captures
-  ! unchanged, so it gets no clearing at all.
+  ! The tail check of a body standing as tt says (anpass.lisp's anp-tc: 1
+  ! a fn's, 0 the top level's): fails the analysis as clj's compiler
+  ! does, and answers whether it passed.
+  logical function tail_ok(body, tt)
+    type(gc_value), intent(in) :: body
+    integer, intent(in) :: tt
+    integer(int64) :: code
+    code = anp_tc(0_int64, body, 0_int64, 0_int64, int(tt, int64))
+    tail_ok = (code == 0)
+    if (code == 1) call fail("Can only recur from tail position")
+    if (code == 2) call fail("Cannot recur across try")
+  end function tail_ok
+
   ! CLOTRAN_KEEP_LOCALS=1 turns the clearing pass off, so a paused frame
   ! shows every local it ever bound rather than nil for the ones already
   ! read. Clojure has the same switch, :disable-locals-clearing, and for
@@ -4649,16 +4530,35 @@
     keep_locals = (keep_locals_mode == 2)
   end function keep_locals
 
+
+  ! The clearing pass over one body with `nslots` slots: generated
+  ! (anp_clears), run with live sets for 16 nested alternatives and 64
+  ! marks at first, the arrays doubled and the pass run again while it
+  ! says they ran out. The marked reads get slot 3 = true, which exec.inc
+  ! reads to clear. A body that recurs to its fn gets no clearing at all.
   subroutine apply_clears(body, nslots)
     type(gc_value), intent(in) :: body
     integer, intent(in) :: nslots
-    logical, allocatable :: live(:)
+    type(anp_state) :: ps
+    integer(int64) :: nlv, nmk, i
     if (keep_locals()) return
     if (nslots <= 0) return
-    if (has_fn_recur(body)) return
-    allocate(live(nslots))
-    live = .false.
-    call liveness(body, live)
+    nlv = 32 * int(nslots, int64) + 32
+    nmk = 64
+    do
+       if (allocated(ps%lv)) deallocate(ps%lv)
+       if (allocated(ps%mk)) deallocate(ps%mk)
+       allocate(ps%lv(0:nlv - 1), ps%mk(0:nmk - 1))
+       call anp_clears(ps, body, int(nslots, int64))
+       if (ps%err == 0) exit
+       ! no clearing rather than a pass that never fits: nothing is lost
+       if (nlv > 2_int64**30) return
+       nlv = 2 * nlv
+       nmk = 2 * nmk
+    end do
+    do i = 0, ps%nmk - 1
+       call gc_set_slot(ps%mk(i), 3, gc_bool(.true.))
+    end do
   end subroutine apply_clears
 
   ! --- the top level -------------------------------------------------
@@ -4705,6 +4605,10 @@
        return
     end if
     call vs_set(vst, base + 3, body)
+    if (.not. tail_ok(vs_get(vst, base + 3), 0)) then
+       call vs_leave(vst, base)
+       return
+    end if
     call apply_clears(vs_get(vst, base + 3), gc_i1(scope_info(vs_get(vst, base + 2))))
     ! the flat form beside the tree (flat.inc): a loop typed at the
     ! REPL runs as one in a fn does; its temporaries widen the frame

@@ -1,0 +1,165 @@
+#!/usr/bin/env bb
+;; fuzz-anpass-gen: the GENERATED analyzer passes (src/f/gen/anpass_gen.inc,
+;; written by scripts/acl2-fortran -b anpass from model/anpass.lisp) against
+;; the ACL2 they were generated from.
+;;
+;;   scripts/fuzz-anpass-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random trees of the analyzer's node kinds -- ifs, dos, lets, loops,
+;; letfns, fns with captures, recurs to a fn or a loop, trys with catches
+;; and finallys, cases, defs with metadata, deftypes, calls, and kinds no
+;; pass knows -- with slots in range and out of it, counts that disagree
+;; with the children, and live-set and mark arrays sometimes too small. ACL2
+;; answers with the model's anp-clears (its error, its marked reads), anp-tc
+;; in each of the four positions and anp-hfr; test/anpass/anpass_check
+;; with the generated ones, through mock reads of the same tree. Every
+;; answer must agree, case for case.
+;;
+;; -x is the NEGATIVE CONTROL: the generated side reads a local's slot one
+;; more and a recur's target flipped, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-anpass-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+;; ---- the trees --------------------------------------------------------------------------
+;;
+;; a node: {:kind :i2 :rfn :kids :s3 :caps :alts}; nil is no node. Ids are
+;; given in a walk afterwards, each node its own.
+
+(declare gen-node)
+(defn gen-kids [d k nslots] (vec (repeatedly k #(gen-node (dec d) nslots))))
+(defn slot [nslots] (if (pos? (rnd 8)) (rnd (max nslots 1)) (pick [-1 nslots (+ nslots 1)])))
+(defn leaf [nslots]
+  (case (rnd 4)
+    0 {:kind 2 :i2 (slot nslots)}
+    1 {:kind 2 :i2 (slot nslots)}
+    2 {:kind 1}
+    3 {:kind 3}))
+(defn node [kind & {:as m}] (merge {:kind kind :i2 0 :rfn 0 :kids [] :s3 nil :caps [] :alts []} m))
+
+(defn gen-node [d nslots]
+  (if (<= d 0)
+    (node (:kind (leaf nslots)) :i2 (or (:i2 (leaf nslots)) 0))
+    (let [k (pick [2 2 2 1 4 4 5 6 10 11 11 12 12 13 14 15 16 16 18 19 20 7 21 99])
+          sub #(gen-node (dec d) nslots)
+          inits (rnd 3)]
+      (case k
+        2 (node 2 :i2 (slot nslots))
+        1 (node 1)
+        4 (node 4 :kids (gen-kids d (pick [2 3 3 1]) nslots))
+        5 (node 5 :kids (gen-kids d (rnd 4) nslots))
+        (6 7 21 99) (node k :kids (gen-kids d (rnd 4) nslots))
+        10 (node 10 :kids (gen-kids d (rnd 2) nslots) :s3 (when (pos? (rnd 2)) (sub)))
+        (11 12 13) (node k :i2 (pick [inits inits inits (+ inits 1) -1]) :kids (gen-kids d (+ inits 1) nslots))
+        (14 15) (node k :caps (vec (repeatedly (rnd 4) #(slot nslots))))
+        16 (node 16 :rfn (pick [0 1 0 2]) :kids (gen-kids d (rnd 3) nslots))
+        18 (node 18 :kids [(sub) (when (pos? (rnd 2)) (sub))] :alts (gen-kids d (rnd 3) nslots))
+        19 (node 19 :kids [(sub) (sub)] :alts (vec (repeatedly (rnd 4) #(when (pos? (rnd 5)) (sub)))))
+        20 (node 20 :alts (vec (repeatedly (rnd 3) #(node 14 :caps (vec (repeatedly (rnd 3) (fn [] (slot nslots))))))))))))
+
+;; ids in a walk; the table, a row a node
+(defn number [root]
+  (let [rows (atom []) ]
+    (letfn [(walk [nd]
+              (if (nil? nd) 0
+                (let [id (inc (count @rows))]
+                  (swap! rows conj nil)
+                  (let [kids (mapv walk (:kids nd)) s3 (walk (:s3 nd)) alts (mapv walk (:alts nd))]
+                    (swap! rows assoc (dec id) (assoc nd :id id :kid-ids kids :s3-id s3 :alt-ids alts))
+                    id))))]
+      (let [r (walk root)] [r @rows]))))
+
+(defn gen-case []
+  (let [nslots (+ 1 (rnd 9)) root (gen-node (+ 1 (rnd 6)) nslots)
+        [r rows] (number root)]
+    {:n nslots :lvlen (pick [(* 64 (+ nslots 1)) (* 64 (+ nslots 1)) (* 3 nslots) (+ nslots (rnd 4)) 0])
+     :mklen (pick [64 64 64 (rnd 3)]) :root r :rows rows}))
+
+(def cases (vec (repeatedly n gen-case)))
+
+;; ---- ACL2 -------------------------------------------------------------------------------
+
+(defn acl2-node [rows id]
+  (if (zero? id) "nil"
+    (let [row (nth rows (dec id))]
+      (str "(list :ast " id " " (:kind row) " " (:i2 row) " (list " (str/join " " (map #(acl2-node rows %) (:kid-ids row))) ") "
+           (acl2-node rows (:s3-id row)) " '(" (str/join " " (:caps row)) ") (list "
+           (str/join " " (map #(acl2-node rows %) (:alt-ids row))) ") " (:rfn row) ")"))))
+
+(def driver
+  (str "(include-book \"anpass\")\n"
+       "(set-print-case :downcase state)\n"
+       "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       "(defun mk-ids (i k anps) (declare (xargs :stobjs anps :mode :program))\n"
+       "  (if (>= i k) nil (cons (cadr (anp-mki i anps)) (mk-ids (1+ i) k anps))))\n"
+       "(defun run-case (c x n lvlen mklen anps) (declare (xargs :stobjs anps :mode :program))\n"
+       "  (let* ((anps (resize-anp-lv 0 anps)) (anps (resize-anp-lv lvlen anps)) (anps (resize-anp-mk 0 anps))\n"
+       "         (anps (resize-anp-mk mklen anps)) (anps (anp-clears x n anps)))\n"
+       "    (prog2$ (cw \"CASE ~x0 ~x1 ~x2~%\" c\n"
+       "                (cons (anp-err anps) (cons (anp-nmk anps) (if (equal (anp-err anps) 0) (mk-ids 0 (anp-nmk anps) anps) nil)))\n"
+       "                (list (anp-tc 0 x 0 0 0) (anp-tc 0 x 0 0 1) (anp-tc 0 x 0 0 2) (anp-tc 0 x 0 0 3) (if (anp-hfr 0 x 0 0) 1 0)))\n"
+       "            anps)))\n"
+       (str/join (map-indexed (fn [k c] (str "(run-case " k " " (acl2-node (:rows c) (:root c)) " " (:n c) " " (:lvlen c) " " (:mklen c) " anps)\n")) cases))
+       "(good-bye)\n"))
+
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ k a b] (re-seq #"CASE (\d+) (\([^)]*\)) (\([^)]*\))" out)]
+             [(parse-long k) [(vec (edn/read-string a)) (vec (edn/read-string b))]])))
+(when (not= (count expected) n)
+  (println (str "fuzz-anpass-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+
+;; ---- the generated code -----------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "anpass" "-o" (str work "/anpass_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "test/anpass/anpass_check.f90" (str work "/anpass_check.f90"))
+(def exe (str work "/anpass_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc (concat ["-O2"] (when (= fc "gfortran") ["-frecursive"]) ["-o" exe "anpass_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(defn case-file [k c]
+  (let [f (str work "/case" k ".txt")]
+    (spit f (str (:n c) " " (:lvlen c) " " (:mklen c) " " (count (:rows c)) " " (:root c) "\n"
+                 (str/join "\n" (for [row (:rows c)]
+                                  (let [vs (concat [(:kind row) (:i2 row) (:rfn row) (:s3-id row) (count (:kid-ids row))] (:kid-ids row)
+                                                   [(count (:caps row))] (:caps row) [(count (:alt-ids row))] (:alt-ids row))]
+                                    (str (count vs) " " (str/join " " vs)))))
+                 "\n"))
+    f))
+
+(def results
+  (vec (for [[k c] (map-indexed vector cases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+               [l1 l2] (remove str/blank? (str/split-lines (:out r)))
+               got [(mapv parse-long (str/split (str/trim (or l1 "")) #"\s+")) (mapv parse-long (str/split (str/trim (or l2 "")) #"\s+"))]
+               want (expected k)]
+           {:k k :got got :want want :ok (= got want)
+            :kinds (cond-> [] (not= (first got) (first want)) (conj "clears") (not= (second got) (second want)) (conj "tail-and-hfr"))}))))
+
+(def bad (remove :ok results))
+(println (str n " trees, seed " seed (when broken " (negative control: a local's slot one more, a recur's target flipped)")))
+(println (str "  " (count (filter #(zero? (first (first (:want %)))) results)) " passes ran to the end, "
+              (reduce + (map #(second (first (:want %))) results)) " reads marked, "
+              (count (filter #(pos? (first (second (:want %)))) results)) " tail checks refused at the top"))
+(println (str "generated analyzer passes against ACL2's: " (count bad) " cases differ"))
+(doseq [[nm c] (sort (frequencies (mapcat :kinds bad)))] (println (str "  " nm ": " c)))
+(doseq [b (take 2 bad)] (println "  case" (:k b) "ACL2" (pr-str (:want b)) "generated" (pr-str (:got b))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

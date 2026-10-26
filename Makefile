@@ -415,7 +415,7 @@ $(B)/vmc_gen.o: $(S)/gen/vmc_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc \
+	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/gen/anpass_gen.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc \
 	$(vm-objects) $(S)/vm.inc $(S)/vmjit.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
@@ -578,7 +578,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           make fuzz-all, every fuzzer at full size, for a release
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-lineedit check-language check-index check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
-TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index
+TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index check-fuzz-recur
 TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
@@ -831,6 +831,9 @@ check-fuzz-bytes:
 check-fuzz-read:
 	@echo "--- the reader on malformed text (PLAN 29): generated source, mutated, read by clj and clotran: the value, or the error by class and message ---"
 	scripts/fuzz-read -n 400 -s $(SEED) > $(B)/fuzz-read.out 2>&1; s=$$?; cat $(B)/fuzz-read.out; exit $$s
+check-fuzz-recur:
+	@echo "--- where a recur may stand (model/anpass.lisp, the generated tail check): fn bodies with a recur in and out of tail position, across a try, compiled by clj and clotran: accepted or refused ---"
+	scripts/fuzz-recur -n 300 -s $(SEED) > $(B)/fuzz-recur.out 2>&1; s=$$?; cat $(B)/fuzz-recur.out; exit $$s
 check-fuzz-threads:
 	@echo "--- threads (PLAN 29): futures contending on an atom, two refs and agents -- send, send-off, nested sends, 40 agents on a 2-worker pool (PLAN 24); final values and invariants against clj ---"
 	CLOTRAN_AGENT_POOL=2 scripts/fuzz-threads -n 20 -s $(SEED) -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s
@@ -1080,7 +1083,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt vmrt vmrt-frame agents agents-drive mainbox lineedit
+MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -1191,6 +1194,7 @@ gen-vm: model
 	scripts/acl2-fortran -b vmicg
 	scripts/acl2-fortran -b heapg
 	scripts/acl2-fortran -b vmrt
+	scripts/acl2-fortran -b anpass
 check-vm-gen: model | $(B)
 	scripts/acl2-fortran -o $(B)/vm_gen.f90
 	@cmp -s $(B)/vm_gen.f90 src/f/gen/vm_gen.f90 || { echo "src/f/gen/vm_gen.f90 is not what model/vmg.lisp generates: make gen-vm"; exit 1; }
@@ -1218,6 +1222,11 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-vmrt-gen -n 300 -s 1
 	scripts/fuzz-vmrt-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-vmrt-gen -n 100 -s 2 -x
+	scripts/acl2-fortran -b anpass -o $(B)/anpass_gen.inc
+	@cmp -s $(B)/anpass_gen.inc src/f/gen/anpass_gen.inc || { echo "src/f/gen/anpass_gen.inc is not what model/anpass.lisp generates: make gen-vm"; exit 1; }
+	scripts/fuzz-anpass-gen -n 300 -s 1
+	scripts/fuzz-anpass-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-anpass-gen -n 100 -s 2 -x
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \

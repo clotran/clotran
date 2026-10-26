@@ -1,0 +1,98 @@
+#!/usr/bin/env bb
+;; fuzz-recur: where a recur may stand (model/anpass.lisp's tail check,
+;; anp-tc, generated into src/f/gen/anpass_gen.inc), against clj.
+;;
+;;   scripts/fuzz-recur [-n N] [-s SEED]
+;;
+;; Generated fn bodies with a recur somewhere in them: in tail position of
+;; the fn or of a loop, or not -- an if's test or branch, a do's form, a
+;; let's init or body, a loop's init or body, a try's body, catch or
+;; finally, a case's test or branch, a letfn's fn or body, a nested fn, a
+;; vector, a call's argument, when, cond, and, binding, locking. Every recur
+;; takes the one argument its target wants, so the only question is the
+;; place. clj compiles each (eval of the fn) and so does clotran; each says
+;; accepted or refused (clj's "Can only recur from tail position" and
+;; "Cannot recur across try"), and the two must agree, case for case. Not
+;; compared: which refusal, when a form has two (clj checks the place
+;; before the count, clotran the count first).
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.edn])
+
+(def opts (loop [as *command-line-args* o {:n 300 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-recur [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(load-file (str repo "/upstream/names.clj"))
+
+;; a form; R stands for (recur <one form>), filled in by the context
+(def g-leaf (g/elements ["x" "1" ":k" "nil" "(inc x)" "R"]))
+
+(def g-form
+  (g/recursive-gen
+   (fn [inner]
+     (let [two (g/tuple inner inner) three (g/tuple inner inner inner)]
+       (g/one-of [(g/fmap (fn [[a b c]] (str "(if " a " " b " " c ")")) three)
+                  (g/fmap (fn [[a b]] (str "(do " a " " b ")")) two)
+                  (g/fmap (fn [[a b]] (str "(let [y " a "] " b ")")) two)
+                  (g/fmap (fn [[a b]] (str "(loop [z " a "] " b ")")) two)
+                  (g/fmap (fn [[a b c]] (str "(try " a " (catch clotran.host.exception e " b ") (finally " c "))")) three)
+                  (g/fmap (fn [a] (str "(try " a ")")) inner)
+                  (g/fmap (fn [[a b]] (str "(try " a " (catch clotran.host.exception e " b "))")) two)
+                  (g/fmap (fn [[a b c]] (str "(case " a " 1 " b " 2 " c " " b ")")) three)
+                  (g/fmap (fn [[a b]] (str "(letfn [(g [w] " a ")] " b ")")) two)
+                  (g/fmap (fn [a] (str "(fn [w] " a ")")) inner)
+                  (g/fmap (fn [[a b]] (str "[" a " " b "]")) two)
+                  (g/fmap (fn [a] (str "(identity " a ")")) inner)
+                  (g/fmap (fn [[a b]] (str "(when " a " " b ")")) two)
+                  (g/fmap (fn [[a b c]] (str "(cond " a " " b " :else " c ")")) three)
+                  (g/fmap (fn [[a b]] (str "(and " a " " b ")")) two)
+                  (g/fmap (fn [a] (str "(binding [*print-length* 3] " a ")")) inner)
+                  (g/fmap (fn [a] (str "(locking x " a ")")) inner)])))
+   g-leaf))
+
+;; each R a recur of one argument
+(defn fill [s] (str/replace s "R" "(recur x)"))
+
+(defn script [bodies]
+  (str (str/join "\n" (map-indexed (fn [i b]
+                                     (str "(println \"FZ " i "\" (try (eval '(fn [x] " (fill b) ")) :accepted"
+                                          " (catch clotran.host.throwable t :refused)))"))
+                                   bodies))
+       "\n"))
+
+(defn answers [out]
+  (into {} (for [[_ i v] (re-seq #"(?m)^FZ (\d+) (.*)$" (or out ""))] [(parse-long i) v])))
+
+(defn run [cmd secs]
+  (let [proc (apply p/process {:dir repo :out :string :err :string :in ""} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true :out "" :err "" :exit -1}) r)))
+
+(let [{:keys [n seed]} opts
+      bodies (vec (for [i (range n)] (g/generate g-form 6 (+ seed i))))
+      work (str (fs/create-temp-dir {:prefix "fuzz-recur"}))
+      clj-f (str work "/recur.clj") ct-f (str work "/recur.cljf")]
+  (spit clj-f (names/to-upstream (script bodies)))
+  (spit ct-f (script bodies))
+  (let [c (run ["clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" clj-f] 600)
+        r (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") ct-f] 600)
+        want (answers (:out c)) got (answers (:out r))
+        diffs (for [i (range n) :when (not= (want i) (got i))] i)
+        kind (fn [i] (str "clj " (want i) ", clotran " (got i)))]
+    (println (str n " fn bodies, seed " seed ": clj accepted " (count (filter #(= ":accepted" %) (vals want)))
+                  ", refused " (count (filter #(= ":refused" %) (vals want)))))
+    (when (or (< (count want) n) (< (count got) n))
+      (println "answered: clj" (count want) "clotran" (count got) "of" n)
+      (println (str/join "\n" (take 5 (str/split-lines (str (:err c) (:err r)))))))
+    (println (str "the places a recur may stand, against clj: " (count diffs) " differ"))
+    (doseq [[k is] (sort (group-by kind diffs))]
+      (println (str "  " k ": " (count is)))
+      (doseq [i (take 3 is)] (println (str "    (fn [x] " (fill (nth bodies i)) ")"))))
+    (System/exit (if (and (empty? diffs) (= n (count want) (count got))) 0 1))))

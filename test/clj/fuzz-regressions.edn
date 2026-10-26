@@ -294,5 +294,9 @@
  ;; a branch nobody selected still reads its tag first, and it must be a symbol:
  ;; "Reader tag must be a symbol", not the delimiter read as the form (scripts/fuzz-read, seed 4156041410)
  (mapv #(try (read-string {:read-cond :allow :features #{:zz}} %) (catch clotran.host.exception e (ex-message e))) ["#?(:yy #true)" "[#?(:yy #nil)\n]" "#?(:yy #1)" "#?(:yy #foo 1 :zz 2)"])
+ ;; a recur only in tail position of its target and never across a try, as
+ ;; clj's compiler: clotran took all of these, and ran them wrong
+ ;; (scripts/fuzz-recur, seed 1; model/anpass.lisp's tail check)
+ (mapv #(try (eval %) :accepted (catch clotran.host.throwable t :refused)) '[(fn [x] (recur (recur 1))) (fn [x] (do (recur 1) 2)) (fn [x] (if (recur 1) 1 2)) (fn [x] (let [a (recur 1)] a)) (fn [x] (loop [z (recur x)] :k)) (fn [x] (try (recur 1) (finally 2))) (fn [x] (try (recur 1))) (fn [x] (try 1 (catch clotran.host.exception e (recur 1)))) (fn [x] (try 1 (finally (recur 1)))) (fn [x] (try (loop [] (recur)) (finally 2))) (fn [x] [(recur 1)]) (fn [x] {:a (recur 1)}) (fn [x] (case (recur 2) 1 2 3)) (fn [x] (case x 1 (recur 2) 3)) (fn [x] (def y (recur 1))) (fn [x] (throw (recur 1))) (fn [x] (binding [*out* *out*] (recur 1))) (fn [x] (locking x (recur 1))) (fn [x] (loop [] (try (recur) (finally 1)))) (fn [x] (letfn [(g [] 1)] (if x (recur false) (g)))) (fn [x] (loop [a 1] (case a 1 (recur 2) (recur 1)))) (fn [x] (when x (recur false)))])
 ]
 

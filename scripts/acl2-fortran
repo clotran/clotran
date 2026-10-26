@@ -4,13 +4,14 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
 ;; vmg), vmicg, the compiler (src/f/gen/vmc_gen.f90), heapg, the
-;; collector (src/f/gen/heap_gen.inc), or vmrt, the VM runtime's reads of
-;; clotran's values (src/f/gen/vmrt_gen.inc).
+;; collector (src/f/gen/heap_gen.inc), vmrt, the VM runtime's reads of
+;; clotran's values (src/f/gen/vmrt_gen.inc), or anpass, the analyzer's
+;; passes over its tree (src/f/gen/anpass_gen.inc).
 ;;
 ;; ACL2 itself hands over each function in its translated form -- no
 ;; macros, only lambda, if, quoted constants and calls -- with its
@@ -186,7 +187,35 @@
               "  ! guard-verified, reading GC.f90's pools through its accessors and writing"
               "  ! nothing. vmrt.lisp proves each agrees with the machine's rt-* (model/vmg.lisp,"
               "  ! vmic.lisp) on the value decoded: vrt-truthy-agrees, vrt-throwp-agrees,"
-              "  ! vrt-clop-agrees, vrt-capt-agrees and the rest."]}})
+              "  ! vrt-clop-agrees, vrt-capt-agrees and the rest."]}
+    "anpass"
+    {:out "src/f/gen/anpass_gen.inc" :include true
+     :fns [anp-nn anp-ch anp-tc anp-hfr anp-get anp-put anp-copy anp-or anp-zero anp-set anp-mark anp-local
+           anp-caps anp-fncaps anp-rd anp-live anp-clears]
+     :stobjs {anps "ps"} :stobj-types {"ps" "anp_state"}
+     :fields {anp-nmk ["ps" "nmk"] anp-err ["ps" "err"]}
+     :array-names {"ps" ["lv" "mk"]} :prefix {"ps" "anp-"}
+     :value-arrays #{"mk"}
+     :value-formals {anp-nn #{x} anp-ch #{x} anp-tc #{x} anp-hfr #{x} anp-mark #{x} anp-local #{x} anp-caps #{x}
+                     anp-fncaps #{x} anp-rd #{x} anp-live #{x} anp-clears #{x}}
+     :value-fns #{anp-ch}
+     :bool-fns #{anp-hfr}
+     ;; a node is a value of clotran's heap, read by analyze.inc's shims
+     :val-type "gc_value"
+     :rt {ast-kind ["ast_kind" [:val] :int] ast-i2 ["ast_i2" [:val] :int] ast-nkids ["ast_nkids" [:val] :int]
+          ast-kid ["ast_kid" [:val :int] :val] ast-s3 ["ast_s3" [:val] :val] ast-ncaps ["ast_ncaps" [:val] :int]
+          ast-cap ["ast_cap" [:val :int] :int] ast-nalts ["ast_nalts" [:val] :int]
+          ast-alt ["ast_alt" [:val :int] :val] ast-rfn ["ast_rfn" [:val] :int]}
+     :header ["  ! GENERATED from model/anpass.lisp by scripts/acl2-fortran -b anpass. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the analyzer's passes over its tree -- the tail check"
+              "  ! (anp_tc), has_fn_recur (anp_hfr), reads_in (anp_rd), liveness (anp_live)"
+              "  ! and apply_clears (anp_clears) -- guard-verified, reading the tree through"
+              "  ! analyze.inc's ast_* shims. The anpass books prove anp_live computes the live"
+              "  ! sets and marks of its meaning (anp-live-spec, anpass-proof.lisp), that no"
+              "  ! read marked for clearing is followed by another of its slot in any run"
+              "  ! (tr-sound, anp-clears-sound: anpass-sound.lisp), and that a body the"
+              "  ! tail check passes recurs only as the last thing it does (tr-tail)."]}})
 
 (def cfg (or (books book) (do (println (str "acl2-fortran: no book " book)) (System/exit 1))))
 (def out-file (get args "-o" (:out cfg)))
@@ -267,12 +296,14 @@
 (defn sref [[o f]] (str o "%" f))
 
 ;; the runtime's operations on values: name, argument types, answer type
-(def rt '{rt-truthy ["rt_truthy" [:val] :bool] rt-add ["rt_add" [:val :val] :val] rt-lt ["rt_lt" [:val :val] :val]
+(def base-rt '{rt-truthy ["rt_truthy" [:val] :bool] rt-add ["rt_add" [:val :val] :val] rt-lt ["rt_lt" [:val :val] :val]
           rt-clo ["rt_clo" [:int :val] :val] rt-clop ["rt_clop" [:val] :bool] rt-clo-f ["rt_clo_f" [:val] :int]
           rt-capt ["rt_capt" [:int :val] :val] rt-prim ["rt_prim" [:val :val] :val] rt-throwp ["rt_throwp" [:val] :bool]
           rt-thrown ["rt_thrown" [:val] :val]
           rt-car ["rt_car" [:val] :val] rt-cdr ["rt_cdr" [:val] :val] rt-consp ["rt_consp" [:val] :bool]
           rt-is ["rt_is" [:val :val] :bool] rt-nat ["rt_nat" [:val] :int] rt-len ["rt_len" [:val] :int]})
+;; a book's own host reads, the thin hand-written shims it is generated against
+(def rt (merge base-rt (get cfg :rt {})))
 
 (defn fname [s] (str/replace (name s) "-" "_"))
 
@@ -374,7 +405,8 @@
     (assoc r :code (if (= "nil" (:sym r)) "rt_nil()" "rt_t()") :type :val)
     r))
 
-(defn ftype [t] (case t :int "integer(int64)" :val "type(value)" :bool "logical"))
+;; a value is the runtime's type(value), or the host's own type where the book says
+(defn ftype [t] (case t :int "integer(int64)" :val (str "type(" (get cfg :val-type "value") ")") :bool "logical"))
 
 ;; a call: the stobjs first, in the order of the formals, then the other
 ;; arguments, each in its formal's type

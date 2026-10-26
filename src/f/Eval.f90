@@ -66,6 +66,7 @@ module Eval
   use vm_runtime, only: vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword, vm_prim_n
   use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
+  use iso_fortran_env, only: int64
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
        c_null_ptr, c_intptr_t, c_funloc, c_size_t, c_int64_t, c_int8_t
   implicit none
@@ -598,6 +599,16 @@ module Eval
   ! method's parameters take their types from the interface, not
   ! from fn's primitive hint rules.
   integer, save :: keep_locals_mode = 0   ! 0 unread, 1 clear, 2 keep
+
+  ! The analyzer passes' live sets and marked reads (model/anpass.lisp's
+  ! stobj anps; src/f/gen/anpass_gen.inc), one per apply_clears call:
+  ! lv the live sets' regions, 0-based as ACL2's arrays are, mk the reads
+  ! marked for clearing, nmk of them, err nonzero when either ran out.
+  type :: anp_state
+     integer(int64), allocatable :: lv(:)
+     type(gc_value), allocatable :: mk(:)
+     integer(int64) :: nmk = 0, err = 0
+  end type anp_state
 
   ! The executor's continuation stack (exec.inc, `run`): one entry per
   ! node being evaluated. Its values live in a K_SLOTS-wide region of
@@ -24413,6 +24424,7 @@ contains
   end subroutine ctx_release
 
   include "analyze.inc"
+  include "gen/anpass_gen.inc"
   include "exec.inc"
   include "rational.inc"
   include "flat.inc"
