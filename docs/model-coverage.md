@@ -15,6 +15,8 @@ This table is where that stands. Each row is one of:
 - **Modeled** -- the design is proved, but the Fortran is hand-written
   to it, so nothing mechanical ties the two; it can drift.
 - **Owed** -- not modeled yet, and should be.
+- **To be retired** -- not modeled, and will not be: it goes once what
+  replaces it stands in for it.
 - **By design** -- not modeled, because something else is the
   authority: Clojure defines the answer (`clj` is the oracle and the
   fuzzers compare against it), or the operating system does, or the
@@ -31,7 +33,8 @@ the commit that moves it.
 | VM bytecode compiler | `src/f/gen/vmc_gen.f90` (1k) | vmic, vmicg | **Generated** | `vmicg-correct`; compared array for array |
 | Superinstructions | in `vm_gen.f90` | vmf, vmfg | **Generated** | Each proved equal to the steps it fuses |
 | Collector: marking, sweep, allocation, arena runs, write barrier, the seq op | `src/f/gen/heap_gen.inc` (2k) | heapg, heapsw, heapal, heaprn, heapgn, heapsq, heap-cost | **Generated** | Stage 1 of the heap plan (PLAN step 33) |
-| VM runtime layer | `VmRuntime.f90` (630), `vm.inc` (1.3k) | none -- `prim` is unconstrained in the model | **Owed** | Joins the proved machine to clotran's values |
+| VM runtime: what each runtime operation answers on clotran's values | `src/f/gen/vmrt_gen.inc` (1.2k), included in `VmRuntime.f90` | vmrt, vmrt-frame: decoding a clotran value as the model's (nil, true, false, integers; a list (THROWN v) as `(:throw . v)`; a list (CLO f caps) or a compiled clotran closure as `(:clo f caps)`, its captures ending with itself, so for every depth; anything else, keywords included, one atom), the machine's rt-truthy, rt-throwp, rt-thrown, rt-clop, rt-clo-f, rt-capt, rt-lt, rt-add (where the sum fits) and the compiler's rt-nat, rt-consp, rt-car, rt-cdr each answer what the generated read answers, decoded; no Clojure value -- the keyword `:throw`, a list `(:throw 5)`, `:false` -- decodes to a throw, a closure or false (vrt-dec-not-tag); the dispatch chooses a keyword op by identity alone and reads an entry value only inside the stack; nothing generated writes the heap; rt_prim's frame leaves the value stack as it found it (heaprt's frame-balance); counted: every read a constant number of heap reads but the META chain (3 a wrapper) and capture i of a list (4 a cell), so a capture at most 43 + 9 objects + 4i | **Generated** | Hand-written around it, each named: taking a value apart into tag, ref and ival and copying the place a read answers (`place`, GC's `gc_word_at`); the constructors that allocate (`rt_clo`, `rt_cons`, `rt_list_from`, `vmrt_throw_of`, through `gcl_cons` on the value stack, the frame vmrt-frame proves); the calls up into Eval (the hooks); `rt_keyword`'s cache and `rt_is`, which compares a keyword's text; `rt_resize_*`. Changed by the generation: a compiled closure's capture past its own index now answers nil, as `rt-capt` does (it answered the closure; no compiled program asks it), and `(:prim arg i)` with i outside the stack answers nil (it read past it) |
+| VM runtime: the translation from clotran's tree, the entry, the hooks | `vm.inc` (1.3k) | none | **Owed** | Needs the analyzer's tree in the model (the row below); `prim`'s answers are Eval's, Clojure's by design |
 | JIT, arm64 | `vmjit.inc` (640) | vmj, vmj2, jit, jit2, jit3 | **Modeled**; the emitter is hand-written | Generating the emitter is in the plan |
 | The rest of the heap: pools, roots and the shadow stack, texts, the image | `GC.f90` (~3k of 5k): the value stack (`vs_*`, `gc_stack_new`), the spare frames, `gc_obj`/`gc_vec`/`new_text`'s roots, `collect_*`, the global roots and their handles, the pools' growth, the texts, `gc_image_write`/`_read` | heaprt: every slot above a stack's top is nil, so a new frame is nil uncleared; a frame leaves the stack exactly as it found it and never changes its callers' slots while it runs, so what they hold is a root at every allocation; anything reachable from a root -- a global, a stack slot, the allocation's own roots and the slots `gc_obj` is about to store -- survives any collection whose marking holds the roots and is closed; a value held in a local and in no root is freed and its cell handed to the next allocation (unrooted-is-reused); a global slot's index never moves, `gc_global_keep` leaves its handle live with its value and every other as it was, `gc_init` makes every handle stale; every spare frame is a used cell, so one taken was handed to no one else; a pool's growth keeps its slots and adds unused ones; an image read gives back the pools, arena, texts, global roots and generation as written, so the graph the roots reach is the one saved; counted: `vs_enter` 1 step, `vs_leave` top - base + 1, `push_roots` one push a root, `gc_global_new` at most count + 2, `gc_frame_give` n + 1, growth 2n, the image linear in the pools and the texts' bytes | **Modeled**, hand-written | Under the rooting discipline the ~970 call sites keep by hand: a frame writes only its own slots and leaves to its own base, a value held across an allocation is in its roots, a frame's slot or reachable from a global, a spare is given only by the call that allocated it, an image is read before any root is claimed and taken with one thread. A bug it found, fixed: a new heap (`gc_init`, an image read) kept stack 1's spare frames, vectors of the old heap the new one hands to someone else (spare-survives-reset-is-stale; `clear_batches` empties them, `test/f/gc_test.f90` 20b fails without it). Not covered: the generational aging (`age_*`, `collect_young`'s promotion -- the alloc books' design), the string builder, `vm_run`'s shortcut leave (the VM runtime row) |
 | Moving nursery | not built | alloc | **Modeled**, not implemented | Waits on the row above |
@@ -72,7 +75,7 @@ the commit that moves it.
 | Part | Code (lines) | Model | Status | Why |
 |---|---|---|---|---|
 | Analyzer and tree evaluator | `analyze.inc`, `exec.inc` (7.4k) | the VM model covers the core language's machine | **Owed** | Stage 2 of the generation plan |
-| Flat interpreter | `flat.inc` (2k) | none | **Owed**, or retired | The VM is meant to replace it |
+| Flat interpreter | `flat.inc` (2k) | none | **To be retired** | James, 2026-10-25: no proof work on it; it goes once the VM stands in for it |
 | Ahead-of-time compiler to Fortran | `compiler.cljf`, `purefort.cljf` (3.4k) | none | **Owed** | Checked today by comparing compiled, interpreted and `clj`; a model would look like vmic's |
 | The REPL's line editor: the input and its cursor, the history, completion | `lineedit.cljf` (520), `tty_shim.c` (190) | lineedit: the cursor stays within the text, an edit changes only its span, the history gives the draft back, completion leaves the candidate in the word's place; each key linear in the input | **Modeled**, hand-written | The terminal itself -- raw mode, the bytes, the width -- is the OS's |
 
@@ -89,7 +92,7 @@ the commit that moves it.
 
 ## Keeping it honest
 
-- `make check-vm-gen` compares all three generated files with what the
+- `make check-vm-gen` compares all four generated files with what the
   model generates and runs them against ACL2, with negative controls.
 - Both are in the gate: the gfortran half of `make crosscheck`
   certifies every book (`make model`) and runs `check-vm-gen`

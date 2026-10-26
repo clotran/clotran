@@ -1,0 +1,14 @@
+;; Values the VM runtime's decoding keeps apart (model/vmrt.lisp,
+;; vrt-dec-not-tag): Clojure data shaped like the model's own tags -- the
+;; keywords :throw, :clo and :false, lists (:throw 5) and (:clo 1 2) --
+;; through fn bodies the VM runs, and closures of none to many captures,
+;; through their slots and their vector. scripts/fuzz -f runs them through
+;; clj, the VM and the JIT (make check-fuzz-jit).
+[
+ (let [f (fn [x] (if x [x :yes] [x :no]))] (map f [:false false nil :throw '(:throw 5) '(:clo 1 2) 0]))
+ (let [f (fn [x] (list x x))] [(f :throw) (f '(:throw 5)) (f :clo)])
+ (let [a 1 b :throw c '(:clo 1 2) d :false e 5 g (fn [] [a b c d e])] (g))
+ (let [a :throw b 2 g (fn [x] (if x [a b x] [b a]))] [(g 1) (g nil) (g :false) (g false)])
+ (let [a '(:throw 5) g (fn [n] (if (pos? n) (recur (dec n)) a))] (g 3))
+ (let [mk (fn [k] (fn [] k)) fs (map mk [:throw :clo :false '(:throw 1)])] (map #(%) fs))
+]

@@ -408,7 +408,7 @@ vm-objects = $(B)/VmRuntime.o $(B)/vm_gen.o $(B)/vmc_gen.o $(B)/jit_shim.o
 # the JIT's executable memory (src/f/vmjit.inc)
 $(B)/jit_shim.o: src/c/jit_shim.c | $(B) $(FCSTAMP)
 	$(CC) -O2 -c $< -o $@
-$(B)/VmRuntime.o: $(B)/GC.o $(B)/PersistentList.o
+$(B)/VmRuntime.o: $(B)/GC.o $(B)/PersistentList.o $(S)/gen/vmrt_gen.inc
 $(B)/vm_gen.o: $(S)/gen/vm_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 $(B)/vmc_gen.o: $(S)/gen/vmc_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
@@ -880,6 +880,7 @@ check-fuzz-jit:
 	@echo "--- the VM and its JIT (PLAN 31, model/vmj.lisp, vmj2.lisp), opt-in: generated programs and test/clj/jit-loops.edn through clj, CLOTRAN_VM=1 and CLOTRAN_VM=1 CLOTRAN_JIT=1; the controls' broken jmpf, sum and recur must be caught ---"
 	scripts/fuzz -m vm,jit -n 100 -s $(SEED) > $(B)/fuzz-jit.out 2>&1; s=$$?; cat $(B)/fuzz-jit.out; \
 	  scripts/fuzz -f test/clj/jit-loops.edn -m vm,jit > $(B)/fuzz-jit-loops.out 2>&1 || s=1; cat $(B)/fuzz-jit-loops.out; \
+	  scripts/fuzz -f test/clj/vm-values.edn -m vm,jit > $(B)/fuzz-vm-values.out 2>&1 || s=1; cat $(B)/fuzz-vm-values.out; \
 	  if scripts/fuzz -m jit-control -n 20 -s $(SEED) > $(B)/fuzz-jit-control.out 2>&1; then echo "the JIT's control was not caught"; exit 1; fi; \
 	  if scripts/fuzz -m jit-control-prim -n 20 -s $(SEED) > $(B)/fuzz-jit-control-prim.out 2>&1; then echo "the compiled prims' control was not caught"; exit 1; fi; \
 	  if scripts/fuzz -f test/clj/jit-loops.edn -m jit-control-recur > $(B)/fuzz-jit-control-recur.out 2>&1; then echo "native recur's control was not caught"; exit 1; fi; exit $$s
@@ -1079,7 +1080,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt agents agents-drive mainbox lineedit
+MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt vmrt vmrt-frame agents agents-drive mainbox lineedit
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -1189,6 +1190,7 @@ gen-vm: model
 	scripts/acl2-fortran
 	scripts/acl2-fortran -b vmicg
 	scripts/acl2-fortran -b heapg
+	scripts/acl2-fortran -b vmrt
 check-vm-gen: model | $(B)
 	scripts/acl2-fortran -o $(B)/vm_gen.f90
 	@cmp -s $(B)/vm_gen.f90 src/f/gen/vm_gen.f90 || { echo "src/f/gen/vm_gen.f90 is not what model/vmg.lisp generates: make gen-vm"; exit 1; }
@@ -1211,6 +1213,11 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-heap-gen -n 300 -s 1
 	scripts/fuzz-heap-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-heap-gen -n 100 -s 2 -x
+	scripts/acl2-fortran -b vmrt -o $(B)/vmrt_gen.inc
+	@cmp -s $(B)/vmrt_gen.inc src/f/gen/vmrt_gen.inc || { echo "src/f/gen/vmrt_gen.inc is not what model/vmrt.lisp generates: make gen-vm"; exit 1; }
+	scripts/fuzz-vmrt-gen -n 300 -s 1
+	scripts/fuzz-vmrt-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-vmrt-gen -n 100 -s 2 -x
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \

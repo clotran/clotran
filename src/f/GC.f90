@@ -789,6 +789,9 @@ module GC
   public :: gc_text, gc_slot, gc_set_slot, gc_kind
   public :: gc_i1, gc_i2, gc_set_i1, gc_set_i2, gc_seq_fast
   public :: gc_vec_len, gc_vec_get, gc_vec_set, gc_vec_word, gc_reg, gc_reg_set, gc_vec_clone
+  ! the pools as the VM runtime's generated reads see them (src/f/gen/vmrt_gen.inc)
+  public :: hp_otag, hp_oref, hp_n_oslot, hp_okind, hp_oi1, hp_n_obj, hp_voff, hp_vlen, hp_n_vec
+  public :: hp_atag, hp_aival, hp_n_arena, hp_oival, hp_oi2, gc_word_at
   ! the vector store itself, for the executor's register reads and writes
   ! inline (flat.inc reg_get, reg_set): a call each was a tenth of a call
   public :: vec_pool, vec_store, vec_mark, vec_rem, gc_reg_barrier
@@ -4300,6 +4303,26 @@ contains
     integer(int64), intent(in) :: j
     hp_oref = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%ref
   end function hp_oref
+  ! word j's ival and object i's i2, for the VM runtime's reads (model/vmrt.lisp)
+  pure integer(int64) function hp_oival(j)
+    integer(int64), intent(in) :: j
+    hp_oival = obj_pool(j / 5)%slot(mod(j, 5_int64) + 1)%ival
+  end function hp_oival
+  pure integer(int64) function hp_oi2(i)
+    integer(int64), intent(in) :: i
+    hp_oi2 = obj_pool(i)%i2
+  end function hp_oi2
+  ! what a place the VM runtime's reads answer holds: p >= 5 object word
+  ! p, p < 0 arena word -p-1 (model/vmrt.lisp); the caller answers 0 and 1
+  function gc_word_at(p) result(v)
+    integer(int64), intent(in) :: p
+    type(gc_value) :: v
+    if (p < 0) then
+       v = vec_store(-p - 1)
+    else
+       v = obj_pool(p / 5)%slot(mod(p, 5_int64) + 1)
+    end if
+  end function gc_word_at
   pure integer(int64) function hp_n_oslot()
     hp_n_oslot = 5_int64 * (size(obj_pool, kind=int64) + 1)
   end function hp_n_oslot
@@ -4478,7 +4501,7 @@ contains
     integer(int64), intent(in) :: j, x
     vec_store(j)%ref = int(x)
   end subroutine hp_set_aref
-  integer(int64) function hp_aival(j)
+  pure integer(int64) function hp_aival(j)
     integer(int64), intent(in) :: j
     hp_aival = vec_store(j)%ival
   end function hp_aival

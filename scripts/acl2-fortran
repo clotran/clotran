@@ -4,11 +4,13 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
-;; vmg), or vmicg, the compiler (src/f/gen/vmc_gen.f90).
+;; vmg), vmicg, the compiler (src/f/gen/vmc_gen.f90), heapg, the
+;; collector (src/f/gen/heap_gen.inc), or vmrt, the VM runtime's reads of
+;; clotran's values (src/f/gen/vmrt_gen.inc).
 ;;
 ;; ACL2 itself hands over each function in its translated form -- no
 ;; macros, only lambda, if, quoted constants and calls -- with its
@@ -154,7 +156,37 @@
               "  ! change the model, prove it, and generate again (PLAN step 33). Included in"
               "  ! GC.f90's contains part: the collector's marking, guard-verified, on GC's"
               "  ! pools through its accessors. heapg-proof's hpg-drain-closed: a drain that"
-              "  ! empties its stack with no overflow leaves the mark set closed."]}})
+              "  ! empties its stack with no overflow leaves the mark set closed."]}
+    "vmrt"
+    {:out "src/f/gen/vmrt_gen.inc" :include true
+     :fns [vrt-oiv vrt-oi2 vrt-voff vrt-vlen vrt-at vrt-av hpg-ot hpg-or hpg-okd hpg-oi hpg-obj-at
+           vrt-truthy vrt-nat vrt-ifix vrt-lt vrt-add-fits vrt-add
+           vrt-lcount vrt-consp vrt-len vrt-car-place vrt-cdr-place vrt-car-at vrt-cdr-at vrt-same-at
+           vrt-throwp vrt-clol vrt-cadr-place vrt-caddr-place vrt-thrown-place vrt-walk
+           vrt-unmeta-k vrt-nobj vrt-unmeta vrt-env-at vrt-ctab vrt-reg vrt-reg-int vrt-reg-tag
+           vrt-tab-ok vrt-fid-of vrt-cfid vrt-cncap vrt-clop vrt-clo-f vrt-capt-place
+           vrt-prim-kind vrt-arg-slot]
+     :stobjs {hpg "hs" vrx "vx"} :stobj-types {"hs" "vrt_heap" "vx" "vrt_aux"}
+     :fields {}
+     :array-names {"hs" ["otag" "oref" "okind" "oi1" "voff" "vlen" "atag" "aival"] "vx" ["oival" "oi2"]}
+     :prefix {"hs" "h-" "vx" "x-"}
+     :value-arrays #{}
+     ;; GC.f90's pools, through its accessors, read only
+     :externs {"otag" ["hp_otag" "-" "hp_n_oslot"] "oref" ["hp_oref" "-" "hp_n_oslot"]
+               "okind" ["hp_okind" "-" "hp_n_obj"] "oi1" ["hp_oi1" "-" "hp_n_obj"]
+               "voff" ["hp_voff" "-" "hp_n_vec"] "vlen" ["hp_vlen" "-" "hp_n_vec"]
+               "atag" ["hp_atag" "-" "hp_n_arena"] "aival" ["hp_aival" "-" "hp_n_arena"]
+               "oival" ["hp_oival" "-" "hp_n_oslot"] "oi2" ["hp_oi2" "-" "hp_n_obj"]}
+     :value-formals {} :value-fns #{}
+     :bool-fns #{hpg-obj-at vrt-truthy vrt-lt vrt-add-fits vrt-consp vrt-same-at vrt-throwp vrt-clol
+                 vrt-env-at vrt-tab-ok vrt-clop}
+     :header ["  ! GENERATED from model/vmrt.lisp by scripts/acl2-fortran -b vmrt. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in VmRuntime.f90's"
+              "  ! contains part: what the VM's runtime operations answer on clotran's values,"
+              "  ! guard-verified, reading GC.f90's pools through its accessors and writing"
+              "  ! nothing. vmrt.lisp proves each agrees with the machine's rt-* (model/vmg.lisp,"
+              "  ! vmic.lisp) on the value decoded: vrt-truthy-agrees, vrt-throwp-agrees,"
+              "  ! vrt-clop-agrees, vrt-capt-agrees and the rest."]}})
 
 (def cfg (or (books book) (do (println (str "acl2-fortran: no book " book)) (System/exit 1))))
 (def out-file (get args "-o" (:out cfg)))

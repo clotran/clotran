@@ -21,6 +21,14 @@
 ! The private heads are objects no Clojure code can reach, so no value a
 ! program builds is ever taken for a throw or a closure.
 !
+! WHAT EACH OPERATION ANSWERS is GENERATED (src/f/gen/vmrt_gen.inc, from
+! model/vmrt.lisp, included below): vmrt.lisp proves each read agrees with
+! the machine's rt-* on this correspondence, the value decoded. What is
+! hand-written here takes a value apart and copies the place a read
+! answers, allocates (rt_clo, rt_cons, rt_list_from, vmrt_throw_of, on the
+! value stack as model/vmrt-frame.lisp has it), calls the hooks, keeps the
+! keyword cache and compares keywords' texts (rt_is).
+!
 ! THE STACK is a window onto the thread's value stack (the glue in
 ! vm.inc points st%stk at it), so the collector, which is non-moving and
 ! scans that stack, sees every slot. Every other array is the program's,
@@ -113,6 +121,15 @@ module vm_runtime
   ! invoke, a node of the evaluator's, and any other value called
   integer(8), public :: vm_prim_n(1:8) = 0
 
+  ! the generated reads take GC.f90's pools as two ACL2 stobjs (hpg, vrx);
+  ! every array of them is read through GC's accessors, so these hold nothing
+  type :: vrt_heap
+  end type vrt_heap
+  type :: vrt_aux
+  end type vrt_aux
+  type(vrt_heap) :: hs
+  type(vrt_aux) :: vx
+
 contains
 
   function rt_nil() result(v)
@@ -184,44 +201,52 @@ contains
     heads_made = .true.
   end subroutine make_heads
 
-  logical function same(a, b)
-    type(value), intent(in) :: a, b
-    same = (a%tag == b%tag .and. a%ref == b%ref)
-  end function same
+  ! ---- THE READS: generated (src/f/gen/vmrt_gen.inc, model/vmrt.lisp) ----------------
+  !
+  ! What each operation answers is the generated function's; these only
+  ! take a value apart into its tag, ref and ival and copy what a place
+  ! names (0 nil, 1 the value itself, else gc_word_at's word).
 
-  ! ---- lists, as the compiler reads its expression ---------------------------------
+  function place(p, self) result(r)
+    integer(int64), intent(in) :: p
+    type(value), intent(in) :: self
+    type(value) :: r
+    if (p == 0) then
+       r = gc_nil()
+    else if (p == 1) then
+       r = self
+    else
+       r = gc_word_at(p)
+    end if
+  end function place
 
   logical function rt_consp(x)
     type(value), intent(in) :: x
-    rt_consp = gcl_is(x)
-    if (rt_consp) rt_consp = gcl_count(x) > 0
+    rt_consp = vrt_consp(hs, int(x%tag, int64), int(x%ref, int64))
   end function rt_consp
 
   function rt_car(x) result(r)
     type(value), intent(in) :: x
     type(value) :: r
-    r = gc_nil()
-    if (rt_consp(x)) r = gc_slot(x, 1)
+    r = place(vrt_car_place(hs, int(x%tag, int64), int(x%ref, int64)), x)
   end function rt_car
 
   ! the rest of a list, nil after its last element, as ACL2's cdr
   function rt_cdr(x) result(r)
     type(value), intent(in) :: x
     type(value) :: r
-    r = gc_nil()
-    if (rt_consp(x)) then
-       if (gcl_count(x) > 1) r = gc_slot(x, 2)
-    end if
+    r = place(vrt_cdr_place(hs, int(x%tag, int64), int(x%ref, int64)), x)
   end function rt_cdr
 
   function rt_len(x) result(n)
     type(value), intent(in) :: x
     integer(int64) :: n
-    n = 0
-    if (rt_consp(x)) n = gcl_count(x)
+    n = vrt_len(hs, int(x%tag, int64), int(x%ref, int64))
   end function rt_len
 
-  ! (equal x k), k a keyword: every rt-is in the model tests one
+  ! (equal x k), k a keyword: every rt-is in the model tests one. A
+  ! keyword's text is the collector's (gc_text), not the model's: this one
+  ! stays hand-written
   logical function rt_is(x, k)
     type(value), intent(in) :: x, k
     character(len=:), allocatable :: a, b
@@ -240,41 +265,30 @@ contains
   function rt_nat(x) result(n)
     type(value), intent(in) :: x
     integer(int64) :: n
-    n = -1
-    if (x%tag == GCT_INT) then
-       if (x%ival >= 0 .and. x%ival < 2147483648_int64) n = x%ival
-    end if
+    n = vrt_nat(int(x%tag, int64), x%ival)
   end function rt_nat
-
-  ! ---- values ------------------------------------------------------------------
 
   logical function rt_truthy(x)
     type(value), intent(in) :: x
-    rt_truthy = .not. (x%tag == GCT_NIL .or. (x%tag == GCT_BOOL .and. x%ival == 0))
+    rt_truthy = vrt_truthy(int(x%tag, int64), x%ival)
   end function rt_truthy
 
-  ! the model's :add and :lt, on integers (fix); clotran compiles Clojure's
-  ! + and < to prims, so these run only if a program says :add or :lt
+  ! the model's :add and :lt, on integers; clotran compiles Clojure's + and
+  ! < to prims, so these run only if a program says :add or :lt. A sum
+  ! past 64 bits answers 0 (vrt-add-agrees holds where it fits)
   function rt_add(a, b) result(r)
     type(value), intent(in) :: a, b
     type(value) :: r
-    r = gc_int(fixv(a) + fixv(b))
+    r = gc_int(vrt_add(int(a%tag, int64), a%ival, int(b%tag, int64), b%ival))
   end function rt_add
 
   function rt_lt(a, b) result(r)
     type(value), intent(in) :: a, b
     type(value) :: r
-    r = gc_bool(fixv(a) < fixv(b))
+    r = gc_bool(vrt_lt(int(a%tag, int64), a%ival, int(b%tag, int64), b%ival))
   end function rt_lt
 
-  function fixv(x) result(i)
-    type(value), intent(in) :: x
-    integer(int64) :: i
-    i = 0
-    if (x%tag == GCT_INT) i = x%ival
-  end function fixv
-
-  ! ---- closures: (CLO f caps) ------------------------------------------------------
+  ! ---- closures: (CLO f caps), or a clotran closure the program compiled ------------
 
   function rt_clo(f, caps) result(r)
     integer(int64), intent(in) :: f
@@ -300,92 +314,23 @@ contains
     call vs_leave(vst, base)
   end function rt_clo
 
-  ! a clotran closure, its metadata taken off, whose fn the program compiled:
-  ! f the closure (nil when it is not one), fid its function in the program,
-  ! ncap its captures -- read from its call table (flat.inc call_table: the
-  ! captures in place 3, K in 4, the function id last), one raw vector the
-  ! closure notes at birth, not the template's persistent vectors
-  subroutine compiled_fn(c, f, fid, ncap)
-    type(value), intent(in) :: c
-    type(value), intent(out) :: f
-    integer(int64), intent(out) :: fid
-    integer, intent(out) :: ncap
-    type(value) :: ct, x
-    f = c
-    fid = -1
-    ncap = 0
-    do while (gc_kind(f) == OBJ_META)
-       f = gc_slot(f, 1)
-    end do
-    if (gc_kind(f) == OBJ_CLOSURE) then
-       if (gc_i2(f) > 0) then
-          if (gc_kind(gc_slot(f, 3)) /= OBJ_ENV) then
-             ct = value(GCT_VEC, gc_i2(f), 0_gc_ip)
-             x = gc_reg(ct, 3)
-             ncap = int(x%ival)
-             x = gc_reg(ct, 4)
-             x = gc_reg(ct, 4 + 4 * (int(x%ival) + 1) + ncap + 1)
-             if (x%tag == GCT_INT) fid = x%ival
-          end if
-       end if
-    end if
-    if (fid < 0) f = gc_nil()
-  end subroutine compiled_fn
-
   logical function rt_clop(c)
     type(value), intent(in) :: c
-    type(value) :: f
-    integer(int64) :: fid
-    integer :: ncap
-    call compiled_fn(c, f, fid, ncap)
-    if (fid >= 0) then
-       rt_clop = .true.
-       return
-    end if
-    rt_clop = rt_consp(c)
-    if (rt_clop) rt_clop = same(gc_slot(c, 1), clo_v) .and. gcl_count(c) == 3
+    rt_clop = vrt_clop(hs, vx, int(c%tag, int64), int(c%ref, int64), int(clo_v%tag, int64), int(clo_v%ref, int64))
   end function rt_clop
 
   function rt_clo_f(c) result(f)
     type(value), intent(in) :: c
     integer(int64) :: f
-    type(value) :: x
-    integer :: ncap
-    call compiled_fn(c, x, f, ncap)
-    if (f >= 0) return
-    x = rt_car(rt_cdr(c))
-    f = -1
-    if (x%tag == GCT_INT) f = x%ival
+    f = vrt_clo_f(hs, vx, int(c%tag, int64), int(c%ref, int64))
   end function rt_clo_f
 
-  ! (nth i (clo-caps c)): a clotran closure's capture i, as cap_of reads it
-  ! (two in the closure's slots 2 and 4, more in a vector in slot 2), and
-  ! past them the fn itself
+  ! (nth i (clo-caps c)); a compiled closure's capture ncap is itself
   function rt_capt(i, c) result(r)
     integer(int64), intent(in) :: i
     type(value), intent(in) :: c
     type(value) :: r
-    integer(int64) :: k, fid
-    type(value) :: f
-    integer :: ncap
-    call compiled_fn(c, f, fid, ncap)
-    if (fid >= 0) then
-       if (i >= ncap) then
-          r = c
-       else if (ncap > 2) then
-          r = gc_vec_get(gc_slot(f, 2), int(i) + 1)
-       else if (i == 0) then
-          r = gc_slot(f, 2)
-       else
-          r = gc_slot(f, 4)
-       end if
-       return
-    end if
-    r = rt_car(rt_cdr(rt_cdr(c)))
-    do k = 1, i
-       r = rt_cdr(r)
-    end do
-    r = rt_car(r)
+    r = place(vrt_capt_place(hs, vx, i, int(c%tag, int64), int(c%ref, int64)), c)
   end function rt_capt
 
   ! the slots a..a+k-1 as a list, nil past the stack (vmg-stk-from)
@@ -428,14 +373,13 @@ contains
 
   logical function rt_throwp(a)
     type(value), intent(in) :: a
-    rt_throwp = rt_consp(a)
-    if (rt_throwp) rt_throwp = same(gc_slot(a, 1), thrown_v) .and. gcl_count(a) == 2
+    rt_throwp = vrt_throwp(hs, int(a%tag, int64), int(a%ref, int64), int(thrown_v%tag, int64), int(thrown_v%ref, int64))
   end function rt_throwp
 
   function rt_thrown(a) result(r)
     type(value), intent(in) :: a
     type(value) :: r
-    r = rt_car(rt_cdr(a))
+    r = place(vrt_thrown_place(hs, int(a%tag, int64), int(a%ref, int64)), a)
   end function rt_thrown
 
   ! ---- THE PRIMITIVES: what clotran's compiled code asks the runtime ----------------
@@ -472,18 +416,18 @@ contains
     type(value) :: r
     type(gc_stack), pointer :: vst
     integer :: base
+    integer(int64) :: k
+    k = opkind(op)
     ! a Var's value (the compiled code's (:prim deref (:const var))): the
     ! hook, with nothing put on the stack
-    if (op%tag == GCT_KEY) then
-       if (op%ref == kw_deref%ref) then
-          vm_prim_n(3) = vm_prim_n(3) + 1
-          r = vmrt_deref(a)
-          return
-       end if
+    if (k == 3) then
+       vm_prim_n(3) = vm_prim_n(3) + 1
+       r = vmrt_deref(a)
+       return
     end if
     ! a builtin seq operation on what is already there: answered here, by
     ! the generated op (model/heapsq.lisp), with nothing put on the stack
-    if (gc_kind(op) == OBJ_BUILTIN) then
+    if (k == 8) then
        if (gc_seq_fast(gc_i1(op), a, r)) then
           vm_prim_n(8) = vm_prim_n(8) + 1
           return
@@ -537,6 +481,17 @@ contains
     call vs_leave(vst, base)
   end function rt_prim3
 
+  ! what an op is, as the generated vrt_prim_kind chooses: 1 arg, 2 arity,
+  ! 3 deref, 4 callw, 5 invoke -- the op keywords the translator and the
+  ! generated code make by rt_keyword from its cache, so identity is the
+  ! test -- 6 a node of the program's own, 8 a builtin, 7 any other value
+  integer(int64) function opkind(op)
+    type(value), intent(in) :: op
+    opkind = vrt_prim_kind(hs, int(op%tag, int64), int(op%ref, int64), int(kw_arg%ref, int64), &
+         int(kw_arity%ref, int64), int(kw_deref%ref, int64), int(kw_callw%ref, int64), &
+         int(kw_invoke%ref, int64), int(kw_invoke_m%ref, int64))
+  end function opkind
+
   ! op on the n values in slots argbase+1 ..
   function dispatch(op, argbase, n) result(r)
     type(value), intent(in) :: op
@@ -544,52 +499,47 @@ contains
     type(value) :: r, a
     type(gc_stack), pointer :: vst
     logical :: ok
+    integer(int64) :: j
     vst => gc_my_stack()
     r = gc_nil()
-    if (gc_kind(op) == OBJ_AST) then
+    select case (opkind(op))
+    case (6)
        vm_prim_n(6) = vm_prim_n(6) + 1
        call vmrt_node(op, argbase, n, r, ok)
        if (.not. ok) r = vmrt_throw_of(r)
-       return
-    end if
-    ! an op keyword is the translator's or the generated code's, made by
-    ! rt_keyword from its cache: the same object, so identity is the test
-    if (op%tag == GCT_KEY) then
-       if (op%ref == kw_arg%ref) then
-          vm_prim_n(1) = vm_prim_n(1) + 1
-          a = vs_get(vst, argbase + 1)
-          if (n == 1 .and. a%tag == GCT_INT) r = vst%vstack(vst%vm_args_rb + int(a%ival) + 1)
-          return
-       else if (op%ref == kw_arity%ref) then
-          vm_prim_n(2) = vm_prim_n(2) + 1
-          call vmrt_arity(op, argbase, n, r, ok)
+    case (1)
+       ! the entry value, read only inside the stack (vrt-arg-slot-inside)
+       vm_prim_n(1) = vm_prim_n(1) + 1
+       a = vs_get(vst, argbase + 1)
+       j = vrt_arg_slot(int(n, int64), int(a%tag, int64), a%ival, int(vst%vm_args_rb, int64), &
+            size(vst%vstack, kind=int64))
+       if (j > 0) r = vst%vstack(j)
+    case (2)
+       vm_prim_n(2) = vm_prim_n(2) + 1
+       call vmrt_arity(op, argbase, n, r, ok)
+       if (.not. ok) r = vmrt_throw_of(r)
+    case (3)
+       vm_prim_n(3) = vm_prim_n(3) + 1
+       if (n == 1) r = vmrt_deref(vs_get(vst, argbase + 1))
+    case (4)
+       ! (callw var args ..): the var's value called on the args
+       vm_prim_n(4) = vm_prim_n(4) + 1
+       if (n >= 1) then
+          call vs_set(vst, argbase + 1, vmrt_deref(vs_get(vst, argbase + 1)))
+          call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
           if (.not. ok) r = vmrt_throw_of(r)
-          return
-       else if (op%ref == kw_deref%ref) then
-          vm_prim_n(3) = vm_prim_n(3) + 1
-          if (n == 1) r = vmrt_deref(vs_get(vst, argbase + 1))
-          return
-       else if (op%ref == kw_callw%ref) then
-          ! (callw var args ..): the var's value called on the args
-          vm_prim_n(4) = vm_prim_n(4) + 1
-          if (n >= 1) then
-             call vs_set(vst, argbase + 1, vmrt_deref(vs_get(vst, argbase + 1)))
-             call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
-             if (.not. ok) r = vmrt_throw_of(r)
-          end if
-          return
-       else if (op%ref == kw_invoke%ref .or. op%ref == kw_invoke_m%ref) then
-          vm_prim_n(5) = vm_prim_n(5) + 1
-          if (n >= 1) then
-             call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
-             if (.not. ok) r = vmrt_throw_of(r)
-          end if
-          return
        end if
-    end if
-    vm_prim_n(7) = vm_prim_n(7) + 1
-    call vmrt_call(op, argbase, n, r, ok)
-    if (.not. ok) r = vmrt_throw_of(r)
+    case (5)
+       vm_prim_n(5) = vm_prim_n(5) + 1
+       if (n >= 1) then
+          call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
+          if (.not. ok) r = vmrt_throw_of(r)
+       end if
+    case default
+       vm_prim_n(7) = vm_prim_n(7) + 1
+       call vmrt_call(op, argbase, n, r, ok)
+       if (.not. ok) r = vmrt_throw_of(r)
+    end select
   end function dispatch
 
   ! ---- the compiler's arrays, resized as ACL2 resizes them: the elements
@@ -626,5 +576,7 @@ contains
     end if
     a => t
   end subroutine rt_resize_val
+
+  include "gen/vmrt_gen.inc"
 
 end module vm_runtime

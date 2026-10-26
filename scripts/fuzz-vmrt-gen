@@ -1,0 +1,177 @@
+#!/usr/bin/env bb
+;; fuzz-vmrt-gen: the GENERATED VM runtime reads (src/f/gen/vmrt_gen.inc,
+;; written by scripts/acl2-fortran -b vmrt from model/vmrt.lisp) against the
+;; ACL2 they were generated from.
+;;
+;;   scripts/fuzz-vmrt-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random heaps: objects of five words (tags of every kind, references in
+;; range and out of it), their kinds -- lists, closures, META wrappers,
+;; environments, builtins, nodes -- counts and second fields; vector runs
+;; in an arena; and compiled closures' call tables written into it, some
+;; whole, some cut short. Random values are asked every read: truthiness,
+;; nat, lt, add, a list's count, car and cdr, throw and closure tests
+;; against two heads, the thrown value, the closure's function, capture i,
+;; the dispatch's kind, an entry slot. ACL2 answers with the model's
+;; functions, test/vmrt/vmrt_check with the generated ones; every answer
+;; must agree, case for case.
+;;
+;; -x is the NEGATIVE CONTROL: the generated side reads a closure's kind
+;; as a builtin's and a list's count one more, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-vmrt-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+(defn gen-val [no nv]
+  (let [t (pick [0 1 2 2 5 7 8 8 8 8 9 3])]
+    [t (case t 8 (rnd (+ no 2)) 9 (rnd (+ nv 2)) (0 1 2 3) 0 (rnd 6))
+     (case t 1 (rnd 2) 2 (pick [0 1 2 3 -1 (rnd 40) 2147483647 2147483648 9223372036854775807]) 0)]))
+
+(defn gen-case []
+  (let [no (+ 2 (rnd 18)) nv (+ 2 (rnd 5)) na (+ 24 (rnd 40))
+        slots (vec (repeatedly (* 5 no) #(gen-val no nv)))
+        ;; objects made the heads' lists: two or three elements, the first a head
+        hobjs (set (repeatedly (rnd 5) #(+ 1 (rnd (dec no)))))
+        okind (vec (for [o (range no)] (if (hobjs o) 1 (pick [1 1 1 4 4 8 7 13 30 (rnd 40)]))))
+        oi1 (vec (for [o (range no)] (if (hobjs o) (pick [2 2 3 3 1]) (pick [0 1 2 3 3 (rnd 9) -1]))))
+        ;; a closure's second field names a run, as a compiled one's does
+        oi2 (vec (for [k okind] (if (= k 4) (pick [(+ 1 (rnd (dec nv))) (+ 1 (rnd (dec nv))) (+ 1 (rnd (dec nv))) 0]) (pick [0 0 (rnd (+ nv 1)) (rnd 4) -1]))))
+        clos (vec (keep-indexed (fn [o k] (when (and (pos? o) (#{4 8} k)) o)) okind))
+        voff (vec (repeatedly nv #(pick [0 (+ 1 (rnd 8)) (+ 1 (rnd 8)) (rnd na) (+ na (rnd 3)) -1])))
+        vlen (vec (repeatedly nv #(rnd 8)))
+        arena (vec (repeatedly na #(let [[t r _] (gen-val no nv)] [t r (pick [0 1 2 3 (rnd 6) (rnd 50) -1])])))
+        ;; call tables: run v's registers 3 (ncap) and 4 (K), the function id at 5 + 4(K+1) + ncap
+        arena (reduce (fn [ar v]
+                        (let [off (nth voff v) nc (rnd 5) kk (rnd 2) fx (+ off 4 (* 4 (+ kk 1)) nc)]
+                          (if (and (pos? off) (< fx na) (pos? (rnd 4)))
+                            (-> ar (assoc (+ off 2) [2 0 nc]) (assoc (+ off 3) [2 0 kk])
+                                (assoc fx [(pick [2 2 2 0]) 0 (rnd 9)]))
+                            ar)))
+                      arena (range nv))
+        heads [[5 (+ 1 (rnd 3))] [5 (+ 1 (rnd 3))]]
+        ;; a few objects made heads' lists
+        slots (reduce (fn [s o] (let [h (pick heads)] (assoc s (* 5 o) [(first h) (second h) 0])))
+                      slots hobjs)
+        ;; META wrappers round closures
+        slots (reduce (fn [s o] (if (and (= 8 (nth okind o)) (seq clos) (zero? (rnd 2))) (assoc s (* 5 o) [8 (pick clos) 0]) s))
+                      slots (range 1 no))
+        qs (vec (repeatedly (+ 4 (rnd 10))
+                            #(let [[t r i] (if (and (seq clos) (zero? (rnd 3))) [8 (pick clos) 0] (gen-val no nv))
+                                   [tb _ ib] (gen-val no nv)]
+                               [t r i tb ib (rnd 6) (rnd 6) (pick [0 1 2 1]) (rnd 30)])))]
+    {:no no :nv nv :na na :slots slots :okind okind :oi1 oi1 :oi2 oi2 :voff voff :vlen vlen
+     :arena arena :heads heads :qs qs}))
+
+(def cases (vec (repeatedly n gen-case)))
+
+;; ---- ACL2 -------------------------------------------------------------------------
+
+(defn l [xs] (str "'(" (str/join " " xs) ")"))
+
+(def hfields [["otag" 0] ["oref" 1] ["okind" 2] ["oi1" 3] ["voff" 4] ["vlen" 5] ["atag" 6] ["aref" 7] ["aival" 8]])
+(def driver
+  (str "(include-book \"vmrt\")\n"
+       "(set-print-case :downcase state)\n"
+       "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       "(defun ld-h (f i xs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (endp xs) hpg (let ((hpg (case f "
+       (str/join " " (for [[nm k] hfields] (str "(" k " (update-h-" nm "i i (car xs) hpg))")))
+       " (t hpg)))) (ld-h f (1+ i) (cdr xs) hpg))))\n"
+       "(defun put-h (f xs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (let ((hpg (case f "
+       (str/join " " (for [[nm k] hfields] (str "(" k " (resize-h-" nm " (len xs) hpg))")))
+       " (t hpg)))) (ld-h f 0 xs hpg)))\n"
+       "(defun ld-x (f i xs vrx) (declare (xargs :stobjs vrx :mode :program))\n"
+       "  (if (endp xs) vrx (let ((vrx (if (equal f 0) (update-x-oivali i (car xs) vrx) (update-x-oi2i i (car xs) vrx)))) (ld-x f (1+ i) (cdr xs) vrx))))\n"
+       "(defun put-x (f xs vrx) (declare (xargs :stobjs vrx :mode :program))\n"
+       "  (let ((vrx (if (equal f 0) (resize-x-oival (len xs) vrx) (resize-x-oi2 (len xs) vrx)))) (ld-x f 0 xs vrx)))\n"
+       "(defun b (x) (if x 1 0))\n"
+       "(defun ask (q hd hpg vrx) (declare (xargs :stobjs (hpg vrx) :mode :program))\n"
+       "  (let ((tg (nth 0 q)) (rf (nth 1 q)) (iv (nth 2 q)) (tb (nth 3 q)) (ib (nth 4 q)) (i (nth 5 q))\n"
+       "        (rb (nth 6 q)) (nn (nth 7 q)) (len (nth 8 q)))\n"
+       "    (list (b (vrt-truthy tg iv)) (vrt-nat tg iv) (b (vrt-lt tg iv tb ib)) (vrt-add tg iv tb ib)\n"
+       "          (vrt-len tg rf hpg) (b (vrt-consp tg rf hpg)) (vrt-car-place tg rf hpg) (vrt-cdr-place tg rf hpg)\n"
+       "          (b (vrt-throwp tg rf (nth 0 hd) (nth 1 hd) hpg)) (vrt-thrown-place tg rf hpg)\n"
+       "          (b (vrt-clop tg rf (nth 2 hd) (nth 3 hd) hpg vrx)) (vrt-clo-f tg rf hpg vrx)\n"
+       "          (vrt-capt-place i tg rf hpg vrx) (vrt-cfid tg rf hpg vrx) (vrt-cncap tg rf hpg vrx)\n"
+       "          (vrt-prim-kind tg rf 1 2 3 4 5 6 hpg) (vrt-arg-slot nn tg iv rb len))))\n"
+       "(defun asks (qs hd hpg vrx) (declare (xargs :stobjs (hpg vrx) :mode :program))\n"
+       "  (if (endp qs) nil (cons (ask (car qs) hd hpg vrx) (asks (cdr qs) hd hpg vrx))))\n"
+       "(defun run-case (k hs xs hd qs hpg vrx) (declare (xargs :stobjs (hpg vrx) :mode :program))\n"
+       "  (let* ((hpg (put-h 0 (nth 0 hs) hpg)) (hpg (put-h 1 (nth 1 hs) hpg)) (hpg (put-h 2 (nth 2 hs) hpg))\n"
+       "         (hpg (put-h 3 (nth 3 hs) hpg)) (hpg (put-h 4 (nth 4 hs) hpg)) (hpg (put-h 5 (nth 5 hs) hpg))\n"
+       "         (hpg (put-h 6 (nth 6 hs) hpg)) (hpg (put-h 7 (nth 7 hs) hpg)) (hpg (put-h 8 (nth 8 hs) hpg))\n"
+       "         (vrx (put-x 0 (nth 0 xs) vrx)) (vrx (put-x 1 (nth 1 xs) vrx)))\n"
+       "    (prog2$ (cw \"CASE ~x0 ~x1~%\" k (asks qs hd hpg vrx)) (mv hpg vrx))))\n"
+       (str/join (map-indexed
+                  (fn [k c]
+                    (let [s (:slots c) a (:arena c)]
+                      (str "(run-case " k " (list "
+                           (str/join " " (map l [(map first s) (map second s) (:okind c) (:oi1 c) (:voff c) (:vlen c)
+                                                 (map first a) (map second a) (map #(nth % 2) a)]))
+                           ") (list " (l (map #(nth % 2) s)) " " (l (:oi2 c)) ") "
+                           (l (flatten (:heads c))) " '("
+                           (str/join " " (map #(str "(" (str/join " " %) ")") (:qs c))) ") hpg vrx)\n")))
+                  cases))
+       "(good-bye)\n"))
+
+(def acl2 (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2")))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ k body] (re-seq #"CASE (\d+) (\(.*\))" out)] [(parse-long k) (edn/read-string body)])))
+(when (not= (count expected) n)
+  (println (str "fuzz-vmrt-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+
+;; ---- the generated code ---------------------------------------------------------------
+
+(p/shell {:out :string :err :string} "scripts/acl2-fortran" "-b" "vmrt" "-o" (str work "/vmrt_gen.inc"))
+(fs/copy "test/vmrt/vmrt_check.f90" (str work "/vmrt_check.f90"))
+(def exe (str work "/vmrt_check"))
+(let [r (p/shell {:continue true :out :string :err :string :dir work} fc "-O2" "-o" exe "vmrt_check.f90")]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(defn nums [xs] (str/join " " xs))
+(defn case-file [k c]
+  (let [f (str work "/case" k ".txt") s (:slots c) a (:arena c)]
+    (spit f (str (:no c) " " (:nv c) " " (:na c) "\n"
+                 (str/join "\n" (map nums [(map first s) (map second s) (map #(nth % 2) s) (:okind c) (:oi1 c) (:oi2 c)
+                                           (:voff c) (:vlen c) (map first a) (map second a) (map #(nth % 2) a)
+                                           (flatten (:heads c))]))
+                 "\n" (count (:qs c)) "\n" (str/join "\n" (map nums (:qs c))) "\n"))
+    f))
+
+(def kinds ["truthy" "nat" "lt" "add" "len" "consp" "car" "cdr" "throwp" "thrown" "clop" "clo-f" "capt" "cfid" "cncap" "prim-kind" "arg-slot"])
+
+(def results
+  (vec (for [[k c] (map-indexed vector cases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+               got (mapv (fn [ln] (mapv parse-long (str/split (str/trim ln) #"\s+"))) (remove str/blank? (str/split-lines (:out r))))
+               want (mapv vec (expected k))]
+           {:k k :got got :want want :ok (= got want)}))))
+
+(def by-kind
+  (frequencies (for [{:keys [got want]} results [g w] (map vector got want) [nm a b] (map vector kinds w g) :when (not= a b)] nm)))
+(def bad (remove :ok results))
+(println (str n " heaps, seed " seed (when broken " (negative control: closures read as builtins, counts one more)")))
+(println (str "  asked " (count (mapcat :want results)) " values, " (count (filter #(<= 0 (nth % 13)) (mapcat :want results)))
+              " of them compiled closures, " (count (filter #(= 1 (nth % 8)) (mapcat :want results))) " throws"))
+(println (str "generated VM runtime reads against ACL2's: " (count bad) " cases differ"))
+(doseq [[nm c] (sort by-kind)] (println (str "  " nm ": " c)))
+(doseq [b (take 2 bad)]
+  (println "  case" (:k b))
+  (doseq [[w g] (map vector (:want b) (:got b)) :when (not= w g)] (println "    ACL2" (pr-str w) "generated" (pr-str g))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))
