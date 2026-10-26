@@ -264,7 +264,7 @@ module Eval
   ! (clotran-run-pid argv dir out env): clotran-run without waiting, answering
   ! the child's process id; (clotran-kill pid) ends it -- the debug adapter
   ! starts the native debugger so and stops it when the session ends (PLAN 31a)
-  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473, B_RESETVAL = 474, B_TTY = 475
+  integer, parameter :: B_RUNPID = 471, B_KILL = 472, B_MAINTHREAD = 473, B_RESETVAL = 474, B_TTY = 475, B_RCOND = 476
   ! Var.setMeta: resetMeta, then :ns and :name restored (clj's Var, setMeta)
   integer, parameter :: B_SETMETA = 458
   ! (clotran-resource rel): the file on clotran's path, io/resource's lookup
@@ -9582,6 +9582,8 @@ contains
                     [vs_get(vst, base + 1)])
             end block
           end block
+       else if (is_lookup_literal(fn)) then
+          call refuse_lookup_literal(fn, 3, "clotran.host.i_fn", [vs_get(vst, base + 1)])
        else if (((gca_is(fn) .or. gc_kind(fn) == OBJ_SET .or. fn%tag == GCT_SYM) .and. &
             (gcv_count(args) == 0 .or. gcv_count(args) > 2)) .or. &
             (gcv_is(fn) .and. gcv_count(args) /= 1)) then
@@ -9751,6 +9753,39 @@ contains
              call vs_leave(vst, base)
              return
           end select
+       end if
+    end if
+
+    ! A tagged literal or reader conditional is an ILookup only (sorted.inc):
+    ! what wants a collection refuses it as clj does
+    if (n >= 1) then
+       if (is_lookup_literal(gcv_nth(args, 0))) then
+          select case (id)
+          case (B_COUNT, B_CONTAINS, B_STRCONTAINS, B_KEYS, B_VALS, B_ASSOC, B_DISSOC, B_CANSEQ)
+             if (id == B_CANSEQ) then
+                out = gc_bool(.false.)
+             else if (id == B_COUNT) then
+                call refuse_lookup_literal(gcv_nth(args, 0), 1, "count", [vs_get(vst, base + 1)])
+             else if (id == B_CONTAINS .or. id == B_STRCONTAINS) then
+                call refuse_lookup_literal(gcv_nth(args, 0), 1, "contains?", [vs_get(vst, base + 1)])
+             else if (id == B_ASSOC) then
+                call refuse_lookup_literal(gcv_nth(args, 0), 3, "clotran.host.associative", [vs_get(vst, base + 1)])
+             else if (id == B_DISSOC) then
+                call refuse_lookup_literal(gcv_nth(args, 0), 3, "clotran.host.i_persistent_map", [vs_get(vst, base + 1)])
+             else
+                call refuse_lookup_literal(gcv_nth(args, 0), 2, "", [vs_get(vst, base + 1)])
+             end if
+             call vs_leave(vst, base)
+             return
+          end select
+       end if
+       ! and as metadata, which must be a map (with-meta [] (tagged-literal ...))
+       if (id == B_WITHMETA .and. n >= 2) then
+          if (is_lookup_literal(gcv_nth(args, 1))) then
+             call refuse_lookup_literal(gcv_nth(args, 1), 3, "clotran.host.i_persistent_map", [vs_get(vst, base + 1)])
+             call vs_leave(vst, base)
+             return
+          end if
        end if
     end if
 
@@ -14180,6 +14215,35 @@ contains
        ! (.setDaemon t b): there is one OS thread, so this is a no-op
        ! that answers the thread, which doto threads on.
        out = strip_meta(gcv_nth(args, 0))
+    case (B_RCOND)
+       ! (reader-conditional form splicing?): ReaderConditional.create, a
+       ! marked map {:form f :splicing? b} like a tagged literal (sorted.inc).
+       ! splicing? is cast to Boolean: nil is a NullPointerException, any
+       ! other non-boolean a ClassCastException.
+       block
+         type(gc_value) :: sp
+         sp = strip_meta(gcv_nth(args, 1))
+         if (sp%tag /= GCT_BOOL) then
+            if (sp%tag == GCT_NIL) then
+               call raise_class("clotran.host.null_pointer_exception", "splicing? is nil", [vs_get(vst, base + 1)])
+            else
+               call raise_class("clotran.host.class_cast_exception", &
+                    "splicing? cannot be cast to class clotran.host.logical", [vs_get(vst, base + 1)])
+            end if
+            call vs_leave(vst, base)
+            return
+         end if
+         call vs_set(vst, base + 2, gca_empty([vs_get(vst, base + 1)]))
+         call vs_set(vst, base + 3, gc_key("clotran/reader-conditional", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+         call vs_set(vst, base + 2, gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), gc_bool(.true.), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+         call vs_set(vst, base + 3, gc_key("form", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+         call vs_set(vst, base + 2, gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), gcv_nth(args, 0), &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+         call vs_set(vst, base + 3, gc_key("splicing?", [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+         out = gca_assoc(vs_get(vst, base + 2), vs_get(vst, base + 3), sp, &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       end block
     case (B_TAGGEDLIT)
        ! (tagged-literal tag form): {:tag t :form f} under the marker.
        block
@@ -21290,8 +21354,9 @@ contains
     ! A tagged literal is a marked map here (sorted.inc) but clj's is only
     ! an ILookup: not a map, not a collection, not Associative, so
     ! (map? (tagged-literal 'js {})) is false and it cannot pass as metadata.
-    if (t == "map" .and. c /= "clotran.host.tagged_literal" .and. c /= "clotran.host.value") then
-       if (is_tagged_literal(v)) then
+    if (t == "map" .and. c /= "clotran.host.tagged_literal" .and. c /= "clotran.host.reader_conditional" &
+         .and. c /= "clotran.host.value") then
+       if (is_tagged_literal(v) .or. is_reader_conditional(v)) then
           yes = .false.
           return
        end if
@@ -21398,6 +21463,8 @@ contains
     case ("clotran.host.tagged_literal")
        ! the same marker-map trick as Reduced, just below
        yes = is_tagged_literal(v)
+    case ("clotran.host.reader_conditional")
+       yes = is_reader_conditional(v)
     case ("clotran.uuid.UUID")
        ! a UUID is its text here (DEVIATIONS 12), so uuid? asks
        ! whether the string has the shape of one
@@ -22347,6 +22414,7 @@ contains
           ! a tagged literal is a marked map (sorted.inc); it prints #tag form
           ! through print-method only if it says what it is
           if (is_tagged_literal(v)) s = "clotran.host.tagged_literal"
+          if (is_reader_conditional(v)) s = "clotran.host.reader_conditional"
        case (OBJ_SET)
           s = "clotran.host.persistent_hash_set"
           if (gca_is_sorted(gc_slot(v, 1))) s = "clotran.host.persistent_tree_set"

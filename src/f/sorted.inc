@@ -64,6 +64,9 @@
        case (OBJ_CLOSURE, OBJ_BUILTIN, OBJ_COMPILED, OBJ_MULTIFN, OBJ_ATOM, OBJ_VAR, OBJ_NS, OBJ_TASK, OBJ_VOLATILE, &
             OBJ_DELAY, OBJ_REGEX, OBJ_MATCHER, OBJ_WRITER, OBJ_ERR, OBJ_TYPE)
           yes = .false.
+       case (OBJ_MAP, OBJ_HAMT)
+          ! a tagged literal or reader conditional is an ILookup, no collection
+          if (is_tagged_literal(v) .or. is_reader_conditional(v)) yes = .false.
        end select
     case default
        yes = .false.
@@ -122,6 +125,46 @@
     if (gca_is_sorted(m)) return
     yes = gca_contains(m, gc_key("clotran/tagged-literal", [m]))
   end function is_tagged_literal
+
+  ! A READER CONDITIONAL, (reader-conditional form splicing?), is the same
+  ! trick under the marker clotran/reader-conditional with :form and :splicing?.
+  function is_reader_conditional(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    type(gc_value) :: m
+    yes = .false.
+    m = strip_meta(v)
+    if (.not. gca_is(m)) return
+    if (gca_is_sorted(m)) return
+    yes = gca_contains(m, gc_key("clotran/reader-conditional", [m]))
+  end function is_reader_conditional
+
+  ! A tagged literal or a reader conditional: an ILookup, no collection and no fn.
+  function is_lookup_literal(v) result(yes)
+    type(gc_value), intent(in) :: v
+    logical :: yes
+    yes = is_tagged_literal(v) .or. is_reader_conditional(v)
+  end function is_lookup_literal
+
+  ! Raise what clj raises when v, a lookup literal, meets an operation that
+  ! wants a collection or a fn: kind 1 count/contains?, 2 seq, 3 a cast to
+  ! the class named by want. roots keep the frame alive.
+  subroutine refuse_lookup_literal(v, kind, what, roots)
+    type(gc_value), intent(in) :: v
+    integer, intent(in) :: kind
+    character(len=*), intent(in) :: what
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: cls
+    call class_name_of(v, s=cls)
+    select case (kind)
+    case (1)
+       call raise_class("clotran.host.unsupported_operation_exception", what // " not supported on type: " // cls, roots)
+    case (2)
+       call raise_class("clotran.host.illegal_argument_exception", "Don't know how to create ISeq from: " // cls, roots)
+    case default
+       call raise_class("clotran.host.class_cast_exception", "class " // cls // " cannot be cast to class " // what, roots)
+    end select
+  end subroutine refuse_lookup_literal
 
   ! (reduced x): an atom-shaped box marked i1 = 3 (Eval, clotran.host.reduced)
   function is_reduced(v) result(yes)

@@ -353,7 +353,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("clotran.host.int8", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("clotran.host.int8", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(65) = [ &
+  type(hm), parameter :: HOST_STATICS_4(66) = [ &
   ! Double.compare, NOT clojure.core/compare: a total order in which
   ! -0.0 is below 0.0. clojure.math's tests are written on it.
        hm("clotran.host.real8", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
@@ -391,6 +391,7 @@
        hm("clotran.uuid.UUID", "randomUUID", B_RANDOMUUID, "clotran-random-uuid"), &
        hm("clotran.uuid.UUID", "fromString", B_UUIDOF, "clotran-uuid-of"), &
        hm("clotran.host.tagged_literal", "create", B_TAGGEDLIT, "tagged-literal"), &
+       hm("clotran.host.reader_conditional", "create", B_RCOND, "reader-conditional"), &
        ! RT.checkSpecAsserts: -Dclojure.spec.check-asserts, off by default,
        ! so (s/assert spec x) is x; a WRITABLE box, so (s/check-asserts true)
        ! -- a set! of this static -- turns the checks on (DEVIATIONS 42).
@@ -443,7 +444,7 @@
        hm("clotran.host.numbers", "longs", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(338) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(339) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(104) = [ &
   ! Instance members. The target becomes the first argument, which is all
