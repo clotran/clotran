@@ -275,11 +275,30 @@ contains
 
   ! the model's :add and :lt, on integers; clotran compiles Clojure's + and
   ! < to prims, so these run only if a program says :add or :lt. A sum
-  ! past 64 bits answers 0 (vrt-add-agrees holds where it fits)
+  ! past 64 bits is a THROW of ArithmeticException "long overflow", as clj's
+  ! Numbers.add, where it answered 0 (vrt-add-agrees where it fits,
+  ! vrt-add-overflow-unrepresentable where it does not). The throw is the
+  ! value; the machine's :add stores what rt_add answers and does not
+  ! unwind (vmg-add equals vmi-add, which adds unbounded), so a program
+  ! that overflows holds the throw in a slot, as rt_prim's answers do.
   function rt_add(a, b) result(r)
     type(value), intent(in) :: a, b
     type(value) :: r
-    r = gc_int(vrt_add(int(a%tag, int64), a%ival, int(b%tag, int64), b%ival))
+    type(gc_stack), pointer :: vst
+    integer :: base
+    if (vrt_add_fits(vrt_ifix(int(a%tag, int64), a%ival), vrt_ifix(int(b%tag, int64), b%ival))) then
+       r = gc_int(vrt_add(int(a%tag, int64), a%ival, int(b%tag, int64), b%ival))
+       return
+    end if
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, gc_sym("clotran.host.arithmetic_exception", [gc_nil()]))
+    call vs_set(vst, base + 2, gc_str("long overflow", [vs_get(vst, base + 1)]))
+    r = gc_obj(OBJ_ERR, [vs_get(vst, base + 1), vs_get(vst, base + 2), gc_nil()], &
+         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 1, r)
+    r = vmrt_throw_of(vs_get(vst, base + 1))
+    call vs_leave(vst, base)
   end function rt_add
 
   function rt_lt(a, b) result(r)

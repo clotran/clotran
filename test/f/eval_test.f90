@@ -17,6 +17,8 @@ program eval_test
   use Eval
   use NativeArray
   use Regex
+  use vm_runtime, only: rt_add, rt_throwp, rt_thrown
+  use iso_fortran_env, only: int64
   implicit none
 
   logical :: all_ok
@@ -75,6 +77,7 @@ contains
     call check_resources()
     call check_errors()
     call check_heap_sound()
+    call check_vm_add_overflow()
   end subroutine run_all
 
   ! Reads, evaluates and prints, in one value-stack frame so the form
@@ -294,12 +297,12 @@ contains
   ! and an empty list is truthy, so that assertion fired on every
   ! correct call.
   subroutine check_varargs()
-    call ev("11a. ", "((fn* [& xs] xs) 1 2 3)", "(1 2 3)")
-    call ev("11b. ", "((fn* [a & xs] xs) 1 2 3)", "(2 3)")
-    call ev("11c. ", "((fn* [a & xs] a) 1 2 3)", "1")
-    call ev("11d. ", "((fn* [a & xs] xs) 1)", "nil")
-    call ev("11e. ", "((fn* [& xs] (count xs)))", "0")   ! (count nil) is 0
-    call ev("11f. ", "(do (def f (fn* [a & r] (cons a r))) (f 1 2 3))", "(1 2 3)")
+    call ev("vmadd-a. ", "((fn* [& xs] xs) 1 2 3)", "(1 2 3)")
+    call ev("vmadd-b. ", "((fn* [a & xs] xs) 1 2 3)", "(2 3)")
+    call ev("vmadd-c. ", "((fn* [a & xs] a) 1 2 3)", "1")
+    call ev("vmadd-d. ", "((fn* [a & xs] xs) 1)", "nil")
+    call ev("vmadd-e. ", "((fn* [& xs] (count xs)))", "0")   ! (count nil) is 0
+    call ev("vmadd-f. ", "(do (def f (fn* [a & r] (cons a r))) (f 1 2 3))", "(1 2 3)")
   end subroutine check_varargs
 
   subroutine check_quasiquote()
@@ -945,5 +948,41 @@ contains
        call ok("10a. the heap passes its own audit: ", dlt_1 == "")
     end block
   end subroutine check_heap_sound
+
+  ! The VM's :add on integers past 64 bits is a throw of ArithmeticException
+  ! "long overflow" (model/vmrt.lisp vrt-add-overflow-unrepresentable), not
+  ! the 0 it answered. No emitted code says :add, so only this reaches it.
+  subroutine check_vm_add_overflow()
+    type(gc_value) :: r, e
+    character(len=:), allocatable :: cls, msg
+    integer(int64), parameter :: mx = huge(0_int64), mn = -huge(0_int64) - 1_int64
+    call gc_init(64)
+    gc_torture = .false.
+    r = rt_add(gc_int(mx - 1_int64), gc_int(1_int64))
+    call ok("vmadd-a. :add that fits is a number: ", .not. rt_throwp(r) .and. r%ival == mx)
+    r = rt_add(gc_int(mn + 1_int64), gc_int(-1_int64))
+    call ok("vmadd-b. :add to the least long is a number: ", .not. rt_throwp(r) .and. r%ival == mn)
+    r = rt_add(gc_int(mn), gc_int(mx))
+    call ok("vmadd-c. :add of the extremes is a number: ", .not. rt_throwp(r) .and. r%ival == -1_int64)
+    call vm_add_throws("vmadd-d. max + 1 ", mx, 1_int64)
+    call vm_add_throws("vmadd-e. min + -1 ", mn, -1_int64)
+    call vm_add_throws("vmadd-f. max + max ", mx, mx)
+    call vm_add_throws("vmadd-g. min + min ", mn, mn)
+  end subroutine check_vm_add_overflow
+
+  subroutine vm_add_throws(label, a, b)
+    character(len=*), intent(in) :: label
+    integer(int64), intent(in) :: a, b
+    type(gc_value) :: r, e
+    character(len=:), allocatable :: cls, msg
+    r = rt_add(gc_int(a), gc_int(b))
+    call ok(label // "is a throw: ", rt_throwp(r))
+    if (.not. rt_throwp(r)) return
+    e = rt_thrown(r)
+    call gc_text(gc_slot(e, 1), cls)
+    call gc_text(gc_slot(e, 2), msg)
+    call ok(label // "is an ArithmeticException: ", cls == "clotran.host.arithmetic_exception")
+    call ok(label // "says long overflow: ", msg == "long overflow")
+  end subroutine vm_add_throws
 
 end program eval_test

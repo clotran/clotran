@@ -40,6 +40,8 @@
 ;   vrt-clo-f-agrees     rt-clo-f is vrt-clo-f, -1 where it is no integer
 ;   vrt-capt-agrees      rt-capt i is the value vrt-capt-place i names
 ;   vrt-lt-agrees, vrt-add-agrees   on integers, the sum when it fits
+;   vrt-add-fits-representable, vrt-add-overflow-unrepresentable   it fits
+;                        exactly when a 64-bit word holds the sum; else a throw
 ;   vrt-nat-agrees, vrt-consp-agrees, vrt-car-agrees, vrt-cdr-agrees
 ;                        the compiler's reads of a plain list
 ;   vrt-prim-kind-range, vrt-arg-slot-inside   the dispatch's choice, and
@@ -737,6 +739,18 @@
            :expand ((vrt-dec 2 ra ia (+ 1 d) hd hpg vrx) (vrt-dec 2 rb ib (+ 1 d) hd hpg vrx))
            :use ((:instance vrt-dec-number (tag ta) (ref ra) (ival ia))
                  (:instance vrt-dec-number (tag tb) (ref rb) (ival ib))))))
+
+;; THE OVERFLOW. rt-add is the sum in ACL2's unbounded integers; a 64-bit
+;; word holds it exactly when vrt-add-fits says so (and vrt-add-agrees
+;; holds). When it does not fit, no word holds the sum, so the runtime
+;; (rt_add) answers a THROW -- an ArithmeticException "long overflow", as
+;; clj's Numbers.add -- instead of a wrong word (it answered 0): the
+;; theorems below are why the two branches of rt_add are the only two.
+(defthm vrt-add-fits-representable
+  (implies (and (sb64p a) (sb64p b) (vrt-add-fits a b)) (sb64p (+ a b))))
+
+(defthm vrt-add-overflow-unrepresentable
+  (implies (and (sb64p a) (sb64p b) (not (vrt-add-fits a b))) (not (sb64p (+ a b)))))
 
 (defthm vrt-nat-agrees
   (implies (vrt-hyps)

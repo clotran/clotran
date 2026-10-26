@@ -3474,3 +3474,6 @@ x10
 ;; a recur is checked for tail position BEFORE its argument count (Compiler RecurExpr.Parser)
 (defn recur-msg [form] (try (eval form) :ok (catch clotran.host.throwable e (ex-message (or (ex-cause e) e)))))
 (mapv recur-msg (quote [(fn [x] (recur 1 2)) (loop [a 1] (recur)) (fn [x] (do (recur 1 2) 2)) (loop [a 1] (do (recur) 1)) (fn [x] (inc (recur 1 2))) (fn [x] (inc (recur))) (loop [a 1] (try (recur 1 2))) (fn ([x] (recur 1 2)) ([x y] (inc (recur 1)))) (fn [x] (if x (recur 1 2) 3)) (fn [x] (fn [y] (inc (recur 1 2))))]))
+;; a long sum past 64 bits throws "long overflow" (also in a fn the VM runs, CLOTRAN_VM=1)
+(defn add2 [a b] (+ a b))
+(mapv (fn [[a b]] (try (add2 a b) (catch clotran.host.throwable e [(class e) (ex-message e)]))) [[9223372036854775807 1] [-9223372036854775808 -1] [9223372036854775807 9223372036854775807] [-9223372036854775808 9223372036854775807] [9223372036854775806 1]])
