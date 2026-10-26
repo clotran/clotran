@@ -3210,6 +3210,11 @@
           call vs_leave(vst, base)
           return
        end if
+       if (.not. recur_count_ok()) then
+          tctx%fn_path = saved
+          call vs_leave(vst, base)
+          return
+       end if
     end do
     do i = 0, gcv_count(vs_get(vst, base + 7)) - 1
        call apply_clears(gcv_nth(gcv_nth(vs_get(vst, base + 7), i), 3), gc_i1(scope_info(vs_get(vst, base + 5))))
@@ -3587,7 +3592,7 @@
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, kids, rinfo, m, tmp
     integer :: base, n, want, i
-    logical :: method
+    logical :: method, bad
     character(len=16) :: wb, gb
     tctx => ctx_self()
     vst => tctx%stk
@@ -3615,22 +3620,21 @@
           want = n - 1
        end if
     end if
-    if (gcl_count(rest) /= want) then
+    bad = (gcl_count(rest) /= want)
+    if (bad .and. .not. allocated(tctx%recur_pend)) then
        write(wb, '(I0)') want
        write(gb, '(I0)') gcl_count(rest)
-       call fail("Mismatched argument count to recur, expected: " // trim(wb) // " args, got: " // trim(gb))
-       call vs_leave(vst, base)
-       return
+       tctx%recur_pend = "Mismatched argument count to recur, expected: " // trim(wb) // " args, got: " // trim(gb)
     end if
     kids = analyze_all(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, kids)
-    if (.not. tctx%has_error .and. .not. method) then
+    if (.not. tctx%has_error .and. .not. method .and. .not. bad) then
        if (.not. recur_args_ok(vs_get(vst, base + 2), vs_get(vst, base + 3), [vs_get(vst, base + 1)])) then
           call vs_leave(vst, base)
           return
        end if
     end if
-    if (method .and. .not. tctx%has_error) then
+    if (method .and. .not. bad .and. .not. tctx%has_error) then
        ! [this args...]: the local in the method's first parameter slot
        m = gc_slot(scope_info(vs_get(vst, base + 2)), 5)
        tmp = mk_node(N_LOCAL, gc_nil(), gca_get(m, gc_key("this", [vs_get(vst, base + 1)])), gc_nil(), &
@@ -4516,6 +4520,21 @@
     if (code == 2) call fail("Cannot recur across try")
   end function tail_ok
 
+  ! After the tail check passed: the argument count a recur gave
+  ! (analyze_recur held it), which clj checks only for a recur in tail
+  ! position.
+  logical function recur_count_ok()
+    type(eval_ctx), pointer :: cx
+    character(len=:), allocatable :: pm
+    cx => ctx_self()
+    recur_count_ok = .true.
+    if (allocated(cx%recur_pend)) then
+       pm = cx%recur_pend
+       call fail(pm)
+       recur_count_ok = .false.
+    end if
+  end function recur_count_ok
+
   ! CLOTRAN_KEEP_LOCALS=1 turns the clearing pass off, so a paused frame
   ! shows every local it ever bound rather than nil for the ones already
   ! read. Clojure has the same switch, :disable-locals-clearing, and for
@@ -4606,6 +4625,10 @@
     end if
     call vs_set(vst, base + 3, body)
     if (.not. tail_ok(vs_get(vst, base + 3), 0)) then
+       call vs_leave(vst, base)
+       return
+    end if
+    if (.not. recur_count_ok()) then
        call vs_leave(vst, base)
        return
     end if

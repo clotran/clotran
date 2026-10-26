@@ -3471,3 +3471,6 @@ x10
 (try (seq (SeqNone. 1)) (catch clotran.host.throwable e [(class e) (ex-message e)]))
 (try (first (SeqNone. 1)) (catch clotran.host.throwable e [(class e) (ex-message e)]))
 (try (empty? (SeqNone. 1)) (catch clotran.host.throwable e [(class e) (ex-message e)]))
+;; a recur is checked for tail position BEFORE its argument count (Compiler RecurExpr.Parser)
+(defn recur-msg [form] (try (eval form) :ok (catch clotran.host.throwable e (ex-message (or (ex-cause e) e)))))
+(mapv recur-msg (quote [(fn [x] (recur 1 2)) (loop [a 1] (recur)) (fn [x] (do (recur 1 2) 2)) (loop [a 1] (do (recur) 1)) (fn [x] (inc (recur 1 2))) (fn [x] (inc (recur))) (loop [a 1] (try (recur 1 2))) (fn ([x] (recur 1 2)) ([x y] (inc (recur 1)))) (fn [x] (if x (recur 1 2) 3)) (fn [x] (fn [y] (inc (recur 1 2))))]))

@@ -711,6 +711,9 @@ module Eval
      ! the state lock; wait_target is rooted by block_on's caller.
      integer :: wait_kind = 0
      type(gc_value) :: wait_target
+     ! a recur whose argument count is wrong, held until the tail check
+     ! has seen it: clj refuses a recur out of tail position first
+     character(len=:), allocatable :: recur_pend
   end type eval_ctx
   ! the VM program's functions: each one's first instruction and name, for a
   ! trace (vm.inc vm_fn_at)
@@ -991,6 +994,7 @@ contains
     tctx => ctx_self()
     tctx%has_error = .true.
     tctx%last_error = msg
+    if (allocated(tctx%recur_pend)) deallocate(tctx%recur_pend)
     call capture_trace()
   end subroutine fail
 
