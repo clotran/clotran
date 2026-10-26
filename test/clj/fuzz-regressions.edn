@@ -291,5 +291,8 @@
  ;; a tagged literal is no map (map? false), so it is no metadata: the error is clj's
  ;; "Metadata must be Symbol,Keyword,String,Vector or Map" (scripts/fuzz-read, seed 2275911424)
  [(map? (tagged-literal 'js {})) (try (read-string {:read-cond :allow :features #{:zz}} "#?(:zz *== :cljs #js {} :default ^#js {} :default ^\"Ayé\\fé\")") (catch clotran.host.exception e (ex-message e)))]
+ ;; a branch nobody selected still reads its tag first, and it must be a symbol:
+ ;; "Reader tag must be a symbol", not the delimiter read as the form (scripts/fuzz-read, seed 4156041410)
+ (mapv #(try (read-string {:read-cond :allow :features #{:zz}} %) (catch clotran.host.exception e (ex-message e))) ["#?(:yy #true)" "[#?(:yy #nil)\n]" "#?(:yy #1)" "#?(:yy #foo 1 :zz 2)"])
 ]
 

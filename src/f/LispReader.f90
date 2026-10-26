@@ -1313,6 +1313,9 @@ contains
             integer :: tb
             tb = vs_enter(2)
             v = read_form(text, pos, roots)
+            ! the tag must be a symbol before the form is read, suppressed
+            ! or not (CtorReader): #true, #nil are refused here
+            if (.not. rdx%has_error .and. v%tag /= GCT_SYM) call fail("Reader tag must be a symbol")
             if (.not. rdx%has_error) then
                call vs_set(tb + 1, v)
                v = read_form(text, pos, [roots, vs_get(tb + 1)])
