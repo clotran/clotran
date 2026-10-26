@@ -21287,6 +21287,15 @@ contains
        call type_name(v, s=dlt_1)
        t = dlt_1
     end block
+    ! A tagged literal is a marked map here (sorted.inc) but clj's is only
+    ! an ILookup: not a map, not a collection, not Associative, so
+    ! (map? (tagged-literal 'js {})) is false and it cannot pass as metadata.
+    if (t == "map" .and. c /= "clotran.host.tagged_literal" .and. c /= "clotran.host.value") then
+       if (is_tagged_literal(v)) then
+          yes = .false.
+          return
+       end if
+    end if
     ! A deftype/reify instance is an instance of its own class and of
     ! everything its :implements list names -- which is the whole
     ! hierarchy there is, and enough for find-protocol-impl, whose

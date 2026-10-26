@@ -10,7 +10,7 @@
   built has no :clotran/unread and is left as it is. DEVIATIONS 46.")
 
 (defn- unread? [x]
-  (and (map? x) (:clotran/unread x)))
+  (and (tagged-literal? x) (:clotran/unread x)))
 
 (defn- read-record
   "#ns.Rec{...} and #ns.Rec[...], as LispReader.CtorReader.readRecord: a

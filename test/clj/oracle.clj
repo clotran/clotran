@@ -3454,3 +3454,6 @@ x10
 (requiring-resolve (quote clojure.string/no-such-fn))
 ;; find-ns of what is not a symbol is the cast clj makes, not a crash
 (for [x [(quote (quote x)) "clojure.core" 1]] (try (find-ns x) (catch clotran.host.throwable e [(class e) (re-find #"^class \S+ cannot be cast to class" (.getMessage e))])))
+;; a tagged literal is an ILookup and no map: it is not map?, coll?, associative?
+;; or counted?, so it cannot pass as reader metadata (scripts/fuzz-read, seed 2275911424)
+(let [t (tagged-literal (quote js) {})] [(map? t) (coll? t) (associative? t) (counted? t) (get t :tag) (tagged-literal? t) (= t (tagged-literal (quote js) {}))])

@@ -1698,6 +1698,17 @@ contains
     end select
   end function read_symbolic
 
+  ! Whether the map m carries the tagged-literal marker (see sorted.inc).
+  function is_marked_tagged(m, roots) result(yes)
+    type(gc_value), intent(in) :: m, roots(:)
+    logical :: yes
+    type(gc_value) :: mark
+    yes = .false.
+    if (gca_is_sorted(m)) return
+    mark = gca_get(m, gc_key("clotran/tagged-literal", [roots, m]))
+    yes = mark%tag /= GCT_NIL
+  end function is_marked_tagged
+
   ! ^meta form -- the metadata shorthands, normalised exactly as real
   ! Clojure's reader does:
   !
@@ -1716,6 +1727,7 @@ contains
     type(gc_value), intent(in) :: roots(:)
     type(gc_value) :: v, m, form, key
     integer :: base, caret
+    logical :: meta_is_map
 
     rdx => rd_self()
     v = gc_nil()
@@ -1734,8 +1746,11 @@ contains
     end do
     call vs_set(base + 1, m)
 
+    meta_is_map = gca_is(vs_get(base + 1))
+    if (meta_is_map) meta_is_map = .not. is_marked_tagged(vs_get(base + 1), roots)
     ! Normalise the shorthands into a map.
-    if (gca_is(vs_get(base + 1))) then
+    ! (a tagged literal is a marked map here but clj's is no Map: refused)
+    if (meta_is_map) then
        continue
     else if (m%tag == GCT_KEY) then
        ! `roots` again: ^:kw on a form inside another form.

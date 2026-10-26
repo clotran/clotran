@@ -187,6 +187,10 @@
     (go (vec (range n)))
     (let [uuid-refused? (fn [i w gv] (or (and (re-find #"#[\s,]*uuid" (nth texts i))
                                               (some #(str/starts-with? (str %) "!error") [w gv]))
+                                         ;; DEVIATIONS 75 too: a #uuid whose groups are not
+                                         ;; 8-4-4-4-12 reads padded in clj, as written here
+                                         (and (re-find #"#[\s,]*uuid" (nth texts i))
+                                              (not (re-find #"(?i)\"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\"" (nth texts i))))
                                          ;; DEVIATIONS 14: ICU's dialect refuses or takes
                                          ;; a pattern clj's host does not
                                          (some #(str/includes? (str %) "pattern_syntax_exception") [w gv])

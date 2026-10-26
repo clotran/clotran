@@ -288,5 +288,8 @@
   (re-find #"(?i-U)x" "X") (re-find #"[(?U)]+" "(?U)") (re-find #"\Q(?U)\E" "(?U)") (re-find #"(?<U>a)" "a")
   (re-seq #"\b+" "ab cd") (re-seq #"\b?" "ab") (re-seq #"\B*x" "axb") (re-seq #"\b{2}" "ab") (re-find #"\b{2,3}x" "x")
   (clojure.string/replace "_$ λ_cЖ\tc0c." #"((?iU)(?:\b?)?)" "<$1>")]
+ ;; a tagged literal is no map (map? false), so it is no metadata: the error is clj's
+ ;; "Metadata must be Symbol,Keyword,String,Vector or Map" (scripts/fuzz-read, seed 2275911424)
+ [(map? (tagged-literal 'js {})) (try (read-string {:read-cond :allow :features #{:zz}} "#?(:zz *== :cljs #js {} :default ^#js {} :default ^\"Ayé\\fé\")") (catch clotran.host.exception e (ex-message e)))]
 ]
 
