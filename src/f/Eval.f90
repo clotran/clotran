@@ -1550,7 +1550,7 @@ contains
   ! lookup: core.clj is in the middle of REDEFINING first, next, rest,
   ! seq and cons in terms of the host when it asks for them, so
   ! resolving .RT/first through the Var `first` would be a loop.
-  ! (seq inst) for a deftype with a `seq` method; nil for one without.
+  ! (seq inst) for a deftype with a `seq` method; one without throws.
   recursive function inst_seq(v, roots) result(out)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
@@ -1572,6 +1572,13 @@ contains
        ! iterator and reduce and no seq, so (seq (eduction ..)) was nil.
        m = gca_get(gc_slot(gc_slot(v, 1), 3), gc_key("iterator", [roots, vs_get(vst, base + 1)]))
        if (gc_kind(m) /= OBJ_CLOSURE) then
+          ! RT.seqFrom: neither ISeq, Seqable nor Iterable throws
+          block
+            character(len=:), allocatable :: cn
+            call class_name_of(vs_get(vst, base + 1), s=cn)
+            call raise_class("clotran.host.illegal_argument_exception", &
+                 "Don't know how to create ISeq from: " // cn, [roots, vs_get(vst, base + 1)])
+          end block
           call vs_leave(vst, base)
           return
        end if
