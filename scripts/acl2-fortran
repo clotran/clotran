@@ -246,7 +246,29 @@
               "  ! anl_caps_of, anl_names_of) -- guard-verified, reading forms through"
               "  ! analyze.inc's frm_* shims. anlocal-proof.lisp proves a name resolves to"
               "  ! its innermost binding and a fn captures exactly the names it uses from"
-              "  ! outside; anlocal-cost.lisp counts the steps."]}})
+              "  ! outside; anlocal-cost.lisp counts the steps."]}
+    "anform"
+    {:out "src/f/gen/anform_gen.inc" :include true
+     :fns [anf-if anf-def anf-quote anf-throw anf-try-op anf-try-step anf-catch anf-set anf-set-target anf-dot anf-dot-member anf-new]
+     :stobjs {} :stobj-types {}
+     :value-formals {anf-def #{f} anf-try-op #{f} anf-try-step #{f} anf-catch #{f} anf-set-target #{x} anf-dot #{f} anf-dot-member #{m} anf-new #{f}}
+     :value-fns #{}
+     ;; a form is a value of clotran's heap, read by analyze.inc's shims
+     :val-type "gc_value"
+     :rt {frm-kind ["frm_kind" [:val] :int] frm-qual ["frm_qual" [:val] :int]
+          frf-kind ["frf_kind" [:val] :int] frf-len ["frf_len" [:val] :int] frf-nth ["frf_nth" [:val :int] :val]
+          frf-word ["frf_word" [:val] :int] frf-class ["frf_class" [:val] :int] frf-defvar ["frf_defvar" [:val] :int]
+          anl-name-code ["anl_name_code" [:val] :int]}
+     :header ["  ! GENERATED from model/anform.lisp by scripts/acl2-fortran -b anform. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the analyzer's special forms -- what each is refused for,"
+              "  ! as clj's Compiler refuses it (anf_if, anf_def, anf_quote, anf_throw, the"
+              "  ! try's clause walk anf_try_step and anf_catch, anf_set, anf_set_target,"
+              "  ! anf_dot, anf_dot_member, anf_new), and where a def's init and docstring are --"
+              "  ! guard-verified, reading forms through analyze.inc's frf_* shims."
+              "  ! anform-proof.lisp proves each refuses exactly what its specification says"
+              "  ! and that the analyzer they drive builds a tree anpass's reads decode;"
+              "  ! anform-cost.lisp counts the steps."]}})
 
 (def cfg (or (books book) (do (println (str "acl2-fortran: no book " book)) (System/exit 1))))
 (def out-file (get args "-o" (:out cfg)))

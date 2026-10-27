@@ -1,0 +1,113 @@
+#!/usr/bin/env bb
+;; fuzz-forms: the analyzer's special forms (model/anform.lisp, generated into
+;; src/f/gen/anform_gen.inc) against clj.
+;;
+;;   scripts/fuzz-forms [-n N] [-s SEED]
+;;
+;; Each form is a special form drawn at random -- if, def, quote, throw,
+;; try, set!, . and new -- with too few parts and too many, parts of the
+;; wrong kind (numbers, strings, keywords, vectors, lists, qualified names),
+;; and a try's clauses in any order: body forms, catches of a class there
+;; is and is not, of a name that is a symbol and is not, finallys first,
+;; last and twice, some bodies throwing so the catch runs. Each is
+;; evaluated; the answer is its value (numbers, strings, keywords, nil),
+;; :accepted, or the refusal's class and message. clj and clotran evaluate
+;; every form and must agree, case for case. Not drawn: what clj answers
+;; with its host's own text -- (var 1)'s ClassCastException, (throw nil)'s
+;; NullPointerException, a method no class has.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[clojure.edn])
+
+(def opts (loop [as *command-line-args* o {:n 300 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-forms [-n N] [-s SEED]") (System/exit 2))))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(load-file (str repo "/upstream/names.clj"))
+
+(def g-atom (g/elements ["1" "2" "\"s\"" ":k" "nil" "[1]" "fz-v" "(inc 1)"]))
+(defn parts [lo hi] (g/fmap #(str/join " " %) (g/vector g-atom lo hi)))
+(def g-name (g/elements ["fz-a" "fz-b" "1" "\"s\"" "user/fz-c" "clojure.core/fz-nonesuch" "clojure.core/max-key" "nosuch/fz-d" "[fz-e]"]))
+(def g-class (g/elements ["clotran.host.exception" "clotran.host.exception" "clotran.host.throwable" "fz-nosuchclass" "1" "\"s\"" ""]))
+(def g-cname (g/elements ["e" "e" "e" "1" "a/b" "" ":k"]))
+(def g-body (g/elements ["1" "2" "(throw (ex-info \"b\" {}))" "(+ 1 2)"]))
+(def g-clause
+  (g/frequency [[3 g-body]
+                [4 (g/fmap (fn [[c n b]] (str "(catch " c " " n " " b ")")) (g/tuple g-class g-cname g-body))]
+                [2 (g/fmap #(str "(finally " % ")") g-body)]
+                [1 (g/return "(finally)")]]))
+(def g-target (g/elements ["fz-v" "fz-undefined" "1" "\"s\"" ":k" "[fz-v]" "()" "(1 2)" "nil" "x"]))
+(def g-member (g/elements ["length" "(length)" "1" "\"x\"" "(1)" "()" "(substring 1)" "substring 1" "(toUpperCase)"]))
+
+(def g-form
+  (g/one-of
+   [(g/fmap #(str "(if " % ")") (parts 0 4))
+    (g/fmap (fn [[nm ps]] (str "(def " nm " " ps ")")) (g/tuple g-name (parts 0 3)))
+    (g/fmap (fn [[nm i]] (str "(def " nm " \"doc\" " i ")")) (g/tuple g-name (parts 0 2)))
+    (g/return "(def)")
+    (g/fmap #(str "(quote " % ")") (parts 0 2))
+    (g/fmap #(str "(throw " % ")") (g/elements ["" "(ex-info \"t\" {})" "(ex-info \"t\" {}) 2"]))
+    (g/fmap #(str "(try " (str/join " " %) ")") (g/vector g-clause 0 4))
+    (g/fmap (fn [[t v]] (str "(set! " t " " v ")")) (g/tuple g-target (parts 0 2)))
+    (g/fmap (fn [[t v]] (str "(let* [x 1] (set! " t " " v "))")) (g/tuple (g/elements ["x" "fz-v"]) (parts 1 1)))
+    (g/fmap #(str "(. " %)  (g/elements [")" "\"abc\")"]))
+    (g/fmap #(str "(. \"abc\" " % ")") g-member)
+    (g/fmap #(str "(new " % ")") (g/elements ["" "1" "fz-nosuchclass" "clotran.host.exception" "clotran.host.exception \"m\"" "\"s\""]))]))
+
+(defn script [forms]
+  (str "(defn fz-root [e] (if (and (ex-cause e) (re-find #\"ompiler\" (str (class e)))) (ex-cause e) e))\n"
+       "(def fz-v 0)\n"
+       (str/join "\n" (map-indexed
+                       (fn [i f]
+                         (str "(println \"FZ " i "\" (pr-str (try (let [v (eval '" f ")] (if (or (nil? v) (number? v) (string? v) (keyword? v)) [:ok v] [:accepted]))"
+                              " (catch clotran.host.throwable t (let [c (fz-root t)] [:refused (str (class c)) (ex-message c)])))))"))
+                       forms))
+       "\n"))
+
+(defn norm [s]
+  (when s
+    (let [v (try (clojure.edn/read-string s) (catch Exception _ s))]
+      (if (and (vector? v) (= :refused (first v)))
+        [:refused (names/class-name (str/replace (str (second v)) #"^class " "")) (nth v 2 nil)]
+        v))))
+
+(defn answers [out]
+  (into {} (for [[_ i v] (re-seq #"(?m)^FZ (\d+) (.*)$" (or out ""))] [(parse-long i) (norm v)])))
+
+(defn run [cmd secs]
+  (let [proc (apply p/process {:dir repo :out :string :err :string :in ""} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true :out "" :err "" :exit -1}) r)))
+
+(defn head [f] (second (re-find #"^\(([^\s)]+)" f)))
+
+(let [{:keys [n seed]} opts
+      forms (vec (for [i (range n)] (g/generate g-form 6 (+ seed i))))
+      work (str (fs/create-temp-dir {:prefix "fuzz-forms"}))
+      clj-f (str work "/forms.clj") ct-f (str work "/forms.cljf")]
+  (spit clj-f (names/to-upstream (script forms)))
+  (spit ct-f (script forms))
+  (let [c (run ["clj" "-Sdeps" (pr-str (clojure.edn/read-string (slurp (str repo "/deps.edn")))) "-M" clj-f] 600)
+        r (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") ct-f] 600)
+        want (answers (:out c)) got (answers (:out r))
+        diffs (for [i (range n) :when (not= (want i) (got i))] i)
+        kind (fn [i] (str (head (nth forms i)) ": clj " (first (want i)) ", clotran " (first (got i))))]
+    (println (str n " forms, seed " seed ": clj answered a value " (count (filter #(= :ok (first %)) (vals want)))
+                  ", accepted " (count (filter #(= :accepted (first %)) (vals want)))
+                  ", refused " (count (filter #(= :refused (first %)) (vals want)))))
+    (when (or (< (count want) n) (< (count got) n))
+      (println "answered: clj" (count want) "clotran" (count got) "of" n)
+      (println (str/join "\n" (take 5 (str/split-lines (str (:err c) (:err r)))))))
+    (println (str "the analyzer's special forms, against clj: " (count diffs) " differ"))
+    (doseq [[k is] (sort (group-by kind diffs))]
+      (println (str "  " k ": " (count is)))
+      (doseq [i (take 3 is)]
+        (println (str "    " (nth forms i)))
+        (println (str "      clj " (pr-str (want i)) "\n      clotran " (pr-str (got i))))))
+    (System/exit (if (and (empty? diffs) (= n (count want) (count got))) 0 1))))

@@ -24455,6 +24455,7 @@ contains
   include "analyze.inc"
   include "gen/anpass_gen.inc"
   include "gen/anlocal_gen.inc"
+  include "gen/anform_gen.inc"
   include "exec.inc"
   include "rational.inc"
   include "flat.inc"

@@ -135,6 +135,103 @@
     if (gc_ref_is(v%ref, "&")) frm_amp = 1
   end function frm_amp
 
+  ! The form reads model/anform.lisp's frf-* decode a special form by. A
+  ! list is a cons list (the analyzer normalises a clause before asking).
+  integer(int64) function frf_kind(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frf_kind = frm_kind(v)
+    if (gcl_is(v)) then
+       frf_kind = 3
+    else if (v%tag == GCT_STR) then
+       frf_kind = 4
+    end if
+  end function frf_kind
+
+  integer(int64) function frf_len(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frf_len = 0
+    if (gcl_is(v)) frf_len = gcl_count(v)
+  end function frf_len
+
+  function frf_nth(x, i) result(e)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: i
+    type(gc_value) :: e, v
+    v = strip_meta(x)
+    e = gc_nil()
+    if (gcl_is(v) .and. i >= 0) then
+       if (i < gcl_count(v)) e = nth_of(v, int(i))
+    end if
+  end function frf_nth
+
+  ! the symbols TryExpr compares a clause's head with: catch, finally
+  integer(int64) function frf_word(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frf_word = 0
+    if (v%tag /= GCT_SYM) return
+    if (gc_ref_is(v%ref, "catch")) then
+       frf_word = 1
+    else if (gc_ref_is(v%ref, "finally")) then
+       frf_word = 2
+    end if
+  end function frf_word
+
+  ! HostExpr.maybeClass: a symbol naming a class -- an import, a host row,
+  ! a deftype analysed so far; in clotran's own and Clojure's sources a
+  ! class defined later too (defers_late_vars, DEVIATIONS 17, 32)
+  integer(int64) function frf_class(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    character(len=:), allocatable :: written, canonical
+    v = strip_meta(x)
+    frf_class = 0
+    if (v%tag /= GCT_SYM) return
+    call gc_ref_text(v%ref, s=written)
+    call canon_class(written, c=canonical)
+    if (known_class_name(canonical) .or. defers_late_vars()) frf_class = 1
+  end function frf_class
+
+  ! DefExpr's lookupVar(sym, true) for a def's name: 0 unqualified, or this
+  ! namespace's (interned if new); 1 no such var ("Can't refer to qualified
+  ! var that doesn't exist"); 2 another namespace's var
+  integer(int64) function frf_defvar(x)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v, nsv, cur, var, vns
+    character(len=:), allocatable :: t
+    integer :: sl, base
+    v = strip_meta(x)
+    frf_defvar = 0
+    if (v%tag /= GCT_SYM) return
+    call gc_ref_text(v%ref, s=t)
+    sl = sym_slash(t)
+    if (sl <= 1 .or. sl >= len(t)) return
+    vst => gc_my_stack()
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, v)
+    nsv = alias_target(t(1:sl-1), [vs_get(vst, base + 1)])
+    if (gc_kind(nsv) /= OBJ_NS) nsv = gcn_find(t(1:sl-1), [vs_get(vst, base + 1)])
+    cur = gcn_current([vs_get(vst, base + 1)])
+    if (gc_kind(nsv) /= OBJ_NS) then
+       frf_defvar = 1
+    else if (nsv%tag /= cur%tag .or. nsv%ref /= cur%ref) then
+       call vs_set(vst, base + 2, nsv)
+       var = gcn_lookup(vs_get(vst, base + 2), gc_sym(t(sl+1:), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+       frf_defvar = 1
+       if (gcn_is_var(var)) then
+          vns = gc_slot(var, 3)
+          if (vns%tag == nsv%tag .and. vns%ref == nsv%ref) frf_defvar = 2
+       end if
+    end if
+    call vs_leave(vst, base)
+  end function frf_defvar
+
   ! The id of a symbol, as model/anlocal.lisp's names are: one per symbol
   ! text, per context, kept in a vector of the symbols and a map back
   ! (anl_root); metadata is not part of a name.
@@ -242,6 +339,69 @@
        call fail("Can't have fixed arity function with more params than variadic function")
     end select
   end subroutine anl_refuse
+
+  ! The special forms' refusals (model/anform.lisp's codes 21..38) in clj's
+  ! words and classes; x the form, or the class form a code 33 names.
+  subroutine anf_refuse(code, x)
+    integer(int64), intent(in) :: code
+    type(gc_value), intent(in) :: x
+    character(len=:), allocatable :: s
+    type(gc_value) :: v
+    character(len=*), parameter :: iae = "clotran.host.illegal_argument_exception"
+    v = strip_meta(x)
+    if (v%tag == GCT_NIL) then
+       s = "null"
+    else
+       call gcp_str(v, v%tag /= GCT_STR, s=s)
+    end if
+    select case (code)
+    case (21); call fail("Too many arguments to if")
+    case (22); call fail("Too few arguments to if")
+    case (23); call fail("Too many arguments to def")
+    case (24); call fail("Too few arguments to def")
+    case (25); call fail("First argument to def must be a Symbol")
+    case (26); call fail("Can't refer to qualified var that doesn't exist")
+    case (27); call fail("Can't create defs outside of current ns")
+    case (28); call quote_arity(x)
+    case (29); call fail("Too few arguments to throw, throw expects a single Throwable instance")
+    case (30); call fail("Too many arguments to throw, throw expects a single Throwable instance")
+    case (31); call fail("Only catch or finally clause can follow catch in try expression")
+    case (32); call fail("finally clause must be last in try expression")
+    case (33); call raise_class(iae, "Unable to resolve classname: " // s, [x])
+    case (34); call raise_class(iae, "Malformed assignment, expecting (set! target val)", [x])
+    case (35); call raise_class(iae, "Invalid assignment target", [x])
+    case (36); call raise_class(iae, "Malformed member expression, expecting (. target member ...)", [x])
+    case (37); call raise_class(iae, "Malformed member expression", [x])
+    case (38); call fail("wrong number of arguments, expecting: (new Classname args...)")
+    end select
+  contains
+    ! ConstantExpr.Parser's ExceptionInfo, its data {:form form}
+    subroutine quote_arity(form)
+      type(gc_value), intent(in) :: form
+      type(gc_stack), pointer :: vst
+      type(eval_ctx), pointer :: tctx
+      type(gc_value) :: e
+      character(len=24) :: buf
+      integer :: base
+      vst => gc_my_stack()
+      base = vs_enter(vst, 3)
+      call vs_set(vst, base + 1, form)
+      write (buf, '(i0)') gcl_count(strip_meta(form)) - 1
+      call vs_set(vst, base + 2, gc_key("form", [vs_get(vst, base + 1)]))
+      call vs_set(vst, base + 3, gca_assoc(gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)]), &
+           vs_get(vst, base + 2), vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)]))
+      call vs_set(vst, base + 2, gc_str("Wrong number of args (" // trim(buf) // ") passed to quote", [vs_get(vst, base + 3)]))
+      call vs_set(vst, base + 1, gc_sym("clotran.host.exception_info", [vs_get(vst, base + 2), vs_get(vst, base + 3)]))
+      e = gc_obj(OBJ_ERR, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)], &
+           [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+      call set_thrown(e)
+      tctx => ctx_self()
+      tctx%has_error = .true.
+      tctx%last_error = "Wrong number of args (" // trim(buf) // ") passed to quote"
+      call capture_innermost()
+      call vs_leave(vst, base)
+    end subroutine quote_arity
+  end subroutine anf_refuse
 
   ! A fresh fn scope: its info and its root block. `outer` is the block
   ! scope the fn is written in, or nil at top level.
@@ -2541,6 +2701,12 @@
        member = seq_to_list(vs_get(vst, base + 5), [vs_get(vst, base + 1), vs_get(vst, base + 5)])
     end if
     call vs_set(vst, base + 5, member)
+    ! the member as HostExpr.Parser reads it (model/anform.lisp anf-dot-member)
+    if (anf_dot_member(frf_len(vs_get(vst, base + 1)), vs_get(vst, base + 5)) /= 0) then
+       call anf_refuse(37_int64, vs_get(vst, base + 1))
+       call vs_leave(vst, base)
+       return
+    end if
     if (gcl_is(vs_get(vst, base + 5))) then
        is_call = .true.
        margs = gcl_rest(vs_get(vst, base + 5), [vs_get(vst, base + 1)])
@@ -2551,11 +2717,6 @@
     end if
     call vs_set(vst, base + 6, margs)
     call vs_set(vst, base + 5, member)
-    if (member%tag /= GCT_SYM) then
-       call fail(". needs a member name")
-       call vs_leave(vst, base)
-       return
-    end if
     block
        call gc_ref_text(member%ref, s=dlt_1)
        mname = dlt_1
@@ -2717,8 +2878,8 @@
     args = gcl_rest(form, [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, args)
     cls = strip_meta(gcl_first(vs_get(vst, base + 3)))
-    if (cls%tag /= GCT_SYM) then
-       call fail("new needs a class name")
+    if (anf_new(vs_get(vst, base + 1)) /= 0) then
+       call anf_refuse(anf_new(vs_get(vst, base + 1)), frf_nth(vs_get(vst, base + 1), 1_int64))
        call vs_leave(vst, base)
        return
     end if
@@ -2728,15 +2889,8 @@
       call gc_ref_text(cls%ref, s=written)
       call canon_class(written, c=canonical)
       ! a name no import, no deftype* analysed so far and no host row knows
-      ! is Compiler's refusal when analysed (DEVIATIONS 17, 32): a deftype's
-      ! bare name means it only where imported. Asked BEFORE the canonical
-      ! symbol is made: known_class_name allocates, and a fresh symbol held
-      ! only in a local is collected under it (GC torture found it)
-      if (.not. known_class_name(canonical) .and. .not. defers_late_vars()) then
-         call fail("Unable to resolve classname: " // written)
-         call vs_leave(vst, base)
-         return
-      end if
+      ! was refused above (anf_new's frf_class, DEVIATIONS 17, 32): a
+      ! deftype's bare name means it only where imported
       if (canonical /= written) cls = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 3)])
     end block
     call vs_set(vst, base + 4, cls)
@@ -2813,6 +2967,7 @@
     type(gc_value), intent(in) :: head, form, sc
     type(gc_value) :: nd, rest
     integer :: base
+    integer(int64) :: code
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
@@ -2824,6 +2979,28 @@
     rest = gcl_rest(form, [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, rest)
 
+    ! the special forms' refusals are the generated checks' (model/anform.lisp)
+    code = 0
+    if (gc_ref_is(head%ref, "quote")) then
+       code = anf_quote(frf_len(form))
+    else if (gc_ref_is(head%ref, "if")) then
+       code = anf_if(frf_len(form))
+    else if (gc_ref_is(head%ref, "throw")) then
+       code = anf_throw(frf_len(form))
+    else if (gc_ref_is(head%ref, "def") .or. gc_ref_is(head%ref, "defmacro*")) then
+       code = anf_def(form, 0_int64)
+    else if (gc_ref_is(head%ref, "set!")) then
+       code = anf_set(frf_len(form))
+       if (code == 0) code = anf_set_target(frf_nth(form, 1_int64))
+    else if (gc_ref_is(head%ref, ".")) then
+       code = anf_dot(form)
+    end if
+    if (code /= 0) then
+       call anf_refuse(code, vs_get(vst, base + 1))
+       call vs_leave(vst, base)
+       return
+    end if
+
     if (gc_ref_is(head%ref, "quote")) then
        nd = const_node(gcl_first(vs_get(vst, base + 3)), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else if (gc_ref_is(head%ref, "if")) then
@@ -2831,9 +3008,9 @@
     else if (gc_ref_is(head%ref, "do")) then
        nd = analyze_body(vs_get(vst, base + 3), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
     else if (gc_ref_is(head%ref, "def")) then
-       nd = analyze_def(vs_get(vst, base + 3), vs_get(vst, base + 2), .false.)
+       nd = analyze_def(vs_get(vst, base + 1), vs_get(vst, base + 2), .false.)
     else if (gc_ref_is(head%ref, "defmacro*")) then
-       nd = analyze_def(vs_get(vst, base + 3), vs_get(vst, base + 2), .true.)
+       nd = analyze_def(vs_get(vst, base + 1), vs_get(vst, base + 2), .true.)
     else if (gc_ref_is(head%ref, "clotran-fields*")) then
        nd = analyze_fields(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "let*")) then
@@ -2851,13 +3028,7 @@
     else if (gc_ref_is(head%ref, "lazy-seq*")) then
        nd = analyze_lazy(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "throw")) then
-       if (gcl_count(vs_get(vst, base + 3)) < 1) then
-          call fail("Too few arguments to throw, expected: a single Throwable instance")
-       else if (gcl_count(vs_get(vst, base + 3)) > 1) then
-          call fail("Too many arguments to throw, expected: a single Throwable instance")
-       else
-          nd = analyze_one(N_THROW, gcl_first(vs_get(vst, base + 3)), vs_get(vst, base + 2))
-       end if
+       nd = analyze_one(N_THROW, gcl_first(vs_get(vst, base + 3)), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "try")) then
        nd = analyze_try(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "case*")) then
@@ -2959,11 +3130,6 @@
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
-    if (gcl_count(rest) < 2 .or. gcl_count(rest) > 3) then
-       call fail("if takes two or three forms")
-       call vs_leave(vst, base)
-       return
-    end if
     kids = analyze_all(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, kids)
     if (.not. tctx%has_error) nd = mk_node(N_IF, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, &
@@ -2975,13 +3141,14 @@
   ! recursive reference in the init resolves, as DefExpr does. Its
   ! metadata (evaluated, like Compiler does) and init are children.
   ! i2: bit 1 = has an init, bit 2 = defmacro*.
-  recursive function analyze_def(rest, sc, is_macro) result(nd)
+  recursive function analyze_def(form, sc, is_macro) result(nd)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: rest, sc
+    type(gc_value), intent(in) :: form, sc
     logical, intent(in) :: is_macro
     type(gc_value) :: nd, nm, md, var, kids, c
     integer :: base, flags
+    integer(int64) :: init, doc
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1, dlt_2
@@ -2989,18 +3156,18 @@
     vst => tctx%stk
     nd = gc_nil()
     base = vs_enter(vst, 7)
-    call vs_set(vst, base + 1, rest)
+    call vs_set(vst, base + 1, form)
     call vs_set(vst, base + 2, sc)
-    nm = gcl_first(rest)
+    ! the generated check passed it (analyze_special, anf_def): a symbol, of
+    ! this namespace if qualified; anf_def says where the init and the
+    ! docstring are
+    init = anf_def(form, 1_int64)
+    doc = anf_def(form, 2_int64)
+    nm = frf_nth(form, 1_int64)
     md = gc_nil()
     if (gc_kind(nm) == OBJ_META) then
        md = gc_slot(nm, 2)
        nm = strip_meta(nm)
-    end if
-    if (nm%tag /= GCT_SYM) then
-       call fail("def needs a symbol")
-       call vs_leave(vst, base)
-       return
     end if
     ! A qualified name -- (def ns/x ...) -- is allowed only for the
     ! current namespace, and defines the bare name: DefExpr's rule. A
@@ -3016,14 +3183,6 @@
       end block
       sl = sym_slash(t)
       if (sl > 1 .and. sl < len(t)) then
-         block
-            call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=dlt_1)
-         if (t(1:sl-1) /= dlt_1) then
-            call fail("Can't create defs outside of current ns: " // t)
-            call vs_leave(vst, base)
-            return
-         end if
-         end block
          nm = gc_sym(t(sl+1:), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
       end if
     end block
@@ -3053,29 +3212,26 @@
     ! (def name "doc" init): DefExpr's four-element form. The docstring
     ! joins the metadata as :doc and the init is what follows it -- it
     ! used to BE the init, and (def x "doc" 1) bound the string.
-    call vs_set(vst, base + 7, gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]))
-    if (gcl_count(vs_get(vst, base + 1)) == 3) then
-       c = gcl_first(vs_get(vst, base + 7))
-       if (c%tag == GCT_STR) then
-          if (md%tag == GCT_NIL) md = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 7)])
-          call vs_set(vst, base + 4, md)
-          md = gca_assoc(vs_get(vst, base + 4), gc_key("doc", [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 7)]), &
-               c, [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 7)])
-          call vs_set(vst, base + 4, md)
-          call vs_set(vst, base + 7, gcl_rest(vs_get(vst, base + 7), [vs_get(vst, base + 1)]))
-       end if
+    if (doc > 0) then
+       c = frf_nth(vs_get(vst, base + 1), doc)
+       call vs_set(vst, base + 7, c)
+       if (md%tag == GCT_NIL) md = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 7)])
+       call vs_set(vst, base + 4, md)
+       md = gca_assoc(vs_get(vst, base + 4), gc_key("doc", [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 7)]), &
+            vs_get(vst, base + 7), [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 7)])
+       call vs_set(vst, base + 4, md)
     end if
 
     flags = 0
     if (is_macro) flags = 2
     kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 5)])
     call vs_set(vst, base + 6, kids)
-    if (gcl_count(vs_get(vst, base + 7)) > 0) then
+    if (init > 0) then
        flags = flags + 1
        ! DefExpr.Parser: analyze(init, v.sym.name)
        call gc_ref_text(nm%ref, s=dlt_1)
        tctx%fn_hint = dlt_1(index(dlt_1, "/", back=.true.) + 1:)
-       c = analyze(gcl_first(vs_get(vst, base + 7)), vs_get(vst, base + 2))
+       c = analyze(frf_nth(vs_get(vst, base + 1), init), vs_get(vst, base + 2))
        if (tctx%has_error) then
           call vs_leave(vst, base)
           return
@@ -3994,15 +4150,20 @@
     call vs_leave(vst, base)
   end function analyze_lazy
 
-  ! (try body* (catch Class name body*)* (finally body*)?)
-  ! Children: [body, finally-or-nil]; slot 2 = catches, each
-  ! [class-symbol, slot, body].
+  ! (try body* (catch C e h*)* (finally f*)?), walked a clause at a time as
+  ! TryExpr.Parser walks it: the generated anf_try_step says what each clause
+  ! is and what is refused (model/anform.lisp), the body is analysed when the
+  ! first catch or finally is reached, anf_catch checks a catch's class and
+  ! name. Children: [body, finally or nil]; slot 2 the catches, each
+  ! [class, slot, handler].
   recursive function analyze_try(rest, sc) result(nd)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value), intent(in) :: rest, sc
     type(gc_value) :: nd, body, fin, catches, item, cl, blk, cb, kids, cname
     integer :: base, i, n, slot
+    integer(int64) :: st, act, code, lastp
+    logical :: body_done
 
     tctx => ctx_self()
     vst => tctx%stk
@@ -4011,61 +4172,43 @@
     call vs_set(vst, base + 1, rest)
     call vs_set(vst, base + 2, sc)
     n = gcl_count(rest)
-    body = gcl_empty([vs_get(vst, base + 1)])
-    call vs_set(vst, base + 3, body)
-    ! body forms, kept in order: collect then reverse via cons
-    do i = n - 1, 0, -1
-       item = norm_form(nth_of(vs_get(vst, base + 1), i), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-       if (is_clause(item, "catch") .or. is_clause(item, "finally")) cycle
-       call vs_set(vst, base + 4, item)
-       body = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
-       call vs_set(vst, base + 3, body)
-    end do
-    ! only the LEADING body forms are the body; a form after a catch is
-    ! ignored by Clojure too (it is an error there). Simplification: all
-    ! non-clause forms are body forms.
-    body = analyze_body(vs_get(vst, base + 3), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 3, body)
-
-    catches = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
+    catches = gcv_empty([vs_get(vst, base + 1)])
     call vs_set(vst, base + 5, catches)
-    fin = gc_nil()
-    call vs_set(vst, base + 6, fin)
+    call vs_set(vst, base + 6, gc_nil())
+    st = 0
+    body_done = .false.
     do i = 0, n - 1
        item = norm_form(nth_of(vs_get(vst, base + 1), i), [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 6)])
        call vs_set(vst, base + 4, item)
-       if (is_clause(item, "catch")) then
-          if (gcl_count(item) < 3) cycle
-          cname = strip_meta(nth_of(vs_get(vst, base + 4), 1))
-          call vs_set(vst, base + 7, cname)
-          ! the class must be one there is: a catch of an unknown class is
-          ! Compiler's "Unable to resolve classname", not a clause that
-          ! quietly never matches
-          if (cname%tag == GCT_SYM) then
-             block
-               character(len=:), allocatable :: written, full
-               call gc_ref_text(cname%ref, s=written)
-               call class_key(written, k=full)
-               if (.not. known_class_name(full)) then
-                  call fail("Unable to resolve classname: " // written)
-                  call vs_leave(vst, base)
-                  return
-               end if
-             end block
+       lastp = merge(1_int64, 0_int64, i == n - 1)
+       act = anf_try_step(st, vs_get(vst, base + 4), lastp, 1_int64)
+       code = anf_try_step(st, vs_get(vst, base + 4), lastp, 0_int64)
+       st = anf_try_step(st, vs_get(vst, base + 4), lastp, 2_int64)
+       if (act /= 0 .and. .not. body_done) then
+          if (.not. analyze_try_body(i)) return
+          body_done = .true.
+       end if
+       if (code /= 0) then
+          call anf_refuse(code, vs_get(vst, base + 4))
+          call vs_leave(vst, base)
+          return
+       end if
+       if (act == 1) then
+          code = anf_catch(vs_get(vst, base + 4))
+          if (code == 33) then
+             call anf_refuse(code, frf_nth(vs_get(vst, base + 4), 1_int64))
+          else if (code /= 0) then
+             call anl_refuse(code, frf_nth(vs_get(vst, base + 4), 2_int64), .true.)
           end if
-          ! CatchExpr's name check (model/anlocal.lisp anl-name-code)
-          if (anl_name_code(nth_of(vs_get(vst, base + 4), 2)) /= 0) then
-             call anl_refuse(anl_name_code(nth_of(vs_get(vst, base + 4), 2)), nth_of(vs_get(vst, base + 4), 2), .true.)
+          if (code /= 0) then
              call vs_leave(vst, base)
              return
           end if
+          cname = strip_meta(frf_nth(vs_get(vst, base + 4), 1_int64))
+          call vs_set(vst, base + 7, cname)
           blk = child_scope(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 7)])
           call vs_set(vst, base + 8, blk)
-          slot = declare_local(vs_get(vst, base + 8), strip_meta(nth_of(vs_get(vst, base + 4), 2)), [vs_get(vst, base + 1)])
+          slot = declare_local(vs_get(vst, base + 8), strip_meta(frf_nth(vs_get(vst, base + 4), 2_int64)), [vs_get(vst, base + 1)])
           cb = analyze_body(gcl_rest(gcl_rest(gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 1)]), &
                [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)]), vs_get(vst, base + 8), [vs_get(vst, base + 1), vs_get(vst, base + 5)])
           if (tctx%has_error) then
@@ -4079,7 +4222,7 @@
           cl = gcv_conj(cl, vs_get(vst, base + 8), [vs_get(vst, base + 5), cl])
           catches = gcv_conj(vs_get(vst, base + 5), cl, [vs_get(vst, base + 1), cl])
           call vs_set(vst, base + 5, catches)
-       else if (is_clause(item, "finally")) then
+       else if (act == 2) then
           fin = analyze_body(gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 1)]), vs_get(vst, base + 2), &
                [vs_get(vst, base + 1), vs_get(vst, base + 5)])
           if (tctx%has_error) then
@@ -4089,12 +4232,35 @@
           call vs_set(vst, base + 6, fin)
        end if
     end do
+    if (.not. body_done) then
+       if (.not. analyze_try_body(n)) return
+    end if
     kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 5), vs_get(vst, base + 6)])
     kids = gcv_conj(kids, vs_get(vst, base + 3), [vs_get(vst, base + 5), vs_get(vst, base + 6), kids])
     kids = gcv_conj(kids, vs_get(vst, base + 6), [vs_get(vst, base + 5), kids])
     call vs_set(vst, base + 7, kids)
     nd = mk_node(N_TRY, vs_get(vst, base + 7), vs_get(vst, base + 5), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)
+  contains
+    ! the body: the forms before clause k, analysed into slot 3; false (the
+    ! frame left) on an error
+    logical function analyze_try_body(k) result(ok)
+      integer, intent(in) :: k
+      integer :: j
+      body = gcl_empty([vs_get(vst, base + 1)])
+      call vs_set(vst, base + 3, body)
+      do j = k - 1, 0, -1
+         body = gcl_cons(nth_of(vs_get(vst, base + 1), j), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+         call vs_set(vst, base + 3, body)
+      end do
+      body = analyze_body(vs_get(vst, base + 3), vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 5)])
+      ok = .not. tctx%has_error
+      if (.not. ok) then
+         call vs_leave(vst, base)
+         return
+      end if
+      call vs_set(vst, base + 3, body)
+    end function analyze_try_body
   end function analyze_try
 
   ! (case* expr shift mask default map table-type test-type skip-check?)
@@ -4511,7 +4677,7 @@
              call vs_set(vst, base + 5, gcl_cons(gc_sym("set!", [vs_get(vst, base + 5)]), vs_get(vst, base + 5), [vs_get(vst, base + 5)]))
              nd = analyze(vs_get(vst, base + 5), vs_get(vst, base + 2))
           else
-             call fail("Cannot assign to non-mutable: " // dlt_1)
+             call raise_class("clotran.host.illegal_argument_exception", "Cannot assign to non-mutable: " // dlt_1, [vs_get(vst, base + 1)])
           end if
           call vs_leave(vst, base)
           return
@@ -4524,7 +4690,7 @@
           ! deftype's methods with the deftype)
           block
              call gc_ref_text(tgt%ref, s=dlt_1)
-             call fail("Cannot assign to non-mutable: " // dlt_1)
+             call raise_class("clotran.host.illegal_argument_exception", "Cannot assign to non-mutable: " // dlt_1, [vs_get(vst, base + 1)])
           end block
           call vs_leave(vst, base)
           return
@@ -4533,7 +4699,8 @@
        if (.not. gcn_is_var(var)) then
           block
              call gc_ref_text(tgt%ref, s=dlt_1)
-             call fail("set! needs a var: " // dlt_1)
+             ! the target analysed, as AssignExpr.Parser does: a symbol nothing binds
+             call fail("Unable to resolve symbol: " // dlt_1 // " in this context")
           end block
           call vs_leave(vst, base)
           return
