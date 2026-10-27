@@ -2390,8 +2390,18 @@
     head = strip_meta(gcl_first(form))
 
     if (head%tag == GCT_SYM) then
-       ! A LOCAL shadows everything: a special form name, a macro, host
-       ! sugar. (let [do 1] (do)) is a call of the local.
+       ! A LOCAL shadows a macro and host sugar, not a special form of
+       ! Clojure's: Compiler.analyzeSeq asks specials.valAt(op) whatever
+       ! the locals are, so (let [do f] (do 1)) is 1 and (let [proxy f]
+       ! (proxy 1)) a call of the local -- proxy and clotran's own
+       ! specials (defmacro*, lazy-seq*, clotran-fields*) are not Clojure's.
+       ! The local is not looked up then, so no fn captures it.
+       if (clj_special(head)) then
+          if (gc_ref_is(head%ref, "fn*")) tctx%fn_hint = hint
+          nd = analyze_special(head, vs_get(vst, base + 1), vs_get(vst, base + 2))
+          call vs_leave(vst, base)
+          return
+       end if
        if (lookup_local(vs_get(vst, base + 2), head) < 0) then
           ! A special form is itself whatever a macro of that name says:
           ! Compiler.macroexpand1 asks isSpecial before isMacro, which is
@@ -2701,8 +2711,17 @@
        member = seq_to_list(vs_get(vst, base + 5), [vs_get(vst, base + 1), vs_get(vst, base + 5)])
     end if
     call vs_set(vst, base + 5, member)
-    ! the member as HostExpr.Parser reads it (model/anform.lisp anf-dot-member)
+    ! the member as HostExpr.Parser reads it (model/anform.lisp anf-dot-member),
+    ! after it has analysed a target that names no class: a target that cannot
+    ! be analysed is the refusal then
     if (anf_dot_member(frf_len(vs_get(vst, base + 1)), vs_get(vst, base + 5)) /= 0) then
+       if (frf_class(vs_get(vst, base + 4)) == 0) then
+          tn = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
+          if (tctx%has_error) then
+             call vs_leave(vst, base)
+             return
+          end if
+       end if
        call anf_refuse(37_int64, vs_get(vst, base + 1))
        call vs_leave(vst, base)
        return

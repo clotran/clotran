@@ -317,4 +317,13 @@
  (mapv #(try (eval %) :accepted (catch clotran.host.throwable t (let [c (or (ex-cause t) t)] [(instance? clotran.host.illegal_argument_exception c) (instance? clotran.host.exception_info c) (ex-message c)]))) (quote [(if) (if 1) (if 1 2 3 4) (def) (def 1) (def "s" 1) (def fz-r 1 2) (def fz-r "d" 1 2) (def nosuch/fz-r 1) (def clojure.core/fz-nonesuch 1) (def clojure.core/max-key 1) (quote) (quote 1 2) (throw) (throw 1 2) (try (catch)) (try (catch clotran.host.exception)) (try (catch clotran.host.exception e 1) 2) (try (finally 1) 2) (try (finally 1) (finally 2)) (try 1 (catch 1 e 2)) (try 1 (catch fz-nosuchclass e 2)) (set!) (set! 1 2) (set! fz-r) (set! fz-r 1 2) (set! fz-undefined 1) (let* [x 1] (set! x 2)) (.) (. "s") (. "s" 1) (. "s" ()) (new) (new 1) (new fz-nosuchclass)]))
  ;; and what they accept, valued as clj values them
  [(do (def fz-r2 "doc" 7) [fz-r2 (:doc (meta (var fz-r2)))]) (try 1 2 (catch clotran.host.exception e 3) (finally 4)) (try (throw (ex-info "t" {})) (catch clotran.host.exception e 5) (finally 6)) (try (finally)) (. "abc" (length)) (. "abc" length)]
+ ;; a local named like one of Clojure's special forms does not shadow it
+ ;; (Compiler.analyzeSeq asks specials first), a macro's name it does; and a
+ ;; . whose target cannot be analysed is refused for the target before the
+ ;; member (HostExpr.Parser) -- clotran called the local and refused the
+ ;; member (scripts/fuzz-forms, seed 1: 21 of 300 differed)
+ [(let* [if (fn* [& a] :call)] (if false 2 3)) (let* [do (fn* [& a] :call)] (do 1)) (let* [quote (fn* [& a] :call)] (quote 7))
+  (let* [try (fn* [& a] :call)] (try 9)) (let* [fn* (fn* [& a] :call)] ((fn* [] 6))) (let* [proxy (fn* [& a] :call)] (proxy 1))
+  (try (eval (quote (let* [throw (fn* [& a] :call)] (throw (ex-info "t" {}))))) (catch clotran.host.throwable t (ex-message (or (ex-cause t) t))))
+  (mapv #(try (eval %) :accepted (catch clotran.host.throwable t (ex-message (or (ex-cause t) t)))) (quote [(. fz-undefined 1) (. (if) ()) (. (fz-undefined 1) "x")]))]
 ]

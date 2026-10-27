@@ -14,7 +14,9 @@
 ;; :accepted, or the refusal's class and message. clj and clotran evaluate
 ;; every form and must agree, case for case. Not drawn: what clj answers
 ;; with its host's own text -- (var 1)'s ClassCastException, (throw nil)'s
-;; NullPointerException, a method no class has.
+;; NullPointerException, a method no class has. Also drawn: a . whose target
+;; cannot be analysed and whose member is bad too (HostExpr analyses the target
+;; first), and a local named like a special form (never shadows Clojure's).
 (require '[clojure.test.check.generators :as g]
          '[clojure.string :as str]
          '[babashka.fs :as fs]
@@ -44,6 +46,13 @@
                 [1 (g/return "(finally)")]]))
 (def g-target (g/elements ["fz-v" "fz-undefined" "1" "\"s\"" ":k" "[fz-v]" "()" "(1 2)" "nil" "x"]))
 (def g-member (g/elements ["length" "(length)" "1" "\"x\"" "(1)" "()" "(substring 1)" "substring 1" "(toUpperCase)"]))
+(def g-dtarget (g/elements ["\"abc\"" "fz-undefined" "(if)" "(fz-undefined 1)"]))
+;; a local named like a special form: Clojure's specials are asked before
+;; the locals, a macro (proxy) after them
+(def g-shadow (g/elements [["if" "(if false 2 3)"] ["do" "(do 1)"] ["quote" "(quote 7)"] ["let*" "(let* [y 5] y)"]
+                           ["throw" "(throw (ex-info \"t\" {}))"] ["def" "(def fz-s 8)"] ["try" "(try 9)"]
+                           ["var" "(var fz-v)"] ["new" "(new clotran.host.exception \"m\")"] ["proxy" "(proxy 1)"]
+                           ["fn*" "((fn* [] 6))"] ["letfn*" "(letfn* [] 4)"] ["set!" "(set! fz-v 1)"]]))
 
 (def g-form
   (g/one-of
@@ -58,6 +67,8 @@
     (g/fmap (fn [[t v]] (str "(let* [x 1] (set! " t " " v "))")) (g/tuple (g/elements ["x" "fz-v"]) (parts 1 1)))
     (g/fmap #(str "(. " %)  (g/elements [")" "\"abc\")"]))
     (g/fmap #(str "(. \"abc\" " % ")") g-member)
+    (g/fmap (fn [[t m]] (str "(. " t " " m ")")) (g/tuple g-dtarget g-member))
+    (g/fmap (fn [[nm body]] (str "(let* [" nm " (fn* [& a] :call)] " body ")")) g-shadow)
     (g/fmap #(str "(new " % ")") (g/elements ["" "1" "fz-nosuchclass" "clotran.host.exception" "clotran.host.exception \"m\"" "\"s\""]))]))
 
 (defn script [forms]

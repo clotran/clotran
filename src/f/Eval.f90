@@ -2617,6 +2617,17 @@ contains
           gc_ref_is(sym%ref, "var")
   end function is_special
 
+  ! A special form of Clojure's own, which no local shadows (Compiler's
+  ! specials map, asked before the locals): is_special's but proxy, a
+  ! macro in Clojure, and clotran's defmacro*, lazy-seq*, clotran-fields*
+  function clj_special(sym) result(yes)
+    type(gc_value), intent(in) :: sym
+    logical :: yes
+    yes = is_special(sym)
+    if (yes) yes = .not. (gc_ref_is(sym%ref, "proxy") .or. gc_ref_is(sym%ref, "defmacro*") .or. &
+         gc_ref_is(sym%ref, "lazy-seq*") .or. gc_ref_is(sym%ref, "clotran-fields*"))
+  end function clj_special
+
 
 
   ! (deftype* user/Name user.Name [fields]
