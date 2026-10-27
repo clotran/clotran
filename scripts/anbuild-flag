@@ -1,0 +1,93 @@
+#!/usr/bin/env bb
+;; anbuild-flag: model/anbuild.lisp's mutually recursive clique, as the flag
+;; function its induction runs on, written into model/anbuild-proof.lisp
+;; between its ";; BEGIN anbuild-flag" and ";; END anbuild-flag" lines.
+;;
+;;   scripts/anbuild-flag            write it
+;;   scripts/anbuild-flag --check    exit 1 when the book is not what it writes
+;;
+;; anb-fl is the clique's bodies with every call of a member a call of anb-fl
+;; on the member's flag (its place in the clique) and the union of the
+;; members' formals, x b i p q, each member's own formals in its places
+;; (MAPS below); the measure each member's. The book proves it is the clique
+;; (anb-fl-is-case), so a mistake here fails a proof, not the model. Also
+;; written: anb-hyp (each member's guard on its integer formals, HYPS below,
+;; else its block's sb64), the preservation by induction on anb-fl and each
+;; member's corollary of it.
+(require '[clojure.string :as str] '[clojure.walk :as w])
+
+(def maps
+  '{anb-sub {x x b b} anb-an {x x b b} anb-deff {x x b b} anb-listn {xs x n i b b} anb-body {xs x b b}
+    anb-binds {bv x i i c b start p loopp q} anb-let {x x b b kind p} anb-lfinits {bv x i i c b}
+    anb-letfn {x x b b} anb-try {x x b b} anb-try-walk {cls x st p b b}
+    anb-set {x x b b} anb-dot {x x b b} anb-new {x x b b} anb-recur {x x b b} anb-fn {x x b b}
+    anb-methods {ms x n i r b} anb-method {m x r b}})
+(def hyps
+  '{anb-listn (and (integerp n) (signed-byte-p 64 b)) anb-methods (and (integerp n) (signed-byte-p 64 r))
+    anb-binds (and (natp i) (signed-byte-p 64 c) (integerp start) (<= -1 start) (< start *anl40*) (signed-byte-p 64 loopp))
+    anb-let (and (signed-byte-p 64 b) (member kind '(11 12))) anb-lfinits (and (natp i) (signed-byte-p 64 c))
+    anb-try-walk (and (signed-byte-p 64 st) (signed-byte-p 64 b))})
+
+(def src (slurp "model/anbuild.lisp"))
+(def clique (read-string (subs src (inc (str/last-index-of src "\n(mutual-recursion\n")))))
+(def defs (for [[_ nm formals decl body] (rest clique)] {:nm nm :formals formals :decl decl :body body}))
+(def flag (into {} (map-indexed (fn [k d] [(:nm d) k]) defs)))
+(doseq [d defs] (when-not (maps (:nm d)) (println "anbuild-flag: no formals' places for" (:nm d)) (System/exit 1)))
+
+(defn ints [nm] (remove '#{anls anb} (:formals (first (filter #(= nm (:nm %)) defs)))))
+(defn slot-args [nm args]
+  (let [given (zipmap (map (maps nm) (ints nm)) args) [sa sb] (take-last 2 args)]
+    (concat [(flag nm)] (map #(get given % 0) '[x b i p q]) [sa sb])))
+(defn rewrite [body ren]
+  (w/postwalk (fn [f] (cond (and (seq? f) (flag (first f))) (cons 'anb-fl (slot-args (first f) (rest f)))
+                            (and (symbol? f) (contains? ren f)) (ren f)
+                            :else f))
+              body))
+(defn measure [d] (let [xs (vec (nth (:decl d) 1))] (nth xs (inc (.indexOf xs :measure)))))
+(defn kase [f] (concat ['case 'fl] (map #(list (flag (:nm %)) (f %)) (butlast defs)) [(list 'otherwise (f (last defs)))]))
+(defn ucall [nm] (cons nm (concat (map #(get (maps nm) %) (ints nm)) '(anls anb))))
+(defn own-hyp [d] (or (hyps (:nm d)) (list 'signed-byte-p 64 (second (ints (:nm d))))))
+
+(def forms
+  [(list 'defun 'anb-fl '(fl x b i p q anls anb)
+         (list 'declare (list 'xargs :stobjs '(anls anb) :verify-guards nil :measure (kase #(rewrite (measure %) (maps (:nm %))))))
+         (kase #(rewrite (:body %) (maps (:nm %)))))
+   (list 'defthm 'anb-fl-is-case
+         (list 'equal '(anb-fl fl x b i p q anls anb) (kase #(ucall (:nm %))))
+         :hints (list (list "Goal" :induct '(anb-fl fl x b i p q anls anb)
+                            :expand (cons '(:free (fl) (anb-fl fl x b i p q anls anb)) (map (comp ucall :nm) defs))))
+         :rule-classes nil)
+   (list 'defun 'anb-hyp '(fl b i p q) (kase #(w/postwalk-replace (maps (:nm %)) (own-hyp %))))
+   '(defthm anb-fl-preserves
+      (implies (and (anlsp anls) (anbp anb) (anb-hyp fl b i p q))
+               (and (anlsp (mv-nth 1 (anb-fl fl x b i p q anls anb))) (anbp (mv-nth 2 (anb-fl fl x b i p q anls anb)))))
+      :hints (("Goal" :induct (anb-fl fl x b i p q anls anb) :in-theory (disable anb-host-push anb-host-meta-push)
+               :expand ((anb-fl fl x b i p q anls anb)))))])
+(def cors
+  (for [d defs]
+    (let [nm (:nm d) call (cons nm (:formals d)) args (rest (cons 'anb-fl (slot-args nm (concat (ints nm) '(anls anb)))))
+          inst (fn [thm] (concat [:instance thm] (map list '[fl x b i p q anls anb] args)))]
+      (list 'defthm (symbol (str nm "-preserves"))
+            (list 'implies (list 'and '(anlsp anls) '(anbp anb) (own-hyp d))
+                  (list 'and (list 'anlsp (list 'mv-nth 1 call)) (list 'anbp (list 'mv-nth 2 call))))
+            :hints (list (list "Goal" :use (list (inst 'anb-fl-is-case) (inst 'anb-fl-preserves)) :in-theory '(disable anb-fl-preserves)))))))
+
+(def block
+  (str ";; BEGIN anbuild-flag -- written by scripts/anbuild-flag from model/anbuild.lisp; do not edit\n"
+       "; the flag function: the clique's bodies, every call one of anb-fl; then\n"
+       "; that it is the clique, each member's guard, the preservation by\n"
+       "; induction on it and each member's\n"
+       (str/join "\n\n" (map pr-str forms)) "\n\n"
+       (str/join "\n" (map pr-str cors)) "\n"
+       ";; END anbuild-flag\n"))
+
+(def book "model/anbuild-proof.lisp")
+(def text (slurp book))
+(def a (str/index-of text ";; BEGIN anbuild-flag"))
+(def z (str/index-of text ";; END anbuild-flag\n"))
+(when-not (and a z) (println "anbuild-flag: no BEGIN/END anbuild-flag lines in" book) (System/exit 1))
+(def new-text (str (subs text 0 a) block (subs text (+ z (count ";; END anbuild-flag\n")))))
+(if (some #{"--check"} *command-line-args*)
+  (if (= new-text text) (println "anbuild-flag: model/anbuild-proof.lisp is current")
+      (do (println "anbuild-flag: model/anbuild-proof.lisp is not what scripts/anbuild-flag writes") (System/exit 1)))
+  (do (spit book new-text) (println "anbuild-flag: wrote" book)))

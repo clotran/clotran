@@ -4,15 +4,17 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal|anform|anbuild] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
 ;; vmg), vmicg, the compiler (src/f/gen/vmc_gen.f90), heapg, the
 ;; collector (src/f/gen/heap_gen.inc), vmrt, the VM runtime's reads of
 ;; clotran's values (src/f/gen/vmrt_gen.inc), anpass, the analyzer's
-;; passes over its tree (src/f/gen/anpass_gen.inc), or anlocal, its locals
-;; (src/f/gen/anlocal_gen.inc).
+;; passes over its tree (src/f/gen/anpass_gen.inc), anlocal, its locals
+;; (src/f/gen/anlocal_gen.inc), anform, its special forms' checks
+;; (src/f/gen/anform_gen.inc), or anbuild, its node assembly
+;; (src/f/gen/anbuild_gen.inc).
 ;;
 ;; ACL2 itself hands over each function in its translated form -- no
 ;; macros, only lambda, if, quoted constants and calls -- with its
@@ -268,11 +270,52 @@
               "  ! guard-verified, reading forms through analyze.inc's frf_* shims."
               "  ! anform-proof.lisp proves each refuses exactly what its specification says"
               "  ! and that the analyzer they drive builds a tree anpass's reads decode;"
-              "  ! anform-cost.lisp counts the steps."]}})
+              "  ! anform-cost.lisp counts the steps."]}
+    "anbuild"
+    {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
+     :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn
+           anb-try anb-try-walk]
+     ;; the shims (analyze.inc anb_*), and what anlocal and anform generate
+     :host [anb-sub anb-host anb-meta anb-const anb-local anb-node anb-node-s anb-refuse anb-refuse-catch anb-hint
+            anb-defvar anb-def anb-catch anb-trynode anb-child anb-set anb-dot anb-new anb-recur anb-fn
+            anb-loop-open anb-let-kind anb-let-ret
+            anl-lookup anl-reserve anl-bind anl-shape anl-name-code
+            anf-if anf-def anf-quote anf-throw anf-try-op anf-try-step anf-catch anf-set anf-set-target anf-dot anf-new]
+     :stobjs {anls "ls" anb "bs"} :stobj-types {"ls" "anl_state" "bs" "anb_state"}
+     :fields {} :array-names {} :prefix {} :value-arrays #{}
+     :value-formals {anb-defend #{x} anb-deff #{x} anb-try-n #{xs} anb-drop #{xs} anb-try-fin #{cls} anb-lfnames #{bv} anb-an #{x} anb-listn #{xs}
+                     anb-body #{xs} anb-binds #{bv} anb-let #{x} anb-lfinits #{bv} anb-letfn #{x} anb-try #{x}
+                     anb-try-walk #{cls}
+                     anb-sub #{x} anb-host #{x} anb-meta #{x} anb-const #{x} anb-local #{x} anb-refuse #{f}
+                     anb-refuse-catch #{f} anb-hint #{x} anb-defvar #{x} anb-def #{x} anb-catch #{f} anb-set #{x}
+                     anb-dot #{x} anb-new #{x} anb-recur #{x} anb-fn #{x} anb-let-kind #{k}
+                     anl-shape #{bv} anl-name-code #{x}
+                     anf-def #{f} anf-try-op #{f} anf-try-step #{f} anf-catch #{f} anf-set-target #{x} anf-dot #{f} anf-new #{f}}
+     :value-fns #{anb-drop}
+     :bool-fns #{}
+     ;; a form is a value of clotran's heap, read by analyze.inc's shims
+     :val-type "gc_value"
+     :rt {frm-kind ["frm_kind" [:val] :int] frm-count ["frm_count" [:val] :int] frm-nth ["frm_nth" [:val :int] :val]
+          frf-kind ["frf_kind" [:val] :int] frf-len ["frf_len" [:val] :int] frf-nth ["frf_nth" [:val :int] :val]
+          frf-rest ["frf_rest" [:val] :val] frf-sp ["frf_sp" [:val] :int]
+          frm-sid ["frm_sid" [:val] :int] frm-bid ["frm_bid" [:val] :int] frm-pairs ["frm_pairs" [:val] :int]}
+     :header ["  ! GENERATED from model/anbuild.lisp by scripts/acl2-fortran -b anbuild. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the analyzer's node assembly -- anb_an, one form to its node:"
+              "  ! a local, or if, do, def, quote, throw, let*, loop*, letfn* and try built here,"
+              "  ! set!, ., new, recur and fn* after their checks by the hand-written drivers,"
+              "  ! the rest the host's -- guard-verified, reading forms through analyze.inc's"
+              "  ! frf_*/frm_* shims and building nodes on the context's value stack through"
+              "  ! its anb_* shims, so no node is held in a variable here. anbuild-proof.lisp"
+              "  ! proves a whole analysis with no error leaves one node, well-formed by"
+              "  ! anpass's reads; anbuild-cost.lisp counts the steps."]}})
 
 (def cfg (or (books book) (do (println (str "acl2-fortran: no book " book)) (System/exit 1))))
 (def out-file (get args "-o" (:out cfg)))
 (def fns (:fns cfg))
+;; what the generated code calls that is generated elsewhere or hand-written:
+;; ACL2 hands over each one's formals and results, nothing is generated
+(def host (get cfg :host []))
 (def value-formals (:value-formals cfg))
 (def value-fns (:value-fns cfg))
 (def bool-fns (get cfg :bool-fns #{}))
@@ -290,7 +333,7 @@
        "                                     (eq (symbol-class fn w) :common-lisp-compliant) (body fn nil w)))\n"
        "              (dump-fns (cdr fns) state)))))\n"
        "(set-iprint nil)\n"
-       "(dump-fns '(" (str/join " " fns) ") state)\n"
+       "(dump-fns '(" (str/join " " (concat fns host)) ") state)\n"
        "(good-bye)\n"))
 
 (def acl2 (or (System/getenv "ACL2") (str (babashka.fs/parent (babashka.fs/parent (babashka.fs/parent (babashka.fs/canonicalize *file*)))) "/acl2/saved_acl2")))
@@ -304,7 +347,7 @@
           (let [form (edn/read-string {:default (fn [_ v] v)} (str/replace blk "'" " QUOTE-MARK "))]
             [(first form) form]))))
 
-(when (not= (count defs) (count fns))
+(when (not= (count defs) (count (concat fns host)))
   (println "acl2-fortran: ACL2 did not hand over every function; its output ends:")
   (println (subs dump (max 0 (- (count dump) 3000))))
   (System/exit 1))
@@ -715,7 +758,8 @@
                                    [x {:f (str (fname x) "_") :type (formal-type self x)}])))
              :locals (atom {}) :counter (atom 0) :calls (atom #{})
              :outs (outs self) :dests rnames :tail true}
-        lines (if sub (stmt ctx self body) (ret-stmts ctx self body))
+        lines (try (if sub (stmt ctx self body) (ret-stmts ctx self body))
+                   (catch Exception e (throw (ex-info (str (ex-message e) " (in " self ")") (ex-data e)))))
         looped? (some #(= "cycle" (str/trim %)) lines)
         recursive? (some #(reaches? % self) @(:calls ctx))
         dummies (for [x formals :when (not (stobjs x))] [(str (fname x) "_") (formal-type self x)])

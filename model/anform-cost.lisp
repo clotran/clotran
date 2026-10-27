@@ -10,13 +10,7 @@
 ;                       anf-dot-member 6, anf-new 5, anf-def 9
 ;   anf-try-code-steps-bound  a try's clauses walked: at most 6n + 1 steps,
 ;                       n clauses
-;   anf-subs-steps-bound, anf-binds-steps-bound, anf-params-bind-steps-bound
-;                       the analyzer's own walks over a body's forms, a
-;                       binding vector's pairs, a parameter vector: at most
-;                       n + 1 steps for n elements, each bind one record
-;                       written; what analysing a subform costs is that
-;                       subform's, and a lookup's is anlocal-cost's
-;                       anl-lookup-steps-bound
+;   (the analyzer's own walks are anbuild-cost.lisp's)
 
 (in-package "ACL2")
 
@@ -73,27 +67,3 @@
   (<= (anf-try-code-steps cls st) (+ 1 (* 6 (len cls))))
   :hints (("Goal" :in-theory (disable anf-try-step-reads anf-try-step)))
   :rule-classes :linear)
-
-; ---- THE ANALYZER'S OWN WALKS ---------------------------------------------------------------------
-
-; logic only (defun-nx): a count, the locals threaded as the analyzer threads them
-(defun-nx anf-subs-steps (xs b anls)
-  (if (atom xs) 1
-    (let ((r (anf-sub (car xs) b anls)))
-      (if (not (equal (mv-nth 0 r) 0)) 1 (+ 1 (anf-subs-steps (cdr xs) b (mv-nth 2 r)))))))
-
-(defthm anf-subs-steps-bound (<= (anf-subs-steps xs b anls) (+ 1 (len xs))) :rule-classes :linear)
-
-(defun-nx anf-binds-steps (ps c k anls)
-  (if (or (atom ps) (atom (cdr ps))) 1
-    (if (not (equal (anl-name-code (car ps)) 0)) 1
-      (let ((r (anf-sub (cadr ps) c anls)))
-        (if (not (equal (mv-nth 0 r) 0)) 1
-          (+ 1 (anf-binds-steps (cddr ps) c (+ 1 k) (anl-bind c (nth 1 (car ps)) k (mv-nth 2 r)))))))))
-
-(defthm anf-binds-steps-bound (<= (anf-binds-steps ps c k anls) (+ 1 (len ps))) :rule-classes :linear)
-
-(defun anf-params-bind-steps (ps)
-  (if (atom ps) 1 (+ 1 (anf-params-bind-steps (cdr ps)))))
-
-(defthm anf-params-bind-steps-bound (equal (anf-params-bind-steps ps) (+ 1 (len ps))))

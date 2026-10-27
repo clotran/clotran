@@ -1,0 +1,187 @@
+#!/usr/bin/env bb
+;; fuzz-anbuild-gen: the GENERATED node assembly (src/f/gen/anbuild_gen.inc,
+;; written by scripts/acl2-fortran -b anbuild from model/anbuild.lisp)
+;; against the ACL2 it was generated from.
+;;
+;;   scripts/fuzz-anbuild-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random forms -- if, do, def (with and without a docstring, a name with
+;; metadata or none), quote, throw, let*, loop*, letfn*, try (body forms,
+;; catches of a class there is and is not, finallys first and last), with
+;; too few parts and too many, names that are symbols and are not, locals
+;; bound and used, and the host's leaves (a symbol no local binds, one the
+;; host refuses, literals) -- each analysed from a fn's root block. ACL2
+;; runs anb-an, its host and prim hooks attached to the same mocks the
+;; Fortran's test/anbuild/anbuild_check gives the generated code; both print
+;; the error code, the locals' record counts and every node left on the
+;; builder, and they must agree, case for case. Not drawn: set!, ., new,
+;; recur and fn* (their drivers are hand-written, Modeled).
+;;
+;; -x is the NEGATIVE CONTROL: the Fortran side takes a node's last two
+;; children in the wrong order, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-anbuild-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+;; ---- the forms ---------------------------------------------------------------------------
+;;
+;; rows {:kind :sid :qual :word :class :defvar :sp :meta :kids}, 1-based
+;; ids, 0 a form of no kind; a form is made after its parts
+
+(def specials {:if 1 :do 2 :def 3 :quote 4 :throw 5 :try 6 :let 11 :loop 12 :letfn 15})
+
+(defn row [m] (merge {:kind 0 :sid 0 :qual 0 :word 0 :class 0 :defvar 0 :sp 0 :meta 0 :kids []} m))
+
+(defn gen-case []
+  (let [rows (atom [])
+        add! (fn [m] (swap! rows conj (row m)) (count @rows))
+        sym (fn [] (add! {:kind 2 :sid (inc (rnd 5)) :qual (pick [0 0 0 0 1]) :class (pick [0 1 1])
+                          :defvar (pick [0 0 0 1 2 3]) :meta (pick [0 0 1])}))
+        head (fn [k] (add! {:kind 2 :sid 50 :sp (specials k)}))
+        word (fn [w] (add! {:kind 2 :sid 60 :word w}))
+        lst (fn [kids] (add! {:kind 3 :kids (vec kids)}))
+        vc (fn [kids] (add! {:kind 1 :kids (vec kids)}))
+        lit (fn [] (add! {:kind (pick [0 4 0])}))]
+    (letfn [(form [d]
+              (if (or (<= d 0) (zero? (rnd 3)))
+                (if (zero? (rnd 2)) (sym) (lit))
+                (case (rnd 11)
+                  0 (lst (cons (head :if) (repeatedly (pick [1 2 3 3 3 4]) #(form (dec d)))))
+                  1 (lst (cons (head :do) (repeatedly (rnd 4) #(form (dec d)))))
+                  2 (lst (concat [(head :def) (pick [(sym) (sym) (lit)])]
+                                 (case (rnd 4) 0 [] 1 [(form (dec d))] 2 [(add! {:kind 4}) (form (dec d))] [(form (dec d)) (form (dec d))])))
+                  3 (lst (cons (head :quote) (repeatedly (pick [0 1 1 2]) #(form (dec d)))))
+                  4 (lst (cons (head :throw) (repeatedly (pick [0 1 1 2]) #(form (dec d)))))
+                  (5 6) (let [k (pick [:let :loop :letfn])
+                              pairs (rnd 4)
+                              bv (vc (mapcat (fn [_] [(pick [(sym) (sym) (sym) (lit)]) (form (dec d))]) (range pairs)))
+                              bv (if (zero? (rnd 6)) (vc (concat (:kids (nth @rows (dec bv))) [(sym)])) bv)]
+                          (lst (concat [(head k) (pick [bv bv bv (lit)])] (repeatedly (rnd 3) #(form (dec d))))))
+                  (7 8) (lst (concat [(head :try)] (repeatedly (rnd 3) #(form (dec d)))
+                                     (repeatedly (rnd 3)
+                                                 #(case (rnd 5)
+                                                    (0 1 2) (lst (concat [(word 1) (pick [(sym) (sym) (lit)]) (pick [(sym) (sym) (lit)])]
+                                                                         (repeatedly (rnd 3) (fn [] (form (dec d))))))
+                                                    3 (lst (cons (word 2) (repeatedly (rnd 3) (fn [] (form (dec d))))))
+                                                    (form (dec d))))))
+                  (9 10) (lst (cons (sym) (repeatedly (rnd 3) #(form (dec d))))))))]
+      (let [root (form 4)] {:rows @rows :root root}))))
+
+(def cases (vec (repeatedly n gen-case)))
+
+;; ---- what ACL2 answers -------------------------------------------------------------------
+
+(defn acl2-form [rows id]
+  (if (or (zero? id) (> id (count rows))) "0"
+      (let [r (nth rows (dec id)) ks (str/join " " (map #(acl2-form rows %) (:kids r)))]
+        (case (:kind r)
+          1 (str "(list :vec " ks ")")
+          3 (str "(list :list " ks ")")
+          2 (str "(list :sym " (:sid r) " " (:qual r) " 0 " (:word r) " " (:class r) " " (:defvar r) " " (:sp r) " " (:meta r) ")")
+          4 "(list :str)"
+          "0"))))
+
+(def driver
+  (str "(include-book \"anbuild-proof\")\n"
+       "(set-print-case :downcase state)\n"
+       "(defun anb-host-mock (x b anls anb)
+          (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b)) (ignore b))
+          (if (and (equal (frm-kind x) 2) (equal (anl-nth 6 x) 3)) (mv 1 anls anb)
+            (let ((anb (anb-push (anf-node 1 0 nil nil nil) anb))) (mv 0 anls anb))))
+        (defun anb-host-meta-mock (x b anls anb)
+          (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b)) (ignore x b))
+          (let ((anb (anb-push (anf-node 1 0 nil nil nil) anb))) (mv 0 anls anb)))
+        (defattach (anb-host anb-host-mock) (anb-host-meta anb-host-meta-mock))
+        (defun anb-zero3 (c s n) (declare (xargs :guard t) (ignore c s n)) 0)
+        (defun anb-zero4 (k c s l) (declare (xargs :guard t) (ignore k c s l)) 0)
+        (defun anb-zero2 (c r) (declare (xargs :guard t) (ignore c r)) 0)
+        (defattach (anb-loop-open anb-zero3) (anb-let-kind anb-zero4) (anb-let-ret anb-zero2))
+        (mutual-recursion
+         (defun anb-ser (x)
+           (declare (xargs :mode :program))
+           (cond ((atom x) (list 0))
+                 ((eq (car x) :catch) (list* -1 (nth 1 x) 0 (anb-ser (nth 2 x))))
+                 (t (append (list (nth 2 x) (nth 3 x) (len (nth 4 x))) (anb-sers (nth 4 x))
+                            (if (nth 5 x) (cons 1 (anb-ser (nth 5 x))) (list 0))
+                            (list (len (nth 7 x))) (anb-sers (nth 7 x))))))
+         (defun anb-sers (l) (declare (xargs :mode :program)) (if (atom l) nil (append (anb-ser (car l)) (anb-sers (cdr l))))))
+        (defun do-case (k x anls anb)
+          (declare (xargs :mode :program :stobjs (anls anb)))
+          (let* ((anls (update-anl-nf 0 anls)) (anls (update-anl-nb 0 anls)) (anls (update-anl-nx 0 anls))
+                 (anls (update-anl-nc 0 anls)) (anls (update-anl-na 0 anls)) (anls (update-anl-nn 0 anls))
+                 (anls (update-anl-nev 0 anls)) (anls (update-anl-err 0 anls)) (anb (update-anb-stk nil anb)))
+            (mv-let (r anls) (anl-new-fn -1 anls)
+              (mv-let (e anls anb) (anb-an x r anls anb)
+                (let ((st (anb-stk anb)))
+                  (prog2$ (cw \"~%CASE ~x0 ~x1~%\" k
+                              (append (list e (anl-nf anls) (anl-nb anls) (anl-nx anls) (anl-nc anls) (anl-na anls) (anl-nn anls) (len st))
+                                      (if (equal e 0) (anb-sers (reverse st)) nil)))
+                          (mv anls anb)))))))\n"
+       "(set-iprint nil)\n"
+       (str/join (map-indexed (fn [k {:keys [rows root]}] (str "(do-case " k " " (acl2-form rows root) " anls anb)\n")) cases))
+       "(good-bye)\n"))
+
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ c l] (re-seq #"CASE (\d+) \(([-\d\s]*)\)" (str/replace out #"\s*\n\s*" " "))]
+             [(parse-long c) (mapv parse-long (remove str/blank? (str/split l #"\s+")))])))
+(when (not= (count expected) n)
+  (println (str "fuzz-anbuild-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 3000))))
+  (System/exit 1))
+
+;; ---- the generated code ------------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "anbuild" "-o" (str work "/anbuild_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "src/f/gen/anlocal_gen.inc" (str work "/anlocal_gen.inc"))
+(fs/copy "src/f/gen/anform_gen.inc" (str work "/anform_gen.inc"))
+(fs/copy "test/anbuild/anbuild_check.f90" (str work "/anbuild_check.f90"))
+(def exe (str work "/anbuild_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc
+               (concat ["-O2"] (when (= fc "gfortran") ["-frecursive" "-ffree-line-length-none"]) ["-o" exe "anbuild_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(defn case-file [k {:keys [rows root]}]
+  (let [f (str work "/case" k ".txt")]
+    (spit f (str (count rows) " " root "\n"
+                 (str/join "\n" (for [r rows]
+                                  (let [vs (concat [(:kind r) (:sid r) (:qual r) (:word r) (:class r) (:defvar r) (:sp r) (:meta r)
+                                                    (count (:kids r))] (:kids r))]
+                                    (str (count vs) " " (str/join " " vs)))))
+                 "\n"))
+    f))
+
+(def results
+  (vec (for [[k c] (map-indexed vector cases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+               got (mapv parse-long (remove str/blank? (str/split (str/trim (:out r)) #"\s+")))
+               want (expected k)]
+           {:k k :got got :want want :ok (= got want)}))))
+
+(def bad (remove :ok results))
+(def ok-cases (filter #(zero? (first (:want %))) results))
+(println (str n " cases, seed " seed (when broken " (negative control: a node's children taken out of order)")))
+(println (str "  " (count ok-cases) " analysed with no error, " (- n (count ok-cases)) " refused; "
+              (reduce + (map #(nth (:want %) 7 0) ok-cases)) " nodes left"))
+(println (str "generated node assembly against ACL2's: " (count bad) " cases differ"))
+(doseq [b (take 2 bad)]
+  (println "  case" (:k b))
+  (println "    ACL2     " (pr-str (:want b)))
+  (println "    generated" (pr-str (:got b))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

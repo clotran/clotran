@@ -464,7 +464,7 @@ module Eval
   ! written in the Clojure core defines
   logical, save :: auto_ready = .false.
   ! core.clj has loaded: from here a clotran namespace named in code is
-  ! loaded when the code is analysed (analyze_symbol), so a form analyses
+  ! loaded when the code is analysed (analyze_global), so a form analyses
   ! the same in every process -- a compiled library's fingerprints are
   ! taken in one and checked in another (clotran.loader)
   logical, save :: core_loaded = .false.
@@ -624,6 +624,13 @@ module Eval
      integer(int64) :: nf = 0, nb = 0, nx = 0, nc = 0, na = 0, nn = 0, nev = 0, err = 0
   end type anl_state
 
+  ! The analyzer's node builder (model/anbuild.lisp's stobj anb;
+  ! src/f/gen/anbuild_gen.inc): the context's value stack, which its shims
+  ! push and pop (analyze.inc anb_*); nothing of its own.
+  type :: anb_state
+     integer :: unused = 0
+  end type anb_state
+
   ! The executor's continuation stack (exec.inc, `run`): one entry per
   ! node being evaluated. Its values live in a K_SLOTS-wide region of
   ! the value stack at `base` -- node, frame, aux, argv, restart -- so
@@ -732,6 +739,9 @@ module Eval
      ! of them and a map back, in one object rooted here (anl_sym_id)
      type(anl_state) :: anl
      type(gc_root) :: anl_root
+     ! the name a fn* being analysed is given, until anb_an dispatches it
+     ! (analyze.inc anb_run, anb_drive, anb_host)
+     character(len=:), allocatable :: anb_hint
   end type eval_ctx
   ! the VM program's functions: each one's first instruction and name, for a
   ! trace (vm.inc vm_fn_at)
@@ -1413,7 +1423,7 @@ contains
     call bind_builtin(core, "clotran-sched-push!", B_SCHEDPUSH)
     call bind_builtin(core, "clotran-agent-peek", B_AGENTPEEK)
     call bind_builtin(core, "clotran-agent-shutdown", B_AGENTSHUTDOWN)
-    ! the writable host static's value, read at RUN time (analyze_symbol
+    ! the writable host static's value, read at RUN time (analyze_global
     ! folds every other static, whose value cannot change)
     call bind_builtin(core, "clotran-host-box", B_HOSTBOX)
     ! import* as it runs (analyze_list rewrites the special form to this)
@@ -4098,7 +4108,7 @@ contains
   ! Whether a symbol names a host class. Compiler.maybeClass asks the
   ! classloader; there is nothing to ask here, so the shape of the name
   ! has to answer: a dotted name, or a bare capitalised one, which
-  ! analyze_symbol then accepts only as an import or a known type.
+  ! analyze_global then accepts only as an import or a known type.
   !
   ! Only ever reached once a symbol has failed to resolve as a local
   ! and as a Var, so it shadows nothing.
@@ -24467,6 +24477,7 @@ contains
   include "gen/anpass_gen.inc"
   include "gen/anlocal_gen.inc"
   include "gen/anform_gen.inc"
+  include "gen/anbuild_gen.inc"
   include "exec.inc"
   include "rational.inc"
   include "flat.inc"
