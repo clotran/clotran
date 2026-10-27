@@ -39,8 +39,9 @@
 ;   anb-loop-open anb-let-kind anb-let-ret   a loop*'s recur target and a
 ;                     return-hinted fn's argument kinds, a local's prim kind
 ;                     and array hint, a hinted loop's return: prim kinds and
-;                     array hints, the Owed row's, constrained to answer an
-;                     error code and nothing else
+;                     array hints, constrained to answer an error code and
+;                     nothing else: what each kind decides is anprim.lisp's,
+;                     generated (src/f/gen/anprim_gen.inc)
 ; And the form reads, beside anform's and anlocal's: frf-sp (the head's
 ; special form), frf-meta (a def's name has metadata), frf-rest (a list
 ; without its first element), frm-sid / frm-bid (a symbol's id, looked up
@@ -316,7 +317,7 @@
   (if (and (equal (frf-meta (frf-nth x 1)) 0) (equal (anf-def x 2) 0)) (mv 0 0 anls anb)
     (mv-let (e anls anb) (anb-host-meta x b anls anb) (mv e 1 anls anb))))
 
-; prim kinds and array hints (the Owed row): an error code each
+; prim kinds and array hints: an error code each (their decisions anprim.lisp's)
 (encapsulate
   (((anb-loop-open * * *) => * :formals (c start n) :guard t)
    ((anb-let-kind * * * *) => * :formals (k c slot loopp) :guard t)

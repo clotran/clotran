@@ -1,0 +1,103 @@
+#!/usr/bin/env bb
+;; fuzz-anprim-gen: the GENERATED primitive kinds (src/f/gen/anprim_gen.inc,
+;; written by scripts/acl2-fortran -b anprim from model/anprim.lisp) against
+;; the ACL2 they were generated from.
+;;
+;;   scripts/fuzz-anprim-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random cases: a Numbers op (each of the six overloads) over 0..6 operands
+;; of every kind, unknown and boolean among them; a let or loop local's
+;; init kind, hinted or not, with a return-hinted fn's argument kind or
+;; none; a hinted return against a body's kind; a recur argument against a
+;; local's primitive; an array hint's place in the table, in it and out.
+;; ACL2 runs anprim's functions, apk-kid attached to the case's operand
+;; kinds; test/anprim/anprim_check runs the generated Fortran with a mock
+;; apk_kid answering the same; both print every answer, and they must agree.
+;;
+;; -x is the NEGATIVE CONTROL: the Fortran side's apk_kid answers operand
+;; i+1's kind for operand i, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "300")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-anprim-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+(def kinds [-1 0 1 1 1 2 2 3 4 5 6 7 8])
+(defn gen-case []
+  (let [nops (rnd 7)]
+    {:how (inc (rnd 6)) :ops (vec (repeatedly nops #(pick kinds)))
+     :pk (pick (conj kinds -2)) :hinted (rnd 2) :loopp (rnd 2) :rk (pick [-100 -100 0 1 2 -1])
+     :ret (pick [0 1 2 -1]) :bk (pick kinds) :p (pick [0 1 2 -1]) :k (pick kinds) :e (pick [-1 0 1 2 3 4 5 6 7 8 9])}))
+
+(def cases (vec (repeatedly n gen-case)))
+
+;; ---- what ACL2 answers -------------------------------------------------------------------
+
+(defn acl2-case [k {:keys [how ops pk hinted loopp rk ret bk p e] :as c}]
+  (let [nn (inc (count ops))]
+    (str "(cw \"~%CASE " k " ~x0~%\" (list (apk-arith '(0 " (str/join " " ops) ") 0 " how " " nn ")"
+         " (apk-loop " pk ") (apk-let " pk " " hinted " " loopp " " rk ") (apk-ret " ret " " bk ")"
+         " (apk-recur-ok " p " " (:k c) ") (apk-elem " e ") (apk-num " (:k c) ")"
+         " (if (apk-int-p " (:k c) ") 1 0) (if (apk-float-p " (:k c) ") 1 0)))\n")))
+
+(def driver
+  (str "(include-book \"anprim-proof\")\n"
+       "(set-print-case :downcase state)\n"
+       "(defun m-kid (kids sc i) (declare (xargs :guard t) (ignore sc))
+          (let ((k (if (and (true-listp kids) (natp i)) (nth i kids) 0))) (if (and (integerp k) (apk-kind-p k)) k 0)))
+        (defattach apk-kid m-kid)\n"
+       "(set-iprint nil)\n"
+       (str/join (map-indexed acl2-case cases))
+       "(good-bye)\n"))
+
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ c l] (re-seq #"CASE (\d+) \(([-\d\s]*)\)" (str/replace out #"\s*\n\s*" " "))]
+             [(parse-long c) (mapv parse-long (remove str/blank? (str/split l #"\s+")))])))
+(when (not= (count expected) n)
+  (println (str "fuzz-anprim-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 3000))))
+  (System/exit 1))
+
+;; ---- the generated code ------------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "anprim" "-o" (str work "/anprim_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "test/anprim/anprim_check.f90" (str work "/anprim_check.f90"))
+(def exe (str work "/anprim_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc
+               (concat ["-O2"] (when (= fc "gfortran") ["-frecursive" "-ffree-line-length-none"]) ["-o" exe "anprim_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(def case-file (str work "/cases.txt"))
+(spit case-file
+      (str/join (for [{:keys [how ops pk hinted loopp rk ret bk p k e]} cases]
+                  (str how " " (inc (count ops)) " " (str/join " " ops) " " (str/join " " [pk hinted loopp rk ret bk p k e]) "\n"))))
+(def got (let [r (apply p/shell {:continue true :out :string :err :string} exe case-file (when broken ["broken"]))]
+           (mapv (fn [l] (mapv parse-long (str/split (str/trim l) #"\s+"))) (str/split-lines (str/trim (:out r))))))
+(def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))
+(def bad (remove :ok results))
+(println (str n " cases, seed " seed (when broken " (negative control: operand i answered as operand i+1)")))
+(println (str "  " (count (filter #(not= 0 (first (:want %))) results)) " ops typed, "
+              (count (filter #(= -2 (nth (:want %) 2)) results)) " locals refused, "
+              (count (filter #(= 1 (nth (:want %) 3)) results)) " returns refused, "
+              (count (filter #(= 0 (nth (:want %) 4)) results)) " recur arguments refused"))
+(println (str "generated primitive kinds against ACL2's: " (count bad) " cases differ"))
+(doseq [b (take 2 bad)]
+  (println "  case" (:k b) (pr-str (nth cases (:k b))))
+  (println "    ACL2     " (pr-str (:want b)))
+  (println "    generated" (pr-str (:got b))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

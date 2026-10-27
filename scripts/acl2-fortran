@@ -4,7 +4,7 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal|anform|anbuild] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal|anform|anprim|anbuild] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
@@ -271,6 +271,26 @@
               "  ! anform-proof.lisp proves each refuses exactly what its specification says"
               "  ! and that the analyzer they drive builds a tree anpass's reads decode;"
               "  ! anform-cost.lisp counts the steps."]}
+    "anprim"
+    {:out "src/f/gen/anprim_gen.inc" :include true :book "anprim-proof"
+     :fns [apk-int-p apk-float-p apk-num apk-step apk-fold apk-arith apk-loop apk-let apk-ret apk-recur-ok apk-elem]
+     :host []
+     :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
+     :value-formals {apk-fold #{kids sc} apk-arith #{kids sc}}
+     :value-fns #{}
+     :bool-fns #{apk-int-p apk-float-p}
+     ;; a node is a value of clotran's heap, its kind read by analyze.inc's static_prim
+     :val-type "gc_value"
+     :rt {apk-kid ["apk_kid" [:val :val :int] :int]}
+     :header ["  ! GENERATED from model/anprim.lisp by scripts/acl2-fortran -b anprim. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the analyzer's primitive kinds -- a Numbers op's kind folded"
+              "  ! over its operands (apk_arith), a loop local's widening (apk_loop), a let or"
+              "  ! loop local's kind or refusal (apk_let), a hinted return's refusal (apk_ret),"
+              "  ! a recur argument's match (apk_recur_ok), an array hint's element kind"
+              "  ! (apk_elem) -- guard-verified, reading a node's kind through analyze.inc's"
+              "  ! apk_kid. anprim-proof.lisp proves each is clj's rule and that a hint changes"
+              "  ! no value; anprim-cost.lisp counts the steps."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn

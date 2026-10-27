@@ -415,7 +415,7 @@ $(B)/vmc_gen.o: $(S)/gen/vmc_gen.f90 $(B)/VmRuntime.o | $(B) $(FCSTAMP)
 	$(FC) $(FCFLAGS) -c $< -o $@
 
 $(B)/Eval.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(B)/seqlock.o $(B)/GC.o $(B)/PersistentList.o $(B)/PersistentVector.o $(B)/Assoc.o $(B)/Env.o \
-	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/gen/anpass_gen.inc $(S)/gen/anlocal_gen.inc $(S)/gen/anform_gen.inc $(S)/gen/anbuild_gen.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc \
+	$(B)/Namespace.o $(B)/Printer.o $(B)/LispReader.o $(B)/Regex.o $(B)/NativeArray.o $(B)/DynLoad.o $(B)/Threads.o $(B)/CompiledFn.o $(B)/Socket.o $(S)/analyze.inc $(S)/gen/anpass_gen.inc $(S)/gen/anlocal_gen.inc $(S)/gen/anform_gen.inc $(S)/gen/anprim_gen.inc $(S)/gen/anbuild_gen.inc $(S)/exec.inc $(S)/rational.inc $(S)/flat.inc $(S)/repl.inc $(S)/tasks.inc $(S)/sorted.inc $(S)/hosttable.inc \
 	$(vm-objects) $(S)/vm.inc $(S)/vmjit.inc
 
 # The reference BLAS (src/f/blas/PROVENANCE.md), F77 fixed form, as a
@@ -1089,7 +1089,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost anlocal anlocal-frames anlocal-proof anlocal-checks anlocal-cost anform anform-proof anform-cost anbuild anbuild-proof anbuild-props anbuild-cost
+MODEL_BOOKS = boundary vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost anlocal anlocal-frames anlocal-proof anlocal-checks anlocal-cost anform anform-proof anform-cost anprim anprim-proof anprim-cost anbuild anbuild-proof anbuild-props anbuild-cost
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 model: $(MODEL_CERTS)
 model/%.cert: model/%.lisp
@@ -1203,6 +1203,7 @@ gen-vm: model
 	scripts/acl2-fortran -b anpass
 	scripts/acl2-fortran -b anlocal
 	scripts/acl2-fortran -b anform
+	scripts/acl2-fortran -b anprim
 	scripts/acl2-fortran -b anbuild
 check-vm-gen: model | $(B)
 	scripts/acl2-fortran -o $(B)/vm_gen.f90
@@ -1246,6 +1247,11 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-anform-gen -n 300 -s 1
 	scripts/fuzz-anform-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-anform-gen -n 100 -s 2 -x
+	scripts/acl2-fortran -b anprim -o $(B)/anprim_gen.inc
+	@cmp -s $(B)/anprim_gen.inc src/f/gen/anprim_gen.inc || { echo "src/f/gen/anprim_gen.inc is not what model/anprim.lisp generates: make gen-vm"; exit 1; }
+	scripts/fuzz-anprim-gen -n 300 -s 1
+	scripts/fuzz-anprim-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-anprim-gen -n 100 -s 2 -x
 	scripts/anbuild-flag --check
 	scripts/acl2-fortran -b anbuild -o $(B)/anbuild_gen.inc
 	@cmp -s $(B)/anbuild_gen.inc src/f/gen/anbuild_gen.inc || { echo "src/f/gen/anbuild_gen.inc is not what model/anbuild.lisp generates: make gen-vm"; exit 1; }

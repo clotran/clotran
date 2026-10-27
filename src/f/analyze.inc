@@ -838,17 +838,9 @@
     kw = strip_meta(gc_slot(kw, 2))
     if (kw%tag /= GCT_KEY) return
     call gc_ref_text(kw%ref, s=nm)
-    select case (nm)
-    case ("doubles"); k = PK_DOUBLE
-    case ("longs"); k = PK_LONG
-    case ("ints"); k = PK_INT
-    case ("floats"); k = PK_FLOAT
-    case ("shorts"); k = PK_SHORT
-    case ("bytes"); k = PK_BYTE
-    case ("chars"); k = PK_CHAR
-    case ("booleans"); k = PK_BOOL
-    case default; k = PK_OBJ
-    end select
+    ! the hint's place in the table, its kind the generated apk_elem's
+    k = int(apk_elem(int(findloc([character(len=8) :: "doubles", "longs", "ints", "floats", "shorts", "bytes", &
+         "chars", "booleans"], nm, 1) - 1, int64)))
   end function array_elem_kind
 
   ! clotran.host.math's methods, typed as the Math methods they stand
@@ -892,48 +884,22 @@
     end select
   end function math_call_kind
 
-  ! A Numbers op on these operands, folded left as the nary inline
-  ! nests it, by Numbers' overloads (`how`):
-  !   1 add, subtract, multiply: two primitive integers are a long; a
-  !     primitive double beside anything typed is a double
-  !     (Numbers.add(double, Object) is a double); else a Number
-  !   2 divide and the promoting ops: the same, but two longs a Number
-  !   3 quot, rem: an Object operand makes a Number, else as 1
-  !   4 one operand (inc, dec, negate): its own kind
-  !   5 max, min: a primitive only when both are the same one
-  !     (Numbers.max(double, long) is an Object)
-  !   6 one operand, promoting (inc', dec'): a double stays one
-  ! Unknown anywhere is unknown.
+  ! A Numbers op on these operands, folded left as the nary inline nests
+  ! it, by Numbers' overloads (`how`): GENERATED, apk_arith
+  ! (src/f/gen/anprim_gen.inc, model/anprim.lisp, its overloads there),
+  ! each operand's kind read through apk_kid.
   recursive integer function arith_kind(kids, sc, how) result(k)
     type(gc_value), intent(in) :: kids, sc
     integer, intent(in) :: how
-    integer :: i, a
-    k = 0
-    do i = 1, gcv_count(kids) - 1
-       a = static_prim(gcv_nth(kids, i), sc)
-       if (a == 0 .or. a == PK_BOOL) then
-          k = 0
-          return
-       end if
-       ! a primitive integer is a long here, a float a double
-       if (any(a == [PK_INT, PK_SHORT, PK_BYTE, PK_CHAR])) a = PK_LONG
-       if (a == PK_FLOAT) a = PK_DOUBLE
-       if (i == 1) then
-          k = a
-       else if (how == 5) then
-          if (k /= a) k = PK_OBJ
-       else if (how == 3 .and. (k == PK_OBJ .or. a == PK_OBJ)) then
-          k = PK_OBJ
-       else if (k == PK_DOUBLE .or. a == PK_DOUBLE) then
-          k = PK_DOUBLE
-       else if (k == PK_OBJ .or. a == PK_OBJ) then
-          k = PK_OBJ
-       else if (how == 2) then
-          k = PK_OBJ
-       end if
-    end do
-    if (how == 6 .and. k /= PK_DOUBLE .and. k /= 0) k = PK_OBJ
+    k = int(apk_arith(kids, sc, int(how, int64), int(gcv_count(kids), int64)))
   end function arith_kind
+
+  ! operand i's kind, for the generated fold: static_prim of the child
+  recursive integer(int64) function apk_kid(kids, sc, i) result(k)
+    type(gc_value), intent(in) :: kids, sc
+    integer(int64), intent(in) :: i
+    k = static_prim(gcv_nth(kids, int(i)), sc)
+  end function apk_kid
 
   ! A call through a Var with `nargs` arguments, as InvokeExpr types it:
   ! an :inline expands to what is not modelled here (0); an :arglists
@@ -1242,9 +1208,8 @@
        if (p <= 0) cycle
        kid = gcv_nth(kids, i)
        k = static_prim(kid, sc)
-       if (k == 0) cycle
-       if (p == PK_LONG .and. any(k == [PK_LONG, PK_INT, PK_SHORT, PK_BYTE, PK_CHAR])) cycle
-       if (p == PK_DOUBLE .and. any(k == [PK_DOUBLE, PK_FLOAT])) cycle
+       ! the match, the generated apk_recur_ok's (model/anprim.lisp)
+       if (apk_recur_ok(int(p, int64), int(k, int64)) == 1) cycle
        call prim_name(k, had)
        if (k == PK_OBJ .and. gc_i1(kid) == N_CONST) then
           v = strip_meta(gc_slot(kid, 2))
@@ -2907,7 +2872,8 @@
   ! holds no node: a subform's analysis leaves its node on the context's
   ! value stack, which the collector scans, and a node is made of the top
   ! n there. It holds forms, each a part of the form analyze holds, and
-  ! integers.
+  ! integers. The primitive kinds' decisions are src/f/gen/anprim_gen.inc's
+  ! (model/anprim.lisp).
   !
   ! What is hand-written here is those shims: the form reads (frf_rest,
   ! frf_sp, frf_norm, frm_sid, frm_bid, frm_pairs), the builder's
@@ -2923,7 +2889,7 @@
   ! (anb_setnode, anb_dotnode, anb_newnode, anb_recurnode, anb_arity,
   ! anb_fnclose: a fn's template, its VM or flat compilation) and the hooks
   ! of the primitive kinds and array hints into the host's tree
-  ! (anb_loop_open, anb_let_kind, anb_let_ret).
+  ! (anb_loop_open, anb_let_kind, anb_let_ret, apk_kid).
 
   ! a list without its first element, when it has a second; else nil
   function frf_rest(x) result(e)
@@ -3633,6 +3599,7 @@
     integer(int64), intent(in) :: c, slot, loopp
     type(gc_value) :: blk, rk, init
     integer :: base, pk
+    integer(int64) :: rkk
     vst => gc_my_stack()
     e = 0
     init = anb_top()
@@ -3640,22 +3607,22 @@
     call vs_set(vst, base + 1, k)
     blk = scope_of(c)
     call vs_set(vst, base + 2, blk)
-    pk = static_prim(init, vs_get(vst, base + 2))
-    if (pk > 0 .and. has_tag(vs_get(vst, base + 1))) then
+    ! the local's kind or the refusal, the generated apk_let's
+    ! (model/anprim.lisp): its init's kind, whether its name is hinted,
+    ! and in a loop the kind a return-hinted fn's argument gives it
+    rkk = -100
+    if (loopp == 1) then
+       rk = gca_get_or_nil(gc_slot(vs_get(vst, base + 2), 5), "clotran/recur-kinds")
+       if (gcv_is(rk)) rkk = int_of(gcv_nth(rk, int(slot) - int_of(gcv_nth(gc_slot(vs_get(vst, base + 2), 4), 1))))
+    end if
+    pk = int(apk_let(int(static_prim(init, vs_get(vst, base + 2)), int64), &
+         merge(1_int64, 0_int64, has_tag(vs_get(vst, base + 1))), loopp, rkk))
+    if (pk == -2) then
        call raise_class("clotran.host.unsupported_operation_exception", &
             "Can't type hint a local with a primitive initializer", [vs_get(vst, base + 1)])
        call vs_leave(vst, base)
        e = 1
        return
-    end if
-    if (loopp == 1) then
-       if (pk == PK_INT) pk = PK_LONG
-       if (pk == PK_FLOAT) pk = PK_DOUBLE
-       rk = gca_get_or_nil(gc_slot(vs_get(vst, base + 2), 5), "clotran/recur-kinds")
-       if (gcv_is(rk)) then
-          pk = int_of(gcv_nth(rk, int(slot) - int_of(gcv_nth(gc_slot(vs_get(vst, base + 2), 4), 1))))
-          if (pk == 0) pk = PK_OBJ
-       end if
     end if
     call bind_local_kind(vs_get(vst, base + 2), int(slot), pk, [vs_get(vst, base + 1)])
     call bind_array_hint(vs_get(vst, base + 2), strip_meta(vs_get(vst, base + 1)), vs_get(vst, base + 1), &
@@ -3673,8 +3640,8 @@
     e = 0
     if (ret <= 0) return
     bk = static_prim(anb_top(), scope_of(c))
-    if (bk > 0 .and. bk /= ret .and. .not. (ret == PK_LONG .and. bk == PK_INT) &
-         .and. .not. (ret == PK_DOUBLE .and. bk == PK_FLOAT)) then
+    ! the generated apk_ret's rule (model/anprim.lisp)
+    if (apk_ret(ret, int(bk, int64)) == 1) then
        call prim_name(int(ret), rn)
        call prim_name(bk, bn)
        call raise_class("clotran.host.illegal_argument_exception", "Mismatched primitive return, expected: " // &

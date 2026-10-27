@@ -24481,6 +24481,7 @@ contains
   include "gen/anpass_gen.inc"
   include "gen/anlocal_gen.inc"
   include "gen/anform_gen.inc"
+  include "gen/anprim_gen.inc"
   include "gen/anbuild_gen.inc"
   include "exec.inc"
   include "rational.inc"
