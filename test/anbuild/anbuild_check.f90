@@ -125,6 +125,9 @@ contains
   integer(int64) function frm_amp(x)
     type(gc_value), intent(in) :: x
     frm_amp = 0
+    if (frm_kind(x) == 2) then
+       if (fsid(x%id) == 70) frm_amp = 1
+    end if
   end function frm_amp
 
   integer(int64) function frm_sid(x)
@@ -399,52 +402,146 @@ contains
     call anb_an(ls, bs, x, b, r)
   end subroutine anb_sub
 
-  ! the hand-written drivers: the fuzzer draws none of their forms
-  recursive subroutine anb_set(ls, bs, x, b, r)
+  ! the drivers' host reads, as scripts/fuzz-anbuild-gen attaches them in
+  ! ACL2: a symbol's raw defvar (fd) and class (fc) fields decide
+  integer function fd(x)
+    type(gc_value), intent(in) :: x
+    fd = 0
+    if (frm_kind(x) == 2) fd = fdefv(x%id)
+  end function fd
+  integer function fc(x)
+    type(gc_value), intent(in) :: x
+    fc = 0
+    if (frm_kind(x) == 2) fc = fclass(x%id)
+  end function fc
+
+  integer(int64) function anb_set_kind(x, b) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    type(gc_value) :: t
+    t = frf_nth(x, 1_int64)
+    k = 3
+    if (frf_kind(t) == 3) then
+       k = 1
+    else if (frm_kind(t) == 2) then
+       k = 0
+       if (fc(t) == 1) k = 2
+       if (fd(t) == 3) k = 3
+    end if
+  end function anb_set_kind
+  integer(int64) function anb_dot_kind(x, b) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    type(gc_value) :: t
+    t = frf_nth(x, 1_int64)
+    k = 0
+    if (frm_kind(t) == 2) then
+       if (fc(t) == 1) k = 1
+       if (fd(t) == 2) k = 2
+       if (fd(t) == 3) k = 3
+    end if
+  end function anb_dot_kind
+  integer(int64) function anb_new_kind(x) result(k)
+    type(gc_value), intent(in) :: x
+    k = 0
+    if (fd(frf_nth(x, 1_int64)) == 2) k = 2
+  end function anb_new_kind
+  integer(int64) function anb_recur_open(x, b) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    k = 0
+    if (frf_len(x) > 3) k = 1
+  end function anb_recur_open
+  integer(int64) function anb_recur_check(x, b, n) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b, n
+    k = 0
+    if (n == 2) k = 1
+  end function anb_recur_check
+  integer(int64) function anb_fn_open(x, r, self) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: r, self
+    k = 0
+  end function anb_fn_open
+  integer(int64) function anb_method_open(m, r, mb, start, nreq, rest) result(k)
+    type(gc_value), intent(in) :: m
+    integer(int64), intent(in) :: r, mb, start, nreq, rest
+    k = 0
+    if (nreq == 2) k = 2
+    if (nreq == 3) k = 1
+  end function anb_method_open
+  integer(int64) function anb_method_check(mb) result(k)
+    integer(int64), intent(in) :: mb
+    k = 0
+  end function anb_method_check
+  integer(int64) function anb_fn_check(x, r, n) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: r, n
+    k = 0
+    if (n == 3) k = 1
+  end function anb_fn_check
+
+  ! what the host analyses itself: N_CONST, as the attachment's
+  recursive subroutine anb_host2(ls, bs, w, x, b, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    integer(int64), value :: w, b
+    type(gc_value), value :: x
+    integer(int64), intent(out) :: r
+    r = 0
+    call push(mk(1, 0, 0, 0))
+  end subroutine anb_host2
+
+  ! the drivers' nodes, as model/anbuild.lisp defines them
+  subroutine anb_setnode(bs, x, n)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: n
+    call node_of(24, merge(2, 0, n == 2), int(n), 0)
+  end subroutine anb_setnode
+  subroutine anb_dotnode(bs, x, k, n)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: k, n
+    call node_of(21, 0, int(n), 0)
+  end subroutine anb_dotnode
+  subroutine anb_newnode(bs, x, n)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: n
+    call node_of(22, 0, int(n), 0)
+  end subroutine anb_newnode
+  subroutine anb_recurnode(bs, x, b, n)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: b, n
+    call node_of(16, int(n), int(n), 0)
+  end subroutine anb_recurnode
+  subroutine anb_arity(bs, m, mb, start, nreq, rest)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: m
+    integer(int64), value :: mb, start, nreq, rest
+  end subroutine anb_arity
+  subroutine anb_newfn(ls, b, r)
+    type(anl_state), intent(inout) :: ls
+    integer(int64), value :: b
+    integer(int64), intent(out) :: r
+    call anl_new_fn(ls, b, r)
+  end subroutine anb_newfn
+  ! a fn's node: its n bodies taken off (anb-ser writes kind 14 with none)
+  subroutine anb_fnclose(ls, bs, x, r, n)
     type(anl_state), intent(inout) :: ls
     type(anb_state), intent(inout) :: bs
     type(gc_value), value :: x
-    integer(int64), value :: b
-    integer(int64), intent(out) :: r
-    r = 0
-    error stop "anbuild_check: set! is not drawn"
-  end subroutine anb_set
-  recursive subroutine anb_dot(ls, bs, x, b, r)
-    type(anl_state), intent(inout) :: ls
-    type(anb_state), intent(inout) :: bs
-    type(gc_value), value :: x
-    integer(int64), value :: b
-    integer(int64), intent(out) :: r
-    r = 0
-    error stop "anbuild_check: . is not drawn"
-  end subroutine anb_dot
-  recursive subroutine anb_new(ls, bs, x, b, r)
-    type(anl_state), intent(inout) :: ls
-    type(anb_state), intent(inout) :: bs
-    type(gc_value), value :: x
-    integer(int64), value :: b
-    integer(int64), intent(out) :: r
-    r = 0
-    error stop "anbuild_check: new is not drawn"
-  end subroutine anb_new
-  recursive subroutine anb_recur(ls, bs, x, b, r)
-    type(anl_state), intent(inout) :: ls
-    type(anb_state), intent(inout) :: bs
-    type(gc_value), value :: x
-    integer(int64), value :: b
-    integer(int64), intent(out) :: r
-    r = 0
-    error stop "anbuild_check: recur is not drawn"
-  end subroutine anb_recur
-  recursive subroutine anb_fn(ls, bs, x, b, r)
-    type(anl_state), intent(inout) :: ls
-    type(anb_state), intent(inout) :: bs
-    type(gc_value), value :: x
-    integer(int64), value :: b
-    integer(int64), intent(out) :: r
-    r = 0
-    error stop "anbuild_check: fn* is not drawn"
-  end subroutine anb_fn
+    integer(int64), value :: r, n
+    top = max(0, top - int(n))
+    call push(mk(14, 0, 0, 0))
+  end subroutine anb_fnclose
+  function frf_norm(x) result(e)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: e
+    e = x
+  end function frf_norm
 
   integer(int64) function anb_loop_open(c, start, n)
     integer(int64), intent(in) :: c, start, n

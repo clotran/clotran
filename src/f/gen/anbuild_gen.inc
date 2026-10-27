@@ -1,9 +1,10 @@
   ! GENERATED from model/anbuild.lisp by scripts/acl2-fortran -b anbuild. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the analyzer's node assembly -- anb_an, one form to its node:
-  ! a local, or if, do, def, quote, throw, let*, loop*, letfn* and try built here,
-  ! set!, ., new, recur and fn* after their checks by the hand-written drivers,
-  ! the rest the host's -- guard-verified, reading forms through analyze.inc's
+  ! a local, or if, do, def, quote, throw, let*, loop*, letfn*, try, set!, ., new,
+  ! recur and fn* built here, their drivers included (what the host decides of
+  ! their forms read through analyze.inc's anb_*_kind hooks), the rest the host's
+  ! -- guard-verified, reading forms through analyze.inc's
   ! frf_*/frm_* shims and building nodes on the context's value stack through
   ! its anb_* shims, so no node is held in a variable here. anbuild-proof.lisp
   ! proves a whole analysis with no error leaves one node, well-formed by
@@ -757,3 +758,495 @@
       exit
     end do
   end subroutine anb_try_walk
+
+  subroutine anb_params(ls, pv_, i_, c_, k_)
+    type(anl_state), intent(inout) :: ls
+    type(gc_value), value :: pv_
+    integer(int64), value :: i_
+    integer(int64), value :: c_
+    integer(int64), value :: k_
+    integer(int64) :: c_5
+    integer(int64) :: c_9
+    integer(int64) :: i_4
+    integer(int64) :: i_8
+    integer(int64) :: k_10
+    integer(int64) :: k_6
+    type(gc_value) :: p_2
+    type(gc_value) :: pv_3
+    type(gc_value) :: pv_7
+    logical :: t_1
+    do
+      if ((i_ >= 0_int64)) then
+        t_1 = (i_ < frm_count(pv_))
+      else
+        t_1 = .false.
+      end if
+      if (t_1) then
+        p_2 = frm_nth(pv_, i_)
+        if ((frm_amp(p_2) == 1_int64)) then
+          pv_3 = pv_
+          i_4 = (1_int64 + i_)
+          c_5 = c_
+          k_6 = k_
+          pv_ = pv_3
+          i_ = i_4
+          c_ = c_5
+          k_ = k_6
+          cycle
+        else
+          call anl_bind(ls, c_, frm_bid(p_2), k_)
+          pv_7 = pv_
+          i_8 = (1_int64 + i_)
+          c_9 = c_
+          k_10 = (1_int64 + k_)
+          pv_ = pv_7
+          i_ = i_8
+          c_ = c_9
+          k_ = k_10
+          cycle
+        end if
+      else
+      end if
+      exit
+    end do
+  end subroutine anb_params
+
+  subroutine anb_self(ls, r_, nm_, r)
+    type(anl_state), intent(inout) :: ls
+    integer(int64), value :: r_
+    type(gc_value), value :: nm_
+    integer(int64), intent(out) :: r
+    integer(int64) :: mv_1
+    integer(int64) :: s_2
+    if ((frm_kind(nm_) == 2_int64)) then
+      call anl_reserve(ls, r_, 1_int64, mv_1)
+      s_2 = mv_1
+      call anl_bind(ls, r_, frm_bid(nm_), s_2)
+      r = s_2
+    else
+      r = (-1_int64)
+    end if
+  end subroutine anb_self
+
+  recursive subroutine anb_set(ls, bs, x_, b_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x_
+    integer(int64), value :: b_
+    integer(int64), intent(out) :: r
+    integer(int64) :: e_4
+    integer(int64) :: e_6
+    integer(int64) :: e_8
+    integer(int64) :: k_1
+    integer(int64) :: mv_3
+    integer(int64) :: mv_5
+    integer(int64) :: mv_7
+    logical :: t_2
+    k_1 = anb_set_kind(x_, b_)
+    if ((k_1 == 2_int64)) then
+      call anb_host2(ls, bs, 1_int64, x_, b_, r)
+    else
+      if ((k_1 == 1_int64)) then
+        t_2 = (frf_kind(frf_nth(x_, 1_int64)) == 3_int64)
+      else
+        t_2 = .false.
+      end if
+      if (t_2) then
+        call anb_sub(ls, bs, frf_nth(frf_nth(x_, 1_int64), 1_int64), b_, mv_3)
+        e_4 = mv_3
+        if ((.not. (e_4 == 0_int64))) then
+          r = e_4
+        else
+          call anb_sub(ls, bs, frf_nth(x_, 2_int64), b_, mv_5)
+          e_6 = mv_5
+          if ((.not. (e_6 == 0_int64))) then
+            r = e_6
+          else
+            call anb_setnode(bs, x_, 2_int64)
+            r = 0_int64
+          end if
+        end if
+      else
+        if ((k_1 == 0_int64)) then
+          call anb_sub(ls, bs, frf_nth(x_, 2_int64), b_, mv_7)
+          e_8 = mv_7
+          if ((.not. (e_8 == 0_int64))) then
+            r = e_8
+          else
+            call anb_setnode(bs, x_, 1_int64)
+            r = 0_int64
+          end if
+        else
+          r = 1_int64
+        end if
+      end if
+    end if
+  end subroutine anb_set
+
+  recursive subroutine anb_dot(ls, bs, x_, b_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x_
+    integer(int64), value :: b_
+    integer(int64), intent(out) :: r
+    type(gc_value) :: args_11
+    type(gc_value) :: args_5
+    integer(int64) :: e_13
+    integer(int64) :: e_2
+    integer(int64) :: e_7
+    integer(int64) :: e_9
+    integer(int64) :: k_3
+    integer(int64) :: mv_1
+    integer(int64) :: mv_12
+    integer(int64) :: mv_6
+    integer(int64) :: mv_8
+    type(gc_value) :: t_10
+    type(gc_value) :: t_4
+    if ((.not. (anf_dot_member(frf_len(x_), frf_norm(frf_nth(x_, 2_int64))) == 0_int64))) then
+      if ((frf_class(frf_nth(x_, 1_int64)) == 1_int64)) then
+        call anb_refuse(bs, 37_int64, x_)
+        r = 37_int64
+      else
+        call anb_sub(ls, bs, frf_nth(x_, 1_int64), b_, mv_1)
+        e_2 = mv_1
+        if ((.not. (e_2 == 0_int64))) then
+          r = e_2
+        else
+          call anb_refuse(bs, 37_int64, x_)
+          r = 37_int64
+        end if
+      end if
+    else
+      k_3 = anb_dot_kind(x_, b_)
+      select case (k_3)
+      case (2_int64)
+        call anb_host2(ls, bs, 2_int64, x_, b_, r)
+      case (1_int64)
+        call anb_const(bs, frf_nth(x_, 1_int64))
+        if ((frf_kind(frf_norm(frf_nth(x_, 2_int64))) == 3_int64)) then
+          t_4 = frf_rest(frf_norm(frf_nth(x_, 2_int64)))
+        else
+          t_4 = frf_rest(frf_rest(frf_rest(x_)))
+        end if
+        args_5 = t_4
+        call anb_listn(ls, bs, args_5, frf_len(args_5), b_, mv_6)
+        e_7 = mv_6
+        if ((.not. (e_7 == 0_int64))) then
+          r = e_7
+        else
+          call anb_dotnode(bs, x_, 1_int64, (1_int64 + frf_len(args_5)))
+          r = 0_int64
+        end if
+      case (0_int64)
+        call anb_sub(ls, bs, frf_nth(x_, 1_int64), b_, mv_8)
+        e_9 = mv_8
+        if ((.not. (e_9 == 0_int64))) then
+          r = e_9
+        else
+          if ((frf_kind(frf_norm(frf_nth(x_, 2_int64))) == 3_int64)) then
+            t_10 = frf_rest(frf_norm(frf_nth(x_, 2_int64)))
+          else
+            t_10 = frf_rest(frf_rest(frf_rest(x_)))
+          end if
+          args_11 = t_10
+          call anb_listn(ls, bs, args_11, frf_len(args_11), b_, mv_12)
+          e_13 = mv_12
+          if ((.not. (e_13 == 0_int64))) then
+            r = e_13
+          else
+            call anb_dotnode(bs, x_, 0_int64, (1_int64 + frf_len(args_11)))
+            r = 0_int64
+          end if
+        end if
+      case default
+        r = 1_int64
+      end select
+    end if
+  end subroutine anb_dot
+
+  recursive subroutine anb_new(ls, bs, x_, b_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x_
+    integer(int64), value :: b_
+    integer(int64), intent(out) :: r
+    type(gc_value) :: args_1
+    integer(int64) :: e_3
+    integer(int64) :: mv_2
+    if ((anb_new_kind(x_) == 2_int64)) then
+      call anb_host2(ls, bs, 3_int64, x_, b_, r)
+    else
+      args_1 = frf_rest(frf_rest(x_))
+      call anb_listn(ls, bs, args_1, frf_len(args_1), b_, mv_2)
+      e_3 = mv_2
+      if ((.not. (e_3 == 0_int64))) then
+        r = e_3
+      else
+        call anb_newnode(bs, x_, frf_len(args_1))
+        r = 0_int64
+      end if
+    end if
+  end subroutine anb_new
+
+  recursive subroutine anb_recur(ls, bs, x_, b_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x_
+    integer(int64), value :: b_
+    integer(int64), intent(out) :: r
+    type(gc_value) :: args_1
+    integer(int64) :: e_3
+    integer(int64) :: mv_2
+    args_1 = frf_rest(x_)
+    if ((.not. (anb_recur_open(x_, b_) == 0_int64))) then
+      r = 1_int64
+    else
+      call anb_listn(ls, bs, args_1, frf_len(args_1), b_, mv_2)
+      e_3 = mv_2
+      if ((.not. (e_3 == 0_int64))) then
+        r = e_3
+      else
+        if ((.not. (anb_recur_check(x_, b_, frf_len(args_1)) == 0_int64))) then
+          r = 1_int64
+        else
+          call anb_recurnode(bs, x_, b_, frf_len(args_1))
+          r = 0_int64
+        end if
+      end if
+    end if
+  end subroutine anb_recur
+
+  recursive subroutine anb_fn(ls, bs, x_, b_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x_
+    integer(int64), value :: b_
+    integer(int64), intent(out) :: r
+    integer(int64) :: e_14
+    integer(int64) :: e_16
+    integer(int64) :: h_8
+    integer(int64) :: mv_13
+    integer(int64) :: mv_15
+    integer(int64) :: mv_4
+    integer(int64) :: mv_6
+    integer(int64) :: n_12
+    integer(int64) :: named_3
+    type(gc_value) :: nm_1
+    integer(int64) :: r_5
+    integer(int64) :: self_7
+    integer(int64) :: t_11
+    integer(int64) :: t_2
+    type(gc_value) :: t_9
+    type(gc_value) :: xs_10
+    nm_1 = frf_nth(x_, 1_int64)
+    if ((frm_kind(nm_1) == 2_int64)) then
+      t_2 = 1_int64
+    else
+      t_2 = 0_int64
+    end if
+    named_3 = t_2
+    call anb_newfn(ls, b_, mv_4)
+    r_5 = mv_4
+    call anb_self(ls, r_5, nm_1, mv_6)
+    self_7 = mv_6
+    h_8 = anb_fn_open(x_, r_5, self_7)
+    if ((named_3 == 1_int64)) then
+      t_9 = frf_rest(frf_rest(x_))
+    else
+      t_9 = frf_rest(x_)
+    end if
+    xs_10 = t_9
+    if ((frm_kind(frf_nth(xs_10, 0_int64)) == 1_int64)) then
+      t_11 = 1_int64
+    else
+      t_11 = frf_len(xs_10)
+    end if
+    n_12 = t_11
+    if ((.not. (h_8 == 0_int64))) then
+      r = h_8
+    else
+      if ((frm_kind(frf_nth(xs_10, 0_int64)) == 1_int64)) then
+        call anb_method(ls, bs, xs_10, r_5, mv_13)
+        e_14 = mv_13
+        if ((.not. (e_14 == 0_int64))) then
+          r = e_14
+        else
+          if ((.not. (anl_arity_end(ls, r_5) == 0_int64))) then
+            call anb_refuse(bs, 12_int64, x_)
+            r = 12_int64
+          else
+            if ((.not. (anb_fn_check(x_, r_5, n_12) == 0_int64))) then
+              r = 1_int64
+            else
+              call anl_caps_of(ls, r_5)
+              call anb_fnclose(ls, bs, x_, r_5, n_12)
+              r = 0_int64
+            end if
+          end if
+        end if
+      else
+        call anb_methods(ls, bs, xs_10, frf_len(xs_10), r_5, mv_15)
+        e_16 = mv_15
+        if ((.not. (e_16 == 0_int64))) then
+          r = e_16
+        else
+          if ((.not. (anl_arity_end(ls, r_5) == 0_int64))) then
+            call anb_refuse(bs, 12_int64, x_)
+            r = 12_int64
+          else
+            if ((.not. (anb_fn_check(x_, r_5, n_12) == 0_int64))) then
+              r = 1_int64
+            else
+              call anl_caps_of(ls, r_5)
+              call anb_fnclose(ls, bs, x_, r_5, n_12)
+              r = 0_int64
+            end if
+          end if
+        end if
+      end if
+    end if
+  end subroutine anb_fn
+
+  recursive subroutine anb_methods(ls, bs, ms_, n_, r_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: ms_
+    integer(int64), value :: n_
+    integer(int64), value :: r_
+    integer(int64), intent(out) :: r
+    integer(int64) :: e_4
+    type(gc_value) :: ms_6
+    integer(int64) :: mv_3
+    integer(int64) :: n_7
+    integer(int64) :: r_8
+    logical :: t_1
+    logical :: t_2
+    logical :: t_5
+    do
+      if ((.not. (n_ >= 0_int64))) then
+        t_2 = (.not. (n_ >= 0_int64))
+      else
+        if ((n_ == 0_int64)) then
+          t_1 = (n_ == 0_int64)
+        else
+          t_1 = (frf_len(ms_) == 0_int64)
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+        r = 0_int64
+      else
+        call anb_method(ls, bs, frf_nth(ms_, 0_int64), r_, mv_3)
+        e_4 = mv_3
+        if ((.not. (e_4 == 0_int64))) then
+          t_5 = (.not. (e_4 == 0_int64))
+        else
+          t_5 = (frf_len(ms_) < 2_int64)
+        end if
+        if (t_5) then
+          r = e_4
+        else
+          ms_6 = frf_rest(ms_)
+          n_7 = ((-1_int64) + n_)
+          r_8 = r_
+          ms_ = ms_6
+          n_ = n_7
+          r_ = r_8
+          cycle
+        end if
+      end if
+      exit
+    end do
+  end subroutine anb_methods
+
+  recursive subroutine anb_method(ls, bs, m_, r_, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: m_
+    integer(int64), value :: r_
+    integer(int64), intent(out) :: r
+    type(gc_value) :: cl_1
+    integer(int64) :: code_14
+    integer(int64) :: code_18
+    integer(int64) :: code_3
+    integer(int64) :: e_12
+    integer(int64) :: e_16
+    integer(int64) :: h_10
+    integer(int64) :: mb_7
+    integer(int64) :: mv_11
+    integer(int64) :: mv_13
+    integer(int64) :: mv_15
+    integer(int64) :: mv_17
+    integer(int64) :: mv_6
+    integer(int64) :: mv_8
+    integer(int64) :: nreq_4
+    type(gc_value) :: pv_2
+    integer(int64) :: rest_5
+    integer(int64) :: start_9
+    cl_1 = frf_norm(m_)
+    pv_2 = frf_nth(cl_1, 0_int64)
+    if ((.not. (frm_kind(pv_2) == 1_int64))) then
+      call anb_refuse(bs, 13_int64, cl_1)
+      r = 13_int64
+    else
+      code_3 = anl_params(pv_2, 0_int64)
+      if ((.not. (code_3 == 0_int64))) then
+        call anb_refuse(bs, code_3, frm_nth(pv_2, anl_params(pv_2, 1_int64)))
+        r = code_3
+      else
+        nreq_4 = anl_params(pv_2, 2_int64)
+        rest_5 = anl_params(pv_2, 3_int64)
+        call anb_child(ls, r_, mv_6)
+        mb_7 = mv_6
+        call anl_reserve(ls, mb_7, (nreq_4 + rest_5), mv_8)
+        start_9 = mv_8
+        call anb_params(ls, pv_2, 0_int64, mb_7, start_9)
+        h_10 = anb_method_open(cl_1, r_, mb_7, start_9, nreq_4, rest_5)
+        if ((h_10 == 1_int64)) then
+          r = 1_int64
+        else
+          if ((h_10 == 2_int64)) then
+            call anb_host2(ls, bs, 4_int64, cl_1, mb_7, mv_11)
+            e_12 = mv_11
+            if ((.not. (e_12 == 0_int64))) then
+              r = e_12
+            else
+              if ((.not. (anb_method_check(mb_7) == 0_int64))) then
+                r = 1_int64
+              else
+                call anl_arity(ls, r_, nreq_4, rest_5, mv_13)
+                code_14 = mv_13
+                if ((.not. (code_14 == 0_int64))) then
+                  call anb_refuse(bs, code_14, cl_1)
+                  r = code_14
+                else
+                  call anb_arity(bs, cl_1, mb_7, start_9, nreq_4, rest_5)
+                  r = 0_int64
+                end if
+              end if
+            end if
+          else
+            call anb_body(ls, bs, frf_rest(cl_1), mb_7, mv_15)
+            e_16 = mv_15
+            if ((.not. (e_16 == 0_int64))) then
+              r = e_16
+            else
+              if ((.not. (anb_method_check(mb_7) == 0_int64))) then
+                r = 1_int64
+              else
+                call anl_arity(ls, r_, nreq_4, rest_5, mv_17)
+                code_18 = mv_17
+                if ((.not. (code_18 == 0_int64))) then
+                  call anb_refuse(bs, code_18, cl_1)
+                  r = code_18
+                else
+                  call anb_arity(bs, cl_1, mb_7, start_9, nreq_4, rest_5)
+                  r = 0_int64
+                end if
+              end if
+            end if
+          end if
+        end if
+      end if
+    end if
+  end subroutine anb_method

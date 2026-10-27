@@ -698,6 +698,10 @@ module Eval
      ! path, and the name a let or def binds the next fn* to (Compiler
      ! FnExpr.parse's basename and name)
      character(len=:), allocatable :: fn_path, fn_hint
+     ! the fns being analysed, innermost last (analyze.inc anb_fn_open):
+     ! the length of the path before each, and whether its hint rules apply
+     integer :: fnp_n = 0
+     integer, allocatable :: fnp_len(:), fnp_hint(:)
      type(gc_value) :: cur_task
      type(gc_root) :: scratch1_root, scratch2_root, recur_root, noargs_root
      ! the scheduler's, per context: who stepped it, whether it is to end,

@@ -274,18 +274,23 @@
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn
-           anb-try anb-try-walk]
+           anb-try anb-try-walk anb-params anb-self anb-set anb-dot anb-new anb-recur anb-fn anb-methods anb-method]
      ;; the shims (analyze.inc anb_*), and what anlocal and anform generate
      :host [anb-sub anb-host anb-meta anb-const anb-local anb-node anb-node-s anb-refuse anb-refuse-catch anb-hint
-            anb-defvar anb-def anb-catch anb-trynode anb-child anb-set anb-dot anb-new anb-recur anb-fn
+            anb-defvar anb-def anb-catch anb-trynode anb-child
+            anb-host2 anb-setnode anb-dotnode anb-newnode anb-recurnode anb-arity anb-newfn anb-fnclose
+            anb-set-kind anb-dot-kind anb-new-kind anb-recur-open anb-recur-check anb-fn-open anb-method-open anb-method-check anb-fn-check
             anb-loop-open anb-let-kind anb-let-ret
-            anl-lookup anl-reserve anl-bind anl-shape anl-name-code
-            anf-if anf-def anf-quote anf-throw anf-try-op anf-try-step anf-catch anf-set anf-set-target anf-dot anf-new]
+            anl-lookup anl-reserve anl-bind anl-shape anl-name-code anl-params anl-arity anl-arity-end anl-caps-of
+            anf-if anf-def anf-quote anf-throw anf-try-op anf-try-step anf-catch anf-set anf-set-target anf-dot anf-dot-member anf-new]
      :stobjs {anls "ls" anb "bs"} :stobj-types {"ls" "anl_state" "bs" "anb_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {anb-defend #{x} anb-deff #{x} anb-try-n #{xs} anb-drop #{xs} anb-try-fin #{cls} anb-lfnames #{bv} anb-an #{x} anb-listn #{xs}
                      anb-body #{xs} anb-binds #{bv} anb-let #{x} anb-lfinits #{bv} anb-letfn #{x} anb-try #{x}
-                     anb-try-walk #{cls}
+                     anb-try-walk #{cls} anb-params #{pv} anb-self #{nm} anb-methods #{ms} anb-method #{m}
+                     anb-host2 #{x} anb-setnode #{x} anb-dotnode #{x} anb-newnode #{x} anb-recurnode #{x} anb-arity #{m} anb-fnclose #{x}
+                     anb-set-kind #{x} anb-dot-kind #{x} anb-new-kind #{x} anb-recur-open #{x} anb-recur-check #{x} anb-fn-open #{x}
+                     anb-method-open #{m} anl-params #{pv} anf-dot-member #{m}
                      anb-sub #{x} anb-host #{x} anb-meta #{x} anb-const #{x} anb-local #{x} anb-refuse #{f}
                      anb-refuse-catch #{f} anb-hint #{x} anb-defvar #{x} anb-def #{x} anb-catch #{f} anb-set #{x}
                      anb-dot #{x} anb-new #{x} anb-recur #{x} anb-fn #{x} anb-let-kind #{k}
@@ -298,13 +303,15 @@
      :rt {frm-kind ["frm_kind" [:val] :int] frm-count ["frm_count" [:val] :int] frm-nth ["frm_nth" [:val :int] :val]
           frf-kind ["frf_kind" [:val] :int] frf-len ["frf_len" [:val] :int] frf-nth ["frf_nth" [:val :int] :val]
           frf-rest ["frf_rest" [:val] :val] frf-sp ["frf_sp" [:val] :int]
-          frm-sid ["frm_sid" [:val] :int] frm-bid ["frm_bid" [:val] :int] frm-pairs ["frm_pairs" [:val] :int]}
+          frm-sid ["frm_sid" [:val] :int] frm-bid ["frm_bid" [:val] :int] frm-pairs ["frm_pairs" [:val] :int]
+          frf-class ["frf_class" [:val] :int] frm-amp ["frm_amp" [:val] :int] frf-norm ["frf_norm" [:val] :val]}
      :header ["  ! GENERATED from model/anbuild.lisp by scripts/acl2-fortran -b anbuild. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the analyzer's node assembly -- anb_an, one form to its node:"
-              "  ! a local, or if, do, def, quote, throw, let*, loop*, letfn* and try built here,"
-              "  ! set!, ., new, recur and fn* after their checks by the hand-written drivers,"
-              "  ! the rest the host's -- guard-verified, reading forms through analyze.inc's"
+              "  ! a local, or if, do, def, quote, throw, let*, loop*, letfn*, try, set!, ., new,"
+              "  ! recur and fn* built here, their drivers included (what the host decides of"
+              "  ! their forms read through analyze.inc's anb_*_kind hooks), the rest the host's"
+              "  ! -- guard-verified, reading forms through analyze.inc's"
               "  ! frf_*/frm_* shims and building nodes on the context's value stack through"
               "  ! its anb_* shims, so no node is held in a variable here. anbuild-proof.lisp"
               "  ! proves a whole analysis with no error leaves one node, well-formed by"

@@ -166,7 +166,7 @@
 (defthm anl-capnames-nev (equal (anl-capnames c (update-anl-nev v anls)) (anl-capnames c anls)))
 
 ; THE FN'S CAPTURES IN ITS NODE: anb-fn's node lists the outer slots of its
-; capture records, oldest first (scope_caps), one for each name anl-fcaps
+; capture records, oldest first (caps_vec), one for each name anl-fcaps
 ; lists -- the free locals the fn uses (anl-lookup-caps-own, -any, -nodup)
 (defthm anb-fn-caps
   (implies (< (len (anb-capouts (anl-g-fcap (anl-g-bfn b anls) anls) anls)) (- *anl40* 1))

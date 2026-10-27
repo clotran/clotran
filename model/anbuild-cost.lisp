@@ -138,3 +138,26 @@
         ((< (frf-len cls) 2) 1)
         (t (+ 1 (anb-try-fin-steps (frf-rest cls))))))
 (defthm anb-try-fin-steps-bound (<= (anb-try-fin-steps cls) (+ 1 (anb-len cls))) :rule-classes :linear)
+
+; THE DRIVERS. A fn's methods: one step each over the first n, the
+; methods' own analyses counted where they run
+(defun-nx anb-methods-steps (ms n r anls anb)
+  (declare (xargs :measure (acl2-count ms)))
+  (if (or (not (natp n)) (equal n 0) (equal (frf-len ms) 0)) 1
+    (let ((rr (anb-method (frf-nth ms 0) r anls anb)))
+      (if (or (not (equal (car rr) 0)) (< (frf-len ms) 2)) 1
+        (+ 1 (anb-methods-steps (frf-rest ms) (- n 1) r (mv-nth 1 rr) (mv-nth 2 rr)))))))
+
+(defthm anb-methods-steps-bound (<= (anb-methods-steps ms n r anls anb) (+ 1 (nfix n))) :rule-classes :linear)
+
+; and each driver's own work, its subforms' analyses, its walks (anb-listn,
+; anb-methods, anb-params, anb-self) and the host's counted where they run:
+; the reads, checks, hook calls and node shims on its longest path -- a
+; set! 7, a . 10, a new 4, a recur 5, a fn* 11, a method 12
+(defun anb-drv-own (sp)
+  (case sp (7 7) (8 10) (9 4) (13 5) (14 11) (otherwise 12)))
+(defthm anb-drv-own-bound (<= (anb-drv-own sp) 12) :rule-classes :linear)
+
+; a fn's own name: a reserve and a bind, or nothing
+(defun anb-self-steps (nm) (if (equal (frm-kind nm) 2) 2 1))
+(defthm anb-self-steps-bound (<= (anb-self-steps nm) 2) :rule-classes :linear)

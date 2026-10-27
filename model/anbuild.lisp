@@ -6,9 +6,10 @@
 ; anb-an is the analysis of one form in block b, and Fortran's analyze runs
 ; it on every form: a symbol bound locally is N_LOCAL of anl-lookup's slot;
 ; a list headed by one of Clojure's special forms is that form's node, built
-; here -- if, do, def, quote, throw, let*, loop*, letfn*, try -- or by the
-; hand-written driver this book states (anb-fn, anb-set, anb-dot, anb-new,
-; anb-recur), after the generated checks; everything else -- a var, a call,
+; here -- if, do, def, quote, throw, let*, loop*, letfn*, try, and by the
+; drivers of set!, ., new, recur and fn* (anb-set, anb-dot, anb-new,
+; anb-recur, anb-fn), what the host decides of their forms read through the
+; hooks anb-*-kind and the rest; everything else -- a var, a call,
 ; a macro expanded through the evaluator, a collection, a literal, var,
 ; case*, deftype*, reify* and clotran's own special forms -- is the host's
 ; (anb-host, constrained). A subform is analysed by anb-sub, which is anb-an
@@ -209,12 +210,51 @@
   (declare (xargs :stobjs anb :guard (signed-byte-p 64 n)))
   (mv-let (bodies rest) (anb-popn (nfix n) (anb-stk anb) nil)
     (update-anb-stk (cons (anf-fn-node caps bodies) rest) anb)))
-; a fn's captures, as its node lists them (scope_caps): the outer slots, oldest first
+; a fn's captures, as its node lists them (caps_vec): the outer slots, oldest first
 (defun anb-caps (i anls)
   (declare (xargs :stobjs anls :guard (signed-byte-p 64 i) :measure (nfix (- (nfix (anl-nev anls)) (nfix i)))))
   (if (and (natp i) (natp (anl-nev anls)) (< i (anl-nev anls)))
       (append (anb-caps (+ 1 i) anls) (list (anl-g-ev i anls)))
     nil))
+
+; THE DRIVERS' NODES, each the host's node of its kind made of the top n
+; (analyze.inc's shims build clotran's: a set!'s var, static or field, a
+; .'s member and target, a new's class, a recur's target and a method's
+; `this`), and what a method and a fn leave
+; (set! target value): N_SETBANG of its value, or of a field's object and value
+(defun anb-setnode (x n anb)
+  (declare (xargs :stobjs anb :guard (member n '(1 2))) (ignore x))
+  (anb-node 24 (if (equal n 2) 2 0) n anb))
+; (. target member args*): of kind k (0 an instance's, 1 a class's), the
+; target then the arguments
+(defun anb-dotnode (x k n anb)
+  (declare (xargs :stobjs anb :guard (and (signed-byte-p 64 k) (signed-byte-p 64 n))) (ignore x k))
+  (anb-node 21 0 n anb))
+(defun anb-newnode (x n anb)
+  (declare (xargs :stobjs anb :guard (signed-byte-p 64 n)) (ignore x))
+  (anb-node 22 0 n anb))
+; (recur args*) in block b: its arguments
+(defun anb-recurnode (x b n anb)
+  (declare (xargs :stobjs anb :guard (signed-byte-p 64 n)) (ignore x b))
+  (anb-node 16 n n anb))
+; a method's body, on top, becomes its arity: its parameters' count and
+; first slot, the body (the host's [nfixed variadic first-slot body])
+(defun anb-arity (m mb start nreq rest anb)
+  (declare (xargs :stobjs anb :guard t) (ignore m mb start nreq rest))
+  anb)
+; a fn's root block in block b, and its heap object
+(defun anb-newfn (b anls)
+  (declare (xargs :stobjs anls :guard (signed-byte-p 64 b)))
+  (anl-new-fn b anls))
+; the fn x in root block r, its n arities on top: its node, with the
+; captures anl-caps-of left (the host's template: the arities' tail
+; checks passed, their locals cleared, the VM's or flat compilation)
+(defun anb-fnclose (x r n anls anb)
+  (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 n)) (ignore x r))
+  (anb-fnnode n (anb-caps 0 anls) anb))
+; a clause as the drivers read it: a seq realised (analyze.inc
+; norm_form); the form itself here, where every list is one
+(defun frf-norm (x) (declare (xargs :guard t)) x)
 
 ; ---- THE HOST'S ---------------------------------------------------------------------------------
 
@@ -247,6 +287,28 @@
          (implies (anlsp anls) (anlsp (mv-nth 1 (anb-host-meta x b anls anb))))
          (implies (anbp anb) (anbp (mv-nth 2 (anb-host-meta x b anls anb)))))))
 
+; what a driver leaves to the host, w which: 1 a set! of a deftype's
+; mutable field, rewritten (set! (.-f this) v); 2 a . whose target names a
+; host class (a static member, a box, or a member of the class); 3 the
+; lazy seq a (new clotran.host.lazy_seq (fn* [] ..)) is; 4 a method body
+; its primitive hints rewrite (a let* or loop* of the casts) -- each
+; analysed by the host, its node constrained as anb-host's is
+(encapsulate
+  (((anb-host2 * * * anls anb) => (mv * anls anb) :formals (w x b anls anb)
+    :guard (and (signed-byte-p 64 w) (signed-byte-p 64 b))))
+  (local (defun anb-host2 (w x b anls anb)
+           (declare (xargs :stobjs (anls anb) :guard (and (signed-byte-p 64 w) (signed-byte-p 64 b))) (ignore w x b))
+           (let ((anb (anb-push (anf-node 1 0 nil nil nil) anb))) (mv 0 anls anb))))
+  (defthm anb-host2-push
+    (implies (equal (car (anb-host2 w x b anls anb)) 0)
+             (and (equal (cdr (anb-stk (mv-nth 2 (anb-host2 w x b anls anb)))) (anb-stk anb))
+                  (consp (anb-stk (mv-nth 2 (anb-host2 w x b anls anb))))
+                  (anf-wf (car (anb-stk (mv-nth 2 (anb-host2 w x b anls anb))))))))
+  (defthm anb-host2-types
+    (and (consp (anb-host2 w x b anls anb))
+         (implies (anlsp anls) (anlsp (mv-nth 1 (anb-host2 w x b anls anb))))
+         (implies (anbp anb) (anbp (mv-nth 2 (anb-host2 w x b anls anb)))))))
+
 ; a def's metadata, analysed when its name has some or a docstring is given:
 ; e, and 1 when a node was left
 (defun anb-meta (x b anls anb)
@@ -266,6 +328,53 @@
     (and (integerp (anb-loop-open c start n)) (signed-byte-p 64 (anb-loop-open c start n))
          (integerp (anb-let-kind k c slot loopp)) (signed-byte-p 64 (anb-let-kind k c slot loopp))
          (integerp (anb-let-ret c ret)) (signed-byte-p 64 (anb-let-ret c ret)))))
+
+; THE DRIVERS' HOST READS: what the host decides of a set!, ., new, recur
+; and fn*, an integer each -- a kind, or an error code whose words the host
+; raised. anb-set-kind: 0 a var or a static field (the value only), 1 a
+; host field (its object, then the value), 2 a deftype's mutable field
+; (anb-host2 1), else refused (a local, an immutable field, an unresolved
+; symbol); anb-dot-kind: 0 an instance member, 1 a class's (the target
+; kept as its name), 2 a host class's (anb-host2 2), else refused (a class
+; nothing knows); anb-new-kind: 2 a lazy seq's (anb-host2 3), else a new;
+; anb-recur-open: the recur's target found (RecurExpr: a loop or fn, the
+; count it expects noted); anb-recur-check: its arguments' primitive kinds
+; as its target's locals need them; anb-fn-open: the fn's display name and
+; its hint rules (a deftype method's clauses exempt), its self slot noted;
+; anb-method-open: a method's array hints, recur target and argument
+; kinds, and its primitive hints -- 1 refused, 2 the body rewritten
+; (anb-host2 4), else 0; anb-method-check: a recur argument that did not
+; match its primitive; anb-fn-check: every arity's tail check and its
+; recurs' counts
+(encapsulate
+  (((anb-set-kind * *) => * :formals (x b) :guard t)
+   ((anb-dot-kind * *) => * :formals (x b) :guard t)
+   ((anb-new-kind *) => * :formals (x) :guard t)
+   ((anb-recur-open * *) => * :formals (x b) :guard t)
+   ((anb-recur-check * * *) => * :formals (x b n) :guard t)
+   ((anb-fn-open * * *) => * :formals (x r self) :guard t)
+   ((anb-method-open * * * * * *) => * :formals (m r mb start nreq rest) :guard t)
+   ((anb-method-check *) => * :formals (mb) :guard t)
+   ((anb-fn-check * * *) => * :formals (x r n) :guard t))
+  (local (defun anb-set-kind (x b) (declare (xargs :guard t) (ignore x b)) 0))
+  (local (defun anb-dot-kind (x b) (declare (xargs :guard t) (ignore x b)) 0))
+  (local (defun anb-new-kind (x) (declare (xargs :guard t) (ignore x)) 0))
+  (local (defun anb-recur-open (x b) (declare (xargs :guard t) (ignore x b)) 0))
+  (local (defun anb-recur-check (x b n) (declare (xargs :guard t) (ignore x b n)) 0))
+  (local (defun anb-fn-open (x r self) (declare (xargs :guard t) (ignore x r self)) 0))
+  (local (defun anb-method-open (m r mb start nreq rest) (declare (xargs :guard t) (ignore m r mb start nreq rest)) 0))
+  (local (defun anb-method-check (mb) (declare (xargs :guard t) (ignore mb)) 0))
+  (local (defun anb-fn-check (x r n) (declare (xargs :guard t) (ignore x r n)) 0))
+  (defthm anb-drv-sb64
+    (and (integerp (anb-set-kind x b)) (signed-byte-p 64 (anb-set-kind x b))
+         (integerp (anb-dot-kind x b)) (signed-byte-p 64 (anb-dot-kind x b))
+         (integerp (anb-new-kind x)) (signed-byte-p 64 (anb-new-kind x))
+         (integerp (anb-recur-open x b)) (signed-byte-p 64 (anb-recur-open x b))
+         (integerp (anb-recur-check x b n)) (signed-byte-p 64 (anb-recur-check x b n))
+         (integerp (anb-fn-open x r self)) (signed-byte-p 64 (anb-fn-open x r self))
+         (integerp (anb-method-open m r mb start nreq rest)) (signed-byte-p 64 (anb-method-open m r mb start nreq rest))
+         (integerp (anb-method-check mb)) (signed-byte-p 64 (anb-method-check mb))
+         (integerp (anb-fn-check x r n)) (signed-byte-p 64 (anb-fn-check x r n)))))
 
 ; ---- THE LOCALS' OPERATIONS: WHAT THEY ANSWER -------------------------------------------------
 
@@ -378,6 +487,19 @@
 (defthm anb-params-anlsp
   (implies (and (anlsp anls) (signed-byte-p 64 c) (natp i) (integerp k) (<= -1 k) (<= k (+ (- *anl40* 1) i)))
            (anlsp (anb-params pv i c k anls))))
+
+; a fn's own name nm, when it has one, bound in its root block r to the
+; self slot reserved there; -1 when it has none
+(defun anb-self (r nm anls)
+  (declare (xargs :stobjs anls :guard (signed-byte-p 64 r)))
+  (if (equal (frm-kind nm) 2)
+      (mv-let (s anls) (anl-reserve r 1 anls)
+        (let ((anls (anl-bind r (frm-bid nm) s anls))) (mv s anls)))
+    (mv -1 anls)))
+(defthm anb-self-types
+  (implies (and (anlsp anls) (signed-byte-p 64 r))
+           (and (anlsp (mv-nth 1 (anb-self r nm anls))) (integerp (car (anb-self r nm anls)))
+                (signed-byte-p 64 (car (anb-self r nm anls))))))
 
 (defthm anl-pw-bounds
   (implies (and (natp i) (natp n) (<= i n) (< n *anl40*) (natp nreq) (<= nreq i) (natp rest) (<= rest 1))
@@ -601,54 +723,72 @@
         ((< (frf-len cls) 2) (mv 0 anls anb))
         (t (anb-try-walk (frf-rest cls) st2 b anls anb))))))
 
- ; THE HAND-WRITTEN DRIVERS, as they build their nodes (analyze_setbang,
- ; analyze_dot, analyze_new, analyze_recur, analyze_fn): Modeled, not
- ; generated; accepting what the host accepts or more (its own refusals --
- ; a recur's target and count, a host member, prim kinds -- are not here)
+ ; THE DRIVERS of set!, ., new, recur and fn*, after anb-an's checks: the
+ ; order clj's parsers analyse their parts in, what the host decides of them
+ ; read through anb-*-kind and the other hooks above
 
- ; (set! target value): a var or local the value; a field (. o f) the object and the value
+ ; (set! target value): AssignExpr.Parser's order -- the target, then the
+ ; value; a host field's object is the target's part
  (defun anb-set (x b anls anb)
    (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
                    :measure (anb-m x 1 3 8)))
-   (mv-let (e anls anb) (anb-sub (frf-nth x 2) b anls anb)
-     (cond ((not (equal e 0)) (mv e anls anb))
-           ((equal (frf-kind (frf-nth x 1)) 3)
+   (let ((k (anb-set-kind x b)))
+     (cond ((equal k 2) (anb-host2 1 x b anls anb))
+           ((and (equal k 1) (equal (frf-kind (frf-nth x 1)) 3))
             (mv-let (e anls anb) (anb-sub (frf-nth (frf-nth x 1) 1) b anls anb)
-              (if (not (equal e 0)) (mv e anls anb) (let ((anb (anb-node 24 2 2 anb))) (mv 0 anls anb)))))
-           (t (let ((anb (anb-node 24 0 1 anb))) (mv 0 anls anb))))))
+              (if (not (equal e 0)) (mv e anls anb)
+                (mv-let (e anls anb) (anb-sub (frf-nth x 2) b anls anb)
+                  (if (not (equal e 0)) (mv e anls anb) (let ((anb (anb-setnode x 2 anb))) (mv 0 anls anb)))))))
+           ((equal k 0)
+            (mv-let (e anls anb) (anb-sub (frf-nth x 2) b anls anb)
+              (if (not (equal e 0)) (mv e anls anb) (let ((anb (anb-setnode x 1 anb))) (mv 0 anls anb)))))
+           (t (mv 1 anls anb)))))
 
- ; (. target member args*): HostExpr.Parser's order -- the target analysed
- ; unless it names a class (maybeClass), then the member, then the arguments
+ ; (. target member args*) or (. target (member args*)): HostExpr.Parser's
+ ; order -- a member it cannot read refused after the target is analysed
+ ; (unless it names a class, maybeClass); then what the target is (the
+ ; host's), the target unless a class names it, and the arguments
  (defun anb-dot (x b anls anb)
    (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
                    :measure (anb-m x 1 3 8)))
-   (mv-let (e anls anb)
-     (if (equal (frf-class (frf-nth x 1)) 1) (let ((anb (anb-const (frf-nth x 1) anb))) (mv 0 anls anb))
-       (anb-sub (frf-nth x 1) b anls anb))
-     (cond ((not (equal e 0)) (mv e anls anb))
-           ((not (equal (anf-dot-member (frf-len x) (frf-nth x 2)) 0)) (let ((anb (anb-refuse 37 x anb))) (mv 37 anls anb)))
-           (t (let ((args (frf-rest (frf-rest (frf-rest x)))))
-                (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
-                  (if (not (equal e 0)) (mv e anls anb)
-                    (let ((anb (anb-node 21 0 (+ 1 (frf-len args)) anb))) (mv 0 anls anb)))))))))
-
+   (if (not (equal (anf-dot-member (frf-len x) (frf-norm (frf-nth x 2))) 0))
+       (if (equal (frf-class (frf-nth x 1)) 1) (let ((anb (anb-refuse 37 x anb))) (mv 37 anls anb))
+         (mv-let (e anls anb) (anb-sub (frf-nth x 1) b anls anb)
+           (if (not (equal e 0)) (mv e anls anb) (let ((anb (anb-refuse 37 x anb))) (mv 37 anls anb)))))
+     (let ((k (anb-dot-kind x b)))
+       (cond ((equal k 2) (anb-host2 2 x b anls anb))
+             ((equal k 1) (let ((anb (anb-const (frf-nth x 1) anb))) (let ((args (if (equal (frf-kind (frf-norm (frf-nth x 2))) 3) (frf-rest (frf-norm (frf-nth x 2))) (frf-rest (frf-rest (frf-rest x))))))
+                  (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
+                    (if (not (equal e 0)) (mv e anls anb)
+                      (let ((anb (anb-dotnode x 1 (+ 1 (frf-len args)) anb))) (mv 0 anls anb)))))))
+             ((equal k 0)
+              (mv-let (e anls anb) (anb-sub (frf-nth x 1) b anls anb)
+                (if (not (equal e 0)) (mv e anls anb) (let ((args (if (equal (frf-kind (frf-norm (frf-nth x 2))) 3) (frf-rest (frf-norm (frf-nth x 2))) (frf-rest (frf-rest (frf-rest x))))))
+                  (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
+                    (if (not (equal e 0)) (mv e anls anb)
+                      (let ((anb (anb-dotnode x 0 (+ 1 (frf-len args)) anb))) (mv 0 anls anb))))))))
+             (t (mv 1 anls anb))))))
  ; (new Class args*)
  (defun anb-new (x b anls anb)
    (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
                    :measure (anb-m x 1 3 8)))
-   (let ((args (frf-rest (frf-rest x))))
-     (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
-       (if (not (equal e 0)) (mv e anls anb)
-         (let ((anb (anb-node 22 0 (frf-len args) anb))) (mv 0 anls anb))))))
+   (if (equal (anb-new-kind x) 2) (anb-host2 3 x b anls anb)
+     (let ((args (frf-rest (frf-rest x))))
+       (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
+         (if (not (equal e 0)) (mv e anls anb)
+           (let ((anb (anb-newnode x (frf-len args) anb))) (mv 0 anls anb)))))))
 
- ; (recur args*)
+ ; (recur args*): RecurExpr.Parser's -- its target, the arguments, then
+ ; their kinds against the target's locals
  (defun anb-recur (x b anls anb)
    (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
                    :measure (anb-m x 1 3 8)))
    (let ((args (frf-rest x)))
-     (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
-       (if (not (equal e 0)) (mv e anls anb)
-         (let ((anb (anb-node 16 (frf-len args) (frf-len args) anb))) (mv 0 anls anb))))))
+     (if (not (equal (anb-recur-open x b) 0)) (mv 1 anls anb)
+       (mv-let (e anls anb) (anb-listn args (frf-len args) b anls anb)
+         (cond ((not (equal e 0)) (mv e anls anb))
+               ((not (equal (anb-recur-check x b (frf-len args)) 0)) (mv 1 anls anb))
+               (t (let ((anb (anb-recurnode x b (frf-len args) anb))) (mv 0 anls anb))))))))
 
  ; (fn* name? [params] body*) or (fn* name? ([params] body*)+): the fn's root
  ; block, its own name bound to its self slot there, each method a child
@@ -658,17 +798,24 @@
    (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
                    :measure (anb-m x 1 3 9)))
    (let* ((nm (frf-nth x 1)) (named (if (equal (frm-kind nm) 2) 1 0)))
-     (mv-let (r anls) (anl-new-fn b anls)
-       (mv-let (self anls) (if (equal named 1) (anl-reserve r 1 anls) (mv -1 anls))
-         (let* ((anls (if (equal named 1) (anl-bind r (frm-bid nm) self anls) anls))
+     (mv-let (r anls) (anb-newfn b anls)
+       (mv-let (self anls) (anb-self r nm anls)
+         (let* ((h (anb-fn-open x r self))
                 (xs (if (equal named 1) (frf-rest (frf-rest x)) (frf-rest x)))
-                (one (equal (frm-kind (frf-nth xs 0)) 1)))
-           (mv-let (e anls anb) (if one (anb-method xs r anls anb) (anb-methods xs (frf-len xs) r anls anb))
-             (cond ((not (equal e 0)) (mv e anls anb))
-                   ((not (equal (anl-arity-end r anls) 0)) (let ((anb (anb-refuse 12 x anb))) (mv 12 anls anb)))
-                   (t (let* ((anls (anl-caps-of r anls))
-                             (anb (anb-fnnode (if one 1 (frf-len xs)) (anb-caps 0 anls) anb)))
-                        (mv 0 anls anb))))))))))
+                (n (if (equal (frm-kind (frf-nth xs 0)) 1) 1 (frf-len xs))))
+           (cond ((not (equal h 0)) (mv h anls anb))
+                 ((equal (frm-kind (frf-nth xs 0)) 1)
+                  (mv-let (e anls anb) (anb-method xs r anls anb)
+                    (cond ((not (equal e 0)) (mv e anls anb))
+                          ((not (equal (anl-arity-end r anls) 0)) (let ((anb (anb-refuse 12 x anb))) (mv 12 anls anb)))
+                          ((not (equal (anb-fn-check x r n) 0)) (mv 1 anls anb))
+                          (t (let* ((anls (anl-caps-of r anls)) (anb (anb-fnclose x r n anls anb))) (mv 0 anls anb))))))
+                 (t
+                  (mv-let (e anls anb) (anb-methods xs (frf-len xs) r anls anb)
+                    (cond ((not (equal e 0)) (mv e anls anb))
+                          ((not (equal (anl-arity-end r anls) 0)) (let ((anb (anb-refuse 12 x anb))) (mv 12 anls anb)))
+                          ((not (equal (anb-fn-check x r n) 0)) (mv 1 anls anb))
+                          (t (let* ((anls (anl-caps-of r anls)) (anb (anb-fnclose x r n anls anb))) (mv 0 anls anb))))))))))))
 
  ; the first n methods of list ms
  (defun anb-methods (ms n r anls anb)
@@ -679,19 +826,36 @@
        (if (or (not (equal e 0)) (< (frf-len ms) 2)) (mv e anls anb)
          (anb-methods (frf-rest ms) (- n 1) r anls anb)))))
 
- ; ([params] body*): its parameters checked, reserved and bound in a child
- ; block of the fn's root r, its body, then its arity recorded
+ ; ([params] body*): a parameter vector (13: "fn* needs a parameter
+ ; vector"), its parameters checked (the refusal about the one at fault),
+ ; reserved and bound in a child block of the fn's root r; the host's
+ ; reading of them (anb-method-open), its body -- or the host's, when
+ ; primitive hints rewrite it -- the recurs' kinds, then its arity recorded
  (defun anb-method (m r anls anb)
    (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 r) :verify-guards nil
                    :measure (anb-m m 0 0 4)))
-   (let* ((pv (frf-nth m 0)) (code (anl-params pv 0)))
-     (if (not (equal code 0)) (let ((anb (anb-refuse code pv anb))) (mv code anls anb))
-       (let ((nreq (anl-params pv 2)) (rest (anl-params pv 3)))
-         (mv-let (mb anls) (anl-child r anls)
-           (mv-let (start anls) (anl-reserve mb (+ nreq rest) anls)
-             (let ((anls (anb-params pv 0 mb start anls)))
-               (mv-let (e anls anb) (anb-body (frf-rest m) mb anls anb)
-                 (if (not (equal e 0)) (mv e anls anb)
-                   (mv-let (code anls) (anl-arity r nreq rest anls)
-                     (if (not (equal code 0)) (let ((anb (anb-refuse code m anb))) (mv code anls anb))
-                       (mv 0 anls anb)))))))))))))
+   (let* ((cl (frf-norm m)) (pv (frf-nth cl 0)))
+     (if (not (equal (frm-kind pv) 1)) (let ((anb (anb-refuse 13 cl anb))) (mv 13 anls anb))
+       (let ((code (anl-params pv 0)))
+         (if (not (equal code 0)) (let ((anb (anb-refuse code (frm-nth pv (anl-params pv 1)) anb))) (mv code anls anb))
+           (let ((nreq (anl-params pv 2)) (rest (anl-params pv 3)))
+             (mv-let (mb anls) (anb-child r anls)
+               (mv-let (start anls) (anl-reserve mb (+ nreq rest) anls)
+                 (let* ((anls (anb-params pv 0 mb start anls))
+                        (h (anb-method-open cl r mb start nreq rest)))
+                   (cond
+                    ((equal h 1) (mv 1 anls anb))
+                    ((equal h 2)
+                     (mv-let (e anls anb) (anb-host2 4 cl mb anls anb)
+                       (cond ((not (equal e 0)) (mv e anls anb))
+                             ((not (equal (anb-method-check mb) 0)) (mv 1 anls anb))
+                             (t (mv-let (code anls) (anl-arity r nreq rest anls)
+                                  (if (not (equal code 0)) (let ((anb (anb-refuse code cl anb))) (mv code anls anb))
+                                    (let ((anb (anb-arity cl mb start nreq rest anb))) (mv 0 anls anb))))))))
+                    (t
+                     (mv-let (e anls anb) (anb-body (frf-rest cl) mb anls anb)
+                       (cond ((not (equal e 0)) (mv e anls anb))
+                             ((not (equal (anb-method-check mb) 0)) (mv 1 anls anb))
+                             (t (mv-let (code anls) (anl-arity r nreq rest anls)
+                                  (if (not (equal code 0)) (let ((anb (anb-refuse code cl anb))) (mv code anls anb))
+                                    (let ((anb (anb-arity cl mb start nreq rest anb))) (mv 0 anls anb)))))))))))))))))))
