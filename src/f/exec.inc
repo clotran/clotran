@@ -1410,216 +1410,12 @@
        case (N_VMB)
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
-       case (N_CONST, N_LOCAL, N_IF, N_DO, N_LET, N_LOOP, N_RECUR)
+       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR)
           ! the core kinds: decided by the generated exec_gen.inc
-          call exec_core(tctx, nd, kids, b, val)
-       case (N_VAR)
-          val = var_deref(gc_slot(nd, 2), [gc_slot(nd, 2)])
-          call k_finish(val, tctx)
-       case (N_CALL)
-          select case (tctx%kst(tctx%ksp)%pc)
-          case (0)
-             tctx%kst(tctx%ksp)%pc = 1
-             ! a direct-linked head (N_VAR, i2 = 1, DEVIATIONS 55): the fn
-             ! bound at analysis is the callee, and the Var is not read.
-             ! After an epoch change -- a compiled namespace installed,
-             ! every Var re-rooted -- the Var is read ONCE more, and only
-             ! a compiled fn found there replaces the binding: anything
-             ! else (a with-redefs in force at this site's first call, say)
-             ! is not what the install put there, and the binding stands.
-             v = gcv_nth(kids, 0)
-             if (gc_kind(v) == OBJ_AST) then
-                if (gc_i1(v) == N_VAR .and. gc_i2(v) == 1) then
-                   fnv = gc_slot(v, 5)   ! slot 4 is the node's source position
-                   if (fnv%tag == GCT_INT) then
-                      if (fnv%ival /= link_epoch) then
-                         fnv = gcn_var_value(gc_slot(v, 2))
-                         if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(v, 3, fnv)
-                         call gc_set_slot(v, 5, gc_int(int(link_epoch, gc_ip)))
-                      end if
-                      val = gc_slot(v, 3)
-                      cycle
-                   end if
-                end if
-             end if
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-          case (1)
-             ! The callee is known before its arguments are: a closure
-             ! with a fixed arity of the right count gets its FRAME now
-             ! and the arguments land in it (mode 2); anything else gets
-             ! a one-node argument vector (mode 1). No vector is copied
-             ! per argument either way.
-             fnv = strip_meta(val)
-             if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
-             n = gcv_count(kids) - 1
-             ! a fn that only wraps a builtin, called with its arity: the
-             ! builtin is the callee (analyze.inc wrapper_builtin)
-             ! b + 6 keeps the wrapper for the call stack (case 4)
-             v = wrapper_of(fnv, n)
-             call vs_set(vst, b + 6, gc_nil())
-             if (v%tag /= GCT_NIL) then
-                call vs_set(vst, b + 6, fnv)
-                fnv = v
-             end if
-             call vs_set(vst, b + 3, fnv)
-             tctx%kst(tctx%ksp)%mode = 1
-             if (is_node_closure(vs_get(vst, b + 3))) then
-                tctx%kst(tctx%ksp)%aux2 = fixed_arity(vs_get(vst, b + 3), n)
-                if (tctx%kst(tctx%ksp)%aux2 >= 0) then
-                   tctx%kst(tctx%ksp)%mode = 2
-                   tctx%kst(tctx%ksp)%aux = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 2))
-                   call vs_set(vst, b + 4, new_frame(int_of(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 3)), [vs_get(vst, b + 1)]))
-                end if
-             end if
-             if (tctx%kst(tctx%ksp)%mode == 1 .and. n >= 1 .and. n <= 2) then
-                if (gc_kind(vs_get(vst, b + 3)) == OBJ_BUILTIN) then
-                   if (scalar_builtin(gc_i1(vs_get(vst, b + 3)))) tctx%kst(tctx%ksp)%mode = 3
-                end if
-             end if
-             ! a builtin that keeps no argument: a spare vector (mode 4)
-             if (tctx%kst(tctx%ksp)%mode == 1 .and. n >= 1 .and. n <= ARG_SPARE_MAX) then
-                if (gc_kind(vs_get(vst, b + 3)) == OBJ_BUILTIN) then
-                   if (args_reusable(gc_i1(vs_get(vst, b + 3)))) then
-                      tctx%kst(tctx%ksp)%mode = 4
-                      call vs_set(vst, b + 4, args_take(n, [vs_get(vst, b + 1), vs_get(vst, b + 3)]))
-                   end if
-                end if
-             end if
-             if (tctx%kst(tctx%ksp)%mode == 1) call vs_set(vst, b + 4, gcv_build(n, [vs_get(vst, b + 1)]))
-             tctx%kst(tctx%ksp)%i = 1
-             tctx%kst(tctx%ksp)%pc = 2
-          case (2)
-             if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
-                tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-             else
-                tctx%kst(tctx%ksp)%pc = 4
-             end if
-          case (3)
-             if (tctx%kst(tctx%ksp)%mode == 2) then
-                call frame_set(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%aux + tctx%kst(tctx%ksp)%i - 1, val)
-             else if (tctx%kst(tctx%ksp)%mode == 3) then
-                if (tctx%kst(tctx%ksp)%i == 1) call vs_set(vst, b + 4, val)
-             else
-                call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%i - 1, val, [vs_get(vst, b + 1)]))
-             end if
-             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
-             tctx%kst(tctx%ksp)%pc = 2
-          case (5)
-             ! the callee's body finished; its value is this call's, and
-             ! its frame is free for the next call
-             call give_frame(vs_get(vst, b + 4))
-             call vs_set(vst, b + 4, gc_nil())
-             call k_finish(val, tctx)
-          case (4)
-             ! where this call is, for the call stack
-             v = gc_slot(nd, 4)
-             site = 0
-             if (v%tag == GCT_INT) site = int(v%ival, kind=4)
-             fnv = vs_get(vst, b + 3)
-             ! an elided wrapper (case 1) is on the call stack while its
-             ! builtin runs, as in clj; nfr has k_finish, or an
-             ! unwinding error, pop it
-             if (tctx%kst(tctx%ksp)%mode /= 2 .and. tag_of(vs_get(vst, b + 6)) /= GCT_NIL) then
-                call push_frame(tctx, vs_get(vst, b + 6), site)
-                if (tctx%has_error) cycle
-                tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr + 1
-                call vs_set(vst, b + 6, gc_nil())
-             end if
-             if (tctx%kst(tctx%ksp)%mode == 4) then
-                ! a builtin that keeps no argument, in a spare vector
-                n = gcv_count(kids) - 1
-                tctx%pending_site = site
-                v = vs_get(vst, b + 4)
-                ! the loop's last-value slot (vbase + 1) still holds the
-                ! last ARGUMENT evaluated; a builtin that walks it (count
-                ! over a seq) must not find the head rooted there for the
-                ! whole call (PLAN.md step 16). Not before the arguments
-                ! are in a vector: on the numeric path the last one is
-                ! still only in `val`, and that slot was its root.
-                call vs_set(vst, vbase + 1, gc_nil())
-                tctx%pending_site = site   ! the call in progress, for a host-raised error's report
-                val = call_builtin(gc_i1(fnv), v)
-                ! the frame is popped below before an error unwinds: its place now
-                if (tctx%has_error) call note_position(vs_get(vst, b + 1))
-                call args_give(vs_get(vst, b + 4), n)
-                call vs_set(vst, b + 4, gc_nil())
-                call k_finish(val, tctx)
-                cycle
-             end if
-             if (tctx%kst(tctx%ksp)%mode == 3) then
-                ! the numeric fast path: no vector is allocated for the call
-                n = gcv_count(kids) - 1
-                v = scratch_args(n)
-                if (n == 1) then
-                   call gc_vec_set(gc_slot(v, 1), 1, val)
-                else
-                   call gc_vec_set(gc_slot(v, 1), 1, vs_get(vst, b + 4))
-                   call vs_set(vst, b + 4, gc_nil())
-                   call gc_vec_set(gc_slot(v, 1), 2, val)
-                end if
-                call vs_set(vst, vbase + 1, gc_nil())
-                tctx%pending_site = site   ! the call in progress, for a host-raised error's report
-                val = call_builtin(gc_i1(fnv), v)
-                ! the frame is popped below before an error unwinds: its place now
-                if (tctx%has_error) call note_position(vs_get(vst, b + 1))
-                call k_finish(val, tctx)
-                cycle
-             end if
-             if (tctx%kst(tctx%ksp)%mode == 2) then
-                ! the frame already holds the arguments; captures and the
-                ! fn's own name complete it, and the body runs in a frame
-                ! OF ITS OWN. A call in tail position used to reuse this
-                ! one, which cost nothing at the time -- the caller was
-                ! finished with its locals -- but a caller's locals are
-                ! exactly what a break has to show, and the call stack
-                ! names the caller either way. Clojure eliminates no tail
-                ! call, so keeping the frame is also what it does.
-                call push_frame(tctx, fnv, site)
-                if (tctx%has_error) cycle
-                call bind_captures(vs_get(vst, b + 3), vs_get(vst, b + 4))
-                body = arity_body(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2))
-                call vs_set(vst, b + 5, body)
-                tctx%kst(tctx%ksp)%pc = 5
-                call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)
-                call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
-                if (step_at /= 0) call step_check()
-                cycle
-             end if
-             ! The argument vector is handed over, not kept (see
-             ! bind_closure / apply): nothing allocates between this nil
-             ! and the callee rooting it.
-             v = vs_get(vst, b + 4)
-             call vs_set(vst, b + 4, gc_nil())
-             if (is_node_closure(fnv)) then
-                ! The callee's body, in a frame of its own (see mode 2).
-                call push_frame(tctx, fnv, site)
-                if (tctx%has_error) cycle
-                call vs_set(vst, b + 3, fnv)
-                ok = bind_closure(vs_get(vst, b + 3), v, newframe, body)
-                if (ok) then
-                   call vs_set(vst, b + 4, newframe)
-                   call vs_set(vst, b + 5, body)
-                   tctx%kst(tctx%ksp)%pc = 5
-                   call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)
-                   call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, vs_get(vst, b + 3))
-                   if (step_at /= 0) call step_check()
-                else
-                   ! no arity fits: the entry pushed above is ours to drop
-                   call pop_frame(tctx)
-                end if
-             else
-                tctx%pending_site = site
-                call vs_set(vst, vbase + 1, gc_nil())
-                val = apply(vs_get(vst, b + 3), v)
-                if (tctx%yield_flag) then
-                   ! parked here: the vector goes back for the re-dispatch
-                   call vs_set(vst, b + 4, v)
-                   exit
-                end if
-                call k_finish(val, tctx)
-             end if
-          end select
+          call exec_core(tctx, nd, kids, b, vbase, val)
+          ! a call parked in the host's apply (tasks.inc): re-dispatched
+          ! from its pc 4 when the task resumes
+          if (tctx%yield_flag) exit
        case (N_CASE)
           if (tctx%kst(tctx%ksp)%pc == 0) then
              tctx%kst(tctx%ksp)%pc = 1
@@ -1694,9 +1490,6 @@
              end block
              call capture_trace()
           end if
-       case (N_FN)
-          val = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
-          call k_finish(val, tctx)
        case (N_LAZY)
           v = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
           call vs_set(vst, b + 3, v)
@@ -2217,8 +2010,8 @@
     call vs_leave(vst, base)
   end function exec_letfn
 
-  ! One turn of run_loop for a CORE KIND -- a constant, a local, if, do,
-  ! let*, loop*, recur. What to do is decided by the generated ex_act,
+  ! One turn of run_loop for a CORE KIND -- a constant, a local, a Var,
+  ! if, do, let*, loop*, recur, fn, a call. What to do is decided by the generated ex_act,
   ! ex_kid, ex_pc and ex_i (src/f/gen/exec_gen.inc, model/exec.lisp:
   ! exec-proof proves the machine they drive answers each node's meaning);
   ! this does it, action for action as exec.lisp's ex-step does.
@@ -2228,10 +2021,10 @@
   ! slot another replaces -- then written to the target's slots, then the
   ! marker the enclosing loop or fn body restarts on. A throw out of an
   ! argument leaves the region with the record (k_unwind's vs_leave).
-  subroutine exec_core(tctx, nd, kids, b, val)
+  subroutine exec_core(tctx, nd, kids, b, vbase, val)
     type(eval_ctx), pointer, intent(in) :: tctx
     type(gc_value), intent(in) :: nd, kids
-    integer, intent(in) :: b
+    integer, intent(in) :: b, vbase
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
     type(gc_value) :: rinfo
@@ -2242,7 +2035,7 @@
     pc = tctx%kst(tctx%ksp)%pc
     i = tctx%kst(tctx%ksp)%i
     nk = 0
-    if (k == N_IF .or. k == N_DO .or. k == N_RECUR) nk = gcv_count(kids)
+    if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL) nk = gcv_count(kids)
     n2 = gc_i2(nd)
     tv = 0
     if (truthy(val)) tv = 1
@@ -2278,7 +2071,11 @@
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
        tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
     case (9)
-       call vs_set(vst, tctx%kst(tctx%ksp)%aux + 1 + int(i), val)
+       if (k == N_CALL) then
+          call call_keep(tctx, b, val)
+       else
+          call vs_set(vst, tctx%kst(tctx%ksp)%aux + 1 + int(i), val)
+       end if
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
        tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
     case (10)
@@ -2292,8 +2089,262 @@
        call vs_leave(vst, rb)
        val = recur_marker()
        call k_finish(val, tctx)
+    case (11)
+       ! the Var's value: the namespace is the host's
+       val = var_deref(gc_slot(nd, 2), [gc_slot(nd, 2)])
+       call k_finish(val, tctx)
+    case (12)
+       val = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
+       call k_finish(val, tctx)
+    case (13)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+       call call_head(tctx, gcv_nth(kids, int(j)), b, val)
+    case (14)
+       call call_dispatch(tctx, kids, b, val)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (15)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (16)
+       call call_enter(tctx, nd, kids, b, vbase, int(ex_pc(k, pc, i, nk, n2, tv)), val)
+    case (17)
+       ! the callee's body finished; its value is this call's, and its
+       ! frame is free for the next call
+       call give_frame(vs_get(vst, b + 4))
+       call vs_set(vst, b + 4, gc_nil())
+       call k_finish(val, tctx)
     end select
   end subroutine exec_core
+
+  ! ---- a call's actions (exec_core's 13, 14, 9, 16), hand-written: the
+  ! host's reads and its other callees. The model (exec.lisp) keeps the
+  ! callee and the arguments in the record and enters a closure of the
+  ! count's fixed arity; here the arguments land where the callee will
+  ! read them (its frame, a vector, a scalar slot: the mode call_dispatch
+  ! picks), and a callee that is not such a closure is the host's apply.
+
+  ! pc 0: the head pushed, or a direct-linked one's fn taken now
+  subroutine call_head(tctx, h, b, val)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_value), intent(in) :: h
+    integer, intent(in) :: b
+    type(gc_value), intent(inout) :: val
+    type(gc_value) :: fnv
+    ! a direct-linked head (N_VAR, i2 = 1, DEVIATIONS 55): the fn bound
+    ! at analysis is the callee, and the Var is not read. After an epoch
+    ! change -- a compiled namespace installed, every Var re-rooted -- the
+    ! Var is read ONCE more, and only a compiled fn found there replaces
+    ! the binding: anything else (a with-redefs in force at this site's
+    ! first call, say) is not what the install put there, and the binding
+    ! stands.
+    if (gc_kind(h) == OBJ_AST) then
+       if (gc_i1(h) == N_VAR .and. gc_i2(h) == 1) then
+          fnv = gc_slot(h, 5)   ! slot 4 is the node's source position
+          if (fnv%tag == GCT_INT) then
+             if (fnv%ival /= link_epoch) then
+                fnv = gcn_var_value(gc_slot(h, 2))
+                if (gc_kind(fnv) == OBJ_COMPILED) call gc_set_slot(h, 3, fnv)
+                call gc_set_slot(h, 5, gc_int(int(link_epoch, gc_ip)))
+             end if
+             val = gc_slot(h, 3)
+             return
+          end if
+       end if
+    end if
+    call k_push(h, vs_get(tctx%stk, b + 2), 0, gc_nil(), tctx)
+  end subroutine call_head
+
+  ! pc 1: the callee kept. It is known before its arguments are: a
+  ! closure with a fixed arity of the right count gets its FRAME now and
+  ! the arguments land in it (mode 2); anything else gets a one-node
+  ! argument vector (mode 1), a builtin of one or two scalars a slot
+  ! (mode 3), one that keeps no argument a spare vector (mode 4). No
+  ! vector is copied per argument either way.
+  subroutine call_dispatch(tctx, kids, b, val)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_value), intent(in) :: kids
+    integer, intent(in) :: b
+    type(gc_value), intent(in) :: val
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: fnv, v
+    integer :: n
+    vst => tctx%stk
+    fnv = strip_meta(val)
+    if (gcn_is_var(fnv)) fnv = gcn_var_value(fnv)
+    n = gcv_count(kids) - 1
+    ! a fn that only wraps a builtin, called with its arity: the builtin
+    ! is the callee (analyze.inc wrapper_builtin); b + 6 keeps the wrapper
+    ! for the call stack (call_enter)
+    v = wrapper_of(fnv, n)
+    call vs_set(vst, b + 6, gc_nil())
+    if (v%tag /= GCT_NIL) then
+       call vs_set(vst, b + 6, fnv)
+       fnv = v
+    end if
+    call vs_set(vst, b + 3, fnv)
+    tctx%kst(tctx%ksp)%mode = 1
+    if (is_node_closure(vs_get(vst, b + 3))) then
+       tctx%kst(tctx%ksp)%aux2 = fixed_arity(vs_get(vst, b + 3), n)
+       if (tctx%kst(tctx%ksp)%aux2 >= 0) then
+          tctx%kst(tctx%ksp)%mode = 2
+          tctx%kst(tctx%ksp)%aux = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2), 2))
+          call vs_set(vst, b + 4, new_frame(int_of(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 3)), [vs_get(vst, b + 1)]))
+       end if
+    end if
+    if (tctx%kst(tctx%ksp)%mode == 1 .and. n >= 1 .and. n <= 2) then
+       if (gc_kind(vs_get(vst, b + 3)) == OBJ_BUILTIN) then
+          if (scalar_builtin(gc_i1(vs_get(vst, b + 3)))) tctx%kst(tctx%ksp)%mode = 3
+       end if
+    end if
+    if (tctx%kst(tctx%ksp)%mode == 1 .and. n >= 1 .and. n <= ARG_SPARE_MAX) then
+       if (gc_kind(vs_get(vst, b + 3)) == OBJ_BUILTIN) then
+          if (args_reusable(gc_i1(vs_get(vst, b + 3)))) then
+             tctx%kst(tctx%ksp)%mode = 4
+             call vs_set(vst, b + 4, args_take(n, [vs_get(vst, b + 1), vs_get(vst, b + 3)]))
+          end if
+       end if
+    end if
+    if (tctx%kst(tctx%ksp)%mode == 1) call vs_set(vst, b + 4, gcv_build(n, [vs_get(vst, b + 1)]))
+  end subroutine call_dispatch
+
+  ! pc 3: argument i (from 1) kept where its mode puts it
+  subroutine call_keep(tctx, b, val)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    integer, intent(in) :: b
+    type(gc_value), intent(in) :: val
+    type(gc_stack), pointer :: vst
+    vst => tctx%stk
+    if (tctx%kst(tctx%ksp)%mode == 2) then
+       call frame_set(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%aux + tctx%kst(tctx%ksp)%i - 1, val)
+    else if (tctx%kst(tctx%ksp)%mode == 3) then
+       if (tctx%kst(tctx%ksp)%i == 1) call vs_set(vst, b + 4, val)
+    else
+       call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%i - 1, val, [vs_get(vst, b + 1)]))
+    end if
+  end subroutine call_keep
+
+  ! pc 4: the entry. A closure's body runs in a frame of its own, the
+  ! record at pc5 (the decided pc) beneath it; a builtin or the host's
+  ! apply answers here and the record finishes. A yield in apply leaves
+  ! the record at pc 4, to dispatch again.
+  subroutine call_enter(tctx, nd, kids, b, vbase, pc5, val)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_value), intent(in) :: nd, kids
+    integer, intent(in) :: b, vbase, pc5
+    type(gc_value), intent(inout) :: val
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: v, fnv, newframe, body
+    integer :: n, site
+    logical :: ok
+    vst => tctx%stk
+    ! where this call is, for the call stack
+    v = gc_slot(nd, 4)
+    site = 0
+    if (v%tag == GCT_INT) site = int(v%ival, kind=4)
+    fnv = vs_get(vst, b + 3)
+    ! an elided wrapper (call_dispatch) is on the call stack while its
+    ! builtin runs, as in clj; nfr has k_finish, or an unwinding error,
+    ! pop it
+    if (tctx%kst(tctx%ksp)%mode /= 2 .and. tag_of(vs_get(vst, b + 6)) /= GCT_NIL) then
+       call push_frame(tctx, vs_get(vst, b + 6), site)
+       if (tctx%has_error) return
+       tctx%kst(tctx%ksp)%nfr = tctx%kst(tctx%ksp)%nfr + 1
+       call vs_set(vst, b + 6, gc_nil())
+    end if
+    if (tctx%kst(tctx%ksp)%mode == 4) then
+       ! a builtin that keeps no argument, in a spare vector
+       n = gcv_count(kids) - 1
+       v = vs_get(vst, b + 4)
+       ! the loop's last-value slot (vbase + 1) still holds the last
+       ! ARGUMENT evaluated; a builtin that walks it (count over a seq)
+       ! must not find the head rooted there for the whole call (PLAN.md
+       ! step 16). Not before the arguments are in a vector: on the
+       ! numeric path the last one is still only in `val`, and that slot
+       ! was its root.
+       call vs_set(vst, vbase + 1, gc_nil())
+       tctx%pending_site = site   ! the call in progress, for a host-raised error's report
+       val = call_builtin(gc_i1(fnv), v)
+       ! the frame is popped below before an error unwinds: its place now
+       if (tctx%has_error) call note_position(vs_get(vst, b + 1))
+       call args_give(vs_get(vst, b + 4), n)
+       call vs_set(vst, b + 4, gc_nil())
+       call k_finish(val, tctx)
+       return
+    end if
+    if (tctx%kst(tctx%ksp)%mode == 3) then
+       ! the numeric fast path: no vector is allocated for the call
+       n = gcv_count(kids) - 1
+       v = scratch_args(n)
+       if (n == 1) then
+          call gc_vec_set(gc_slot(v, 1), 1, val)
+       else
+          call gc_vec_set(gc_slot(v, 1), 1, vs_get(vst, b + 4))
+          call vs_set(vst, b + 4, gc_nil())
+          call gc_vec_set(gc_slot(v, 1), 2, val)
+       end if
+       call vs_set(vst, vbase + 1, gc_nil())
+       tctx%pending_site = site   ! the call in progress, for a host-raised error's report
+       val = call_builtin(gc_i1(fnv), v)
+       ! the frame is popped below before an error unwinds: its place now
+       if (tctx%has_error) call note_position(vs_get(vst, b + 1))
+       call k_finish(val, tctx)
+       return
+    end if
+    if (tctx%kst(tctx%ksp)%mode == 2) then
+       ! the frame already holds the arguments; captures and the fn's own
+       ! name complete it, and the body runs in a frame OF ITS OWN. A
+       ! call in tail position used to reuse this one, which cost nothing
+       ! at the time -- the caller was finished with its locals -- but a
+       ! caller's locals are exactly what a break has to show, and the
+       ! call stack names the caller either way. Clojure eliminates no
+       ! tail call, so keeping the frame is also what it does.
+       call push_frame(tctx, fnv, site)
+       if (tctx%has_error) return
+       call bind_captures(vs_get(vst, b + 3), vs_get(vst, b + 4))
+       body = arity_body(gcv_nth(gcv_nth(gc_slot(vs_get(vst, b + 3), 1), 1), tctx%kst(tctx%ksp)%aux2))
+       call vs_set(vst, b + 5, body)
+       tctx%kst(tctx%ksp)%pc = pc5
+       call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)
+       call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, fnv)
+       if (step_at /= 0) call step_check()
+       return
+    end if
+    ! The argument vector is handed over, not kept (see bind_closure /
+    ! apply): nothing allocates between this nil and the callee rooting
+    ! it.
+    v = vs_get(vst, b + 4)
+    call vs_set(vst, b + 4, gc_nil())
+    if (is_node_closure(fnv)) then
+       ! The callee's body, in a frame of its own (see mode 2).
+       call push_frame(tctx, fnv, site)
+       if (tctx%has_error) return
+       call vs_set(vst, b + 3, fnv)
+       ok = bind_closure(vs_get(vst, b + 3), v, newframe, body)
+       if (ok) then
+          call vs_set(vst, b + 4, newframe)
+          call vs_set(vst, b + 5, body)
+          tctx%kst(tctx%ksp)%pc = pc5
+          call k_push(vs_get(vst, b + 5), vs_get(vst, b + 4), ior(KF_FNBODY, KF_RESTART), vs_get(vst, b + 5), tctx)
+          call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, vs_get(vst, b + 3))
+          if (step_at /= 0) call step_check()
+       else
+          ! no arity fits: the entry pushed above is ours to drop
+          call pop_frame(tctx)
+       end if
+    else
+       tctx%pending_site = site
+       call vs_set(vst, vbase + 1, gc_nil())
+       val = apply(vs_get(vst, b + 3), v)
+       if (tctx%yield_flag) then
+          ! parked here: the vector goes back for the re-dispatch
+          call vs_set(vst, b + 4, v)
+          return
+       end if
+       call k_finish(val, tctx)
+    end if
+  end subroutine call_enter
 
   recursive function exec_try(nd, frame) result(out)
     type(gc_stack), pointer :: vst

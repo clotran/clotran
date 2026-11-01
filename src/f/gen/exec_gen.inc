@@ -16,6 +16,7 @@
     integer(int64), value :: tv_
     integer(int64) :: r
     logical :: t_1
+    logical :: t_10
     logical :: t_2
     logical :: t_3
     logical :: t_4
@@ -23,6 +24,7 @@
     logical :: t_6
     logical :: t_7
     logical :: t_8
+    logical :: t_9
     select case (k_)
     case (1_int64)
       r = 1_int64
@@ -111,7 +113,8 @@
           end if
         end if
       else
-        if ((k_ == 16_int64)) then
+        select case (k_)
+        case (16_int64)
           if ((pc_ == 0_int64)) then
             r = 8_int64
             return
@@ -139,10 +142,55 @@
               end if
             end if
           end if
-        else
+        case (3_int64)
+          r = 11_int64
+          return
+        case (14_int64)
+          r = 12_int64
+          return
+        case (6_int64)
+          select case (pc_)
+          case (0_int64)
+            r = 13_int64
+            return
+          case (1_int64)
+            r = 14_int64
+            return
+          case (2_int64)
+            if (.true.) then
+              if (.true.) then
+                t_9 = (i_ < nk_)
+              else
+                t_9 = .false.
+              end if
+              t_10 = t_9
+            else
+              t_10 = .false.
+            end if
+            if (t_10) then
+              r = 3_int64
+              return
+            else
+              r = 15_int64
+              return
+            end if
+          case (3_int64)
+            r = 9_int64
+            return
+          case (4_int64)
+            r = 16_int64
+            return
+          case (5_int64)
+            r = 17_int64
+            return
+          case default
+            r = 0_int64
+            return
+          end select
+        case default
           r = 0_int64
           return
-        end if
+        end select
       end if
     end select
   end function ex_act
@@ -272,6 +320,8 @@
     integer(int64), value :: tv_
     integer(int64) :: r
     logical :: t_1
+    logical :: t_2
+    logical :: t_3
     if ((k_ == 4_int64)) then
       r = 1_int64
       return
@@ -299,8 +349,46 @@
             return
           end if
         else
-          r = 0_int64
-          return
+          if ((k_ == 6_int64)) then
+            select case (pc_)
+            case (0_int64)
+              r = 1_int64
+              return
+            case (1_int64)
+              r = 2_int64
+              return
+            case (2_int64)
+              if (.true.) then
+                if (.true.) then
+                  t_2 = (i_ < nk_)
+                else
+                  t_2 = .false.
+                end if
+                t_3 = t_2
+              else
+                t_3 = .false.
+              end if
+              if (t_3) then
+                r = 3_int64
+                return
+              else
+                r = 4_int64
+                return
+              end if
+            case (3_int64)
+              r = 2_int64
+              return
+            case (4_int64)
+              r = 5_int64
+              return
+            case default
+              r = pc_
+              return
+            end select
+          else
+            r = 0_int64
+            return
+          end if
         end if
       end if
     end if
@@ -317,6 +405,9 @@
     integer(int64) :: i1_3
     logical :: t_1
     integer(int64) :: t_10
+    integer(int64) :: t_11
+    integer(int64) :: t_12
+    integer(int64) :: t_13
     integer(int64) :: t_2
     logical :: t_4
     integer(int64) :: t_5
@@ -336,7 +427,7 @@
     end if
     i1_3 = t_2
     if ((k_ == 5_int64)) then
-      t_10 = i1_3
+      t_13 = i1_3
     else
       if ((k_ == 11_int64)) then
         t_4 = (k_ == 11_int64)
@@ -349,7 +440,7 @@
         else
           t_5 = i_
         end if
-        t_9 = t_5
+        t_12 = t_5
       else
         if ((k_ == 16_int64)) then
           if ((pc_ == 0_int64)) then
@@ -362,15 +453,30 @@
             end if
             t_7 = t_6
           end if
-          t_8 = t_7
+          t_11 = t_7
         else
-          t_8 = i_
+          if ((k_ == 6_int64)) then
+            if ((pc_ == 1_int64)) then
+              t_9 = 1_int64
+            else
+              if ((pc_ == 3_int64)) then
+                t_8 = i1_3
+              else
+                t_8 = i_
+              end if
+              t_9 = t_8
+            end if
+            t_10 = t_9
+          else
+            t_10 = i_
+          end if
+          t_11 = t_10
         end if
-        t_9 = t_8
+        t_12 = t_11
       end if
-      t_10 = t_9
+      t_13 = t_12
     end if
-    r = t_10
+    r = t_13
     return
   end function ex_i
 

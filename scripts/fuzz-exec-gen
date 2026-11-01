@@ -5,7 +5,7 @@
 ;;
 ;;   scripts/fuzz-exec-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
 ;;
-;; Random cases: a record's node kind (the core's seven, and others), its
+;; Random cases: a record's node kind (the core's ten, and others), its
 ;; pc and i, the node's count of children and its operand, whether the
 ;; value in flight is truthy, and k_finish's restart flag and marker. ACL2
 ;; runs ex-act, ex-kid, ex-pc, ex-i and ex-fin; test/exec/exec_check runs
@@ -32,8 +32,8 @@
 
 (defn gen-case []
   (let [nk (pick [0 1 2 2 3 3 4 5 9])]
-    {:k (pick [1 2 4 4 4 5 5 5 11 11 11 12 12 12 16 16 16 3 14 17 0 -1])
-     :pc (pick [0 0 1 1 2 3 -1])
+    {:k (pick [1 2 3 4 4 4 5 5 5 6 6 6 6 6 11 11 11 12 12 12 14 16 16 16 17 0 -1])
+     :pc (pick [0 0 1 1 2 2 3 4 5 -1])
      :i (pick [0 0 1 2 3 4 8 -1 (dec nk) nk])
      :nk nk :n2 (pick [0 1 2 3 4 -1 (dec nk)])
      :tv (rnd 2) :rf (rnd 2) :mk (pick [0 1 1 2])}))

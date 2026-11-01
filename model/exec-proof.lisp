@@ -16,42 +16,8 @@
 
 (include-book "exec")
 
-; ---- what the theorem assumes -----------------------------------------------------------------
-;
-; every node a core kind; an if 2 or 3 children; a let or loop its
-; bindings' inits and its body; a recur only in a loop body's tail
-; position (tl), as anpass's tail check passes it, with as many arguments
-; as its loop's slots; no constant the recur marker
-
-(defun ex-wf (flg e i tl)
-  (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-rank flg)) (ex-left flg e i)))
-                  :well-founded-relation o<
-                  :hints (("Goal" :in-theory (disable ex-kid-of)))))
-  (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
-    (and (consp e) (< nk *ex40*) (< n2 *ex40*)
-         (case flg
-           (:iter (ex-wf :m e 0 t))
-           (:do (cond ((not (equal k 5)) nil)
-                      ((zp nk) t)
-                      ((< i (- nk 1)) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :do e (1+ i) tl)))
-                      (t (ex-wf :m (ex-kid-of e (- nk 1)) 0 tl))))
-           (:let (cond ((not (or (equal k 11) (equal k 12))) nil)
-                       ((< i n2) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :let e (1+ i) tl)))
-                       ((equal k 12) (ex-wf :m (ex-kid-of e n2) 0 t))
-                       (t (ex-wf :m (ex-kid-of e n2) 0 tl))))
-           (:rec (cond ((not (equal k 16)) nil)
-                       ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :rec e (1+ i) tl)))
-                       (t tl)))
-           (otherwise
-            (cond ((equal k 1) (not (equal (ex-c e) *ex-mk*)))
-                  ((equal k 2) t)
-                  ((equal k 4) (and (or (equal nk 2) (equal nk 3))
-                                    (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
-                                    (or (equal nk 2) (ex-wf :m (ex-kid-of e 2) 0 tl))))
-                  ((equal k 5) (ex-wf :do e 0 tl))
-                  ((or (equal k 11) (equal k 12)) (and (equal nk (1+ n2)) (ex-wf :let e 0 tl)))
-                  ((equal k 16) (and tl (equal (ex-rn e) nk) (ex-wf :rec e 0 tl)))
-                  (t nil)))))))
+; what the theorem assumes is exec.lisp's ex-wf, which a call's meaning
+; also asks of the body it enters
 
 (defthm ex-wf-facts (implies (ex-wf flg e i tl) (and (consp e) (< (ex-nk e) *ex40*) (< (ex-i2 e) *ex40*)))
   :rule-classes :forward-chaining :hints (("Goal" :expand ((ex-wf flg e i tl)))))
@@ -59,13 +25,13 @@
 (defthm ex-wf-iter (equal (ex-wf :iter e i tl) (and (consp e) (< (ex-nk e) *ex40*) (< (ex-i2 e) *ex40*) (ex-wf :m e 0 t)))
   :hints (("Goal" :expand ((ex-wf :iter e i tl)))))
 
-(defun no-mk (l) (not (member-equal *ex-mk* l)))
 
 ; the record a flag's meaning starts from
 (defun ex-start (flg e i tmp fl rs)
   (case flg
     (:iter (ex-rec e 0 0 t e nil))
     (:rec (ex-rec e 1 i fl rs tmp))
+    (:call (ex-rec e 2 i fl rs tmp))
     ((:do :let) (ex-rec e 0 i fl rs tmp))
     (otherwise (ex-rec e 0 0 fl rs nil))))
 
@@ -103,6 +69,13 @@
 (in-theory (disable no-mk))
 (defthm no-mk-write (implies (and (no-mk l) (no-mk vs)) (no-mk (ex-write s vs l)))
   :hints (("Goal" :induct (ex-write s vs l))))
+; a call's new frame: nils, the arguments, the captures and the closure
+(defthm no-mk-make-list-ac (implies (no-mk acc) (no-mk (make-list-ac n nil acc))))
+(defthm no-mk-bind-caps (implies (and (no-mk fr) (no-mk caps)) (no-mk (ex-bind-caps capv caps fr)))
+  :hints (("Goal" :induct (ex-bind-caps capv caps fr))))
+(defthm no-mk-bind
+  (implies (and (no-mk args) (no-mk (caddr f)) (equal (car f) :clo)) (no-mk (ex-bind f args)))
+  :hints (("Goal" :in-theory (disable ex-bind-caps ex-write ex-arity))))
 
 ; the induction: ex-ev's recursion, each call with the records it runs on
 (set-irrelevant-formals-ok t)
@@ -142,6 +115,15 @@
                      (list (ex-ind :m (ex-kid-of e i) 0 nil fr fuel nil nil (cons (ex-rec e 2 i fl rs tmp) ks) v0 nil)
                            (ex-ind :rec e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel fl rs ks (val (car r)) tl))))
                   (t nil)))
+      (:call (cond ((not (consp e)) nil)
+                   ((< i nk)
+                    (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                      (list (ex-ind :m (ex-kid-of e i) 0 nil fr fuel nil nil (cons (ex-rec e 3 i fl rs tmp) ks) v0 nil)
+                            (ex-ind :call e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel fl rs ks (val (car r)) tl))))
+                   ((zp fuel) nil)
+                   (t (let ((bd (ex-fbody (car tmp) (len (cdr tmp)))))
+                        (ex-ind :iter bd 0 nil (ex-bind (car tmp) (cdr tmp)) (1- fuel) t bd
+                                (cons (ex-rec e 5 i fl rs fr) ks) v0 nil)))))
       (otherwise
        (cond ((not (consp e)) nil)
              ((equal k 4)
@@ -152,6 +134,12 @@
              ((equal k 5) (ex-ind :do e 0 nil fr fuel fl rs ks v0 tl))
              ((or (equal k 11) (equal k 12)) (ex-ind :let e 0 nil fr fuel fl rs ks v0 tl))
              ((equal k 16) (ex-ind :rec e 0 nil fr fuel fl rs ks v0 tl))
+             ((equal k 6)
+              (let* ((h (ex-kid-of e 0)) (r (ex-ev :m h 0 nil fr fuel)))
+                (if (ex-linked h)
+                    (ex-ind :call e 1 (list (ex-c h)) fr fuel fl rs ks (ex-c h) tl)
+                  (list (ex-ind :m h 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)
+                        (ex-ind :call e 1 (list (val (car r))) (cadr r) fuel fl rs ks (val (car r)) tl)))))
              (t nil))))))
 
 ; ---- each construct, given what its parts do ----------------------------------------------------
@@ -163,7 +151,7 @@
 (defthm ex-rn-natp (natp (ex-rn e)) :rule-classes :type-prescription)
 (in-theory (disable ex-kind ex-i2 ex-s2 ex-nk ex-c ex-mark ex-rstart ex-rn ex-kids))
 
-(defmacro ex-other (flg) `(not (member-equal ,flg '(:iter :do :let :rec))))
+(defmacro ex-other (flg) `(not (member-equal ,flg '(:iter :do :let :rec :call))))
 (defmacro ex-r (kid fr fuel) `(ex-ev :m ,kid 0 nil ,fr ,fuel))
 
 (defmacro ex-case (name hyps &key (flg 'flg))
@@ -174,7 +162,7 @@
 
 (ex-case ex-good-atom ((not (consp e))))
 
-(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 11 12 16)))))
+(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 11 12 16)))))
 
 ; an if, a case for each way its test goes
 (defmacro ex-if-test () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
@@ -236,6 +224,30 @@
   :flg :rec)
 (ex-case ex-good-rec-end ((consp e) (not (< (nfix i) (ex-nk e)))) :flg :rec)
 
+; a call: its head (direct-linked or run), each argument, the entry
+(defthm ex-wf-var-not-mk (implies (and (ex-wf :m h 0 tl) (equal (ex-kind h) 3)) (not (equal (ex-c h) *ex-mk*)))
+  :hints (("Goal" :expand ((ex-wf :m h 0 tl)))))
+(ex-case ex-good-m-call-linked
+  ((ex-other flg) (consp e) (equal (ex-kind e) 6) (ex-linked (ex-kid-of e 0))
+   (ex-good :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel fl rs ks (ex-c (ex-kid-of e 0)) tl)))
+(ex-case ex-good-m-call
+  ((ex-other flg) (consp e) (equal (ex-kind e) 6) (not (ex-linked (ex-kid-of e 0)))
+   (ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)
+   (ex-good :call e 1 (list (val (car (ex-r (ex-kid-of e 0) fr fuel)))) (cadr (ex-r (ex-kid-of e 0) fr fuel)) fuel fl rs ks
+            (val (car (ex-r (ex-kid-of e 0) fr fuel))) tl)))
+(ex-case ex-good-call-mid
+  ((consp e) (< (nfix i) (ex-nk e))
+   (ex-good :m (ex-kid-of e (nfix i)) 0 nil fr fuel nil nil (cons (ex-rec e 3 (nfix i) fl rs tmp) ks) v0 nil)
+   (ex-good :call e (+ 1 (nfix i)) (append tmp (list (val (car (ex-r (ex-kid-of e (nfix i)) fr fuel)))))
+            (cadr (ex-r (ex-kid-of e (nfix i)) fr fuel)) fuel fl rs ks (val (car (ex-r (ex-kid-of e (nfix i)) fr fuel))) tl))
+  :flg :call)
+(ex-case ex-good-call-zp ((consp e) (not (< (nfix i) (ex-nk e))) (zp fuel)) :flg :call)
+(ex-case ex-good-call-enter
+  ((consp e) (not (< (nfix i) (ex-nk e))) (not (zp fuel))
+   (ex-good :iter (ex-fbody (car tmp) (len (cdr tmp))) 0 nil (ex-bind (car tmp) (cdr tmp)) (+ -1 fuel) t
+            (ex-fbody (car tmp) (len (cdr tmp))) (cons (ex-rec e 5 (nfix i) fl rs fr) ks) v0 nil))
+  :flg :call)
+
 (ex-case ex-good-iter-zp
   ((consp e) (zp fuel) (ex-good :m e 0 nil fr fuel t e ks v0 t))
   :flg :iter)
@@ -250,7 +262,7 @@
   (ex-good flg e i tmp fr fuel fl rs ks v0 tl)
   :rule-classes nil
   :hints (("Goal" :induct (ex-ind flg e i tmp fr fuel fl rs ks v0 tl)
-                  :in-theory (disable ex-good ex-ev ex-wf ex-run ex-step c+ ex-kid-of ex-rec ex-kind ex-nk ex-i2 ex-s2))))
+                  :in-theory (disable ex-good ex-ev ex-wf ex-run ex-step c+ ex-kid-of ex-rec ex-kind ex-nk ex-i2 ex-s2 ex-bind ex-fbody))))
 
 ; RUNNING THE MACHINE ANSWERS WHAT THE MEANING DOES: a value pops the
 ; node's record with it, a recur in a loop body's tail restarts the loop's

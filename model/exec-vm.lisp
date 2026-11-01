@@ -138,7 +138,8 @@
                   (t nil)))))))
 
 ; the loop-free core, well formed as ex-vwf is outside a loop: what
-; exec-cost bounds (a loop's turns depend on its iterations)
+; exec-cost bounds (a loop's turns depend on its iterations, a call's on its
+; callee), a Var and a fn leaves as a constant is
 (defun ex-lfwf (flg e i cm)
   (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
                   :well-founded-relation o<
@@ -155,7 +156,7 @@
                    (and (equal k 11) (ex-lfwf :m (ex-kid-of e n2) 0 cm))))
            (:rec nil)
            (otherwise
-            (cond ((equal k 1) t)
+            (cond ((member-equal k (quote (1 3 14))) t)
                   ((equal k 2) (and (member-equal (ex-i2 e) cm) (not (ex-mark e))))
                   ((equal k 4) (and (or (equal nk 2) (equal nk 3))
                                     (ex-lfwf :m (ex-kid-of e 0) 0 cm) (ex-lfwf :m (ex-kid-of e 1) 0 cm)
@@ -379,6 +380,7 @@
                     (list (ex-vind :m (ex-kid-of e i) 0 nil cm env fr fuel caps defs nil)
                           (ex-vind :rec e (1+ i) (append tmp (list (val (car r)))) cm env (cadr r) fuel caps defs lp)))
                 nil))
+        (:call nil)
         (otherwise
          (cond ((equal k 4)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))

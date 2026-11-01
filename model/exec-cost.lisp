@@ -1,21 +1,26 @@
 ; THE TREE EVALUATOR'S CORE, COUNTED (model/exec.lisp). A turn of
 ; run_loop is one ex-step: the generated decisions are a fixed number of
-; comparisons (ex-own, at most 9 on any path), and its action a push, a
+; comparisons (ex-own, at most 16 on any path), and its action a push, a
 ; tail, a finish or a slot written, each a constant number of steps but a
-; recur's last, which writes its k slots. ex-ev counts the turns
-; (exec-proof proves the machine takes exactly them); here they are
-; bounded: a loop-free core tree of n nodes takes at most 3n - 2 turns --
-; a constant 1, an if 2, a do one a child, a let two a binding and one for
-; its body, each node's children their own. A loop's turns are its
-; inits', then each iteration's -- its body's and a recur's 2k + 2.
+; recur's last, which writes its k slots, a closure's making, which copies
+; its c captures, and a call's entry, which makes a frame of its callee's
+; s slots and writes its arguments and captures into it (s + c steps).
+; ex-ev counts the turns (exec-proof proves the machine takes exactly
+; them); here they are bounded: a loop-free, call-free core tree of n
+; nodes takes at most 3n - 2 turns -- a constant, a Var or a fn 1, an if
+; 2, a do one a child, a let two a binding and one for its body, each
+; node's children their own. A loop's turns are its inits', then each
+; iteration's -- its body's and a recur's 2k + 2; a call's of k arguments
+; its head's (none, and one turn fewer, when direct-linked), its
+; arguments' and 2k + 4, and its callee's body's (ex-call-turns).
 
 (in-package "ACL2")
 
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 9) (ex-kid 6) (ex-pc 4) (ex-i 5) (ex-fin 2) (otherwise 0)))
-(defthm ex-own-bound (<= (ex-own f) 9) :rule-classes :linear)
+(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (otherwise 0)))
+(defthm ex-own-bound (<= (ex-own f) 16) :rule-classes :linear)
 
 ; the nodes: flg :kids the children from i on, else the node and its children
 (defun ex-sz (flg e i)
@@ -72,3 +77,21 @@
            (<= (caddr (ex-ev :m e 0 nil fr fuel)) (- (* 3 (ex-sz :m e 0)) 2)))
   :rule-classes :linear
   :hints (("Goal" :use ((:instance ex-turns-bound-flag (flg :m) (i 0) (tmp nil))))))
+
+; A CALL'S TURNS: from its i-th argument, 2 for each argument left and 3
+; for the entry, the body's answer and the finish, beyond what its
+; arguments and its callee's body take (ex-call-parts)
+(defun ex-call-parts (e i tmp fr fuel)
+  (declare (xargs :measure (nfix (- (ex-nk e) (nfix i)))))
+  (if (< (nfix i) (ex-nk e))
+      (let ((r (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel)))
+        (+ (caddr r) (ex-call-parts e (1+ (nfix i)) (append tmp (list (val (car r)))) (cadr r) fuel)))
+    (caddr (ex-ev :iter (ex-fbody (car tmp) (len (cdr tmp))) 0 nil (ex-bind (car tmp) (cdr tmp)) (1- fuel)))))
+
+(defthm ex-call-turns
+  (implies (and (consp e) (valp (car (ex-ev :call e i tmp fr fuel))))
+           (equal (caddr (ex-ev :call e i tmp fr fuel))
+                  (+ (* 2 (nfix (- (ex-nk e) (nfix i)))) 3 (ex-call-parts e i tmp fr fuel))))
+  :hints (("Goal" :induct (ex-call-parts e i tmp fr fuel)
+                  :in-theory (e/d (c+) (ex-kid-of ex-bind ex-fbody ex-enters))
+                  :expand ((ex-ev :call e i tmp fr fuel)))))
