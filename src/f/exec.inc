@@ -1211,7 +1211,9 @@
     end if
     vst => tctx%stk
     b = tctx%kst(tctx%ksp)%base
-    if (iand(tctx%kst(tctx%ksp)%flags, KF_RESTART) /= 0 .and. gc_kind(val) == OBJ_RECUR) then
+    ! restart or pop: the generated ex_fin (model/exec.lisp ex-finish)
+    if (ex_fin(merge(1_int64, 0_int64, iand(tctx%kst(tctx%ksp)%flags, KF_RESTART) /= 0), &
+               merge(1_int64, 0_int64, gc_kind(val) == OBJ_RECUR)) == 1) then
        call vs_set(vst, b + 1, vs_get(vst, b + 5))
        call vs_set(vst, b + 3, gc_nil())
        call vs_set(vst, b + 4, gc_nil())
@@ -1408,39 +1410,12 @@
        case (N_VMB)
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
-       case (N_CONST)
-          val = gc_slot(nd, 2)
-          call k_finish(val, tctx)
-       case (N_LOCAL)
-          val = frame_get(vs_get(vst, b + 2), gc_i2(nd))
-          if (tag_of(gc_slot(nd, 3)) == GCT_BOOL) call frame_set(vs_get(vst, b + 2), gc_i2(nd), gc_nil())
-          call k_finish(val, tctx)
+       case (N_CONST, N_LOCAL, N_IF, N_DO, N_LET, N_LOOP, N_RECUR)
+          ! the core kinds: decided by the generated exec_gen.inc
+          call exec_core(tctx, nd, kids, b, val)
        case (N_VAR)
           val = var_deref(gc_slot(nd, 2), [gc_slot(nd, 2)])
           call k_finish(val, tctx)
-       case (N_IF)
-          if (tctx%kst(tctx%ksp)%pc == 0) then
-             tctx%kst(tctx%ksp)%pc = 1
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-          else if (truthy(val)) then
-             call k_tail(gcv_nth(kids, 1), tctx)
-          else if (gcv_count(kids) > 2) then
-             call k_tail(gcv_nth(kids, 2), tctx)
-          else
-             val = gc_nil()
-             call k_finish(val, tctx)
-          end if
-       case (N_DO)
-          n = gcv_count(kids)
-          if (n == 0) then
-             val = gc_nil()
-             call k_finish(val, tctx)
-          else if (tctx%kst(tctx%ksp)%i < n - 1) then
-             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
-             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i - 1), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-          else
-             call k_tail(gcv_nth(kids, n - 1), tctx)
-          end if
        case (N_CALL)
           select case (tctx%kst(tctx%ksp)%pc)
           case (0)
@@ -1645,22 +1620,6 @@
                 call k_finish(val, tctx)
              end if
           end select
-       case (N_LET, N_LOOP)
-          n = gc_i2(nd)
-          if (tctx%kst(tctx%ksp)%pc == 1) then
-             call frame_set(vs_get(vst, b + 2), int_of(gc_slot(nd, 2)) + tctx%kst(tctx%ksp)%i, val)
-             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
-             tctx%kst(tctx%ksp)%pc = 0
-          else if (tctx%kst(tctx%ksp)%i < n) then
-             tctx%kst(tctx%ksp)%pc = 1
-             call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-          else
-             if (kind == N_LOOP) then
-                call vs_set(vst, b + 5, gcv_nth(kids, n))
-                tctx%kst(tctx%ksp)%flags = ior(tctx%kst(tctx%ksp)%flags, KF_RESTART)
-             end if
-             call k_tail(gcv_nth(kids, n), tctx)
-          end if
        case (N_CASE)
           if (tctx%kst(tctx%ksp)%pc == 0) then
              tctx%kst(tctx%ksp)%pc = 1
@@ -1722,9 +1681,6 @@
              tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
              tctx%kst(tctx%ksp)%pc = 2
           end select
-       case (N_RECUR)
-          val = exec_recur(nd, vs_get(vst, b + 2))
-          if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_THROW)
           v = exec(gcv_nth(kids, 0), vs_get(vst, b + 2))
           if (.not. tctx%has_error) then
@@ -2261,43 +2217,83 @@
     call vs_leave(vst, base)
   end function exec_letfn
 
-  ! recur: arguments evaluated, THEN written to the target's slots (an
-  ! argument may read a slot another argument replaces), then a marker
-  ! the enclosing loop or fn body reads. Into a variadic fn the last
-  ! argument is the rest parameter itself, as Clojure's recur binds it.
-  recursive function exec_recur(nd, frame) result(out)
+  ! One turn of run_loop for a CORE KIND -- a constant, a local, if, do,
+  ! let*, loop*, recur. What to do is decided by the generated ex_act,
+  ! ex_kid, ex_pc and ex_i (src/f/gen/exec_gen.inc, model/exec.lisp:
+  ! exec-proof proves the machine they drive answers each node's meaning);
+  ! this does it, action for action as exec.lisp's ex-step does.
+  ! A recur's arguments run as children of its record, their values kept
+  ! in a region of the value stack it opens (kst%aux its base) -- every
+  ! value computed before any slot is rebound, as an argument may read a
+  ! slot another replaces -- then written to the target's slots, then the
+  ! marker the enclosing loop or fn body restarts on. A throw out of an
+  ! argument leaves the region with the record (k_unwind's vs_leave).
+  subroutine exec_core(tctx, nd, kids, b, val)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_value), intent(in) :: nd, kids
+    integer, intent(in) :: b
+    type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, rinfo, v
-    integer :: base, i, n, nk, start
-    tctx => ctx_self()
+    type(gc_value) :: rinfo
+    integer(int64) :: k, pc, i, nk, n2, tv, j
+    integer :: q, m, start, rb
     vst => tctx%stk
-    out = gc_nil()
-    ! Every new value is computed before any slot is rebound, into stack
-    ! slots base+3.. -- not a vector: that was an allocation per turn of
-    ! every interpreted loop.
-    nk = gcv_count(gc_slot(nd, 1))
-    base = vs_enter(vst, 2 + nk)
-    call vs_set(vst, base + 1, nd)
-    call vs_set(vst, base + 2, frame)
-    do i = 0, nk - 1
-       v = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), i), vs_get(vst, base + 2))
-       if (tctx%has_error) then
-          call vs_leave(vst, base)
-          return
-       end if
-       call vs_set(vst, base + 3 + i, v)
-    end do
-    rinfo = gc_slot(vs_get(vst, base + 1), 2)
-    start = int_of(gcv_nth(rinfo, 1))
-    n = int_of(gcv_nth(rinfo, 2))
-    do i = 0, min(n, nk) - 1
-       call frame_set(vs_get(vst, base + 2), start + i, vs_get(vst, base + 3 + i))
-    end do
-    out = recur_marker()
-    call vs_leave(vst, base)
-  end function exec_recur
+    k = gc_i1(nd)
+    pc = tctx%kst(tctx%ksp)%pc
+    i = tctx%kst(tctx%ksp)%i
+    nk = 0
+    if (k == N_IF .or. k == N_DO .or. k == N_RECUR) nk = gcv_count(kids)
+    n2 = gc_i2(nd)
+    tv = 0
+    if (truthy(val)) tv = 1
+    j = ex_kid(k, pc, i, nk, n2, tv)
+    select case (ex_act(k, pc, i, nk, n2, tv))
+    case (1)
+       val = gc_slot(nd, 2)
+       call k_finish(val, tctx)
+    case (2)
+       val = frame_get(vs_get(vst, b + 2), int(n2))
+       ! anpass marked this read the slot's last: cleared, as clj does
+       if (tag_of(gc_slot(nd, 3)) == GCT_BOOL) call frame_set(vs_get(vst, b + 2), int(n2), gc_nil())
+       call k_finish(val, tctx)
+    case (3)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+       call k_push(gcv_nth(kids, int(j)), vs_get(vst, b + 2), 0, gc_nil(), tctx)
+    case (4)
+       call k_tail(gcv_nth(kids, int(j)), tctx)
+    case (5)
+       val = gc_nil()
+       call k_finish(val, tctx)
+    case (6)
+       call frame_set(vs_get(vst, b + 2), int_of(gc_slot(nd, 2)) + int(i), val)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (7)
+       call vs_set(vst, b + 5, gcv_nth(kids, int(j)))
+       tctx%kst(tctx%ksp)%flags = ior(tctx%kst(tctx%ksp)%flags, KF_RESTART)
+       call k_tail(gcv_nth(kids, int(j)), tctx)
+    case (8)
+       tctx%kst(tctx%ksp)%aux = vs_enter(vst, int(nk))
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (9)
+       call vs_set(vst, tctx%kst(tctx%ksp)%aux + 1 + int(i), val)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (10)
+       rb = tctx%kst(tctx%ksp)%aux
+       rinfo = gc_slot(nd, 2)
+       start = int_of(gcv_nth(rinfo, 1))
+       m = min(int_of(gcv_nth(rinfo, 2)), int(nk))
+       do q = 0, m - 1
+          call frame_set(vs_get(vst, b + 2), start + q, vs_get(vst, rb + 1 + q))
+       end do
+       call vs_leave(vst, rb)
+       val = recur_marker()
+       call k_finish(val, tctx)
+    end select
+  end subroutine exec_core
 
   recursive function exec_try(nd, frame) result(out)
     type(gc_stack), pointer :: vst

@@ -1,0 +1,94 @@
+#!/usr/bin/env bb
+;; fuzz-exec-gen: the GENERATED tree evaluator's decisions
+;; (src/f/gen/exec_gen.inc, written by scripts/acl2-fortran -b exec from
+;; model/exec.lisp) against the ACL2 they were generated from.
+;;
+;;   scripts/fuzz-exec-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random cases: a record's node kind (the core's seven, and others), its
+;; pc and i, the node's count of children and its operand, whether the
+;; value in flight is truthy, and k_finish's restart flag and marker. ACL2
+;; runs ex-act, ex-kid, ex-pc, ex-i and ex-fin; test/exec/exec_check runs
+;; the generated Fortran; both print every answer, and they must agree.
+;;
+;; -x is the NEGATIVE CONTROL: the Fortran side reads the value's
+;; truthiness the wrong way round and every record as restarting, and the
+;; answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "300")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-exec-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+(defn gen-case []
+  (let [nk (pick [0 1 2 2 3 3 4 5 9])]
+    {:k (pick [1 2 4 4 4 5 5 5 11 11 11 12 12 12 16 16 16 3 14 17 0 -1])
+     :pc (pick [0 0 1 1 2 3 -1])
+     :i (pick [0 0 1 2 3 4 8 -1 (dec nk) nk])
+     :nk nk :n2 (pick [0 1 2 3 4 -1 (dec nk)])
+     :tv (rnd 2) :rf (rnd 2) :mk (pick [0 1 1 2])}))
+
+(def cases (vec (repeatedly n gen-case)))
+(defn row [{:keys [k pc i nk n2 tv]}] (str/join " " [k pc i nk n2 tv]))
+
+;; ---- what ACL2 answers -------------------------------------------------------------------
+
+(defn acl2-case [j {:keys [rf mk] :as c}]
+  (let [as (row c)]
+    (str "(cw \"~%CASE " j " ~x0~%\" (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")))\n")))
+
+(def driver
+  (str "(include-book \"exec-proof\")\n"
+       "(set-print-case :downcase state)\n"
+       "(set-iprint nil)\n"
+       (str/join (map-indexed acl2-case cases))
+       "(good-bye)\n"))
+
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ c l] (re-seq #"CASE (\d+) \(([-\d\s]*)\)" (str/replace out #"\s*\n\s*" " "))]
+             [(parse-long c) (mapv parse-long (remove str/blank? (str/split l #"\s+")))])))
+(when (not= (count expected) n)
+  (println (str "fuzz-exec-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 3000))))
+  (System/exit 1))
+
+;; ---- the generated code ------------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "exec" "-o" (str work "/exec_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "test/exec/exec_check.f90" (str work "/exec_check.f90"))
+(def exe (str work "/exec_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc
+               (concat ["-O2"] (when (= fc "gfortran") ["-frecursive" "-ffree-line-length-none"]) ["-o" exe "exec_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(def case-file (str work "/cases.txt"))
+(spit case-file (str/join (for [{:keys [rf mk] :as c} cases] (str (row c) " " rf " " mk "\n"))))
+(def got (let [r (apply p/shell {:continue true :out :string :err :string} exe case-file (when broken ["broken"]))]
+           (mapv (fn [l] (mapv parse-long (str/split (str/trim l) #"\s+"))) (str/split-lines (str/trim (:out r))))))
+(def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))
+(def bad (remove :ok results))
+(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting)")))
+(println (str "  by action: "
+              (str/join ", " (for [[a c] (sort (frequencies (map #(first (:want %)) results)))] (str a ":" c)))
+              "; restarts " (count (filter #(= 1 (nth (:want %) 4)) results))))
+(println (str "generated tree-evaluator decisions against ACL2's: " (count bad) " cases differ"))
+(doseq [b (take 3 bad)]
+  (println "  case" (:k b) (pr-str (nth cases (:k b))))
+  (println "    ACL2     " (pr-str (:want b)))
+  (println "    generated" (pr-str (:got b))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

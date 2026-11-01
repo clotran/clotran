@@ -4,7 +4,7 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal|anform|anprim|anbuild] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
@@ -292,6 +292,24 @@
               "  ! (apk_elem) -- guard-verified, reading a node's kind through analyze.inc's"
               "  ! apk_kid. anprim-proof.lisp proves each is clj's rule and that a hint changes"
               "  ! no value; anprim-cost.lisp counts the steps."]}
+    "exec"
+    {:out "src/f/gen/exec_gen.inc" :include true :book "exec-proof"
+     :fns [ex-act ex-kid ex-pc ex-i ex-fin]
+     :host []
+     :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
+     :value-formals {}
+     :value-fns #{}
+     :val-type "gc_value"
+     :rt {}
+     :header ["  ! GENERATED from model/exec.lisp by scripts/acl2-fortran -b exec. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the tree evaluator's turn for its core kinds -- a constant, a"
+              "  ! local, if, do, let*, loop* and recur -- what run_loop does with the top"
+              "  ! record (ex_act), which child it takes (ex_kid), the record's pc and i after"
+              "  ! (ex_pc, ex_i), and whether k_finish restarts it (ex_fin) -- guard-verified."
+              "  ! exec.inc's exec_core does what they decide. exec-proof.lisp proves the"
+              "  ! machine they drive answers each node's meaning, exec-vm.lisp that the"
+              "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn
