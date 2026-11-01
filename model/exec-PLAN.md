@@ -49,7 +49,7 @@ slot's read and write), and every kind not yet in the model.
    `bind_closure`'s slots, the fn body's KF_FNBODY|KF_RESTART record, a
    recur to the fn), N_VAR. Needs `vmx`'s `:callv`/`:mkclo` and the
    captures (anlocal's) in the meaning. Split in two:
-2a. **The machine and the generation** *(this commit)*: exec.lisp's turn
+2a. **The machine and the generation** *(done)*: exec.lisp's turn
    for N_VAR (the Var's value, the namespace the host's), N_FN (a closure,
    vmx's `(:clo template capvals)`, of the outer slots' values) and N_CALL
    (pc 0 its head pushed or direct-linked, 1 the callee kept, 2/3 each
@@ -84,10 +84,29 @@ slot's read and write), and every kind not yet in the model.
    templates with distinct parameter, inner and self slots, and
    vcsx-correct with those defs (xdefs-ok, alistp; check the compiler takes
    a non-symbol name).
-3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
+   *(done, as designed: vcsx-correct asks only `alistp` and `xdefs-ok` of
+   the defs, and both mx (`assoc-eq`, `assoc-equal` in the logic) and the
+   VM's fntab (`assoc-equal`) look a name up by `equal`, so a template is
+   its own def's name -- exec-vmrun runs one through the VM. `ex-xvs` the
+   value invariant, `ex-defs-ok` the defs (every entry `ex-def` of its
+   template, the template `ex-tmwf`), `ex-vwf` taking the defs; the flag
+   induction gains the `:call` place, its end entering the callee's
+   `:iter` with mx's caps the closure's (`ex-call-mx` and its siblings
+   give the body's hypotheses). ex-vm-agree, ex-recur-stays, ex-tr-xwf and
+   ex-vm-runs now cover Vars (a constant of the Var's value: the namespace
+   is the host's, its value read from the node as the machine does), fns
+   and calls. Left out: a template of several arities or a variadic one
+   -- the machine leaves those to the host's apply, and the meaning
+   answers :out for them, so ex-tmwf asks one fixed arity.)*
+3. **Throw and try, case, collections** *(next)*: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's
    branch (`case_branch`), N_VECTOR/MAP/SET; their nested `exec`s made
-   record steps as recur's were.
+   record steps as recur's were. Needs: a throw's result in ex-ev beside
+   :val and :recur, threaded through every place as :recur is; a VM
+   counterpart for try (vmi's handler stack, or mx grown a throw and a
+   try with vcsx-correct extended); case's table read as data; and
+   ex-xvs over collections, a closure inside a vector still a call's
+   possible head.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,
