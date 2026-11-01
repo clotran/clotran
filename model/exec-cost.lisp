@@ -41,8 +41,9 @@
 
 (in-theory (disable ex-sz))
 
-(defthm ex-vwf-consp (implies (ex-vwf flg e i cm) (consp e)) :rule-classes :forward-chaining
-  :hints (("Goal" :expand ((ex-vwf flg e i cm)))))
+
+(defthm ex-lfwf-consp (implies (ex-lfwf flg e i cm) (consp e)) :rule-classes :forward-chaining
+  :hints (("Goal" :expand ((ex-lfwf flg e i cm)))))
 
 (defthm ex-ev-turns-natp (natp (caddr (ex-ev flg e i tmp fr fuel))) :rule-classes :type-prescription
   :hints (("Goal" :induct (ex-ev flg e i tmp fr fuel) :in-theory (e/d (c+) (ex-kid-of)))))
@@ -52,7 +53,7 @@
   :hints (("Goal" :in-theory (enable ex-nk ex-kids) :use ((:instance ex-nth-consp-len (l (ex-kids e)))))))
 
 (defun ex-cgood (flg e i tmp fr fuel cm)
-  (implies (and (ex-vwf flg e i cm) (member-equal flg '(:m :do :let)) (natp i)
+  (implies (and (ex-lfwf flg e i cm) (member-equal flg '(:m :do :let)) (natp i)
                 (implies (eq flg :let) (<= i (ex-i2 e))) (implies (eq flg :do) (or (zp (ex-nk e)) (< i (ex-nk e)))))
            (<= (caddr (ex-ev flg e i tmp fr fuel))
                (if (eq flg :m) (- (* 3 (ex-sz :m e 0)) 2) (+ 1 (* 3 (ex-sz :kids e i)))))))
@@ -60,14 +61,14 @@
 (defthm ex-turns-bound-flag
   (ex-cgood flg e i tmp fr fuel cm)
   :rule-classes nil
-  :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs)
+  :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs nil)
                   :in-theory (e/d (c+) (ex-kid-of))
-                  :expand ((:free (flg cm) (ex-vwf flg e i cm))
+                  :expand ((:free (flg cm) (ex-lfwf flg e i cm))
                            (:free (flg fr tmp) (ex-ev flg e i tmp fr fuel))))))
 
 ; A LOOP-FREE CORE TREE OF n NODES TAKES AT MOST 3n - 2 TURNS
 (defthm ex-turns-bound
-  (implies (ex-vwf :m e 0 cm)
+  (implies (ex-lfwf :m e 0 cm)
            (<= (caddr (ex-ev :m e 0 nil fr fuel)) (- (* 3 (ex-sz :m e 0)) 2)))
   :rule-classes :linear
   :hints (("Goal" :use ((:instance ex-turns-bound-flag (flg :m) (i 0) (tmp nil))))))

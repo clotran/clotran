@@ -17,8 +17,10 @@ pops that record with the node's value, or, for a recur, leaves its loop's
 record back at the body with the loop's slots rebound** (exec-proof,
 `ex-machine-correct`); the value is what the meaning `ex-ev` says, and the
 meaning is `mx` of the tree's translation, slots mapped to `mx`'s
-positions (exec-vm; the loop-free core so far, loops 1b). So the slot a local reads holds its binding's value,
-and the tree evaluator and the VM agree. Locals clearing is anpass-sound's
+positions (exec-vm, `ex-vm-agree`), and the VM run of the translation
+answers the tree's value (`ex-vm-runs`, with vmx-proof's `vcsx-correct`).
+So the slot a local reads holds its binding's value, and the tree
+evaluator and the VM agree. Locals clearing is anpass-sound's
 (no cleared slot is read again); joining the two is milestone 4.
 
 What is generated: the decisions of each turn, as integers (`ex-act`,
@@ -33,12 +35,16 @@ slot's read and write), and every kind not yet in the model.
    loop*, recur, k_finish's restart. exec, exec-proof, exec-vm,
    exec-cost; exec_gen.inc behind `exec_core`; recur's arguments run on
    the record stack (no nested `exec`). The row splits: core Generated,
-   the rest Owed. *(this commit; exec-vm covers the loop-free core)*
+   the rest Owed. *(done; exec-vm then covered the loop-free core)*
 1b. **The VM for loop* and recur**: exec-vm's translation over loops --
    vmx's `:loop` binds its inits at once where the tree binds them one
    after another, so a loop becomes lets of its inits around an `mx`
    loop of their copies, and the scope relation holds only of the
-   positions a name still reaches (the copies are shadowed).
+   positions a name still reaches (the lets' positions are blanked).
+   *(this commit: `ex-vm-agree` over loops and recurs, a recur's values
+   only ever its loop's slots, never a value outside a loop's tail
+   (`ex-recur-stays`); the translation is `xwf` (`ex-tr-xwf`), so with
+   `vcsx-correct` the VM run answers the tree's value (`ex-vm-runs`))*
 2. **Calls and fns**: N_FN's closure, N_CALL's record (argument mode,
    `bind_closure`'s slots, the fn body's KF_FNBODY|KF_RESTART record, a
    recur to the fn), N_VAR. Needs `vmx`'s `:callv`/`:mkclo` and the
@@ -48,9 +54,7 @@ slot's read and write), and every kind not yet in the model.
    branch (`case_branch`), N_VECTOR/MAP/SET; their nested `exec`s made
    record steps as recur's were.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
-   tr-sound -- a marked read's slot is never read again -- and
-   loops whose inits read the loop's earlier bindings (vmx binds a loop's
-   inits at once; the translation needs lets around it).
+   tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
