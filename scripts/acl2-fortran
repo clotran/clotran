@@ -34,7 +34,8 @@
 ;;   one returning an integer     an integer(int64) function; a value
 ;;                                (anything a slot holds) is type(value)
 ;;   tail recursion               a loop
-;;   other recursion              a recursive procedure, marked so
+;;   other recursion              a recursive procedure, marked so, as is
+;;                                one the host re-enters (:reentrant)
 ;;   if                           an if statement, into a temporary where
 ;;                                it is an expression: only the branch
 ;;                                taken is evaluated, as in ACL2
@@ -273,7 +274,7 @@
               "  ! anform-cost.lisp counts the steps."]}
     "anprim"
     {:out "src/f/gen/anprim_gen.inc" :include true :book "anprim-proof"
-     :fns [apk-int-p apk-float-p apk-num apk-step apk-fold apk-arith apk-loop apk-let apk-ret apk-recur-ok apk-elem]
+     :fns [apk-int-p apk-float-p apk-num apk-step apk-fold apk-arith apk-loop apk-let apk-ret apk-recur-ok apk-elem apk-cast-code]
      :host []
      :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {apk-fold #{kids sc} apk-arith #{kids sc}}
@@ -294,13 +295,17 @@
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn
-           anb-try anb-try-walk anb-params anb-self anb-set anb-dot anb-new anb-recur anb-fn anb-methods anb-method]
+           anb-try anb-try-walk anb-params anb-self anb-set anb-dot anb-new anb-recur anb-fn anb-methods anb-method
+           anb-varq anb-seq anb-call anb-case anb-case-thens anb-coll anb-elems anb-type-methods anb-type]
      ;; the shims (analyze.inc anb_*), and what anlocal and anform generate
      :host [anb-sub anb-host anb-meta anb-const anb-local anb-node anb-node-s anb-refuse anb-refuse-catch anb-hint
             anb-defvar anb-def anb-catch anb-trynode anb-child
             anb-host2 anb-setnode anb-dotnode anb-newnode anb-recurnode anb-arity anb-newfn anb-fnclose
             anb-set-kind anb-dot-kind anb-new-kind anb-recur-open anb-recur-check anb-fn-open anb-method-open anb-method-check anb-fn-check
             anb-loop-open anb-let-kind anb-let-ret
+            anb-seq-kind anb-call-kind anb-var-kind anb-case-n anb-expand anb-varnode anb-callnode anb-casenode
+            anb-coll-kind anb-coll-n anb-coll-meta anb-metanode
+            anb-type-open anb-type-id anb-type-n anb-type-method anb-typenode
             anl-lookup anl-reserve anl-bind anl-shape anl-name-code anl-params anl-arity anl-arity-end anl-caps-of
             anf-if anf-def anf-quote anf-throw anf-try-op anf-try-step anf-catch anf-set anf-set-target anf-dot anf-dot-member anf-new]
      :stobjs {anls "ls" anb "bs"} :stobj-types {"ls" "anl_state" "bs" "anb_state"}
@@ -315,8 +320,14 @@
                      anb-refuse-catch #{f} anb-hint #{x} anb-defvar #{x} anb-def #{x} anb-catch #{f} anb-set #{x}
                      anb-dot #{x} anb-new #{x} anb-recur #{x} anb-fn #{x} anb-let-kind #{k}
                      anl-shape #{bv} anl-name-code #{x}
+                     anb-varq #{x} anb-seq #{x} anb-call #{x} anb-case #{x} anb-case-thens #{x}
+                     anb-seq-kind #{x} anb-call-kind #{x} anb-var-kind #{s} anb-case-n #{x} anb-expand #{x}
+                     anb-varnode #{s} anb-callnode #{x} anb-casenode #{x}
+                     anb-coll #{x} anb-elems #{x} anb-coll-kind #{x} anb-coll-n #{x} anb-coll-meta #{x}
+                     anb-type #{x} anb-type-methods #{x} anb-type-open #{x} anb-type-id #{x} anb-type-n #{x} anb-type-method #{x} anb-typenode #{x}
                      anf-def #{f} anf-try-op #{f} anf-try-step #{f} anf-catch #{f} anf-set-target #{x} anf-dot #{f} anf-new #{f}}
      :value-fns #{anb-drop}
+     :reentrant #{anb-type anb-type-methods}
      :bool-fns #{}
      ;; a form is a value of clotran's heap, read by analyze.inc's shims
      :val-type "gc_value"
@@ -324,13 +335,18 @@
           frf-kind ["frf_kind" [:val] :int] frf-len ["frf_len" [:val] :int] frf-nth ["frf_nth" [:val :int] :val]
           frf-rest ["frf_rest" [:val] :val] frf-sp ["frf_sp" [:val] :int]
           frm-sid ["frm_sid" [:val] :int] frm-bid ["frm_bid" [:val] :int] frm-pairs ["frm_pairs" [:val] :int]
-          frf-class ["frf_class" [:val] :int] frm-amp ["frm_amp" [:val] :int] frf-norm ["frf_norm" [:val] :val]}
+          frf-class ["frf_class" [:val] :int] frm-amp ["frm_amp" [:val] :int] frf-norm ["frf_norm" [:val] :val]
+          frf-nil ["frf_nil" [:val] :int] anb-case-then ["anb_case_then" [:val :int] :val]
+          anb-coll-elem ["anb_coll_elem" [:val :int] :val] anb-coll-metaform ["anb_coll_metaform" [:val] :val]}
      :header ["  ! GENERATED from model/anbuild.lisp by scripts/acl2-fortran -b anbuild. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the analyzer's node assembly -- anb_an, one form to its node:"
               "  ! a local, or if, do, def, quote, throw, let*, loop*, letfn*, try, set!, ., new,"
               "  ! recur and fn* built here, their drivers included (what the host decides of"
-              "  ! their forms read through analyze.inc's anb_*_kind hooks), the rest the host's"
+              "  ! their forms read through analyze.inc's anb_*_kind hooks); a call, var and"
+              "  ! case* (anb_seq: the host's special forms, deftype*, reify* and proxy (anb_type), the macroexpansion hook"
+              "  ! anb_expand, then the call); a collection literal (anb_coll); a"
+              "  ! symbol no local binds the host's"
               "  ! -- guard-verified, reading forms through analyze.inc's"
               "  ! frf_*/frm_* shims and building nodes on the context's value stack through"
               "  ! its anb_* shims, so no node is held in a variable here. anbuild-proof.lisp"
@@ -345,6 +361,9 @@
 (def host (get cfg :host []))
 (def value-formals (:value-formals cfg))
 (def value-fns (:value-fns cfg))
+;; the procedures the host calls back into: a hook of theirs analyses a
+;; form, so they run again before they return (anbuild's anb-type)
+(def reentrant (or (:reentrant cfg) #{}))
 (def bool-fns (get cfg :bool-fns #{}))
 
 ;; ---- ACL2 hands over the translated definitions --------------------------------
@@ -788,7 +807,7 @@
         lines (try (if sub (stmt ctx self body) (ret-stmts ctx self body))
                    (catch Exception e (throw (ex-info (str (ex-message e) " (in " self ")") (ex-data e)))))
         looped? (some #(= "cycle" (str/trim %)) lines)
-        recursive? (some #(reaches? % self) @(:calls ctx))
+        recursive? (or (reentrant self) (some #(reaches? % self) @(:calls ctx)))
         dummies (for [x formals :when (not (stobjs x))] [(str (fname x) "_") (formal-type self x)])
         sts (for [x formals :when (stobjs x)] x)
         args (str/join ", " (concat (map stobjs sts) (map first dummies) (when sub rnames)))

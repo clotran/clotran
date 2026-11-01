@@ -16,6 +16,13 @@
 ;                         step 6 reads more (anform-cost's anf-try-step-reads)
 ;   anb-try-n-steps-bound, anb-drop-steps-bound, anb-try-fin-steps-bound
 ;                         the try's scans of its forms: at most n + 1
+;   anb-host-own-bound    the host's forms' own work: at most 8 steps (a
+;                         list's dispatch, a call, a case*, a var, a
+;                         collection literal)
+;   anb-case-thens-steps-bound, anb-elems-steps-bound  a case*'s n thens,
+;                         a collection literal's n forms: at most n + 1
+;   anb-type-steps-bound  a deftype*, reify* or proxy of n method names:
+;                         at most n + 5
 
 (in-package "ACL2")
 
@@ -161,3 +168,65 @@
 ; a fn's own name: a reserve and a bind, or nothing
 (defun anb-self-steps (nm) (if (equal (frm-kind nm) 2) 2 1))
 (defthm anb-self-steps-bound (<= (anb-self-steps nm) 2) :rule-classes :linear)
+
+; THE HOST'S FORMS, each one's own work on its longest path, its subforms'
+; analyses counted where they run: a list's dispatch 3 (its kind, the
+; macroexpansion hook, the call), a call 6 (its head read twice, its
+; count, the walk's entry, its kind, its node), a case* 8 (its count, its
+; table's, the expr's and the default's reads, the walk's entry, its
+; node), a var 4 (its symbol read twice, its resolution, its node), a
+; collection literal 7 (its kind, its count twice, the walk's entry, its
+; node, its metadata's read and node)
+(defun anb-host-own (w) (case w (0 3) (1 6) (2 8) (3 7) (otherwise 4)))
+(defthm anb-host-own-bound (<= (anb-host-own w) 8) :rule-classes :linear)
+
+; a case*'s then forms from entry i: one step an entry
+(defun-nx anb-case-thens-steps (x i n b anls anb)
+  (declare (xargs :measure (nfix (- *anl40* (nfix i)))))
+  (if (and (equal (frf-kind x) 3) (natp i) (< i n) (< i *anl40*))
+      (let ((r (anb-sub (anb-case-then x i) b anls anb)))
+        (if (not (equal (car r) 0)) 1
+          (+ 1 (anb-case-thens-steps x (+ 1 i) n b (mv-nth 1 r) (mv-nth 2 r)))))
+    1))
+
+; a collection literal's forms from i: one step a form
+(defun-nx anb-elems-steps (x i b anls anb)
+  (declare (xargs :measure (nfix (- *anl40* (nfix i)))))
+  (if (and (natp i) (< i (anb-coll-n x)) (< i *anl40*))
+      (let ((r (anb-sub (anb-coll-elem x i) b anls anb)))
+        (if (not (equal (car r) 0)) 1
+          (+ 1 (anb-elems-steps x (+ 1 i) b (mv-nth 1 r) (mv-nth 2 r)))))
+    1))
+
+(defthm anb-elems-steps-bound
+  (implies (natp i) (<= (anb-elems-steps x i b anls anb) (+ 1 (nfix (- (min (anb-coll-n x) *anl40*) i)))))
+  :rule-classes :linear :hints (("Goal" :induct (anb-elems-steps x i b anls anb))))
+
+(defthm anb-case-thens-steps-bound
+  (implies (and (natp i) (integerp n))
+           (<= (anb-case-thens-steps x i n b anls anb) (+ 1 (nfix (- (min n *anl40*) i)))))
+  :rule-classes :linear :hints (("Goal" :induct (anb-case-thens-steps x i n b anls anb))))
+
+; A TYPE (deftype*, reify*, proxy): its own work 4 steps (the open, the
+; class's number, the count of its method names, its node) and one step
+; a method name, each method's fn the host's to analyse (anb-type-method,
+; as anb-host2's forms are); n names at most n + 5 steps
+(defun-nx anb-type-methods-steps (w x i n b anls anb)
+  (declare (xargs :measure (nfix (- *anl40* (nfix i)))))
+  (if (and (natp i) (< i n) (< i *anl40*))
+      (let ((r (anb-type-method w x i b anls anb)))
+        (if (not (equal (car r) 0)) 1
+          (+ 1 (anb-type-methods-steps w x (+ 1 i) n b (mv-nth 1 r) (mv-nth 2 r)))))
+    1))
+(defthm anb-type-methods-steps-bound
+  (implies (and (natp i) (natp n))
+           (<= (anb-type-methods-steps w x i n b anls anb) (+ 1 (nfix (- (min n *anl40*) i)))))
+  :rule-classes :linear :hints (("Goal" :induct (anb-type-methods-steps w x i n b anls anb))))
+(defun-nx anb-type-steps (w x b anls anb)
+  (if (not (equal (anb-type-open w x b) 0)) 1
+    (+ 4 (anb-type-methods-steps w x 0 (anb-type-n w x) b anls anb))))
+(defthm anb-type-steps-bound
+  (<= (anb-type-steps w x b anls anb) (+ 5 (anb-type-n w x)))
+  :rule-classes :linear
+  :hints (("Goal" :use ((:instance anb-type-methods-steps-bound (i 0) (n (anb-type-n w x))) (:instance anb-type-reads-sb64))
+           :in-theory (disable anb-type-methods-steps-bound anb-type-reads-sb64))))

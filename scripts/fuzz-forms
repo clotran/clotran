@@ -17,6 +17,13 @@
 ;; NullPointerException, a method no class has. Also drawn: a . whose target
 ;; cannot be analysed and whose member is bad too (HostExpr analyses the target
 ;; first), and a local named like a special form (never shadows Clojure's).
+;; And the host's forms (model/anbuild.lisp's anb-seq, anb-call, anb-case,
+;; anb-varq): calls whose head is nil (refused, "Can't call nil"), a fn, a
+;; keyword, a collection or nothing defined, with arguments that fail;
+;; var of names that resolve and do not; case, its tests and thens and
+;; default (a then that fails before the default, as CaseExpr analyses).
+;; And reify and deftype (anb-type): a method body closing over a local, which
+;; a deftype's cannot, a field read, a body that fails when analysed or run.
 (require '[clojure.test.check.generators :as g]
          '[clojure.string :as str]
          '[babashka.fs :as fs]
@@ -54,9 +61,31 @@
                            ["var" "(var fz-v)"] ["new" "(new clotran.host.exception \"m\")"] ["proxy" "(proxy 1)"]
                            ["fn*" "((fn* [] 6))"] ["letfn*" "(letfn* [] 4)"] ["set!" "(set! fz-v 1)"]]))
 
+;; the host forms: a call (its head nil, a fn, a keyword, a collection, a
+;; symbol nothing names), var, and case through the case macro (case*)
+(def g-head (g/elements ["nil" "nil" "(fn* [& a] (count a))" "fz-undefined"]))
+(def g-arg (g/elements ["0" ":k" "1" "fz-undefined" "(fz-undefined 1)" "(nil)" "{(quote fz-q) 2}"]))
+;; integer tests only where there are several: a test's hash orders the
+;; thens of the other modes, and clotran's hashes are its own
+(def g-ctest (g/elements ["1" "2" "(2 3)" "5"]))
+(def g-cthen (g/elements [":a" "1" "fz-a" "fz-b" "(throw (ex-info \"c\" {}))" "(nil)"]))
+
+;; a type: reify's methods close over the locals around them, a
+;; deftype's do not (NewInstanceExpr: a class, no closure); a field read
+(def g-mbody (g/elements ["\"m\"" "(str y)" "(str fz-a)" "(nil)" "(throw (ex-info \"m\" {}))" "(str a)"]))
+
 (def g-form
   (g/one-of
-   [(g/fmap #(str "(if " % ")") (parts 0 4))
+   [(g/fmap #(str "(do (defprotocol FzP (fzm [x])) (let* [y 2 a 3] (fzm (reify FzP (fzm [_] " % ")))))") g-mbody)
+    (g/fmap #(str "(do (defprotocol FzP (fzm [x])) (let* [y 2] (deftype FzT [a] FzP (fzm [_] " % "))) (fzm (FzT. 1)))") g-mbody)
+    (g/fmap (fn [[h as]] (str "(" h (when (seq as) " ") (str/join " " as) ")")) (g/tuple g-head (g/vector g-arg 0 3)))
+    (g/elements ["(:k {:k 1})" "((quote fz-q) {(quote fz-q) 2})" "({:k 1} :k)" "([5 6] 0)" "(#{1} 1)" "({:k 1} fz-undefined)"])
+    (g/fmap (fn [[v t th d]] (str "(let* [x " v "] (case x " t " " th (when d (str " " d)) "))"))
+            (g/tuple (g/elements [":k" "\"s\"" "(quote fz-q)" "1"]) (g/elements [":k" "\"s\"" "fz-q" "(:k fz-q)"]) g-cthen (g/one-of [(g/return nil) g-cthen])))
+    (g/fmap #(str "(var " % ")") (g/elements ["fz-v" "fz-nosuch" "user/fz-nosuch" "nosuch/fz-d" "clojure.core/max-key" "fz-v 2"]))
+    (g/fmap (fn [[v cls d]] (str "(let* [x " v "] (case x " (str/join " " (mapcat identity cls)) (when d (str " " d)) "))"))
+            (g/tuple (g/elements ["1" "2" "3" ":k" "\"s\""]) (g/vector (g/tuple g-ctest g-cthen) 1 3) (g/one-of [(g/return nil) g-cthen])))
+    (g/fmap #(str "(if " % ")") (parts 0 4))
     (g/fmap (fn [[nm ps]] (str "(def " nm " " ps ")")) (g/tuple g-name (parts 0 3)))
     (g/fmap (fn [[nm i]] (str "(def " nm " \"doc\" " i ")")) (g/tuple g-name (parts 0 2)))
     (g/return "(def)")

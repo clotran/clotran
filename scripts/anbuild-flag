@@ -21,12 +21,16 @@
     anb-binds {bv x i i c b start p loopp q} anb-let {x x b b kind p} anb-lfinits {bv x i i c b}
     anb-letfn {x x b b} anb-try {x x b b} anb-try-walk {cls x st p b b}
     anb-set {x x b b} anb-dot {x x b b} anb-new {x x b b} anb-recur {x x b b} anb-fn {x x b b}
-    anb-methods {ms x n i r b} anb-method {m x r b}})
+    anb-methods {ms x n i r b} anb-method {m x r b}
+    anb-seq {x x b b} anb-call {x x b b} anb-case {x x b b} anb-case-thens {x x i i n p b b}
+    anb-coll {x x k p b b} anb-elems {x x i i b b}})
 (def hyps
   '{anb-listn (and (integerp n) (signed-byte-p 64 b)) anb-methods (and (integerp n) (signed-byte-p 64 r))
     anb-binds (and (natp i) (signed-byte-p 64 c) (integerp start) (<= -1 start) (< start *anl40*) (signed-byte-p 64 loopp))
     anb-let (and (signed-byte-p 64 b) (member kind '(11 12))) anb-lfinits (and (natp i) (signed-byte-p 64 c))
-    anb-try-walk (and (signed-byte-p 64 st) (signed-byte-p 64 b))})
+    anb-try-walk (and (signed-byte-p 64 st) (signed-byte-p 64 b))
+    anb-case-thens (and (natp i) (integerp n) (signed-byte-p 64 b))
+    anb-coll (and (member k '(7 8 9)) (signed-byte-p 64 b)) anb-elems (and (natp i) (signed-byte-p 64 b))})
 
 (def src (slurp "model/anbuild.lisp"))
 (def clique (read-string (subs src (inc (str/last-index-of src "\n(mutual-recursion\n")))))

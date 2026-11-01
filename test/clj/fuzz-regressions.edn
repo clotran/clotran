@@ -326,4 +326,11 @@
   (let* [try (fn* [& a] :call)] (try 9)) (let* [fn* (fn* [& a] :call)] ((fn* [] 6))) (let* [proxy (fn* [& a] :call)] (proxy 1))
   (try (eval (quote (let* [throw (fn* [& a] :call)] (throw (ex-info "t" {}))))) (catch clotran.host.throwable t (ex-message (or (ex-cause t) t))))
   (mapv #(try (eval %) :accepted (catch clotran.host.throwable t (ex-message (or (ex-cause t) t)))) (quote [(. fz-undefined 1) (. (if) ()) (. (fz-undefined 1) "x")]))]
+ ;; a call whose head is the literal nil is refused when it is analysed,
+ ;; InvokeExpr.parse's NilExpr check -- clotran called it and said "not a
+ ;; function: nil"; a case's thens are analysed before its default, as
+ ;; CaseExpr.Parser does; and ^objects takes an array of arrays, a [[D being
+ ;; an Object[] (scripts/fuzz-forms, seed 1: 13 of 300 differed; model/anbuild.lisp
+ ;; anb-call and anb-case, model/anprim.lisp apk-cast-code)
+ (mapv #(try (eval %) (catch clotran.host.throwable t (let [c (or (ex-cause t) t)] [(instance? clotran.host.illegal_argument_exception c) (ex-message c)]))) (quote [(nil) (nil 1 2) ((nil)) (:k 0 (nil) 0) (let* [x 1] (case x 1 fz-a fz-b)) (let* [x 1] (case x 5 (nil) 1 fz-a :a)) (let* [^objects a (make-array clotran.host.real8/TYPE 2 2)] (alength a)) (let* [^doubles a (make-array clotran.host.real8/TYPE 2 2)] (try (alength a) (catch clotran.host.class_cast_exception e :cce))) (var clojure.core/max-key) (let* [x 2] (case x 1 :a (2 3) :b :d))]))
 ]

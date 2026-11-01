@@ -52,6 +52,7 @@ contains
     type(gc_value), intent(in) :: x
     frf_kind = 0
     if (ok(x)) frf_kind = fkind(x%id)
+    if (frf_kind == 5) frf_kind = 0
   end function frf_kind
 
   integer(int64) function frm_kind(x)
@@ -557,7 +558,214 @@ contains
     anb_let_ret = 0
   end function anb_let_ret
 
+  ! ---- the host's forms, as scripts/fuzz-anbuild-gen attaches them: a
+  ! list's head's defvar field its kind (1 case*, 2 the host's), its class
+  ! field an expansion; a call's kind its count mod 4; a var refused for a
+  ! symbol of class 1; a case*'s table its sixth form, a vector of thens
+  integer(int64) function frf_nil(x)
+    type(gc_value), intent(in) :: x
+    frf_nil = 0
+    if (ok(x)) then
+       if (fkind(x%id) == 5) frf_nil = 1
+    end if
+  end function frf_nil
+  integer(int64) function anb_seq_kind(x, b) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    k = 0
+    if (fd(frf_nth(x, 0_int64)) == 1) k = 2
+    if (fd(frf_nth(x, 0_int64)) == 2) k = merge(5_int64, 6_int64, mod(frf_len(x), 2_int64) == 0)
+  end function anb_seq_kind
+  recursive subroutine anb_expand(ls, bs, x, b, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: b
+    integer(int64), intent(out) :: r
+    r = -1
+    if (fc(frf_nth(x, 0_int64)) /= 1) return
+    call push(mk(1, 0, 0, 0))
+    r = 0
+  end subroutine anb_expand
+  integer(int64) function anb_call_kind(x, b) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    k = mod(frf_len(x), 4_int64)
+  end function anb_call_kind
+  integer(int64) function anb_var_kind(s) result(k)
+    type(gc_value), intent(in) :: s
+    k = 0
+    if (fc(s) == 1) k = 7
+  end function anb_var_kind
+  subroutine anb_varnode(bs, s)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: s
+    call push(mk(1, 0, 0, 0))
+  end subroutine anb_varnode
+  integer(int64) function anb_case_n(x) result(n)
+    type(gc_value), intent(in) :: x
+    n = -1
+    if (frm_kind(frf_nth(x, 5_int64)) == 1) n = frm_count(frf_nth(x, 5_int64))
+  end function anb_case_n
+  function anb_case_then(x, i) result(e)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: i
+    type(gc_value) :: e
+    e = frm_nth(frf_nth(x, 5_int64), i)
+  end function anb_case_then
+  ! N_CALL of the top n: bit 0 its first argument the cast's call
+  ! [const kid const], bit 1 its head a constant (anb-callkids)
+  subroutine anb_callnode(bs, x, b, c, n0)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: b, c, n0
+    integer :: k, i, n, cn, c1, c2
+    n = int(max(0_int64, min(n0, int(top, int64))))
+    if (btest(c, 0) .and. n >= 2) then
+       c1 = mk(1, 0, 0, 0)
+       c2 = mk(1, 0, 0, 0)
+       cn = mk(6, 0, 3, 0)
+       nkid0(cn) = nlist
+       lists(nlist + 1) = c1
+       lists(nlist + 2) = stk(top - n + 2)
+       lists(nlist + 3) = c2
+       nlist = nlist + 3
+       stk(top - n + 2) = cn
+    end if
+    if (btest(c, 1) .and. n >= 1) stk(top - n + 1) = mk(1, 0, 0, 0)
+    k = mk(6, 0, n, 0)
+    nkid0(k) = nlist
+    do i = top - n + 1, top
+       nlist = nlist + 1
+       lists(nlist) = stk(i)
+    end do
+    if (broken .and. n > 1) then
+       i = lists(nlist)
+       lists(nlist) = lists(nlist - 1)
+       lists(nlist - 1) = i
+    end if
+    top = top - n
+    call push(k)
+  end subroutine anb_callnode
+  ! a collection literal: a vector, its forms its elements, its metadata
+  ! (MetaExpr) when it has three, the first
+  integer(int64) function anb_coll_kind(x) result(k)
+    type(gc_value), intent(in) :: x
+    k = 0
+    if (frm_kind(x) == 1) k = 7
+  end function anb_coll_kind
+  integer(int64) function anb_coll_n(x) result(n)
+    type(gc_value), intent(in) :: x
+    n = 0
+    if (frm_kind(x) == 1) n = frm_count(x)
+  end function anb_coll_n
+  function anb_coll_elem(x, i) result(e)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: i
+    type(gc_value) :: e
+    e = frm_nth(x, i)
+  end function anb_coll_elem
+  integer(int64) function anb_coll_meta(x) result(k)
+    type(gc_value), intent(in) :: x
+    k = 0
+    if (frm_kind(x) == 1 .and. frm_count(x) == 3) k = 1
+  end function anb_coll_meta
+  function anb_coll_metaform(x) result(e)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: e
+    e = frm_nth(x, 0_int64)
+  end function anb_coll_metaform
+  ! N_CALL of a constant and the top two
+  subroutine anb_metanode(bs)
+    type(anb_state), intent(inout) :: bs
+    integer :: k, c
+    c = mk(1, 0, 0, 0)
+    k = mk(6, 0, 3, 0)
+    nkid0(k) = nlist
+    lists(nlist + 1) = c
+    lists(nlist + 2) = stk(top - 1)
+    lists(nlist + 3) = stk(top)
+    nlist = nlist + 3
+    top = top - 2
+    call push(k)
+  end subroutine anb_metanode
+  ! N_CASE: on top the default, the n thens under it, the expr under them
+  subroutine anb_casenode(bs, x, n0)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: n0
+    integer :: k, i, n
+    n = int(n0)
+    k = mk(19, 0, 2, 0)
+    nkid0(k) = nlist
+    lists(nlist + 1) = stk(top - n - 1)
+    lists(nlist + 2) = stk(top)
+    nlist = nlist + 2
+    nalt0(k) = nlist
+    do i = top - n, top - 1
+       nlist = nlist + 1
+       lists(nlist) = stk(i)
+    end do
+    nna(k) = n
+    top = top - n - 2
+    call push(k)
+  end subroutine anb_casenode
+
   ! a node as anb-ser writes it: kind i2 nkids kids.. has-s3 [s3] nalts alts..; 0 for nil
+  ! a type: refused at its open when it has 3 forms, the last a list;
+  ! min(4, n + 1) method names, the fourth refused (9), each method's fn a constant its i2 i; broken,
+  ! its last two methods swapped
+  integer(int64) function anb_type_open(w, x, b) result(k)
+    integer(int64), intent(in) :: w, b
+    type(gc_value), intent(in) :: x
+    k = 0
+    if (frf_len(x) == 3) then
+       if (frf_kind(frf_nth(x, 2_int64)) == 3) k = 1
+    end if
+  end function anb_type_open
+  integer(int64) function anb_type_id(w, x) result(k)
+    integer(int64), intent(in) :: w
+    type(gc_value), intent(in) :: x
+    k = 0
+  end function anb_type_id
+  integer(int64) function anb_type_n(w, x) result(k)
+    integer(int64), intent(in) :: w
+    type(gc_value), intent(in) :: x
+    k = min(4_int64, 1 + max(0_int64, frf_len(x)))
+  end function anb_type_n
+  recursive subroutine anb_type_method(ls, bs, w, x, i, b, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    integer(int64), value :: w, i, b
+    type(gc_value), value :: x
+    integer(int64), intent(out) :: r
+    r = 9
+    if (i == 3) return
+    r = 0
+    call push(mk(1, int(i), 0, 0))
+  end subroutine anb_type_method
+  subroutine anb_typenode(bs, w, x, id, n0)
+    type(anb_state), intent(inout) :: bs
+    integer(int64), value :: w, id, n0
+    type(gc_value), value :: x
+    integer :: k, i, n
+    n = int(n0)
+    k = mk(20, merge(0, 1, w == 5), 0, 0)
+    nalt0(k) = nlist
+    do i = top - n + 1, top
+       nlist = nlist + 1
+       lists(nlist) = stk(i)
+    end do
+    if (broken .and. n > 1) then
+       i = lists(nlist)
+       lists(nlist) = lists(nlist - 1)
+       lists(nlist - 1) = i
+    end if
+    nna(k) = n
+    top = top - n
+    call push(k)
+  end subroutine anb_typenode
+
   recursive subroutine ser(k)
     integer, intent(in) :: k
     integer :: i

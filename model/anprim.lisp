@@ -145,3 +145,20 @@
 (defun apk-cast (ek v)
   (declare (xargs :guard t))
   (if (and (consp v) (eq (car v) :arr) (consp (cdr v)) (equal (cadr v) ek)) v :cce))
+
+; THE CAST AS THE RUNTIME RUNS IT (B_ARRAYCAST, generated: apk_cast_code):
+; ek the hint's element kind (apk-elem's), ak the value's as the host reads
+; it -- a one-dimensional array its element's kind, numbered as apk-elem
+; numbers them, an array of arrays an Object's array (-1: a [[D is an
+; Object[], so ^objects takes it), anything else 0 -- and nilp 1 for nil:
+; 0 the value itself, 1 the NullPointerException, 2 the ClassCastException
+(defun apk-cast-code (ek ak nilp)
+  (declare (xargs :guard t))
+  (cond ((equal nilp 1) 1)
+        ((and (not (equal ak 0)) (equal ak ek)) 0)
+        (t 2)))
+
+; what the host reads of a value: its element kind if it is an array, else 0
+(defun apk-akind (v)
+  (declare (xargs :guard t))
+  (if (and (consp v) (eq (car v) :arr) (consp (cdr v))) (cadr v) 0))

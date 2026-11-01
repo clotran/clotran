@@ -5184,7 +5184,7 @@ contains
        ! the namespace looked up, never MADE: a qualified name in a
        ! namespace that does not exist does not resolve (Compiler.resolveIn),
        ! and making one here left (var ns/x) unable to tell a real
-       ! namespace from a skipped library's placeholder (analyze_varq)
+       ! namespace from a skipped library's placeholder (varq_var)
        block
          type(gc_value) :: nsv
          nsv = gcn_find(t(1:slash-1), [roots, bare])
@@ -12849,40 +12849,49 @@ contains
        end block
     case (B_ARRAYCAST)
        ! (clotran-array-cast value :doubles) -- the checkcast Clojure
-       ! emits where an array-hinted value is used as an array. The
-       ! value comes back unchanged or it throws. nil is the
-       ! NullPointerException the array operation would raise on it; the
-       ! wrong thing is a ClassCastException naming both types the way
-       ! clj does, [D for double[] and so on.
+       ! emits where an array-hinted value is used as an array. What it
+       ! answers is model/anprim.lisp's apk-cast, generated (apk_cast_code):
+       ! the value back unchanged, nil the NullPointerException the array
+       ! operation would raise on it, the wrong thing a ClassCastException
+       ! naming both types the way clj does, [D for double[] and so on. An
+       ! array of arrays is an Object's array, as a [[D is an Object[].
        block
-         character(len=:), allocatable :: want, desc, have, kind
+         character(len=:), allocatable :: desc, have, kind
          type(gc_value) :: hv
+         integer(int64) :: ek, ak, nilp
          a = strip_meta(gcv_nth(args, 0))
          hv = strip_meta(gcv_nth(args, 1))
-         block
-            call gc_ref_text(hv%ref, s=dlt_1)
-         select case (dlt_1)
-         case ("doubles");  want = "real8";   desc = "[D"
-         case ("longs");    want = "int8";    desc = "[J"
-         case ("ints");     want = "int4";    desc = "[I"
-         case ("shorts");   want = "int2";    desc = "[S"
-         case ("bytes");    want = "int1";    desc = "[B"
-         case ("floats");   want = "real4";   desc = "[F"
-         case ("booleans"); want = "logical"; desc = "[Z"
-         case ("chars");    want = "char2";   desc = "[C"
-         case default;      want = "value";   desc = "[Lclotran.host.value;"
-         end select
-         end block
-         if (a%tag == GCT_NIL) then
+         call gc_ref_text(hv%ref, s=dlt_1)
+         ek = apk_elem(int(findloc([character(len=8) :: "doubles", "longs", "ints", "floats", "shorts", "bytes", &
+              "chars", "booleans"], dlt_1, 1) - 1, int64))
+         ak = 0
+         kind = ""
+         if (gc_kind(a) == OBJ_ARRAY) then
+            call gcna_kind(gc_i1(a), s=kind)
+            ak = apk_elem(int(findloc([character(len=8) :: "real8", "int8", "int4", "real4", "int2", "int1", &
+                 "char2", "logical"], kind, 1) - 1, int64))
+            if (gcna_rank(gc_i1(a)) > 1) ak = -1
+         end if
+         nilp = 0
+         if (a%tag == GCT_NIL) nilp = 1
+         select case (apk_cast_code(ek, ak, nilp))
+         case (0)
+            out = a
+         case (1)
             call raise_class("clotran.host.null_pointer_exception", "Cannot use a null array", [vs_get(vst, base + 1)])
-         else if (gc_kind(a) == OBJ_ARRAY) then
-            block
-               call gcna_kind(gc_i1(a), s=dlt_1)
-               kind = dlt_1
-            end block
-            if (kind == want .and. gcna_rank(gc_i1(a)) == 1) then
-               out = a
-            else
+         case default
+            select case (dlt_1)
+            case ("doubles");  desc = "[D"
+            case ("longs");    desc = "[J"
+            case ("ints");     desc = "[I"
+            case ("shorts");   desc = "[S"
+            case ("bytes");    desc = "[B"
+            case ("floats");   desc = "[F"
+            case ("booleans"); desc = "[Z"
+            case ("chars");    desc = "[C"
+            case default;      desc = "[Lclotran.host.value;"
+            end select
+            if (gc_kind(a) == OBJ_ARRAY) then
                select case (kind)
                case ("real8");   have = "[D"
                case ("int8");    have = "[J"
@@ -12895,16 +12904,12 @@ contains
                case default;     have = "[Lclotran.host.value;"
                end select
                if (gcna_rank(gc_i1(a)) > 1) have = repeat("[", gcna_rank(gc_i1(a)) - 1) // have
-               call raise_class("clotran.host.class_cast_exception", "class " // have // " cannot be cast to class " // desc, &
-                    [vs_get(vst, base + 1)])
+            else
+               call class_name_of(a, s=have)
             end if
-         else
-            block
-               call class_name_of(a, s=dlt_1)
-               call raise_class("clotran.host.class_cast_exception", "class " // dlt_1 //  " cannot be cast to class " // desc, &
-                    [vs_get(vst, base + 1)])
-            end block
-         end if
+            call raise_class("clotran.host.class_cast_exception", "class " // have // " cannot be cast to class " // desc, &
+                 [vs_get(vst, base + 1)])
+         end select
        end block
     case (B_LONGCAST_CHECKED, B_NUMLONG)
        ! B_NUMLONG is a ^long PARAMETER's conversion: the compiler checks

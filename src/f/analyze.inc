@@ -1281,46 +1281,48 @@
     end do
   end function local_array_hint
 
-  ! If this call is aget, aset or alength and its array argument carries
-  ! a hint -- on the expression itself, or on the local it names -- put
-  ! the cast in front of it: (aget a i) becomes
-  ! (aget (clotran-array-cast a :doubles) i). `rawargs` is the argument
-  ! forms as written; core.clj's aget arrives here through its :inline
-  ! as (. clotran.host.rt (aget a i)).
-  recursive function cast_array_arg(rawargs, kids, sc, roots) result(out)
-    type(gc_stack), pointer :: vst
-    type(gc_value), intent(in) :: rawargs, kids, sc
+  ! The hint an aget, aset or alength call's array argument carries -- on
+  ! the expression itself, or on the local it names -- as a keyword, or
+  ! nil: head is the call's head node, raw its first argument as written.
+  ! core.clj's aget arrives here through its :inline as
+  ! (. clotran.host.rt (aget a i)).
+  function call_cast_hint(head, raw, sc, roots) result(h)
+    type(gc_value), intent(in) :: head, raw, sc
     type(gc_value), intent(in) :: roots(:)
-    type(gc_value) :: out, head, fv, raw, h, cnode, cargs
-    integer :: base, id
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1, dlt_2
-    vst => gc_my_stack()
-    out = kids
-    if (gcv_count(kids) < 2) return
-    head = gcv_nth(kids, 0)
+    type(gc_value) :: h, fv
+    integer :: id
+    character(len=:), allocatable :: t
+    h = gc_nil()
     if (gc_kind(head) /= OBJ_AST) return
     if (gc_i1(head) /= N_CONST) return
     fv = strip_meta(gc_slot(head, 2))
     if (gc_kind(fv) /= OBJ_BUILTIN) return
     id = gc_i1(fv)
     if (id /= B_AGET .and. id /= B_ASET .and. id /= B_JASET .and. id /= B_ALENGTH) return
-    raw = gcl_first(rawargs)
-    base = vs_enter(vst, 4)
-    call vs_set(vst, base + 1, kids)
-    h = gc_nil()
-    block
-       call array_hint_of(raw, h=dlt_1)
-    if (len(dlt_1) > 0) then
-       block
-          call array_hint_of(raw, h=dlt_2)
-          h = gc_key(dlt_2, [roots, vs_get(vst, base + 1)])
-       end block
+    call array_hint_of(raw, h=t)
+    if (len(t) > 0) then
+       h = gc_key(t, roots)
     else
        fv = strip_meta(raw)
        if (fv%tag == GCT_SYM) h = local_array_hint(sc, fv)
     end if
-    end block
+  end function call_cast_hint
+
+  ! The cast in front of a hinted array argument (call_cast_hint): (aget a
+  ! i) becomes (aget (clotran-array-cast a :doubles) i). raw is the first
+  ! argument as written.
+  recursive function cast_array_arg(raw, kids, sc, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: raw, kids, sc
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, h, cnode, cargs
+    integer :: base
+    vst => gc_my_stack()
+    out = kids
+    if (gcv_count(kids) < 2) return
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, kids)
+    h = call_cast_hint(gcv_nth(kids, 0), raw, sc, [roots, vs_get(vst, base + 1)])
     if (tag_of(h) == GCT_NIL) then
        call vs_leave(vst, base)
        return
@@ -1847,23 +1849,16 @@
     if (allocated(tctx%fn_hint)) hint = tctx%fn_hint
     tctx%fn_hint = ""
     form = form0
+    ! A COLLECTION LITERAL, its metadata with it (MetaExpr), is the
+    ! generated anb_coll's
+    if (literal_coll(strip_meta(form))) then
+       nd = anb_run(form0, vs_get(vst, base + 2), "", 0)
+       call vs_leave(vst, base)
+       return
+    end if
     ! Metadata on a form is information about it, not part of what it
     ! means; only def looks at it (and does so from the raw form).
-    !
-    ! A COLLECTION LITERAL is the exception, and Clojure's Compiler
-    ! says so: VectorExpr, MapExpr and SetExpr each end with
-    !   if(form instanceof IObj && ((IObj) form).meta() != null)
-    !      return new MetaExpr(ret, MapExpr.parse(..., meta));
-    ! so the map is EVALUATED and the constructed collection carries
-    ! it -- which is why (:tag (meta ^String [1])) is a Class and not
-    ! a symbol. Dropping it here made clojure.zip unusable: `zipper`
-    ! returns ^{:zip/branch? branch? ...} [root nil], and with the map
-    ! gone every branch? call was (nil node).
-    call vs_set(vst, base + 5, gc_nil())
-    if (gc_kind(form) == OBJ_META) then
-       if (literal_coll(strip_meta(form))) call vs_set(vst, base + 5, gc_slot(form, 2))
-       form = strip_meta(form)
-    end if
+    if (gc_kind(form) == OBJ_META) form = strip_meta(form)
     ! A seq is code, like a list; realised once, here.
     if (gc_kind(form) == OBJ_LAZY .or. gc_kind(form) == OBJ_SEQ) then
        call vs_set(vst, base + 1, form)
@@ -1910,19 +1905,6 @@
                 end if
              end if
           end if
-       case (OBJ_VECTOR)
-          kids = analyze_all(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
-          call vs_set(vst, base + 3, kids)
-          if (.not. tctx%has_error) nd = mk_node(N_VECTOR, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, &
-               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-       case (OBJ_MAP, OBJ_HAMT)
-          nd = analyze_map(vs_get(vst, base + 1), vs_get(vst, base + 2))
-       case (OBJ_SET)
-          kids = analyze_all(set_elems(vs_get(vst, base + 1), vs_get(vst, base + 2)), vs_get(vst, base + 2), &
-               [vs_get(vst, base + 1)])
-          call vs_set(vst, base + 3, kids)
-          if (.not. tctx%has_error) nd = mk_node(N_SET, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, &
-               [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        case default
           ! closures, builtins, vars, types: self-evaluating
           nd = const_node(vs_get(vst, base + 1), [vs_get(vst, base + 2)])
@@ -1930,15 +1912,6 @@
     case default
        nd = const_node(vs_get(vst, base + 1), [vs_get(vst, base + 2)])
     end select
-    ! MetaExpr: (with-meta <the collection> <the map>), built as a
-    ! call to the builtin rather than to the NAME with-meta, so that a
-    ! literal carrying metadata analyses the same during core.clj's
-    ! bootstrap as after it.
-    if (.not. tctx%has_error .and. tag_of(vs_get(vst, base + 5)) /= GCT_NIL &
-         .and. gc_kind(nd) == OBJ_AST) then
-       call vs_set(vst, base + 6, nd)
-       nd = meta_call_node(vs_get(vst, base + 6), vs_get(vst, base + 5), vs_get(vst, base + 2))
-    end if
     call vs_leave(vst, base)
   end function analyze
 
@@ -1955,73 +1928,7 @@
          .or. k == OBJ_SET)
   end function literal_coll
 
-  ! (with-meta value-node meta-form): the metadata map is ANALYSED,
-  ! so ^{:zip/branch? branch?} closes over the local.
-  recursive function meta_call_node(vnode, mform, sc) result(nd)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: vnode, mform, sc
-    type(gc_value) :: nd, kids, mn
-    integer :: base
-    tctx => ctx_self()
-    vst => tctx%stk
-    base = vs_enter(vst, 5)
-    call vs_set(vst, base + 1, vnode)
-    call vs_set(vst, base + 2, mform)
-    call vs_set(vst, base + 3, sc)
-    mn = analyze(vs_get(vst, base + 2), vs_get(vst, base + 3))
-    if (tctx%has_error) then
-       nd = vs_get(vst, base + 1)
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 4, mn)
-    kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 4)])
-    call vs_set(vst, base + 5, kids)
-    kids = gcv_conj(vs_get(vst, base + 5), &
-         const_node(native(B_WITHMETA, "with-meta", [vs_get(vst, base + 5)]), &
-                    [vs_get(vst, base + 5)]), [vs_get(vst, base + 5)])
-    call vs_set(vst, base + 5, kids)
-    kids = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 1), [vs_get(vst, base + 5)])
-    call vs_set(vst, base + 5, kids)
-    kids = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 4), [vs_get(vst, base + 5)])
-    call vs_set(vst, base + 5, kids)
-    nd = mk_node(N_CALL, vs_get(vst, base + 5), gc_nil(), gc_nil(), 0, &
-         [vs_get(vst, base + 5)])
-    call vs_leave(vst, base)
-  end function meta_call_node
 
-  ! A map literal: children alternate key, value.
-  recursive function analyze_map(form, sc) result(nd)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: form, sc
-    type(gc_value) :: nd, kids, kn, vn
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: base, i
-    tctx => ctx_self()
-    vst => tctx%stk
-    nd = gc_nil()
-    base = vs_enter(vst, 4)
-    call vs_set(vst, base + 1, form)
-    call vs_set(vst, base + 2, sc)
-    call gca_entries(form, ks, vls)
-    kids = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 3, kids)
-    do i = 1, size(ks)
-       kn = analyze(ks(i), vs_get(vst, base + 2))
-       if (tctx%has_error) exit
-       kids = gcv_conj(vs_get(vst, base + 3), kn, [vs_get(vst, base + 1), vs_get(vst, base + 2), kn])
-       call vs_set(vst, base + 3, kids)
-       vn = analyze(vls(i), vs_get(vst, base + 2))
-       if (tctx%has_error) exit
-       kids = gcv_conj(vs_get(vst, base + 3), vn, [vs_get(vst, base + 1), vs_get(vst, base + 2), vn])
-       call vs_set(vst, base + 3, kids)
-    end do
-    if (.not. tctx%has_error) nd = mk_node(N_MAP, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, &
-         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
-  end function analyze_map
 
   ! A symbol: a local, a static field, a Var, a class literal -- in the
   ! order Compiler.analyzeSymbol tries them.
@@ -2293,132 +2200,149 @@
     call vs_leave(vst, base)
   end function args_vector
 
-  recursive function analyze_seq(form, sc) result(nd)
+  ! (anb-seq-kind) the host's special form heading the list x in block b,
+  ! as Compiler.analyzeSeq asks: Clojure's whatever the locals are (case*
+  ! 2, deftype* 5, reify* 6, monitor-enter/-exit 10, import* 11 -- the
+  ! rest the generated anb_an builds), clotran's own only when no local
+  ! binds the head (defmacro* 3, proxy 7, lazy-seq* 8, clotran-fields* 9);
+  ! 0 none. A local is not looked up for Clojure's, so no fn captures it.
+  integer(int64) function anb_seq_kind(x, b) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    type(gc_value) :: head
+    k = 0
+    head = strip_meta(frf_nth(x, 0_int64))
+    if (head%tag /= GCT_SYM) return
+    if (clj_special(head)) then
+       if (gc_ref_is(head%ref, "case*")) then
+          k = 2
+       else if (gc_ref_is(head%ref, "deftype*")) then
+          k = 5
+       else if (gc_ref_is(head%ref, "reify*")) then
+          k = 6
+       else if (gc_ref_is(head%ref, "monitor-enter") .or. gc_ref_is(head%ref, "monitor-exit")) then
+          k = 10
+       else if (gc_ref_is(head%ref, "clojure.core/import*")) then
+          k = 11
+       end if
+       return
+    end if
+    if (.not. is_special(head)) return
+    if (lookup_local(scope_of(b), head) >= 0) return
+    if (gc_ref_is(head%ref, "defmacro*")) then
+       k = 3
+    else if (gc_ref_is(head%ref, "proxy")) then
+       k = 7
+    else if (gc_ref_is(head%ref, "lazy-seq*")) then
+       k = 8
+    else if (gc_ref_is(head%ref, "clotran-fields*")) then
+       k = 9
+    end if
+  end function anb_seq_kind
+
+  ! THE MACROEXPANSION HOOK (anb-expand): x, a list no special form heads,
+  ! expanded and the expansion analysed, its node left on the builder (r
+  ! 0); r -1 when nothing expands it (its head a local, or no macro, no
+  ! :inline, no sugar), r 1 for an error. Compiler.analyzeSeq's order:
+  ! macroexpand1 asks isMacro before it looks at the dot, then :inline
+  ! (isInline), then member, static and constructor sugar.
+  recursive subroutine anb_expand(ls, bs, x, b, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: b
+    integer(int64), intent(out) :: r
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: form, sc
     type(gc_value) :: nd, head, mvar, expanded
     integer :: base
     character(len=:), allocatable :: hint
-
     tctx => ctx_self()
     vst => tctx%stk
-    nd = gc_nil()
-    hint = tctx%fn_hint
-    tctx%fn_hint = ""
+    r = -1
+    head = strip_meta(frf_nth(x, 0_int64))
+    if (head%tag /= GCT_SYM) return
+    if (lookup_local(scope_of(b), head) >= 0) return
+    ! the name a let or def gave this form reaches a fn* only through
+    ! macroexpansion, as Compiler.analyze passes it
+    hint = ""
+    if (allocated(tctx%anb_hint)) hint = tctx%anb_hint
     base = vs_enter(vst, 4)
-    call vs_set(vst, base + 1, form)
-    call vs_set(vst, base + 2, sc)
-    head = strip_meta(gcl_first(form))
-
-    if (head%tag == GCT_SYM) then
-       ! A LOCAL shadows a macro and host sugar, not a special form of
-       ! Clojure's: Compiler.analyzeSeq asks specials.valAt(op) whatever
-       ! the locals are, so (let [do f] (do 1)) is 1 and (let [proxy f]
-       ! (proxy 1)) a call of the local -- proxy and clotran's own
-       ! specials (defmacro*, lazy-seq*, clotran-fields*) are not Clojure's.
-       ! The local is not looked up then, so no fn captures it.
-       if (clj_special(head)) then
-          if (gc_ref_is(head%ref, "fn*")) tctx%fn_hint = hint
-          nd = analyze_special(head, vs_get(vst, base + 1), vs_get(vst, base + 2))
+    call vs_set(vst, base + 1, x)
+    call vs_set(vst, base + 2, scope_of(b))
+    r = 1
+    mvar = macro_var(head, gc_nil())
+    if (gcn_is_var(mvar)) then
+       call vs_set(vst, base + 3, mvar)
+       call check_specs(vs_get(vst, base + 3), vs_get(vst, base + 1))
+       if (tctx%has_error) then
           call vs_leave(vst, base)
           return
        end if
-       if (lookup_local(vs_get(vst, base + 2), head) < 0) then
-          ! A special form is itself whatever a macro of that name says:
-          ! Compiler.macroexpand1 asks isSpecial before isMacro, which is
-          ! what lets clojure.spec.alpha define a macro named `def` and
-          ! still write (defn ...) in the same file.
-          if (is_special(head)) then
-             if (gc_ref_is(head%ref, "fn*")) tctx%fn_hint = hint
-             nd = analyze_special(head, vs_get(vst, base + 1), vs_get(vst, base + 2))
-             call vs_leave(vst, base)
-             return
-          end if
-          ! Macros are expanded next: `..` is a macro whose name looks
-          ! like member sugar, and Compiler.macroexpand1 asks isMacro
-          ! before it looks at the dot.
-          mvar = macro_var(head, gc_nil())
-          if (gcn_is_var(mvar)) then
-             call vs_set(vst, base + 3, mvar)
-             call check_specs(vs_get(vst, base + 3), vs_get(vst, base + 1))
-             if (tctx%has_error) then
-                call vs_leave(vst, base)
-                return
-             end if
-             mvar = vs_get(vst, base + 3)
-             call vs_set(vst, base + 3, gcn_var_value(mvar))
-             ! &env: the locals in scope, as LOCAL_ENV holds them -- a map
-             ! from each name to something truthy (Clojure's LocalBinding;
-             ! the slot here). nil answered (contains? &env 'x) false for
-             ! every local, and a macro could not tell one from a Var.
-             call vs_set(vst, base + 4, locals_env(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
-             expanded = expand_macro(vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 4), mvar)
-             if (tctx%has_error) then
-                call vs_leave(vst, base)
-                return
-             end if
-             call vs_set(vst, base + 4, expanded)
-             call vs_set(vst, base + 4, forms_as_lists(vs_get(vst, base + 4), [vs_get(vst, base + 1)]))
-             tctx%fn_hint = hint
-             nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
-             call vs_leave(vst, base)
-             return
-          end if
-          ! :inline, as Compiler.analyzeSeq does right after macroexpansion
-          ! (isInline): a Var whose metadata carries an :inline fn, and
-          ! whose :inline-arities -- if any -- accepts this argument count,
-          ! has that fn applied to the argument FORMS and the result
-          ! analysed instead of a call. core.clj gives 129 definitions one:
-          ! (+ a b) becomes (. clotran.host.numbers (add a b)) and the
-          ! static call resolves to the native here, so the arithmetic
-          ! in a loop costs no closure call. preserveTag is not done: a
-          ! :tag on the form is a hint nothing here reads.
-          mvar = inline_fn(head, gcl_count(vs_get(vst, base + 1)) - 1)
+       mvar = vs_get(vst, base + 3)
+       call vs_set(vst, base + 3, gcn_var_value(mvar))
+       ! &env: the locals in scope, as LOCAL_ENV holds them -- a map
+       ! from each name to something truthy (Clojure's LocalBinding;
+       ! the slot here). nil answered (contains? &env 'x) false for
+       ! every local, and a macro could not tell one from a Var.
+       call vs_set(vst, base + 4, locals_env(vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+       expanded = expand_macro(vs_get(vst, base + 3), vs_get(vst, base + 1), vs_get(vst, base + 4), mvar)
+       if (tctx%has_error) then
+          call vs_leave(vst, base)
+          return
+       end if
+       call vs_set(vst, base + 4, expanded)
+       call vs_set(vst, base + 4, forms_as_lists(vs_get(vst, base + 4), [vs_get(vst, base + 1)]))
+       tctx%fn_hint = hint
+       nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
+    else
+       ! :inline, as Compiler.analyzeSeq does right after macroexpansion
+       ! (isInline): a Var whose metadata carries an :inline fn, and
+       ! whose :inline-arities -- if any -- accepts this argument count,
+       ! has that fn applied to the argument FORMS and the result
+       ! analysed instead of a call. core.clj gives 129 definitions one:
+       ! (+ a b) becomes (. clotran.host.numbers (add a b)) and the
+       ! static call resolves to the native here, so the arithmetic
+       ! in a loop costs no closure call. preserveTag is not done: a
+       ! :tag on the form is a hint nothing here reads.
+       mvar = inline_fn(head, gcl_count(vs_get(vst, base + 1)) - 1)
+       if (tctx%has_error) then
+          call vs_leave(vst, base)
+          return
+       end if
+       if (mvar%tag /= GCT_NIL) then
+          call vs_set(vst, base + 3, mvar)
+          expanded = apply(vs_get(vst, base + 3), args_vector(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 3)]), [vs_get(vst, base + 3)]))
           if (tctx%has_error) then
              call vs_leave(vst, base)
              return
           end if
-          if (mvar%tag /= GCT_NIL) then
-             call vs_set(vst, base + 3, mvar)
-             expanded = apply(vs_get(vst, base + 3), args_vector(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 3)]), [vs_get(vst, base + 3)]))
-             if (tctx%has_error) then
-                call vs_leave(vst, base)
-                return
-             end if
-             call vs_set(vst, base + 4, expanded)
-             call vs_set(vst, base + 4, forms_as_lists(vs_get(vst, base + 4), [vs_get(vst, base + 1)]))
-             nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
-             call vs_leave(vst, base)
-             return
-          end if
-          if (is_member_sym(head)) then
-             nd = analyze_dot(member_to_dot(vs_get(vst, base + 1)), vs_get(vst, base + 2))
-             call vs_leave(vst, base)
-             return
-          end if
-          if (is_static_call(head)) then
-             ! clotran.rt.TransformerIterator/create with clotran.rt not loaded yet
-             block
-               character(len=:), allocatable :: ht
-               call gc_ref_text(head%ref, s=ht)
-               call prepare_clotran_name(ht)
-             end block
-             nd = analyze_dot(static_to_dot(vs_get(vst, base + 1)), vs_get(vst, base + 2))
-             call vs_leave(vst, base)
-             return
-          end if
-          if (is_ctor_sym(head)) then
-             nd = analyze_new(ctor_to_new(vs_get(vst, base + 1)), vs_get(vst, base + 2))
-             call vs_leave(vst, base)
-             return
-          end if
+          call vs_set(vst, base + 4, expanded)
+          call vs_set(vst, base + 4, forms_as_lists(vs_get(vst, base + 4), [vs_get(vst, base + 1)]))
+          nd = analyze(vs_get(vst, base + 4), vs_get(vst, base + 2))
+       else if (is_member_sym(head)) then
+          nd = analyze_dot(member_to_dot(vs_get(vst, base + 1)), vs_get(vst, base + 2))
+       else if (is_static_call(head)) then
+          ! clotran.rt.TransformerIterator/create with clotran.rt not loaded yet
+          block
+            character(len=:), allocatable :: ht
+            call gc_ref_text(head%ref, s=ht)
+            call prepare_clotran_name(ht)
+          end block
+          nd = analyze_dot(static_to_dot(vs_get(vst, base + 1)), vs_get(vst, base + 2))
+       else if (is_ctor_sym(head)) then
+          nd = analyze_new(ctor_to_new(vs_get(vst, base + 1)), vs_get(vst, base + 2))
+       else
+          r = -1
+          call vs_leave(vst, base)
+          return
        end if
     end if
-
-    nd = analyze_call(vs_get(vst, base + 1), vs_get(vst, base + 2))
     call vs_leave(vst, base)
-  end function analyze_seq
+    if (tctx%has_error) return
+    call anb_push(nd)
+    r = 0
+  end subroutine anb_expand
 
   ! CLOTRAN_TRACE_MACRO=1 also names the innermost list form whose
   ! analysis failed, which is how a structural surprise in a
@@ -2438,31 +2362,6 @@
     write(0, '(A,A)') "analysis failed in: ", t
   end subroutine trace_analysis_failure
 
-  ! (f a b) -> N_CALL with children [f a b].
-  recursive function analyze_call(form, sc) result(nd)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: form, sc
-    type(gc_value) :: nd, kids
-    integer :: base
-    tctx => ctx_self()
-    vst => tctx%stk
-    nd = gc_nil()
-    base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, form)
-    call vs_set(vst, base + 2, sc)
-    kids = analyze_all(vs_get(vst, base + 1), vs_get(vst, base + 2), [vs_get(vst, base + 1)])
-    call vs_set(vst, base + 3, kids)
-    if (.not. tctx%has_error) then
-       kids = cast_array_arg(gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)]), vs_get(vst, base + 3), vs_get(vst, base + 2), &
-            [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-       call vs_set(vst, base + 3, kids)
-    end if
-    if (.not. tctx%has_error) call instance_of_head(base + 3)
-    if (.not. tctx%has_error) nd = mk_node(N_CALL, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, &
-         [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
-  end function analyze_call
 
   ! (instance? C x), C a class literal, is the type test itself, as the
   ! clj compiler makes it (Compiler, InvokeExpr.parse: a head that
@@ -2471,15 +2370,12 @@
   ! head, and the Var is not called. It was two interpreted calls and a
   ! host dispatch -- chunked-seq? cost 400 ns, per element of every
   ! reduce1 and map.
-  subroutine instance_of_head(slot)
-    integer, intent(in) :: slot
-    type(gc_stack), pointer :: vst
-    type(gc_value) :: kids, h, var, nm, ns, core, c, b
-    integer :: base
-    vst => gc_my_stack()
-    kids = vs_get(vst, slot)
-    if (gcv_count(kids) /= 3) return
-    h = gcv_nth(kids, 0)
+  ! (instance? C x)'s head and first argument: the Var clojure.core/instance?
+  ! and a class constant
+  logical function instance_head_ok(h, c) result(ok)
+    type(gc_value), intent(in) :: h, c
+    type(gc_value) :: var, nm, ns, core
+    ok = .false.
     if (gc_kind(h) /= OBJ_AST) return
     if (gc_i1(h) /= N_VAR) return
     var = gc_slot(h, 2)
@@ -2490,10 +2386,20 @@
     ns = gc_slot(var, 3)
     core = gcn_find("clojure.core")
     if (ns%tag /= core%tag .or. ns%ref /= core%ref) return
-    c = gcv_nth(kids, 1)
     if (gc_kind(c) /= OBJ_AST) return
     if (gc_i1(c) /= N_CONST) return
-    if (tag_of(strip_meta(gc_slot(c, 2))) /= GCT_CLASS) return
+    ok = tag_of(strip_meta(gc_slot(c, 2))) == GCT_CLASS
+  end function instance_head_ok
+
+  subroutine instance_of_head(slot)
+    integer, intent(in) :: slot
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: kids, b
+    integer :: base
+    vst => gc_my_stack()
+    kids = vs_get(vst, slot)
+    if (gcv_count(kids) /= 3) return
+    if (.not. instance_head_ok(gcv_nth(kids, 0), gcv_nth(kids, 1))) return
     base = vs_enter(vst, 1)
     b = native(B_INSTANCE, "instance?", [kids])
     call vs_set(vst, base + 1, b)
@@ -2592,7 +2498,7 @@
     call vs_leave(vst, base)
   end function ctor_to_new
 
-  ! (. target member args...) as analyze_seq writes a (.member target
+  ! (. target member args...) as anb_expand writes a (.member target
   ! args...) or a Class/static call: the generated anb_dot (anbuild_gen.inc)
   recursive function analyze_dot(form, sc) result(nd)
     type(gc_stack), pointer :: vst
@@ -2743,7 +2649,7 @@
                 end if
                 kids = concat_vecs(vs_get(vst, base + 7), vs_get(vst, base + 8), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
                 call vs_set(vst, base + 7, kids)
-                kids = cast_array_arg(vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 2), &
+                kids = cast_array_arg(gcl_first(vs_get(vst, base + 6)), vs_get(vst, base + 7), vs_get(vst, base + 2), &
                      [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 6), vs_get(vst, base + 7)])
                 call vs_set(vst, base + 7, kids)
                 nd = mk_node(N_CALL, vs_get(vst, base + 7), gc_nil(), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
@@ -2820,7 +2726,7 @@
     call vs_leave(vst, base)
   end function dot_host
 
-  ! (new Class args...) as analyze_seq writes a (Class. args...): anf_new's
+  ! (new Class args...) as anb_expand writes a (Class. args...): anf_new's
   ! checks, then the generated anb_new (anbuild_gen.inc)
   recursive function analyze_new(form, sc) result(nd)
     type(gc_stack), pointer :: vst
@@ -3077,9 +2983,8 @@
     r = 0
   end subroutine anb_sub
 
-  ! the host's: a symbol no local binds, a list no special form of
-  ! Clojure's heads (a call, a macro, case*, deftype*, reify*, var,
-  ! clotran's own special forms)
+  ! the host's: a symbol no local binds (a var, a class, a field), or
+  ! a literal
   recursive subroutine anb_host(ls, bs, x, b, r)
     type(anl_state), intent(inout) :: ls
     type(anb_state), intent(inout) :: bs
@@ -3092,9 +2997,6 @@
     v = strip_meta(x)
     if (v%tag == GCT_SYM) then
        nd = analyze_global(x, scope_of(b))
-    else if (gcl_is(v)) then
-       tctx%fn_hint = tctx%anb_hint
-       nd = analyze_seq(x, scope_of(b))
     else
        nd = analyze(x, scope_of(b))
     end if
@@ -3304,9 +3206,22 @@
     type(anb_state), intent(inout) :: bs
     integer(int64), value :: code
     type(gc_value), value :: f
+    character(len=:), allocatable :: s
     if (code == 13) then
        ! anbuild's: a method whose first form is no vector
        call fail("fn* needs a parameter vector")
+    else if (code == 39) then
+       ! anbuild's host forms: InvokeExpr's NilExpr check
+       call gcp_str(strip_meta(f), .true., s=s)
+       call raise_class("clotran.host.illegal_argument_exception", "Can't call nil, form: " // s, [f])
+    else if (code == 40) then
+       ! var's and case*'s shapes, where clj's words are its host's (a
+       ! ClassCastException, an IndexOutOfBoundsException)
+       call fail("var needs a symbol")
+    else if (code == 41) then
+       call fail("case* needs 7 or 8 forms")
+    else if (code == 42) then
+       call fail("case* needs a map of [test then] entries")
     else if (code == 33 .or. code == 38) then
        ! new's: about its class, as analyze_new says it
        call anf_refuse(code, frf_nth(f, 1_int64))
@@ -3376,6 +3291,8 @@
        nd = dot_host(strip_meta(x), scope_of(b))
     case (3)
        nd = new_lazy(strip_meta(x), scope_of(b))
+    case (8:11)
+       nd = analyze_special(strip_meta(frf_nth(x, 0_int64)), x, scope_of(b))
     case default
        nd = method_hinted_body(x, b)
     end select
@@ -3384,6 +3301,270 @@
     call anb_push(nd)
     r = 0
   end subroutine anb_host2
+
+! --- the host's forms the generated anb_seq, anb_call, anb_case and
+  ! anb_varq read and build (model/anbuild.lisp) ------------------------
+
+  ! (frf-nil) 1 when a form is the literal nil
+  integer(int64) function frf_nil(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    frf_nil = 0
+    if (v%tag == GCT_NIL) frf_nil = 1
+  end function frf_nil
+
+! (anb-coll-kind) a collection literal's node kind: N_VECTOR, N_MAP,
+  ! N_SET; 0 for anything else
+  integer(int64) function anb_coll_kind(x) result(k)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    k = 0
+    v = strip_meta(x)
+    if (v%tag /= GCT_OBJ) return
+    select case (gc_kind(v))
+    case (OBJ_VECTOR)
+       k = N_VECTOR
+    case (OBJ_MAP, OBJ_HAMT)
+       k = N_MAP
+    case (OBJ_SET)
+       k = N_SET
+    end select
+  end function anb_coll_kind
+
+  ! (anb-coll-n) the forms a collection literal has to analyse: a map's
+  ! keys and values, alternating (MapExpr's keyvals)
+  integer(int64) function anb_coll_n(x) result(n)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: v
+    v = strip_meta(x)
+    select case (anb_coll_kind(v))
+    case (N_VECTOR)
+       n = gcv_count(v)
+    case (N_MAP)
+       n = 2 * gca_count(v)
+    case (N_SET)
+       n = gcv_count(set_elems(v, x))
+    case default
+       n = 0
+    end select
+  end function anb_coll_n
+
+  ! (anb-coll-elem) the i-th of them, from 0, in the order the map's or
+  ! the set's entries come
+  function anb_coll_elem(x, i) result(e)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: i
+    type(gc_value) :: e, v
+    type(gc_value), allocatable :: ks(:), vls(:)
+    e = gc_nil()
+    v = strip_meta(x)
+    select case (anb_coll_kind(v))
+    case (N_VECTOR)
+       e = gcv_nth(v, int(i))
+    case (N_MAP)
+       call gca_entries(v, ks, vls)
+       if (mod(i, 2_int64) == 0) then
+          e = ks(i / 2 + 1)
+       else
+          e = vls(i / 2 + 1)
+       end if
+    case (N_SET)
+       e = gcv_nth(set_elems(v, x), int(i))
+    end select
+  end function anb_coll_elem
+
+  ! (anb-coll-meta) 1 when a collection literal carries metadata:
+  ! VectorExpr, MapExpr and SetExpr each end with
+  !   if(form instanceof IObj && ((IObj) form).meta() != null)
+  !      return new MetaExpr(ret, MapExpr.parse(..., meta));
+  ! so the map is EVALUATED and the constructed collection carries it --
+  ! which is why (:tag (meta ^String [1])) is a Class and not a symbol.
+  ! Dropping it made clojure.zip unusable: `zipper` returns
+  ! ^{:zip/branch? branch? ...} [root nil], and with the map gone every
+  ! branch? call was (nil node).
+  integer(int64) function anb_coll_meta(x) result(k)
+    type(gc_value), intent(in) :: x
+    k = 0
+    if (gc_kind(x) == OBJ_META) then
+       if (literal_coll(strip_meta(x))) k = 1
+    end if
+  end function anb_coll_meta
+
+  function anb_coll_metaform(x) result(m)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: m
+    m = gc_nil()
+    if (gc_kind(x) == OBJ_META) m = gc_slot(x, 2)
+  end function anb_coll_metaform
+
+  ! (anb-metanode) MetaExpr: (with-meta <the collection> <the map>) of the
+  ! top two, built as a call of the builtin rather than of the NAME
+  ! with-meta, so that a literal carrying metadata analyses the same during
+  ! core.clj's bootstrap as after it
+  subroutine anb_metanode(bs)
+    type(anb_state), intent(inout) :: bs
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: kids, nd
+    integer :: base, top
+    vst => gc_my_stack()
+    top = vst%vs_top
+    base = vs_enter(vst, 1)
+    kids = gcv_empty([gc_nil()])
+    call vs_set(vst, base + 1, kids)
+    kids = gcv_conj(vs_get(vst, base + 1), const_node(native(B_WITHMETA, "with-meta", [vs_get(vst, base + 1)]), &
+         [vs_get(vst, base + 1)]), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, kids)
+    kids = gcv_conj(vs_get(vst, base + 1), vs_get(vst, top - 1), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, kids)
+    kids = gcv_conj(vs_get(vst, base + 1), vs_get(vst, top), [vs_get(vst, base + 1)])
+    call vs_set(vst, base + 1, kids)
+    nd = mk_node(N_CALL, vs_get(vst, base + 1), gc_nil(), gc_nil(), 0, [vs_get(vst, base + 1)])
+    call vs_leave(vst, base)
+    call anb_replace(2_int64, nd)
+  end subroutine anb_metanode
+
+  ! (anb-call-kind) what InvokeExpr makes of the call x whose nodes are
+  ! on top, in block b: bit 0 its first argument cast, an aget, aset or
+  ! alength whose array argument carries an array hint (call_cast_hint);
+  ! bit 1 (instance? C x) of a class literal, its head instance?'s builtin
+  integer(int64) function anb_call_kind(x, b) result(c)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: b
+    type(gc_stack), pointer :: vst
+    integer :: n, top
+    vst => gc_my_stack()
+    c = 0
+    n = int(frf_len(x))
+    top = vst%vs_top
+    if (n >= 2) then
+       if (tag_of(call_cast_hint(vs_get(vst, top - n + 1), frf_nth(x, 1_int64), scope_of(b), [x])) /= GCT_NIL) c = 1
+    end if
+    if (n == 3) then
+       if (instance_head_ok(vs_get(vst, top - 2), vs_get(vst, top - 1))) c = c + 2
+    end if
+  end function anb_call_kind
+
+  ! (anb-callnode) N_CALL of the top n, its first argument cast (bit 0 of
+  ! c) and its head instance?'s builtin (bit 1) as anb_call_kind found
+  subroutine anb_callnode(bs, x, b, c, n)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: b, c, n
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: kids, nd
+    integer :: base
+    vst => gc_my_stack()
+    kids = anb_kids(n)
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, kids)
+    if (btest(c, 0)) then
+       kids = cast_array_arg(frf_nth(x, 1_int64), vs_get(vst, base + 1), scope_of(b), [x, vs_get(vst, base + 1)])
+       call vs_set(vst, base + 1, kids)
+    end if
+    if (btest(c, 1)) call instance_of_head(base + 1)
+    nd = mk_node(N_CALL, vs_get(vst, base + 1), gc_nil(), gc_nil(), 0, [x, vs_get(vst, base + 1)])
+    call vs_leave(vst, base)
+    call anb_replace(n, nd)
+  end subroutine anb_callnode
+
+  ! (anb-var-kind) 0 when (var s) names a var, else 1, the refusal raised
+  integer(int64) function anb_var_kind(s) result(k)
+    type(gc_value), intent(in) :: s
+    k = 0
+    if (.not. gcn_is_var(varq_var(s))) k = 1
+  end function anb_var_kind
+
+  ! (anb-varnode) N_CONST of the var (var s) names
+  subroutine anb_varnode(bs, s)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: s
+    type(gc_value) :: var
+    var = varq_var(s)
+    call anb_push(const_node(var, [var]))
+  end subroutine anb_varnode
+
+  ! a case*'s table, its form's sixth
+  function case_table(x) result(t)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: t
+    t = strip_meta(frf_nth(x, 5_int64))
+  end function case_table
+
+  ! (anb-case-n) a case*'s [test then] entries, -1 when its table is no
+  ! map of them (CaseExpr.Parser's casts, ClassCastException's)
+  integer(int64) function anb_case_n(x) result(n)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: tbl, e
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: i
+    n = -1
+    tbl = case_table(x)
+    if (.not. (gca_is(tbl) .or. gca_is_sorted(tbl))) return
+    call gca_entries(tbl, ks, vls)
+    do i = 1, size(vls)
+       e = strip_meta(vls(i))
+       if (.not. (gcv_is(e) .and. gcv_count(e) == 2)) return
+    end do
+    n = size(vls)
+  end function anb_case_n
+
+  ! (anb-case-then) the then form of a case*'s entry i, from 0
+  function anb_case_then(x, i) result(f)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: i
+    type(gc_value) :: f
+    type(gc_value), allocatable :: ks(:), vls(:)
+    f = gc_nil()
+    call gca_entries(case_table(x), ks, vls)
+    if (i >= 0 .and. i < size(vls)) f = gcv_nth(strip_meta(vls(i + 1)), 1)
+  end function anb_case_then
+
+  ! (anb-casenode) N_CASE: children [expr default]; slot 2 the table with
+  ! each [test then] rebuilt as [test then-node]; slot 3 [shift mask
+  ! test-type skip]. On top the default, under it the n thens in entry
+  ! order, under them the expr
+  subroutine anb_casenode(bs, x, n)
+    type(anb_state), intent(inout) :: bs
+    type(gc_value), value :: x
+    integer(int64), value :: n
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: kids, mp, ent2, info, skip, nd, e
+    type(gc_value), allocatable :: ks(:), vls(:)
+    integer :: base, top, i
+    vst => gc_my_stack()
+    top = vst%vs_top
+    base = vs_enter(vst, 4)
+    kids = gcv_empty([x])
+    kids = gcv_conj(kids, vs_get(vst, top - int(n) - 1), [x, kids])
+    kids = gcv_conj(kids, vs_get(vst, top), [x, kids])
+    call vs_set(vst, base + 1, kids)
+    mp = gca_empty([x, vs_get(vst, base + 1)])
+    call vs_set(vst, base + 2, mp)
+    call gca_entries(case_table(x), ks, vls)
+    do i = 1, int(n)
+       e = strip_meta(vls(i))
+       ent2 = gcv_empty([x, vs_get(vst, base + 2)])
+       ent2 = gcv_conj(ent2, gcv_nth(e, 0), [x, vs_get(vst, base + 2), ent2])
+       ent2 = gcv_conj(ent2, vs_get(vst, top - int(n) - 1 + i), [x, vs_get(vst, base + 2), ent2])
+       call vs_set(vst, base + 3, ent2)
+       mp = gca_assoc(vs_get(vst, base + 2), ks(i), vs_get(vst, base + 3), [x, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 2, mp)
+    end do
+    skip = gc_nil()
+    if (frf_len(x) >= 9) skip = strip_meta(frf_nth(x, 8_int64))
+    call vs_set(vst, base + 3, skip)
+    info = gcv_empty([x, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    info = gcv_conj(info, gc_int(ival_of(frf_nth(x, 2_int64))), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), info])
+    info = gcv_conj(info, gc_int(ival_of(frf_nth(x, 3_int64))), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), info])
+    info = gcv_conj(info, strip_meta(frf_nth(x, 7_int64)), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), info])
+    info = gcv_conj(info, vs_get(vst, base + 3), [x, vs_get(vst, base + 2), info])
+    call vs_set(vst, base + 4, info)
+    nd = mk_node(N_CASE, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4), 0, [x, vs_get(vst, base + 1)])
+    call vs_leave(vst, base)
+    call anb_replace(n + 2, nd)
+  end subroutine anb_casenode
+
 
   ! (. target member args...) with a member HostExpr can read, in block b
   ! (anb-dot-kind): 2 a symbol no local binds naming a host class (a
@@ -3651,7 +3832,7 @@
   end function anb_let_ret
 
   ! THE ENTRY: form x in scope sc, its node, through the generated anb_an
-  ! (mode 0), for defmacro* its def (mode 1), for the sugar analyze_seq
+  ! (mode 0), for the sugar anb_expand
   ! writes as (. ..) and (new ..) anb_dot (3) and anb_new (4); hint the name a fn* x is
   ! would be given. The builder is the value stack above where it was.
   recursive function anb_run(x, sc, hint, mode) result(nd)
@@ -3673,8 +3854,6 @@
     b = -1
     if (gc_kind(sc) == OBJ_AST) b = gc_i2(sc)
     select case (mode)
-    case (1)
-       call anb_deff(anl_ls(), bs, x, b, e)
     case (3)
        call anb_dot(anl_ls(), bs, x, b, e)
     case (4)
@@ -3694,11 +3873,10 @@
 
   ! --- special forms -------------------------------------------------
 
-  ! The special forms the host analyses: Clojure's that the generated
-  ! anb_an leaves to it (var, case*, deftype*, reify*, monitor-enter and
-  ! -exit, import*) and clotran's own (defmacro*, a def through the
-  ! generated driver; clotran-fields*, lazy-seq*, proxy). The rest are
-  ! anbuild_gen.inc's.
+  ! The special forms the host analyses (anb_host2 8 to 11, as
+  ! anb_seq_kind finds them): Clojure's monitor-enter and -exit,
+  ! import*, and clotran's own clotran-fields*, lazy-seq*. The rest,
+  ! deftype*, reify* and proxy among them (anb_type), are anbuild_gen.inc's.
   recursive function analyze_special(head, form, sc) result(nd)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: head, form, sc
@@ -3715,22 +3893,10 @@
     rest = gcl_rest(form, [vs_get(vst, base + 1)])
     call vs_set(vst, base + 3, rest)
 
-    if (gc_ref_is(head%ref, "defmacro*")) then
-       nd = anb_run(vs_get(vst, base + 1), vs_get(vst, base + 2), "", 1)
-    else if (gc_ref_is(head%ref, "clotran-fields*")) then
+    if (gc_ref_is(head%ref, "clotran-fields*")) then
        nd = analyze_fields(vs_get(vst, base + 3), vs_get(vst, base + 2))
-    else if (gc_ref_is(head%ref, "var")) then
-       nd = analyze_varq(vs_get(vst, base + 3), vs_get(vst, base + 2))
     else if (gc_ref_is(head%ref, "lazy-seq*")) then
        nd = analyze_lazy(vs_get(vst, base + 3), vs_get(vst, base + 2))
-    else if (gc_ref_is(head%ref, "case*")) then
-       nd = analyze_case(vs_get(vst, base + 3), vs_get(vst, base + 2))
-    else if (gc_ref_is(head%ref, "deftype*")) then
-       nd = analyze_deftype(vs_get(vst, base + 3), vs_get(vst, base + 2))
-    else if (gc_ref_is(head%ref, "reify*")) then
-       nd = analyze_reify(vs_get(vst, base + 3), vs_get(vst, base + 2), .false.)
-    else if (gc_ref_is(head%ref, "proxy")) then
-       nd = analyze_reify(vs_get(vst, base + 3), vs_get(vst, base + 2), .true.)
     else if (gc_ref_is(head%ref, "monitor-enter") .or. gc_ref_is(head%ref, "monitor-exit")) then
        ! A monitor, held by one thread at a time (PLAN.md step 14f): the
        ! call (clojure.core/clotran-monitor-enter x), or -exit, analysed
@@ -4494,25 +4660,20 @@
     call vs_leave(vst, base)
   end function intern_unbound
 
-  ! (var sym) -> the Var itself, resolved now.
-  recursive function analyze_varq(rest, sc) result(nd)
+  ! (var s)'s Var, resolved now (TheVarExpr.Parser, Compiler.lookupVar),
+  ! or nil after the refusal: s a symbol (the generated anb_varq checks it)
+  recursive function varq_var(s) result(var)
     type(gc_stack), pointer :: vst
-    type(gc_value), intent(in) :: rest, sc
-    type(gc_value) :: nd, sym, var
+    type(gc_value), intent(in) :: s
+    type(gc_value) :: sym, var
     integer :: base
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
-    nd = gc_nil()
     base = vs_enter(vst, 3)
-    call vs_set(vst, base + 1, rest)
-    call vs_set(vst, base + 2, sc)
-    sym = strip_meta(gcl_first(rest))
-    if (sym%tag /= GCT_SYM) then
-       call fail("var needs a symbol")
-       call vs_leave(vst, base)
-       return
-    end if
+    call vs_set(vst, base + 1, s)
+    call vs_set(vst, base + 2, gc_nil())
+    sym = strip_meta(s)
     var = resolve_var(sym, gc_nil())
     if (.not. gcn_is_var(var)) then
        ! ... but a namespace that EXISTS and has no such var is
@@ -4567,10 +4728,8 @@
           return
        end if
     end if
-    call vs_set(vst, base + 3, var)
-    nd = const_node(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)
-  end function analyze_varq
+  end function varq_var
 
   ! (lazy-seq* body...) -> a no-argument fn whose closure becomes the
   ! thunk of a pending lazy seq.
@@ -4599,336 +4758,335 @@
     call vs_leave(vst, base)
   end function analyze_lazy
 
-  ! (case* expr shift mask default map table-type test-type skip-check?)
-  ! Children: [expr, default]; slot 2 = the map with each [test then]
-  ! rebuilt as [test then-node]; slot 3 = [shift mask test-type skip].
-  recursive function analyze_case(rest, sc) result(nd)
+
+  ! ---- deftype*, reify* and proxy: the host's reads and rewrites the
+  ! generated anb_type drives (model/anbuild.lisp anb-type: opened, its
+  ! class's number read, each method name's fn analysed, its node) ------
+  !
+  ! w 5 (deftype* tagname classname [fields] :implements [ifaces] opts (method [this args] body)*),
+  ! 6 (reify* [ifaces] (method [this args] body)*), 7 (proxy [supers]
+  ! [ctor-args] (name [args] body)*). Its parts [classname fields ifaces
+  ! methods raw-ifaces]: the classname nil but a deftype's; reify's
+  ! interfaces with IObj, which NewInstanceExpr adds (its meta/withMeta
+  ! the instance's own slot, B_META, B_WITHMETA), raw-ifaces as written;
+  ! a proxy's methods proxy_methods' rewrite. Nil after a refusal.
+  recursive function type_parts(w, x) result(parts)
+    integer(int64), intent(in) :: w
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: parts, c, k
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: rest, sc
-    type(gc_value) :: nd, kids, c, tbl, entry, ent2, mp, tn, info, skip
-    type(gc_value), allocatable :: ks(:), vls(:)
-    integer :: base, i, n
-
+    integer :: base, i
     tctx => ctx_self()
     vst => tctx%stk
-    nd = gc_nil()
-    base = vs_enter(vst, 8)
-    call vs_set(vst, base + 1, rest)
-    call vs_set(vst, base + 2, sc)
-    n = gcl_count(rest)
-    if (n < 7) then
-       call fail("case* needs 7 or 8 forms")
-       call vs_leave(vst, base)
-       return
-    end if
-    kids = gcv_empty([vs_get(vst, base + 1)])
-    call vs_set(vst, base + 3, kids)
-    c = analyze(nth_of(vs_get(vst, base + 1), 0), vs_get(vst, base + 2))
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    kids = gcv_conj(vs_get(vst, base + 3), c, [vs_get(vst, base + 1), c])
-    call vs_set(vst, base + 3, kids)
-    c = analyze(nth_of(vs_get(vst, base + 1), 3), vs_get(vst, base + 2))
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    kids = gcv_conj(vs_get(vst, base + 3), c, [vs_get(vst, base + 1), c])
-    call vs_set(vst, base + 3, kids)
-
-    tbl = strip_meta(nth_of(vs_get(vst, base + 1), 4))
-    call vs_set(vst, base + 4, tbl)
-    mp = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
-    call vs_set(vst, base + 5, mp)
-    call gca_entries(vs_get(vst, base + 4), ks, vls)
-    do i = 1, size(ks)
-       entry = strip_meta(vls(i))
-       call vs_set(vst, base + 6, entry)
-       if (.not. (gcv_is(entry) .and. gcv_count(entry) == 2)) cycle
-       tn = analyze(gcv_nth(vs_get(vst, base + 6), 1), vs_get(vst, base + 2))
-       if (tctx%has_error) then
+    parts = gc_nil()
+    base = vs_enter(vst, 6)
+    ! 1 the cursor, 2 classname, 3 fields, 4 ifaces, 5 methods, 6 raw ifaces
+    call vs_set(vst, base + 1, gcl_rest(strip_meta(x), [x]))
+    call vs_set(vst, base + 3, gcv_empty([x, vs_get(vst, base + 1)]))
+    call vs_set(vst, base + 4, gcv_empty([x, vs_get(vst, base + 1), vs_get(vst, base + 3)]))
+    select case (w)
+    case (5)
+       c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 1, c)
+       k = strip_meta(gcl_first(vs_get(vst, base + 1)))
+       if (k%tag /= GCT_SYM) then
+          call fail("deftype* needs a class name")
           call vs_leave(vst, base)
           return
        end if
-       call vs_set(vst, base + 7, tn)
-       ent2 = gcv_empty([vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7)])
-       ent2 = gcv_conj(ent2, gcv_nth(vs_get(vst, base + 6), 0), [vs_get(vst, base + 5), vs_get(vst, base + 7), ent2])
-       ent2 = gcv_conj(ent2, vs_get(vst, base + 7), [vs_get(vst, base + 5), ent2])
-       call vs_set(vst, base + 8, ent2)
-       mp = gca_assoc(vs_get(vst, base + 5), ks(i), vs_get(vst, base + 8), [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 8)])
-       call vs_set(vst, base + 5, mp)
-    end do
-    skip = gc_nil()
-    if (n >= 8) skip = strip_meta(nth_of(vs_get(vst, base + 1), 7))
-    call vs_set(vst, base + 6, skip)
-    info = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 5), vs_get(vst, base + 6)])
-    info = gcv_conj(info, gc_int(ival_of(nth_of(vs_get(vst, base + 1), 1))), [vs_get(vst, base + 5), vs_get(vst, base + 6), info])
-    info = gcv_conj(info, gc_int(ival_of(nth_of(vs_get(vst, base + 1), 2))), [vs_get(vst, base + 5), vs_get(vst, base + 6), info])
-    info = gcv_conj(info, strip_meta(nth_of(vs_get(vst, base + 1), 6)), [vs_get(vst, base + 5), vs_get(vst, base + 6), info])
-    info = gcv_conj(info, vs_get(vst, base + 6), [vs_get(vst, base + 5), info])
-    call vs_set(vst, base + 7, info)
-    nd = mk_node(N_CASE, vs_get(vst, base + 3), vs_get(vst, base + 5), vs_get(vst, base + 7), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
-  end function analyze_case
-
-  ! (deftype* tagname classname [fields] :implements [ifaces] opts (method [this args] body)*)
-  ! Slot 2 = spec [class-text fields ifaces names fn-nodes]; i2 = 0.
-  recursive function analyze_deftype(rest, sc) result(nd)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: rest, sc
-    type(gc_value) :: nd, w, cname, k, fields, ifaces, spec
-    integer :: base
-    character(len=:), allocatable :: cn
-    logical :: stub
-
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
-    tctx => ctx_self()
-    vst => tctx%stk
-    nd = gc_nil()
-    base = vs_enter(vst, 6)
-    call vs_set(vst, base + 1, rest)
-    call vs_set(vst, base + 2, sc)
-    w = gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1)])
-    call vs_set(vst, base + 3, w)
-    cname = strip_meta(gcl_first(vs_get(vst, base + 3)))
-    if (cname%tag /= GCT_SYM) then
-       call fail("deftype* needs a class name")
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 4, cname)
-    ! the class name is KNOWN from here (known_class_name): the forms
-    ! after this deftype* in the same expansion name it in full
-    block
-       character(len=:), allocatable :: nsn, sn
-       call gc_ref_text(cname%ref, s=cn)
-       if (index(cn, ".") == 0) then
-          call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=nsn)
-          cn = nsn // "." // cn
+       call vs_set(vst, base + 2, k)
+       c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 1, c)
+       call vs_set(vst, base + 3, strip_meta(gcl_first(vs_get(vst, base + 1))))
+       c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 1, c)
+       do while (gcl_count(vs_get(vst, base + 1)) > 0)
+          k = strip_meta(gcl_first(vs_get(vst, base + 1)))
+          if (k%tag /= GCT_KEY) exit
+          c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+          call vs_set(vst, base + 1, c)
+          if (gc_ref_is(k%ref, "implements")) call vs_set(vst, base + 4, strip_meta(gcl_first(vs_get(vst, base + 1))))
+          c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+          call vs_set(vst, base + 1, c)
+       end do
+       call vs_set(vst, base + 5, vs_get(vst, base + 1))
+       call vs_set(vst, base + 6, vs_get(vst, base + 4))
+    case (6)
+       call vs_set(vst, base + 4, strip_meta(gcl_first(vs_get(vst, base + 1))))
+       call vs_set(vst, base + 6, vs_get(vst, base + 4))
+       c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 5, c)
+       if (gcv_is(vs_get(vst, base + 4))) then
+          c = gc_sym("clotran.host.i_obj", [x, vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 1, c)
+          c = gcv_conj(vs_get(vst, base + 4), vs_get(vst, base + 1), &
+               [x, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
+          call vs_set(vst, base + 4, c)
        end if
-       call declare_type_name(cn)
-       ! and by its short name inside its own methods only, as clj's
-       ! compile stub is (Compiler.COMPILE_STUB_SYM, HostExpr.maybeClass):
-       ! the (import ...) deftype expands to records it for what follows
-       call canon_class(cn(index(cn, ".", back=.true.) + 1:), c=sn)
-       stub = sn /= cn
-       if (stub) call record_import(cn)
-    end block
-    w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 4)])
-    call vs_set(vst, base + 3, w)
-    fields = strip_meta(gcl_first(vs_get(vst, base + 3)))
-    call vs_set(vst, base + 5, fields)
-    w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 4), vs_get(vst, base + 5)])
-    call vs_set(vst, base + 3, w)
-    ifaces = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 5)])
-    call vs_set(vst, base + 6, ifaces)
-    do while (gcl_count(vs_get(vst, base + 3)) > 0)
-       k = strip_meta(gcl_first(vs_get(vst, base + 3)))
-       if (k%tag /= GCT_KEY) exit
-       w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 6)])
-       call vs_set(vst, base + 3, w)
-       if (gc_ref_is(k%ref, "implements")) call vs_set(vst, base + 6, strip_meta(gcl_first(vs_get(vst, base + 3))))
-       w = gcl_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 6)])
-       call vs_set(vst, base + 3, w)
-    end do
-    if (.not. ifaces_known(vs_get(vst, base + 6))) then
-       if (stub) call forget_import(cn)
-       call vs_leave(vst, base)
-       return
-    end if
-    block
-       call class_of_text(vs_get(vst, base + 4), s=dlt_1)
-       ! no enclosing local: a deftype is a class, not a closure, as
-       ! NewInstanceExpr compiles its methods (reify is, below)
-       spec = type_spec(dlt_1, vs_get(vst, base + 5), vs_get(vst, base + 6),  vs_get(vst, base + 3), gc_nil())
-    end block
-    if (stub) call forget_import(cn)
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 6, spec)
-    nd = mk_node(N_DEFTYPE, gc_nil(), vs_get(vst, base + 6), gc_nil(), 0, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
-  end function analyze_deftype
-
-  ! (reify* [ifaces] (method [this args] body)*) and
-  ! (proxy [supers] [ctor-args] (name [args] body)*): a nameless type,
-  ! instantiated on the spot. i2 = 1.
-  recursive function analyze_reify(rest, sc, is_proxy) result(nd)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: rest, sc
-    logical, intent(in) :: is_proxy
-    type(gc_value) :: nd, ifaces, methods, spec
-    character(len=24) :: buf
-    character(len=:), allocatable :: cname, who
-    integer :: base
-
-    tctx => ctx_self()
-    vst => tctx%stk
-    nd = gc_nil()
-    base = vs_enter(vst, 6)
-    call vs_set(vst, base + 1, rest)
-    call vs_set(vst, base + 2, sc)
-    ifaces = strip_meta(gcl_first(rest))
-    call vs_set(vst, base + 3, ifaces)
-    methods = gcl_rest(vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-    call vs_set(vst, base + 4, methods)
-    if (is_proxy) then
-       if (.not. gcv_is(vs_get(vst, base + 3))) then
+    case default
+       call vs_set(vst, base + 4, strip_meta(gcl_first(vs_get(vst, base + 1))))
+       call vs_set(vst, base + 6, vs_get(vst, base + 4))
+       if (.not. gcv_is(vs_get(vst, base + 4))) then
           call fail("proxy needs a vector of superclasses")
           call vs_leave(vst, base)
           return
        end if
-       methods = gcl_rest(vs_get(vst, base + 4), [vs_get(vst, base + 3), vs_get(vst, base + 4)])   ! past ctor args
-       call vs_set(vst, base + 4, methods)
-       methods = proxy_methods(vs_get(vst, base + 4), [vs_get(vst, base + 3)])
+       c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 1, c)
+       c = gcl_rest(vs_get(vst, base + 1), [x, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 1, c)   ! past the ctor args
+       c = proxy_methods(vs_get(vst, base + 1), [x, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
        if (tctx%has_error) then
           call vs_leave(vst, base)
           return
        end if
-       call vs_set(vst, base + 4, methods)
-       write(buf, '(I0)') gc_next(proxy_id)
-       buf = "clotran.proxy__" // trim(buf)
-       cname = trim(buf)
-    else
-       if (.not. ifaces_known(vs_get(vst, base + 3))) then
+       call vs_set(vst, base + 5, c)
+    end select
+    parts = gcv_empty([x])
+    do i = 2, 6
+       parts = gcv_conj(parts, vs_get(vst, base + i), [x, parts])
+    end do
+    call vs_leave(vst, base)
+  end function type_parts
+
+  ! its methods' distinct names, as keywords, in the order they first
+  ! appear: one fn* a name, its clauses the methods of that name
+  recursive function type_names(methods) result(names)
+    type(gc_value), intent(in) :: methods
+    type(gc_value) :: names, m, mname, tmp
+    type(gc_stack), pointer :: vst
+    character(len=:), allocatable :: nm
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 5)
+    call vs_set(vst, base + 1, methods)
+    call vs_set(vst, base + 2, gcv_empty([methods]))
+    call vs_set(vst, base + 3, gca_empty([methods, vs_get(vst, base + 2)]))
+    do while (gcl_count(vs_get(vst, base + 1)) > 0)
+       m = norm_form(strip_meta(gcl_first(vs_get(vst, base + 1))), [methods, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       mname = strip_meta(gcl_first(m))
+       if (mname%tag == GCT_SYM) then
+          call bare_name(mname, s=nm)
+          tmp = gc_key(nm, [methods, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          call vs_set(vst, base + 4, tmp)
+          if (.not. gca_contains(vs_get(vst, base + 3), vs_get(vst, base + 4))) then
+             tmp = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 4), [methods, vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 2, tmp)
+             tmp = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 4), gc_bool(.true.), &
+                  [methods, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+             call vs_set(vst, base + 3, tmp)
+          end if
+       end if
+       tmp = gcl_rest(vs_get(vst, base + 1), [methods, vs_get(vst, base + 2), vs_get(vst, base + 3)])
+       call vs_set(vst, base + 1, tmp)
+    end do
+    names = vs_get(vst, base + 2)
+    call vs_leave(vst, base)
+  end function type_names
+
+  ! a deftype's class in full (its namespace's when it names none), and
+  ! whether its short name is a stub: known by it inside its own methods
+  ! only, as clj's compile stub is (Compiler.COMPILE_STUB_SYM,
+  ! HostExpr.maybeClass); the (import ...) deftype expands to records it
+  ! for what follows
+  subroutine deftype_class(x, cname, cn, stub)
+    type(gc_value), intent(in) :: x, cname
+    character(len=:), allocatable, intent(out) :: cn
+    logical, intent(out) :: stub
+    character(len=:), allocatable :: nsn, sn
+    call gc_ref_text(cname%ref, s=cn)
+    if (index(cn, ".") == 0) then
+       call gcn_name(gcn_current([x, cname]), s=nsn)
+       cn = nsn // "." // cn
+    end if
+    call canon_class(cn(index(cn, ".", back=.true.) + 1:), c=sn)
+    stub = sn /= cn
+  end subroutine deftype_class
+
+  ! (anb-type-open) the type opened: 0, or 1 when the host refused it. A
+  ! deftype's class name is KNOWN from here (known_class_name: the forms
+  ! after it in the same expansion name it in full); every interface a
+  ! deftype* or reify* names is a class, as NewInstanceExpr resolves each
+  ! (ifaces_known); an interface a type implements is a class from here,
+  ! nominal, as every interface is here, so (instance? some.IFace x)
+  ! resolves it
+  recursive function anb_type_open(w, x, b) result(r)
+    integer(int64), intent(in) :: w, b
+    type(gc_value), intent(in) :: x
+    integer(int64) :: r
+    type(gc_value) :: parts, isym
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    character(len=:), allocatable :: cn, itext
+    logical :: stub
+    integer :: base, ii
+    tctx => ctx_self()
+    vst => tctx%stk
+    r = 1
+    parts = type_parts(w, x)
+    if (tctx%has_error) return
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, parts)
+    if (w == 5) then
+       call deftype_class(x, gcv_nth(vs_get(vst, base + 1), 0), cn, stub)
+       call declare_type_name(cn)
+    end if
+    if (w /= 7) then
+       if (.not. ifaces_known(gcv_nth(vs_get(vst, base + 1), 4))) then
           call vs_leave(vst, base)
           return
        end if
-       ! named as clj's compiler names it, after the fn it is written in:
-       ! clojure.core$future_call$reify__3, so pprint's map-ref-type calls
-       ! a future a Future (a top-level one is user$reify__3)
-       write(buf, '(I0)') gc_next(reify_id)
+    end if
+    if (gcv_is(gcv_nth(vs_get(vst, base + 1), 2))) then
+       do ii = 0, gcv_count(gcv_nth(vs_get(vst, base + 1), 2)) - 1
+          isym = strip_meta(gcv_nth(gcv_nth(vs_get(vst, base + 1), 2), ii))
+          if (isym%tag /= GCT_SYM) cycle
+          call gc_ref_text(isym%ref, s=itext)
+          if (index(itext, ".") > 0) call declare_type_name(itext)
+       end do
+    end if
+    call vs_leave(vst, base)
+    r = 0
+  end function anb_type_open
+
+  ! (anb-type-id) the number its class is named with: reify's and proxy's
+  ! counter, read once a type, before its methods are analysed as clj
+  ! numbers them; 0 a deftype's
+  integer(int64) function anb_type_id(w, x) result(id)
+    integer(int64), intent(in) :: w
+    type(gc_value), intent(in) :: x
+    id = 0
+    if (w == 6) id = gc_next(reify_id)
+    if (w == 7) id = gc_next(proxy_id)
+  end function anb_type_id
+
+  ! (anb-type-n) how many distinct method names it has
+  recursive function anb_type_n(w, x) result(n)
+    integer(int64), intent(in) :: w
+    type(gc_value), intent(in) :: x
+    integer(int64) :: n
+    type(gc_value) :: parts
+    type(gc_stack), pointer :: vst
+    integer :: base
+    vst => gc_my_stack()
+    n = 0
+    parts = type_parts(w, x)
+    if (ctx_self_has_error()) return
+    base = vs_enter(vst, 1)
+    call vs_set(vst, base + 1, parts)
+    n = gcv_count(type_names(gcv_nth(vs_get(vst, base + 1), 3)))
+    call vs_leave(vst, base)
+  end function anb_type_n
+
+  ! (anb-type-method) the i-th name's methods as the clauses of ONE fn*,
+  ! each with the type's fields bound around its body (method_clauses,
+  ! bind_fields), a method an interface declares ^void answering nil as
+  ! in clj (void_clauses), analysed -- a deftype's in no enclosing scope
+  ! (a class, not a closure, as NewInstanceExpr compiles its methods), a
+  ! reify's or proxy's in the one it is written in, so its bodies close
+  ! over their surroundings; its fn node pushed
+  recursive subroutine anb_type_method(ls, bs, w, x, i, b, r)
+    type(anl_state), intent(inout) :: ls
+    type(anb_state), intent(inout) :: bs
+    integer(int64), value :: w, i, b
+    type(gc_value), value :: x
+    integer(int64), intent(out) :: r
+    type(gc_value) :: parts, tmp, fnode
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    character(len=:), allocatable :: cn, nm
+    logical :: stub
+    integer :: base
+    tctx => ctx_self()
+    vst => tctx%stk
+    r = 1
+    parts = type_parts(w, x)
+    if (tctx%has_error) return
+    base = vs_enter(vst, 4)
+    ! 1 the parts, 2 the name, 3 the clauses, 4 the interfaces' keys
+    call vs_set(vst, base + 1, parts)
+    tmp = type_names(gcv_nth(vs_get(vst, base + 1), 3))
+    call vs_set(vst, base + 2, gcv_nth(tmp, int(i)))
+    call vs_set(vst, base + 4, iface_keys(gcv_nth(vs_get(vst, base + 1), 2)))
+    tmp = vs_get(vst, base + 2)
+    call gc_ref_text(tmp%ref, s=nm)
+    call vs_set(vst, base + 3, method_clauses(nm, gcv_nth(vs_get(vst, base + 1), 3), gcv_nth(vs_get(vst, base + 1), 1)))
+    if (method_is_void(vs_get(vst, base + 4), vs_get(vst, base + 2))) then
+       tmp = void_clauses(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 4)])
+       call vs_set(vst, base + 3, tmp)
+    end if
+    stub = .false.
+    if (w == 5) then
+       call deftype_class(x, gcv_nth(vs_get(vst, base + 1), 0), cn, stub)
+       if (stub) call record_import(cn)
+    end if
+    tctx%analyzing_method = .true.
+    if (w == 5) then
+       fnode = analyze_fn(vs_get(vst, base + 3), gc_nil())
+    else
+       fnode = analyze_fn(vs_get(vst, base + 3), scope_of(b))
+    end if
+    if (stub) call forget_import(cn)
+    call vs_leave(vst, base)
+    if (tctx%has_error) return
+    call anb_push(fnode)
+    r = 0
+  end subroutine anb_type_method
+
+  ! (anb-typenode) N_DEFTYPE, i2 0 a deftype's, 1 reify's or proxy's: its
+  ! spec [class-text fields iface-keys names fn-nodes], the n fns on top
+  ! its fn-nodes. A reify's class is named as clj's compiler names it,
+  ! after the fn it is written in: clojure.core$future_call$reify__3, so
+  ! pprint's map-ref-type calls a future a Future (a top-level one is
+  ! user$reify__3)
+  recursive subroutine anb_typenode(bs, w, x, id, n)
+    type(anb_state), intent(inout) :: bs
+    integer(int64), value :: w, id, n
+    type(gc_value), value :: x
+    type(gc_value) :: tmp, spec, nd
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    character(len=24) :: buf
+    character(len=:), allocatable :: cname, who
+    integer :: base, i2
+    tctx => ctx_self()
+    vst => tctx%stk
+    tmp = anb_kids(n)
+    base = vs_enter(vst, 5)
+    ! 1 the parts, 2 the names, 3 the fns, 4 the keys, 5 the class text
+    call vs_set(vst, base + 3, tmp)
+    tmp = type_parts(w, x)
+    call vs_set(vst, base + 1, tmp)
+    call vs_set(vst, base + 2, type_names(gcv_nth(vs_get(vst, base + 1), 3)))
+    call vs_set(vst, base + 4, iface_keys(gcv_nth(vs_get(vst, base + 1), 2)))
+    write(buf, '(I0)') id
+    i2 = 1
+    select case (w)
+    case (5)
+       call class_of_text(gcv_nth(vs_get(vst, base + 1), 0), s=cname)
+       i2 = 0
+    case (6)
        who = ""
        if (allocated(tctx%fn_path)) who = tctx%fn_path
        if (len(who) == 0) call gcn_name(gcn_current([vs_get(vst, base + 1)]), s=who)
        call who_class_name(who // "/reify__" // trim(buf), cname)
-       ! reify always implements IObj: the reify macro does not say so,
-       ! NewInstanceExpr adds it, and its meta/withMeta are the
-       ! instance's own slot (B_META, B_WITHMETA)
-       if (gcv_is(vs_get(vst, base + 3))) then
-          spec = gc_sym("clotran.host.i_obj", [vs_get(vst, base + 3)])
-          call vs_set(vst, base + 6, spec)
-          ifaces = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 6), [vs_get(vst, base + 3), vs_get(vst, base + 6)])
-          call vs_set(vst, base + 3, ifaces)
-       end if
-    end if
-    call vs_set(vst, base + 5, gcv_empty([vs_get(vst, base + 3), vs_get(vst, base + 4)]))
-    spec = type_spec(cname, vs_get(vst, base + 5), vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 2))
-    if (tctx%has_error) then
-       call vs_leave(vst, base)
-       return
-    end if
-    call vs_set(vst, base + 6, spec)
-    nd = mk_node(N_DEFTYPE, gc_nil(), vs_get(vst, base + 6), gc_nil(), 1, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    case default
+       cname = "clotran.proxy__" // trim(buf)
+    end select
+    tmp = gc_str(cname, [gc_nil()])
+    call vs_set(vst, base + 5, tmp)
+    spec = gcv_empty([gc_nil()])
+    spec = gcv_conj(spec, vs_get(vst, base + 5), [spec])
+    spec = gcv_conj(spec, gcv_nth(vs_get(vst, base + 1), 1), [spec])
+    spec = gcv_conj(spec, vs_get(vst, base + 4), [spec])
+    spec = gcv_conj(spec, vs_get(vst, base + 2), [spec])
+    spec = gcv_conj(spec, vs_get(vst, base + 3), [spec])
+    call vs_set(vst, base + 5, spec)
+    nd = mk_node(N_DEFTYPE, gc_nil(), vs_get(vst, base + 5), gc_nil(), i2, [vs_get(vst, base + 5)])
     call vs_leave(vst, base)
-  end function analyze_reify
-
-  ! A type's spec: [class-text fields iface-keys names fn-nodes]. Method
-  ! forms sharing a name become the clauses of ONE fn*, each with the
-  ! type's fields bound around its body (method_clauses, bind_fields),
-  ! and that fn* is analysed in the enclosing scope -- which is what
-  ! lets a reify body close over its surroundings.
-  recursive function type_spec(cname, fields, ifaces, methods, sc) result(spec)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    character(len=*), intent(in) :: cname
-    type(gc_value), intent(in) :: fields, ifaces, methods, sc
-    type(gc_value) :: spec, m, mname, names, fns, seen, clauses, fnform, fnode, tmp
-    integer :: base
-
-    ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
-    tctx => ctx_self()
-    vst => tctx%stk
-    spec = gc_nil()
-    base = vs_enter(vst, 11)
-    call vs_set(vst, base + 1, fields)
-    call vs_set(vst, base + 2, ifaces)
-    call vs_set(vst, base + 11, iface_keys(vs_get(vst, base + 2)))
-    ! an interface a type implements is a class from here: nominal, as
-    ! every interface is here, and (instance? some.IFace x) resolves it
-    block
-       integer :: ii
-       type(gc_value) :: isym
-       character(len=:), allocatable :: itext
-       if (gcv_is(vs_get(vst, base + 2))) then
-          do ii = 0, gcv_count(vs_get(vst, base + 2)) - 1
-             isym = strip_meta(gcv_nth(vs_get(vst, base + 2), ii))
-             if (isym%tag /= GCT_SYM) cycle
-             call gc_ref_text(isym%ref, s=itext)
-             if (index(itext, ".") > 0) call declare_type_name(itext)
-          end do
-       end if
-    end block
-    call vs_set(vst, base + 3, methods)
-    call vs_set(vst, base + 4, sc)
-    names = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 3)])
-    call vs_set(vst, base + 5, names)
-    fns = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 5)])
-    call vs_set(vst, base + 6, fns)
-    seen = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 3), vs_get(vst, base + 5), vs_get(vst, base + 6)])
-    call vs_set(vst, base + 7, seen)
-    call vs_set(vst, base + 8, vs_get(vst, base + 3))
-    do while (gcl_count(vs_get(vst, base + 8)) > 0)
-       m = norm_form(strip_meta(gcl_first(vs_get(vst, base + 8))), [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 8)])
-       mname = strip_meta(gcl_first(m))
-       if (mname%tag == GCT_SYM) then
-          block
-             call bare_name(mname, s=dlt_1)
-             tmp = gc_key(dlt_1, [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 8)])
-          end block
-          call vs_set(vst, base + 9, tmp)
-          if (.not. gca_contains(vs_get(vst, base + 7), vs_get(vst, base + 9))) then
-             block
-                call bare_name(mname, s=dlt_1)
-                clauses = method_clauses(dlt_1, vs_get(vst, base + 3), vs_get(vst, base + 1))
-             end block
-             call vs_set(vst, base + 10, clauses)
-             ! a method an interface declares ^void answers nil, as in clj
-             if (method_is_void(vs_get(vst, base + 11), vs_get(vst, base + 9))) then
-                clauses = void_clauses(vs_get(vst, base + 10), [vs_get(vst, base + 5), vs_get(vst, base + 6), &
-                     vs_get(vst, base + 7), vs_get(vst, base + 8), vs_get(vst, base + 9), vs_get(vst, base + 11)])
-                call vs_set(vst, base + 10, clauses)
-             end if
-             fnform = vs_get(vst, base + 10)      ! the clause list IS fn*'s rest
-             tctx%analyzing_method = .true.
-             fnode = analyze_fn(fnform, vs_get(vst, base + 4))
-             if (tctx%has_error) then
-                call vs_leave(vst, base)
-                return
-             end if
-             call vs_set(vst, base + 10, fnode)
-             names = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 9), [vs_get(vst, base + 6), vs_get(vst, base + 7), vs_get(vst, base + 10)])
-             call vs_set(vst, base + 5, names)
-             fns = gcv_conj(vs_get(vst, base + 6), vs_get(vst, base + 10), [vs_get(vst, base + 5), vs_get(vst, base + 7)])
-             call vs_set(vst, base + 6, fns)
-             seen = gca_assoc(vs_get(vst, base + 7), vs_get(vst, base + 9), gc_bool(.true.), &
-                  [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 9)])
-             call vs_set(vst, base + 7, seen)
-          end if
-       end if
-       tmp = gcl_rest(vs_get(vst, base + 8), [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 7)])
-       call vs_set(vst, base + 8, tmp)
-    end do
-    call vs_set(vst, base + 8, vs_get(vst, base + 11))
-    tmp = gc_str(cname, [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 8)])
-    call vs_set(vst, base + 9, tmp)
-    spec = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 8), vs_get(vst, base + 9)])
-    spec = gcv_conj(spec, vs_get(vst, base + 9), [vs_get(vst, base + 1), vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 8), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 1), [vs_get(vst, base + 5), vs_get(vst, base + 6), vs_get(vst, base + 8), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 8), [vs_get(vst, base + 5), vs_get(vst, base + 6), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 5), [vs_get(vst, base + 6), spec])
-    spec = gcv_conj(spec, vs_get(vst, base + 6), [spec])
-    call vs_leave(vst, base)
-  end function type_spec
+    call anb_replace(n, nd)
+  end subroutine anb_typenode
 
   ! `x -> expanded to cons/concat calls, then analysed. Done here, once,
   ! rather than at every evaluation of the macro body that contains it

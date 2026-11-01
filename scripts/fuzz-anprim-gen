@@ -9,13 +9,15 @@
 ;; of every kind, unknown and boolean among them; a let or loop local's
 ;; init kind, hinted or not, with a return-hinted fn's argument kind or
 ;; none; a hinted return against a body's kind; a recur argument against a
-;; local's primitive; an array hint's place in the table, in it and out.
+;; local's primitive; an array hint's place in the table, in it and out;
+;; the runtime cast's answer for a hint's kind and a value's, nil or not.
 ;; ACL2 runs anprim's functions, apk-kid attached to the case's operand
 ;; kinds; test/anprim/anprim_check runs the generated Fortran with a mock
 ;; apk_kid answering the same; both print every answer, and they must agree.
 ;;
 ;; -x is the NEGATIVE CONTROL: the Fortran side's apk_kid answers operand
-;; i+1's kind for operand i, and the answers must part.
+;; i+1's kind for operand i, and the cast is asked of nil for a value and
+;; of a value for nil (apk_cast_code), and the answers must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -37,18 +39,19 @@
   (let [nops (rnd 7)]
     {:how (inc (rnd 6)) :ops (vec (repeatedly nops #(pick kinds)))
      :pk (pick (conj kinds -2)) :hinted (rnd 2) :loopp (rnd 2) :rk (pick [-100 -100 0 1 2 -1])
-     :ret (pick [0 1 2 -1]) :bk (pick kinds) :p (pick [0 1 2 -1]) :k (pick kinds) :e (pick [-1 0 1 2 3 4 5 6 7 8 9])}))
+     :ret (pick [0 1 2 -1]) :bk (pick kinds) :p (pick [0 1 2 -1]) :k (pick kinds) :e (pick [-1 0 1 2 3 4 5 6 7 8 9])
+     :cek (pick [-1 1 2 3 4 5 6 7 8]) :cak (pick [-1 0 0 1 2 3 4 5 6 7 8]) :cnil (pick [0 0 0 1])}))
 
 (def cases (vec (repeatedly n gen-case)))
 
 ;; ---- what ACL2 answers -------------------------------------------------------------------
 
-(defn acl2-case [k {:keys [how ops pk hinted loopp rk ret bk p e] :as c}]
+(defn acl2-case [k {:keys [how ops pk hinted loopp rk ret bk p e cek cak cnil] :as c}]
   (let [nn (inc (count ops))]
     (str "(cw \"~%CASE " k " ~x0~%\" (list (apk-arith '(0 " (str/join " " ops) ") 0 " how " " nn ")"
          " (apk-loop " pk ") (apk-let " pk " " hinted " " loopp " " rk ") (apk-ret " ret " " bk ")"
          " (apk-recur-ok " p " " (:k c) ") (apk-elem " e ") (apk-num " (:k c) ")"
-         " (if (apk-int-p " (:k c) ") 1 0) (if (apk-float-p " (:k c) ") 1 0)))\n")))
+         " (if (apk-int-p " (:k c) ") 1 0) (if (apk-float-p " (:k c) ") 1 0) (apk-cast-code " cek " " cak " " cnil ")))\n")))
 
 (def driver
   (str "(include-book \"anprim-proof\")\n"
@@ -84,8 +87,8 @@
 
 (def case-file (str work "/cases.txt"))
 (spit case-file
-      (str/join (for [{:keys [how ops pk hinted loopp rk ret bk p k e]} cases]
-                  (str how " " (inc (count ops)) " " (str/join " " ops) " " (str/join " " [pk hinted loopp rk ret bk p k e]) "\n"))))
+      (str/join (for [{:keys [how ops pk hinted loopp rk ret bk p k e cek cak cnil]} cases]
+                  (str how " " (inc (count ops)) " " (str/join " " ops) " " (str/join " " [pk hinted loopp rk ret bk p k e cek cak cnil]) "\n"))))
 (def got (let [r (apply p/shell {:continue true :out :string :err :string} exe case-file (when broken ["broken"]))]
            (mapv (fn [l] (mapv parse-long (str/split (str/trim l) #"\s+"))) (str/split-lines (str/trim (:out r))))))
 (def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))

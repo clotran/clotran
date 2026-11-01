@@ -23,5 +23,5 @@
 
 ; the rest: the comparisons on each one's longest path
 (defun apk-own (f)
-  (case f (apk-step 6) (apk-num 3) (apk-loop 2) (apk-let 5) (apk-ret 7) (apk-recur-ok 5) (apk-elem 8) (apk-cast 4) (otherwise 0)))
+  (case f (apk-step 6) (apk-num 3) (apk-loop 2) (apk-let 5) (apk-ret 7) (apk-recur-ok 5) (apk-elem 8) (apk-cast 4) (apk-cast-code 4) (otherwise 0)))
 (defthm apk-own-bound (<= (apk-own f) 8) :rule-classes :linear)

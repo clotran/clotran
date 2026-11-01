@@ -97,3 +97,13 @@
 (defthm apk-arith-long-double
   (implies (and (equal (apk-kid kids sc 1) 1) (equal (apk-kid kids sc 2) 2))
            (equal (apk-arith kids sc 1 3) 2)))
+
+; the runtime's cast is apk-cast: for a hint's element kind (never 0), the
+; value itself exactly when apk-cast answers it, a refusal exactly when
+; apk-cast refuses, nil's the NullPointerException
+(defthm apk-cast-code-spec
+  (implies (and (not (equal ek 0)) (not (equal v :cce)))
+           (equal (apk-cast ek v)
+                  (if (equal (apk-cast-code ek (apk-akind v) (if v 0 1)) 0) v :cce))))
+(defthm apk-cast-code-nil (equal (apk-cast-code ek ak 1) 1))
+(defthm apk-elem-nonzero (not (equal (apk-elem i) 0)))

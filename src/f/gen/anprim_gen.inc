@@ -407,3 +407,28 @@
       return
     end select
   end function apk_elem
+
+  pure function apk_cast_code(ek_, ak_, nilp_) result(r)
+    integer(int64), value :: ek_
+    integer(int64), value :: ak_
+    integer(int64), value :: nilp_
+    integer(int64) :: r
+    logical :: t_1
+    if ((nilp_ == 1_int64)) then
+      r = 1_int64
+      return
+    else
+      if ((.not. (ak_ == 0_int64))) then
+        t_1 = (ak_ == ek_)
+      else
+        t_1 = .false.
+      end if
+      if (t_1) then
+        r = 0_int64
+        return
+      else
+        r = 2_int64
+        return
+      end if
+    end if
+  end function apk_cast_code

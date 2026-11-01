@@ -16,7 +16,11 @@
 ;; the error code, the locals' record counts and every node left on the
 ;; builder, and they must agree, case for case. And set!, ., new, recur and
 ;; fn* (named or not, one method or several, parameters with & and without,
-;; a clause that is no method), their host reads (what a set!'s or a .'s
+;; a clause that is no method), calls (a head that is nil, a symbol, an
+;; expansion), var and case* (too few forms, a table of thens and none), vector
+;; literals (with metadata when they have three forms), deftype* and reify*
+;; (refused at the open, no methods, methods, a method refused),
+;; their host reads (what a set!'s or a .'s
 ;; target is, a lazy seq's new, a recur's target and kinds, a method's hints,
 ;; the fn's tail check) attached to mocks that answer by the forms' fields
 ;; the same way on both sides.
@@ -44,7 +48,7 @@
 ;; rows {:kind :sid :qual :word :class :defvar :sp :meta :kids}, 1-based
 ;; ids, 0 a form of no kind; a form is made after its parts
 
-(def specials {:if 1 :do 2 :def 3 :quote 4 :throw 5 :try 6 :set 7 :dot 8 :new 9 :let 11 :loop 12 :recur 13 :fn 14 :letfn 15})
+(def specials {:if 1 :do 2 :def 3 :quote 4 :throw 5 :try 6 :set 7 :dot 8 :new 9 :var 10 :let 11 :loop 12 :recur 13 :fn 14 :letfn 15})
 
 (defn row [m] (merge {:kind 0 :sid 0 :qual 0 :word 0 :class 0 :defvar 0 :sp 0 :meta 0 :kids []} m))
 
@@ -58,11 +62,19 @@
         lst (fn [kids] (add! {:kind 3 :kids (vec kids)}))
         vc (fn [kids] (add! {:kind 1 :kids (vec kids)}))
         lit (fn [] (add! {:kind (pick [0 4 0])}))
-        amp (fn [] (add! {:kind 2 :sid 70}))]
+        amp (fn [] (add! {:kind 2 :sid 70}))
+        nil-lit (fn [] (add! {:kind 5}))
+        case-head (fn [] (add! {:kind 2 :sid 80 :defvar 1}))]
     (letfn [(form [d]
               (if (or (<= d 0) (zero? (rnd 3)))
                 (if (zero? (rnd 2)) (sym) (lit))
-                (case (rnd 16)
+                (case (rnd 20)
+                  16 (lst (concat [(pick [(nil-lit) (sym) (sym)])] (repeatedly (rnd 3) #(form (dec d)))))
+                  17 (lst (concat [(head :var)] (repeatedly (pick [0 1 1 1 2]) #(pick [(sym) (sym) (lit)]))))
+                  19 (vc (repeatedly (rnd 4) #(form (dec d))))
+                  18 (lst (concat [(case-head) (form (dec d)) (lit) (lit) (form (dec d))
+                                   (pick [(vc (repeatedly (rnd 4) #(form (dec d)))) (vc (repeatedly (rnd 4) #(form (dec d)))) (lit)])]
+                                  (repeatedly (pick [0 2 2 2 3 1]) lit)))
                   0 (lst (cons (head :if) (repeatedly (pick [1 2 3 3 3 4]) #(form (dec d)))))
                   1 (lst (cons (head :do) (repeatedly (rnd 4) #(form (dec d)))))
                   2 (lst (concat [(head :def) (pick [(sym) (sym) (lit)])]
@@ -108,6 +120,7 @@
           3 (str "(list :list " ks ")")
           2 (str "(list :sym " (:sid r) " " (:qual r) (if (= 70 (:sid r)) " 1 " " 0 ") (:word r) " " (:class r) " " (:defvar r) " " (:sp r) " " (:meta r) ")")
           4 "(list :str)"
+          5 ":nil"
           "0"))))
 
 (def driver
@@ -148,10 +161,44 @@
         (defattach (anb-set-kind m-set-kind) (anb-dot-kind m-dot-kind) (anb-new-kind m-new-kind)
                    (anb-recur-open m-recur-open) (anb-recur-check m-recur-check) (anb-fn-open m-fn-open)
                    (anb-method-open m-method-open) (anb-method-check m-method-check) (anb-fn-check m-fn-check))
+        (defun m-seq-kind (x b) (declare (xargs :guard t) (ignore b))
+          (let ((d (m-fd (frf-nth x 0)))) (cond ((equal d 1) 2) ((equal d 2) (if (equal (mod (nfix (frf-len x)) 2) 0) 5 6)) (t 0))))
+        (defun m-call-kind (x b) (declare (xargs :guard t) (ignore b)) (mod (frf-len x) 4))
+        (defun m-var-kind (s) (declare (xargs :guard t)) (if (equal (m-fc s) 1) 7 0))
+        (defun m-case-n (x) (declare (xargs :guard t)) (let ((tb (frf-nth x 5))) (if (equal (frm-kind tb) 1) (frm-count tb) -1)))
+        (defattach (anb-seq-kind m-seq-kind) (anb-call-kind m-call-kind) (anb-var-kind m-var-kind) (anb-case-n m-case-n))
+        (defun m-case-then (x i) (declare (xargs :guard t)) (frm-nth (frf-nth x 5) i))
+        (defthm m-case-then-count (implies (consp x) (< (acl2-count (m-case-then x i)) (acl2-count x)))
+          :hints ((\"Goal\" :cases ((consp (frf-nth x 5))) :use ((:instance frf-nth-count (i 5)) (:instance frm-nth-count (x (frf-nth x 5)) (i i))))))
+        (defattach (anb-case-then m-case-then) :hints ((\"Goal\" :use m-case-then-count :in-theory (disable m-case-then))))
+        (defun anb-expand-mock (x b anls anb)
+          (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b)) (ignore b))
+          (if (equal (m-fc (frf-nth x 0)) 1) (let ((anb (anb-push (anf-node 1 0 nil nil nil) anb))) (mv 0 anls anb)) (mv -1 anls anb)))
+        (defattach anb-expand anb-expand-mock)
+        (defun m-ck (x) (declare (xargs :guard t)) (if (equal (frm-kind x) 1) 7 0))
+        (defun m-cn (x) (declare (xargs :guard t)) (if (equal (frm-kind x) 1) (frm-count x) 0))
+        (defun m-cm (x) (declare (xargs :guard t)) (if (and (equal (frm-kind x) 1) (equal (frm-count x) 3)) 1 0))
+        (defun m-ce (x i) (declare (xargs :guard t)) (frm-nth x i))
+        (defun m-cmf (x) (declare (xargs :guard t)) (frm-nth x 0))
+        (defthm m-coll-ok
+          (and (implies (consp x) (and (< (acl2-count (m-ce x i)) (acl2-count x)) (< (acl2-count (m-cmf x)) (acl2-count x))))
+               (implies (not (consp x)) (and (equal (m-ck x) 0) (equal (m-cn x) 0) (equal (m-cm x) 0)))
+               (natp (m-cn x)) (signed-byte-p 64 (m-cn x)) (< (m-cn x) *anl40*))
+          :hints ((\"Goal\" :in-theory (enable frm-kind frm-count) :use ((:instance frm-nth-count (i i)) (:instance frm-nth-count (i 0))))))
+        (defattach (anb-coll-kind m-ck) (anb-coll-n m-cn) (anb-coll-meta m-cm) (anb-coll-elem m-ce) (anb-coll-metaform m-cmf)
+          :hints ((\"Goal\" :use ((:instance m-coll-ok)) :in-theory (disable m-ce m-cmf m-cn))))
         (defun anb-host2-mock (w x b anls anb)
           (declare (xargs :stobjs (anls anb) :guard (and (signed-byte-p 64 w) (signed-byte-p 64 b))) (ignore w x b))
           (let ((anb (anb-push (anf-node 1 0 nil nil nil) anb))) (mv 0 anls anb)))
         (defattach anb-host2 anb-host2-mock)
+        (defun m-type-open (w x b) (declare (xargs :guard t) (ignore w b)) (if (and (equal (frf-len x) 3) (equal (frf-kind (frf-nth x 2)) 3)) 1 0))
+        (defun m-type-id (w x) (declare (xargs :guard t) (ignore w x)) 0)
+        (defun m-type-n (w x) (declare (xargs :guard t) (ignore w)) (min 4 (+ 1 (nfix (frf-len x)))))
+        (defattach (anb-type-open m-type-open) (anb-type-id m-type-id) (anb-type-n m-type-n))
+        (defun anb-type-method-mock (w x i b anls anb)
+          (declare (xargs :stobjs (anls anb) :guard (and (signed-byte-p 64 w) (signed-byte-p 64 i) (signed-byte-p 64 b))) (ignore w x b))
+          (if (equal i 3) (mv 9 anls anb) (let ((anb (anb-push (anf-node 1 i nil nil nil) anb))) (mv 0 anls anb))))
+        (defattach anb-type-method anb-type-method-mock)
         (mutual-recursion
          (defun anb-ser (x)
            (declare (xargs :mode :program))
@@ -184,7 +231,8 @@
   (into {} (for [[_ c l] (re-seq #"CASE (\d+) \(([-\d\s]*)\)" (str/replace out #"\s*\n\s*" " "))]
              [(parse-long c) (mapv parse-long (remove str/blank? (str/split l #"\s+")))])))
 (when (not= (count expected) n)
-  (println (str "fuzz-anbuild-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (spit (str work "/acl2.out") out)
+  (println (str "fuzz-anbuild-gen: ACL2 answered " (count expected) " of " n " cases (missing " (vec (take 5 (remove expected (range n)))) ", all of it in " work "/acl2.out); its output ends:"))
   (println (subs out (max 0 (- (count out) 3000))))
   (System/exit 1))
 

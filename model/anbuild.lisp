@@ -9,10 +9,17 @@
 ; here -- if, do, def, quote, throw, let*, loop*, letfn*, try, and by the
 ; drivers of set!, ., new, recur and fn* (anb-set, anb-dot, anb-new,
 ; anb-recur, anb-fn), what the host decides of their forms read through the
-; hooks anb-*-kind and the rest; everything else -- a var, a call,
-; a macro expanded through the evaluator, a collection, a literal, var,
-; case*, deftype*, reify* and clotran's own special forms -- is the host's
-; (anb-host, constrained). A subform is analysed by anb-sub, which is anb-an
+; hooks anb-*-kind and the rest; var (anb-varq), and a list no special
+; form the clique builds heads by anb-seq: case* (anb-case), defmacro*
+; (a def), the macroexpansion hook (anb-expand: a macro, an :inline or
+; host sugar expanded through the evaluator, the expansion analysed), and
+; else a call (anb-call) -- what the host decides of them read through
+; anb-seq-kind, anb-call-kind, anb-var-kind, anb-case-n and anb-case-then;
+; deftype*, reify* and proxy (anb-type: opened, then each method name's fn
+; the host rewrites analysed, then its node); lazy-seq*, clotran-fields*,
+; monitor-enter and -exit and import* are the host's (anb-host2 8 to 11),
+; and so are a
+; symbol no local binds and a literal (anb-host, constrained). A subform is analysed by anb-sub, which is anb-an
 ; on it: the hand-written shim runs Fortran's analyze around it (metadata
 ; stripped, a seq realised, the source position stamped on the node), none
 ; of which changes what is modelled here.
@@ -63,7 +70,7 @@
 
 ; ---- THE FORM READS ADDED HERE ---------------------------------------------------------------
 
-; the special form a list's head names, as analyze_seq's dispatch reads it:
+; the special form a list's head names, as anb_an's dispatch reads it:
 ; Clojure's, by name, never a local -- 1 if, 2 do, 3 def, 4 quote, 5 throw,
 ; 6 try, 7 set!, 8 ., 9 new, 10 var, 11 let*, 12 loop*, 13 recur, 14 fn*,
 ; 15 letfn* -- else 0 (case*, deftype*, reify* and the rest are the host's).
@@ -259,9 +266,9 @@
 
 ; ---- THE HOST'S ---------------------------------------------------------------------------------
 
-; what the host analyses (a var, a call, a macro's expansion, a collection,
-; a literal, case*, deftype*, reify*, clotran's own special forms) and a
-; def's metadata map: a node, well-formed when there is no error
+; what the host analyses (a symbol no local binds: a var, a class, a
+; field; a literal) and a def's metadata map: a node, well-formed when
+; there is no error
 (encapsulate
   (((anb-host * * anls anb) => (mv * anls anb) :formals (x b anls anb) :guard (signed-byte-p 64 b))
    ((anb-host-meta * * anls anb) => (mv * anls anb) :formals (x b anls anb) :guard (signed-byte-p 64 b)))
@@ -292,8 +299,10 @@
 ; mutable field, rewritten (set! (.-f this) v); 2 a . whose target names a
 ; host class (a static member, a box, or a member of the class); 3 the
 ; lazy seq a (new clotran.host.lazy_seq (fn* [] ..)) is; 4 a method body
-; its primitive hints rewrite (a let* or loop* of the casts) -- each
-; analysed by the host, its node constrained as anb-host's is
+; its primitive hints rewrite (a let* or loop* of the casts); 8 lazy-seq* (a fn* of no
+; parameters), 9 clotran-fields*, 10 monitor-enter or -exit and 11
+; import* (rewritten as calls) -- each analysed by the host, its node
+; constrained as anb-host's is
 (encapsulate
   (((anb-host2 * * * anls anb) => (mv * anls anb) :formals (w x b anls anb)
     :guard (and (signed-byte-p 64 w) (signed-byte-p 64 b))))
@@ -376,6 +385,222 @@
          (integerp (anb-method-open m r mb start nreq rest)) (signed-byte-p 64 (anb-method-open m r mb start nreq rest))
          (integerp (anb-method-check mb)) (signed-byte-p 64 (anb-method-check mb))
          (integerp (anb-fn-check x r n)) (signed-byte-p 64 (anb-fn-check x r n)))))
+
+; ---- THE HOST'S FORMS: A CALL, A VAR, case* ---------------------------------------------------
+;
+; A list no special form of Clojure's that the clique builds heads is
+; anb-seq, analyze.inc's analyze_seq once, Compiler.analyzeSeq's order: a special form the
+; host analyses, asked of the head whatever the locals are for Clojure's
+; and only when no local binds it for clotran's (anb-seq-kind); else a
+; macro's expansion, an :inline's, or member, static or constructor sugar
+; (anb-expand, the MACROEXPANSION HOOK: the evaluator runs the macro, and
+; the expansion is analysed); else a call (InvokeExpr).
+
+; 1 when a form is the literal nil (frf_nil)
+(defun frf-nil (x) (declare (xargs :guard t)) (if (eq x :nil) 1 0))
+
+; THE HOST'S READS of a list, an integer each. anb-seq-kind: the host's
+; special form heading x -- 2 case*, 3 defmacro* (a def, anb-deff), 5
+; deftype*, 6 reify*, 7 proxy, 8 lazy-seq*, 9 clotran-fields*, 10
+; monitor-enter or -exit, 11 import* (case* and defmacro* built here,
+; 5 to 7 by anb-type, the rest by anb-host2), 0 none; anb-call-kind: what InvokeExpr makes of
+; the call whose n nodes are on top -- bit 0 its first argument cast (an
+; aget, aset or alength whose array argument carries an array hint: the
+; checkcast, apk-cast's), bit 1 its head instance?'s builtin (a class
+; literal tested: InstanceOfExpr); anb-var-kind: the var a symbol names
+; resolved, or the error code of the refusal the host raised (Compiler
+; lookupVar's); anb-case-n: the number of a case*'s [test then] entries,
+; -1 when its table is no map of them; anb-case-then: the then form of
+; entry i, a part of the form
+(encapsulate
+  (((anb-seq-kind * *) => * :formals (x b) :guard t)
+   ((anb-call-kind * *) => * :formals (x b) :guard t)
+   ((anb-var-kind *) => * :formals (s) :guard t)
+   ((anb-case-n *) => * :formals (x) :guard t))
+  (local (defun anb-seq-kind (x b) (declare (xargs :guard t) (ignore x b)) 0))
+  (local (defun anb-call-kind (x b) (declare (xargs :guard t) (ignore x b)) 0))
+  (local (defun anb-var-kind (s) (declare (xargs :guard t) (ignore s)) 0))
+  (local (defun anb-case-n (x) (declare (xargs :guard t) (ignore x)) 0))
+  (defthm anb-seq-reads-sb64
+    (and (integerp (anb-seq-kind x b)) (signed-byte-p 64 (anb-seq-kind x b))
+         (integerp (anb-call-kind x b)) (signed-byte-p 64 (anb-call-kind x b))
+         (integerp (anb-var-kind s)) (signed-byte-p 64 (anb-var-kind s))
+         (integerp (anb-case-n x)) (signed-byte-p 64 (anb-case-n x)))))
+(encapsulate
+  (((anb-case-then * *) => * :formals (x i) :guard t))
+  (local (defun anb-case-then (x i) (declare (xargs :guard t) (ignore x i)) nil))
+  (defthm anb-case-then-count (implies (consp x) (< (acl2-count (anb-case-then x i)) (acl2-count x)))
+    :rule-classes :linear))
+
+; THE MACROEXPANSION HOOK: x expanded, by a macro, an :inline, or member,
+; static or constructor sugar rewritten, and the expansion analysed -- its
+; node left, well-formed, when there is no error; -1 when nothing expands
+; x, the builder as it was
+(encapsulate
+  (((anb-expand * * anls anb) => (mv * anls anb) :formals (x b anls anb) :guard (signed-byte-p 64 b)))
+  (local (defun anb-expand (x b anls anb)
+           (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b)) (ignore x b))
+           (mv -1 anls anb)))
+  (defthm anb-expand-push
+    (and (implies (equal (car (anb-expand x b anls anb)) 0)
+                  (and (equal (cdr (anb-stk (mv-nth 2 (anb-expand x b anls anb)))) (anb-stk anb))
+                       (consp (anb-stk (mv-nth 2 (anb-expand x b anls anb))))
+                       (anf-wf (car (anb-stk (mv-nth 2 (anb-expand x b anls anb)))))))
+         (implies (equal (car (anb-expand x b anls anb)) -1)
+                  (equal (anb-stk (mv-nth 2 (anb-expand x b anls anb))) (anb-stk anb)))))
+  (defthm anb-expand-types
+    (and (consp (anb-expand x b anls anb))
+         (integerp (car (anb-expand x b anls anb))) (signed-byte-p 64 (car (anb-expand x b anls anb)))
+         (implies (anlsp anls) (anlsp (mv-nth 1 (anb-expand x b anls anb))))
+         (implies (anbp anb) (anbp (mv-nth 2 (anb-expand x b anls anb)))))))
+
+; THE NODES. (var sym): N_CONST of the var (anb_varnode)
+(defun anb-varnode (s anb) (declare (xargs :stobjs anb :guard t) (ignore s)) (anb-push (anf-node 1 0 nil nil nil) anb))
+
+; a call of the top n (anb_callnode, InvokeExpr): bit 0 of c its first
+; argument replaced by the cast's call on it, (clotran-array-cast arg
+; :hint), the cast and the hint constants; bit 1 its head by instance?'s
+; builtin, a constant
+(defun anb-castnode (kid)
+  (declare (xargs :guard t))
+  (anf-node 6 0 (list (anf-node 1 0 nil nil nil) kid (anf-node 1 0 nil nil nil)) nil nil))
+(defun anb-callkids (c kids)
+  (declare (xargs :guard (integerp c)))
+  (let ((kids (if (and (logbitp 0 c) (consp kids) (consp (cdr kids)))
+                  (list* (car kids) (anb-castnode (cadr kids)) (cddr kids))
+                kids)))
+    (if (and (logbitp 1 c) (consp kids)) (cons (anf-node 1 0 nil nil nil) (cdr kids)) kids)))
+(defun anb-callnode (x b c n anb)
+  (declare (xargs :stobjs anb :guard (and (signed-byte-p 64 c) (signed-byte-p 64 n))) (ignore x b))
+  (mv-let (kids rest) (anb-popn (nfix n) (anb-stk anb) nil)
+    (update-anb-stk (cons (anf-node 6 0 (anb-callkids c kids) nil nil) rest) anb)))
+
+; (case* expr shift mask default table switch test skip?): N_CASE of the
+; expr and the default, its n then-nodes its alternatives, the table
+; rebuilt with them (anb_casenode). On top: the default over the n thens
+; over the expr, the order CaseExpr.Parser analyses them in
+(defun anb-casenode (x n anb)
+  (declare (xargs :stobjs anb :guard (signed-byte-p 64 n)) (ignore x))
+  (let* ((l (anb-stk anb)) (dflt (anb-top l)))
+    (mv-let (thens l) (anb-popn (nfix n) (anb-under l) nil)
+      (update-anb-stk (cons (anf-node 19 0 (list (anb-top l) dflt) nil thens) (anb-under l)) anb))))
+
+; (var sym): TheVarExpr.Parser's -- 40 when its second form is no symbol
+; ("var needs a symbol": clj's ClassCastException is its host's words),
+; else the var the host resolves, or the host's refusal (lookupVar)
+(defun anb-varq (x anls anb)
+  (declare (xargs :stobjs (anls anb) :guard t))
+  (let ((s (frf-nth x 1)))
+    (if (not (equal (frf-kind s) 2)) (let ((anb (anb-refuse 40 x anb))) (mv 40 anls anb))
+      (let ((e (anb-var-kind s)))
+        (if (not (equal e 0)) (mv e anls anb)
+          (let ((anb (anb-varnode s anb))) (mv 0 anls anb)))))))
+
+; A COLLECTION LITERAL (VectorExpr, MapExpr, SetExpr): the host reads it --
+; anb-coll-kind its node's kind, 7 a vector, 8 a map, 9 a set, else 0 (not
+; a collection literal: the host's); anb-coll-n how many forms it has to
+; analyse (a map's keys and values alternating, as MapExpr's keyvals);
+; anb-coll-elem the i-th, a part of it; anb-coll-meta 1 when it carries
+; metadata, MetaExpr's case, and anb-coll-metaform that map, a part of it.
+; A form that is no cons has none of them.
+(encapsulate
+  (((anb-coll-kind *) => * :formals (x) :guard t)
+   ((anb-coll-n *) => * :formals (x) :guard t)
+   ((anb-coll-meta *) => * :formals (x) :guard t)
+   ((anb-coll-elem * *) => * :formals (x i) :guard t)
+   ((anb-coll-metaform *) => * :formals (x) :guard t))
+  (local (defun anb-coll-kind (x) (declare (xargs :guard t) (ignore x)) 0))
+  (local (defun anb-coll-n (x) (declare (xargs :guard t) (ignore x)) 0))
+  (local (defun anb-coll-meta (x) (declare (xargs :guard t) (ignore x)) 0))
+  (local (defun anb-coll-elem (x i) (declare (xargs :guard t) (ignore x i)) nil))
+  (local (defun anb-coll-metaform (x) (declare (xargs :guard t) (ignore x)) nil))
+  (defthm anb-coll-reads-sb64
+    (and (integerp (anb-coll-kind x)) (signed-byte-p 64 (anb-coll-kind x))
+         (natp (anb-coll-n x)) (signed-byte-p 64 (anb-coll-n x)) (< (anb-coll-n x) *anl40*)
+         (integerp (anb-coll-meta x)) (signed-byte-p 64 (anb-coll-meta x))))
+  (defthm anb-coll-parts
+    (implies (consp x) (and (< (acl2-count (anb-coll-elem x i)) (acl2-count x))
+                            (< (acl2-count (anb-coll-metaform x)) (acl2-count x))))
+    :rule-classes :linear)
+  (defthm anb-coll-atom
+    (implies (not (consp x)) (and (equal (anb-coll-kind x) 0) (equal (anb-coll-n x) 0) (equal (anb-coll-meta x) 0)))))
+
+; MetaExpr's node: (with-meta <the collection> <the map>), a call of the
+; builtin's constant on the top two (anb_metanode)
+(defun anb-metanode (anb)
+  (declare (xargs :stobjs anb :guard t))
+  (mv-let (kids rest) (anb-popn 2 (anb-stk anb) nil)
+    (update-anb-stk (cons (anf-node 6 0 (cons (anf-node 1 0 nil nil nil) kids) nil nil) rest) anb)))
+
+; A TYPE (NewInstanceExpr): w 5 deftype*, 6 reify*, 7 proxy. The host's
+; reads: anb-type-open the type opened -- 0, or 1 its refusal in the
+; host's words (a deftype's class name no symbol, an interface no class
+; names: ClassNotFoundException, a proxy's supers no vector); then
+; anb-type-id the number its class is named with (reify's or proxy's
+; counter, read once, before its methods as clj numbers them; 0 a
+; deftype's); anb-type-n how many distinct method names it has; and
+; anb-type-method the i-th name's clauses, the host's rewrite (one fn*,
+; the fields bound around each body, a ^void method's answering nil, a
+; deftype's short name its own class in it), analysed -- its fn node
+; left, well-formed, when there is no error, as anb-host2's is
+(encapsulate
+  (((anb-type-open * * *) => * :formals (w x b) :guard t)
+   ((anb-type-id * *) => * :formals (w x) :guard t)
+   ((anb-type-n * *) => * :formals (w x) :guard t))
+  (local (defun anb-type-open (w x b) (declare (xargs :guard t) (ignore w x b)) 0))
+  (local (defun anb-type-id (w x) (declare (xargs :guard t) (ignore w x)) 0))
+  (local (defun anb-type-n (w x) (declare (xargs :guard t) (ignore w x)) 0))
+  (defthm anb-type-reads-sb64
+    (and (integerp (anb-type-open w x b)) (signed-byte-p 64 (anb-type-open w x b))
+         (integerp (anb-type-id w x)) (signed-byte-p 64 (anb-type-id w x))
+         (natp (anb-type-n w x)) (signed-byte-p 64 (anb-type-n w x)) (< (anb-type-n w x) *anl40*))))
+(encapsulate
+  (((anb-type-method * * * * anls anb) => (mv * anls anb) :formals (w x i b anls anb)
+    :guard (and (signed-byte-p 64 w) (signed-byte-p 64 i) (signed-byte-p 64 b))))
+  (local (defun anb-type-method (w x i b anls anb)
+           (declare (xargs :stobjs (anls anb) :guard (and (signed-byte-p 64 w) (signed-byte-p 64 i) (signed-byte-p 64 b)))
+                    (ignore w x i b))
+           (let ((anb (anb-push (anf-node 1 0 nil nil nil) anb))) (mv 0 anls anb))))
+  (defthm anb-type-method-push
+    (implies (equal (car (anb-type-method w x i b anls anb)) 0)
+             (and (equal (cdr (anb-stk (mv-nth 2 (anb-type-method w x i b anls anb)))) (anb-stk anb))
+                  (consp (anb-stk (mv-nth 2 (anb-type-method w x i b anls anb))))
+                  (anf-wf (car (anb-stk (mv-nth 2 (anb-type-method w x i b anls anb))))))))
+  (defthm anb-type-method-types
+    (and (consp (anb-type-method w x i b anls anb))
+         (integerp (car (anb-type-method w x i b anls anb))) (signed-byte-p 64 (car (anb-type-method w x i b anls anb)))
+         (implies (anlsp anls) (anlsp (mv-nth 1 (anb-type-method w x i b anls anb))))
+         (implies (anbp anb) (anbp (mv-nth 2 (anb-type-method w x i b anls anb)))))))
+
+; N_DEFTYPE: i2 0 a deftype's, 1 reify's or proxy's; its n method fns, on
+; top, its alternatives, in the order their names first appear; its spec
+; (the class named with id, its fields, interfaces and method names) the
+; host's (anb_typenode)
+(defun anb-typenode (w x id n anb)
+  (declare (xargs :stobjs anb :guard (and (signed-byte-p 64 w) (signed-byte-p 64 id) (signed-byte-p 64 n))) (ignore x id))
+  (mv-let (fns rest) (anb-popn (nfix n) (anb-stk anb) nil)
+    (update-anb-stk (cons (anf-node 20 (if (equal w 5) 0 1) nil nil fns) rest) anb)))
+
+; the methods from the i-th name, each fn left on the builder
+(defun anb-type-methods (w x i n b anls anb)
+  (declare (xargs :stobjs (anls anb) :guard (and (signed-byte-p 64 w) (natp i) (signed-byte-p 64 n) (signed-byte-p 64 b))
+                  :measure (nfix (- *anl40* (nfix i)))))
+  (if (and (natp i) (< i n) (< i *anl40*))
+      (mv-let (e anls anb) (anb-type-method w x i b anls anb)
+        (if (not (equal e 0)) (mv e anls anb)
+          (anb-type-methods w x (+ 1 i) n b anls anb)))
+    (mv 0 anls anb)))
+
+; the type: opened, its class's number read, its methods analysed in
+; order, its node
+(defun anb-type (w x b anls anb)
+  (declare (xargs :stobjs (anls anb) :guard (and (signed-byte-p 64 w) (signed-byte-p 64 b))))
+  (let ((e (anb-type-open w x b)))
+    (if (not (equal e 0)) (mv e anls anb)
+      (let* ((id (anb-type-id w x)) (n (anb-type-n w x)))
+        (mv-let (e anls anb) (anb-type-methods w x 0 n b anls anb)
+          (if (not (equal e 0)) (mv e anls anb)
+            (let ((anb (anb-typenode w x id n anb))) (mv 0 anls anb))))))))
 
 ; ---- THE LOCALS' OPERATIONS: WHAT THEY ANSWER -------------------------------------------------
 
@@ -545,7 +770,9 @@
     ((equal (frf-kind x) 2)
      (mv-let (slot bx anls) (anl-lookup b (frm-sid x) anls)
        (if (<= 0 bx) (let ((anb (anb-local x slot anb))) (mv 0 anls anb)) (anb-host x b anls anb))))
-    ((not (equal (frf-kind x) 3)) (anb-host x b anls anb))
+    ((not (equal (frf-kind x) 3))
+     (let ((k (anb-coll-kind x)))
+       (if (or (equal k 7) (equal k 8) (equal k 9)) (anb-coll x k b anls anb) (anb-host x b anls anb))))
     (t
      (let ((sp (frf-sp x)) (n (frf-len x)))
        (case sp
@@ -586,7 +813,8 @@
          (13 (anb-recur x b anls anb))
          (14 (anb-fn x b anls anb))
          (15 (anb-letfn x b anls anb))
-         (otherwise (anb-host x b anls anb)))))))
+         (10 (anb-varq x anls anb))
+         (otherwise (anb-seq x b anls anb)))))))
 
  ; (def name init?) / (def name "doc" init): DefExpr.Parser's checks, the var
  ; interned, the init analysed under the name, then the metadata
@@ -859,4 +1087,82 @@
                              ((not (equal (anb-method-check mb) 0)) (mv 1 anls anb))
                              (t (mv-let (code anls) (anl-arity r nreq rest anls)
                                   (if (not (equal code 0)) (let ((anb (anb-refuse code cl anb))) (mv code anls anb))
-                                    (let ((anb (anb-arity cl mb start nreq rest anb))) (mv 0 anls anb)))))))))))))))))))
+                                    (let ((anb (anb-arity cl mb start nreq rest anb))) (mv 0 anls anb))))))))))))))))))
+
+ ; A LIST THE HOST'S: Compiler.analyzeSeq's order -- the host's special form, or
+ ; the macroexpansion hook, or a call
+ (defun anb-seq (x b anls anb)
+   (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
+                   :measure (anb-m x 1 (+ 2 *anl40*) 10)))
+   (let ((k (anb-seq-kind x b)))
+     (cond ((equal k 2) (anb-case x b anls anb))
+           ((equal k 3) (anb-deff x b anls anb))
+           ((and (< 4 k) (< k 8)) (anb-type k x b anls anb))
+           ((< 7 k) (anb-host2 k x b anls anb))
+           (t (mv-let (e anls anb) (anb-expand x b anls anb)
+                (if (equal e -1) (anb-call x b anls anb) (mv e anls anb)))))))
+
+ ; (f args*): InvokeExpr.parse's -- a head that is the literal nil refused
+ ; (39, "Can't call nil, form: ..."), then the head and the arguments
+ ; analysed in order, then the call's node
+ (defun anb-call (x b anls anb)
+   (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
+                   :measure (anb-m x 1 3 8)))
+   (if (equal (frf-nil (frf-nth x 0)) 1) (let ((anb (anb-refuse 39 x anb))) (mv 39 anls anb))
+     (mv-let (e anls anb) (anb-listn x (frf-len x) b anls anb)
+       (if (not (equal e 0)) (mv e anls anb)
+         (let ((anb (anb-callnode x b (anb-call-kind x b) (frf-len x) anb))) (mv 0 anls anb))))))
+
+ ; (case* expr shift mask default table switch test skip?): CaseExpr.Parser's
+ ; -- fewer than 8 forms refused (41: clj's IndexOutOfBoundsException has
+ ; no words), a table that is no map of [test then] entries (42); then the
+ ; expr, each then, the default, in that order
+ (defun anb-case (x b anls anb)
+   (declare (xargs :stobjs (anls anb) :guard (signed-byte-p 64 b) :verify-guards nil
+                   :measure (anb-m x 1 (+ 1 *anl40*) 9)))
+   (if (< (frf-len x) 8) (let ((anb (anb-refuse 41 x anb))) (mv 41 anls anb))
+     (let ((n (anb-case-n x)))
+       (if (or (< n 1) (<= *anl40* n)) (let ((anb (anb-refuse 42 x anb))) (mv 42 anls anb))
+         (mv-let (e anls anb) (anb-sub (frf-nth x 1) b anls anb)
+           (if (not (equal e 0)) (mv e anls anb)
+             (mv-let (e anls anb) (anb-case-thens x 0 n b anls anb)
+               (if (not (equal e 0)) (mv e anls anb)
+                 (mv-let (e anls anb) (anb-sub (frf-nth x 4) b anls anb)
+                   (if (not (equal e 0)) (mv e anls anb)
+                     (let ((anb (anb-casenode x n anb))) (mv 0 anls anb))))))))))))
+
+ ; a case*'s then forms from entry i, each left on the builder
+ (defun anb-case-thens (x i n b anls anb)
+   (declare (xargs :stobjs (anls anb) :guard (and (natp i) (integerp n) (signed-byte-p 64 b)) :verify-guards nil
+                   :measure (anb-m x 1 (nfix (- *anl40* (nfix i))) 8)))
+   (if (and (equal (frf-kind x) 3) (natp i) (< i n) (< i *anl40*))
+       (mv-let (e anls anb) (anb-sub (anb-case-then x i) b anls anb)
+         (if (not (equal e 0)) (mv e anls anb)
+           (anb-case-thens x (+ 1 i) n b anls anb)))
+     (mv 0 anls anb)))
+
+ ; a collection literal of kind k: its forms analysed in order, its node
+ ; of them, and when it carries metadata, the map analysed and the
+ ; collection's node with it (MetaExpr: the map is evaluated, the
+ ; constructed collection carries it)
+ (defun anb-coll (x k b anls anb)
+   (declare (xargs :stobjs (anls anb) :guard (and (member k '(7 8 9)) (signed-byte-p 64 b)) :verify-guards nil
+                   :measure (anb-m x 1 (+ 1 *anl40*) 9)))
+   (mv-let (e anls anb) (anb-elems x 0 b anls anb)
+     (if (not (equal e 0)) (mv e anls anb)
+       (let ((anb (anb-node k 0 (anb-coll-n x) anb)))
+         (if (equal (anb-coll-meta x) 1)
+             (mv-let (e anls anb) (anb-sub (anb-coll-metaform x) b anls anb)
+               (if (not (equal e 0)) (mv e anls anb)
+                 (let ((anb (anb-metanode anb))) (mv 0 anls anb))))
+           (mv 0 anls anb))))))
+
+ ; a collection literal's forms from i, each left on the builder
+ (defun anb-elems (x i b anls anb)
+   (declare (xargs :stobjs (anls anb) :guard (and (natp i) (signed-byte-p 64 b)) :verify-guards nil
+                   :measure (anb-m x 1 (nfix (- *anl40* (nfix i))) 8)))
+   (if (and (natp i) (< i (anb-coll-n x)) (< i *anl40*))
+       (mv-let (e anls anb) (anb-sub (anb-coll-elem x i) b anls anb)
+         (if (not (equal e 0)) (mv e anls anb)
+           (anb-elems x (+ 1 i) b anls anb)))
+     (mv 0 anls anb))))
