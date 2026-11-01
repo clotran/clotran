@@ -330,21 +330,43 @@
     if (self >= 0) call frame_set(frame, self, fn)
   end subroutine bind_captures
 
+  ! The index of the arity a call of argc arguments picks in pass -- 0 the
+  ! fixed arity of exactly argc, 1 the variadic one of at most argc fixed
+  ! parameters -- or -1. The generated ex_arfit decides each arity's fit
+  ! (model/exec.lisp ex-arity-pass); this is its walk over the template's.
+  integer function arity_in_pass(fn, argc, pass)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: argc, pass
+    type(gc_value) :: arities, ar
+    integer :: i
+    integer(int64) :: vr
+    arity_in_pass = -1
+    arities = gcv_nth(gc_slot(fn, 1), 1)
+    do i = 0, gcv_count(arities) - 1
+       ar = gcv_nth(arities, i)
+       vr = 0
+       if (truthy(gcv_nth(ar, 1))) vr = 1
+       if (ex_arfit(int(pass, int64), int(int_of(gcv_nth(ar, 0)), int64), vr, int(argc, int64)) == 1) then
+          arity_in_pass = i
+          return
+       end if
+    end do
+  end function arity_in_pass
+
+  ! The arity a call picks (ex-arity): an exact fixed arity wins, else
+  ! the variadic one that fits; -1 for none (the arity error)
+  integer function pick_arity(fn, argc)
+    type(gc_value), intent(in) :: fn
+    integer, intent(in) :: argc
+    pick_arity = arity_in_pass(fn, argc, 0)
+    if (pick_arity < 0) pick_arity = arity_in_pass(fn, argc, 1)
+  end function pick_arity
+
   ! The index of the fixed arity taking exactly argc arguments, or -1.
   integer function fixed_arity(fn, argc)
     type(gc_value), intent(in) :: fn
     integer, intent(in) :: argc
-    type(gc_value) :: arities, ar
-    integer :: i
-    fixed_arity = -1
-    arities = gcv_nth(gc_slot(fn, 1), 1)
-    do i = 0, gcv_count(arities) - 1
-       ar = gcv_nth(arities, i)
-       if (.not. truthy(gcv_nth(ar, 1)) .and. int_of(gcv_nth(ar, 0)) == argc) then
-          fixed_arity = i
-          return
-       end if
-    end do
+    fixed_arity = arity_in_pass(fn, argc, 0)
   end function fixed_arity
 
   ! Picks the arity, builds the frame and binds the arguments, the
@@ -362,7 +384,7 @@
     logical :: ok
     type(gc_value) :: tmpl, arities, ar, caps, capv, rest
     integer :: base, argc, i, n, nfixed, start, nslots, ncap, self
-    logical :: variadic, found
+    logical :: variadic
 
     vst => gc_my_stack()
     ok = .false.
@@ -404,34 +426,22 @@
     arities = gcv_nth(tmpl, 1)
     argc = gcv_count(argv)
 
-    ! An exact fixed arity wins; otherwise the variadic one that fits.
-    found = .false.
-    n = gcv_count(arities)
-    do i = 0, n - 1
-       ar = gcv_nth(arities, i)
-       nfixed = int_of(gcv_nth(ar, 0))
-       variadic = truthy(gcv_nth(ar, 1))
-       if (.not. variadic .and. nfixed == argc .and. .not. present(restseq)) then
-          found = .true.
-          exit
-       end if
-    end do
-    if (.not. found) then
-       do i = 0, n - 1
-          ar = gcv_nth(arities, i)
-          nfixed = int_of(gcv_nth(ar, 0))
-          variadic = truthy(gcv_nth(ar, 1))
-          if (variadic .and. argc >= nfixed) then
-             found = .true.
-             exit
-          end if
-       end do
+    ! The arity the count picks (pick_arity, ex-arity): an exact fixed one
+    ! wins, otherwise the variadic one that fits; with restseq only the
+    ! variadic one can.
+    if (present(restseq)) then
+       i = arity_in_pass(fn, argc, 1)
+    else
+       i = pick_arity(fn, argc)
     end if
-    if (.not. found) then
+    if (i < 0) then
        call raise_arity(argc, vs_get(vst, base + 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_leave(vst, base)
        return
     end if
+    ar = gcv_nth(arities, i)
+    nfixed = int_of(gcv_nth(ar, 0))
+    variadic = truthy(gcv_nth(ar, 1))
     call vs_set(vst, base + 4, ar)
     start = int_of(gcv_nth(ar, 2))
     nslots = int_of(gcv_nth(vs_get(vst, base + 3), 3))
@@ -2237,6 +2247,7 @@
     type(gc_stack), pointer :: vst
     type(gc_value) :: v, fnv, newframe, body
     integer :: n, site
+    integer(int64) :: cl, fit
     logical :: ok
     vst => tctx%stk
     ! where this call is, for the call stack
@@ -2316,7 +2327,18 @@
     ! it.
     v = vs_get(vst, b + 4)
     call vs_set(vst, b + 4, gc_nil())
+    ! the entry's way, as the generated ex_entry decides (exec.lisp's
+    ! action 16): one of the machine's closures entered by the arity its
+    ! count picks, or the arity error thrown; anything else the host's
+    ! apply
+    cl = 0
+    fit = 0
     if (is_node_closure(fnv)) then
+       cl = 1
+       if (pick_arity(fnv, gcv_count(v)) >= 0) fit = 1
+    end if
+    select case (ex_entry(cl, fit))
+    case (1)
        ! The callee's body, in a frame of its own (see mode 2).
        call push_frame(tctx, fnv, site)
        if (tctx%has_error) return
@@ -2330,10 +2352,17 @@
           call vs_set(vst, tctx%kst(tctx%ksp)%base + 7, vs_get(vst, b + 3))
           if (step_at /= 0) call step_check()
        else
-          ! no arity fits: the entry pushed above is ours to drop
           call pop_frame(tctx)
        end if
-    else
+    case (2)
+       ! no arity fits: thrown from inside the callee, as clj's
+       ! AFn.throwArity is, so the call stack names it; the entry
+       ! pushed for it is ours to drop
+       call push_frame(tctx, fnv, site)
+       if (tctx%has_error) return
+       call raise_arity(gcv_count(v), fnv, [fnv, v])
+       call pop_frame(tctx)
+    case default
        tctx%pending_site = site
        call vs_set(vst, vbase + 1, gc_nil())
        val = apply(vs_get(vst, b + 3), v)
@@ -2343,7 +2372,7 @@
           return
        end if
        call k_finish(val, tctx)
-    end if
+    end select
   end subroutine call_enter
 
   recursive function exec_try(nd, frame) result(out)

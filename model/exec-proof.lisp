@@ -8,6 +8,9 @@
 ;     records below untouched and the frame the meaning's;
 ;   - when it is a recur (only in a loop body's tail): leaves the loop's
 ;     record back at its body, restarting, the loop's slots rebound;
+;   - when it is a throw (a call's arity error, or a part's throw): stops
+;     with the throw's record on top, over the records below (k_unwind,
+;     milestone 3, takes it from there);
 ; and never makes the recur marker a value or puts it in a slot. So a
 ; local's read answers the slot its binding wrote (ex-local-reads-binding):
 ; the meaning's frame is the machine's.
@@ -35,14 +38,22 @@
     ((:do :let) (ex-rec e 0 i fl rs tmp))
     (otherwise (ex-rec e 0 0 fl rs nil))))
 
+; ks is l or a tail of it
+(defun ex-below (ks l) (cond ((equal l ks) t) ((atom l) nil) (t (ex-below ks (cdr l)))))
+
 (defun ex-good (flg e i tmp fr fuel fl rs ks v0 tl)
-  (implies (and (ex-wf flg e i tl) (implies tl fl) (no-mk fr) (no-mk tmp) (natp i))
+  (implies (and (ex-wf flg e i tl) (implies tl fl) (no-mk fr) (no-mk tmp) (true-listp tmp) (natp i))
            (let* ((r (ex-ev flg e i tmp fr fuel)) (res (car r)) (fr2 (cadr r))
                   (s2 (ex-run (list (cons (ex-start flg e i tmp fl rs) ks) v0 fr) (caddr r))))
              (and (no-mk fr2)
                   (implies (valp res) (and (not (equal (val res) *ex-mk*)) (equal s2 (list ks (val res) fr2))))
                   (implies (equal (car res) :recur)
-                           (and tl (equal s2 (list (cons (ex-rec rs 0 0 fl rs nil) ks) nil fr2))))))))
+                           (and tl (equal s2 (list (cons (ex-rec rs 0 0 fl rs nil) ks) nil fr2))))
+                  (implies (ex-thp res)
+                           (and (equal (car (car s2)) (ex-throwr (val res))) (ex-below ks (cdr (car s2)))))))))
+
+(defthm ex-below-cons (ex-below ks (cons x ks)))
+(defthm ex-below-weaken (implies (ex-below (cons x ks) l) (ex-below ks l)))
 
 ; ---- the machine, a turn at a time -------------------------------------------------------------
 
@@ -55,9 +66,15 @@
                   :use ((:instance ex-run-plus (a (nfix a)) (b (nfix b))) (:instance ex-run-nfix (s (ex-run s a)) (a b))
                         (:instance ex-run-nfix (a a))))))
 (defthm ex-run-1 (equal (ex-run s 1) (ex-step s)) :hints (("Goal" :in-theory (disable ex-step))))
+(defthm ex-run-2 (equal (ex-run s 2) (ex-step (ex-step s)))
+  :hints (("Goal" :in-theory (disable ex-step) :expand ((ex-run s 2) (ex-run (ex-step s) 1)))))
 (in-theory (disable c+))
 (defthm ex-step-list (implies (consp ks) (equal (ex-step (list ks v fr)) (ex-turn ks v fr))))
-(in-theory (disable ex-step))
+; a throw's record stops the machine
+(defthm ex-turn-throwr (equal (ex-turn (cons (ex-throwr v) l) val fr) (list (cons (ex-throwr v) l) val fr)))
+(defthm ex-run-throwr (equal (ex-run (list (cons (ex-throwr v) l) val fr) n) (list (cons (ex-throwr v) l) val fr))
+  :hints (("Goal" :induct (ex-run (list (cons (ex-throwr v) l) val fr) n) :in-theory (disable ex-turn ex-throwr))))
+(in-theory (disable ex-step ex-throwr))
 
 (defthm no-mk-update (implies (and (no-mk l) (not (equal v *ex-mk*))) (no-mk (update-nth n v l))))
 (defthm no-mk-nth (implies (no-mk l) (not (equal (nth n l) *ex-mk*))))
@@ -73,9 +90,13 @@
 (defthm no-mk-make-list-ac (implies (no-mk acc) (no-mk (make-list-ac n nil acc))))
 (defthm no-mk-bind-caps (implies (and (no-mk fr) (no-mk caps)) (no-mk (ex-bind-caps capv caps fr)))
   :hints (("Goal" :induct (ex-bind-caps capv caps fr))))
+(defthm no-mk-nthcdr (implies (no-mk l) (no-mk (nthcdr n l))) :hints (("Goal" :in-theory (enable no-mk))))
+(defthm ex-mk-not-true-list (implies (true-listp x) (not (equal x *ex-mk*))))
+(defthm no-mk-bargs (implies (and (no-mk args) (true-listp args)) (no-mk (ex-bargs ar args)))
+  :hints (("Goal" :in-theory (enable ex-bargs ex-rest-args))))
 (defthm no-mk-bind
-  (implies (and (no-mk args) (no-mk (caddr f)) (equal (car f) :clo)) (no-mk (ex-bind f args)))
-  :hints (("Goal" :in-theory (disable ex-bind-caps ex-write ex-arity))))
+  (implies (and (no-mk args) (true-listp args) (no-mk (caddr f)) (equal (car f) :clo)) (no-mk (ex-bind f args)))
+  :hints (("Goal" :in-theory (disable ex-bind-caps ex-write ex-arity ex-bargs))))
 
 ; the induction: ex-ev's recursion, each call with the records it runs on
 (set-irrelevant-formals-ok t)
@@ -168,7 +189,7 @@
 (defmacro ex-if-test () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
 (defmacro ex-if-branch (j)
   `(ex-good :m (ex-kid-of e ,j) 0 nil (cadr (ex-r (ex-kid-of e 0) fr fuel)) fuel fl rs ks (val (car (ex-r (ex-kid-of e 0) fr fuel))) tl))
-(ex-case ex-good-if-out ((ex-other flg) (consp e) (equal (ex-kind e) 4) (not (valp (car (ex-r (ex-kid-of e 0) fr fuel))))))
+(ex-case ex-good-if-out ((ex-other flg) (consp e) (equal (ex-kind e) 4) (not (valp (car (ex-r (ex-kid-of e 0) fr fuel)))) (ex-if-test)))
 (ex-case ex-good-if-then ((ex-other flg) (consp e) (equal (ex-kind e) 4) (valp (car (ex-r (ex-kid-of e 0) fr fuel)))
                           (truthy (val (car (ex-r (ex-kid-of e 0) fr fuel)))) (ex-if-test) (ex-if-branch 1)))
 (ex-case ex-good-if-else ((ex-other flg) (consp e) (equal (ex-kind e) 4) (valp (car (ex-r (ex-kid-of e 0) fr fuel)))

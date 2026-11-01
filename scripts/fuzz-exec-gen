@@ -7,13 +7,18 @@
 ;;
 ;; Random cases: a record's node kind (the core's ten, and others), its
 ;; pc and i, the node's count of children and its operand, whether the
-;; value in flight is truthy, and k_finish's restart flag and marker. ACL2
-;; runs ex-act, ex-kid, ex-pc, ex-i and ex-fin; test/exec/exec_check runs
-;; the generated Fortran; both print every answer, and they must agree.
+;; value in flight is truthy, and k_finish's restart flag and marker; and a
+;; call's callee: one to four arities, fixed and variadic, of 0 to 4 fixed
+;; parameters (a multi-arity fn, a variadic one, both, two that could fit),
+;; the call's count and whether the callee is one of the machine's closures.
+;; ACL2 runs ex-act, ex-kid, ex-pc, ex-i, ex-fin, ex-arity (the arity the
+;; count picks) and ex-entry; test/exec/exec_check runs the generated
+;; Fortran, the arity picked by exec.inc pick_arity's walk over ex_arfit;
+;; both print every answer, and they must agree.
 ;;
 ;; -x is the NEGATIVE CONTROL: the Fortran side reads the value's
-;; truthiness the wrong way round and every record as restarting, and the
-;; answers must part.
+;; truthiness the wrong way round, every record as restarting and every
+;; arity's variadic flag reversed, and the answers must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -36,16 +41,27 @@
      :pc (pick [0 0 1 1 2 2 3 4 5 -1])
      :i (pick [0 0 1 2 3 4 8 -1 (dec nk) nk])
      :nk nk :n2 (pick [0 1 2 3 4 -1 (dec nk)])
-     :tv (rnd 2) :rf (rnd 2) :mk (pick [0 1 1 2])}))
+     :tv (rnd 2) :rf (rnd 2) :mk (pick [0 1 1 2])
+     ;; the callee's arities [nf vr], up to 4, and the call's count
+     :ars (vec (repeatedly (inc (rnd 4)) (fn [] [(pick [0 1 1 2 2 3 4 -1]) (pick [0 0 0 1])])))
+     :m (pick [0 1 1 2 2 3 4 5 -1]) :cl (pick [1 1 1 0 2])}))
 
 (def cases (vec (repeatedly n gen-case)))
 (defn row [{:keys [k pc i nk n2 tv]}] (str/join " " [k pc i nk n2 tv]))
+(defn arow [{:keys [ars m cl]}]
+  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl])))
+;; the arities as ACL2 reads a template's: (nf variadic index), the index
+;; in the start slot so the pick names its place
+(defn acl2-ars [{:keys [ars]}]
+  (str "'(" (str/join " " (map-indexed (fn [j [nf vr]] (str "(" nf (if (= vr 1) " t " " nil ") j ")")) ars)) ")"))
 
 ;; ---- what ACL2 answers -------------------------------------------------------------------
 
 (defn acl2-case [j {:keys [rf mk] :as c}]
   (let [as (row c)]
-    (str "(cw \"~%CASE " j " ~x0~%\" (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")))\n")))
+    (str "(cw \"~%CASE " j " ~x0~%\" (let ((a (ex-arity " (acl2-ars c) " " (:m c) ")))"
+         " (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")"
+         " (if a (nth 2 a) -1) (ex-entry " (:cl c) " (if a 1 0)))))\n")))
 
 (def driver
   (str "(include-book \"exec-proof\")\n"
@@ -77,15 +93,17 @@
   (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
 
 (def case-file (str work "/cases.txt"))
-(spit case-file (str/join (for [{:keys [rf mk] :as c} cases] (str (row c) " " rf " " mk "\n"))))
+(spit case-file (str/join (for [{:keys [rf mk] :as c} cases] (str (row c) " " rf " " mk " " (arow c) "\n"))))
 (def got (let [r (apply p/shell {:continue true :out :string :err :string} exe case-file (when broken ["broken"]))]
            (mapv (fn [l] (mapv parse-long (str/split (str/trim l) #"\s+"))) (str/split-lines (str/trim (:out r))))))
 (def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))
 (def bad (remove :ok results))
-(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting)")))
+(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting, variadic flags reversed)")))
 (println (str "  by action: "
               (str/join ", " (for [[a c] (sort (frequencies (map #(first (:want %)) results)))] (str a ":" c)))
-              "; restarts " (count (filter #(= 1 (nth (:want %) 4)) results))))
+              "; restarts " (count (filter #(= 1 (nth (:want %) 4)) results))
+              "; arity picked " (count (filter #(<= 0 (nth (:want %) 5)) results))
+              ", by entry " (str/join "," (for [[a c] (sort (frequencies (map #(nth (:want %) 6) results)))] (str a ":" c)))))
 (println (str "generated tree-evaluator decisions against ACL2's: " (count bad) " cases differ"))
 (doseq [b (take 3 bad)]
   (println "  case" (:k b) (pr-str (nth cases (:k b))))

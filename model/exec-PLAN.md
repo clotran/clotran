@@ -16,9 +16,10 @@ loop's tail, as many arguments as slots) and any records below,
 pops that record with the node's value, or, for a recur, leaves its loop's
 record back at the body with the loop's slots rebound** (exec-proof,
 `ex-machine-correct`); the value is what the meaning `ex-ev` says, and the
-meaning is `mx` of the tree's translation, slots mapped to `mx`'s
-positions (exec-vm, `ex-vm-agree`), and the VM run of the translation
-answers the tree's value (`ex-vm-runs`, with vmx-proof's `vcsx-correct`).
+meaning is `mx2` (vmx2's, multi-arity and variadic fns) of the tree's
+translation, slots mapped to `mx2`'s positions (exec-vm, `ex-vm-agree`),
+and the VM run of the translation answers the tree's value (`ex-vm-runs`,
+with vmx2-proof's `vcs2-correct`).
 So the slot a local reads holds its binding's value, and the tree
 evaluator and the VM agree. Locals clearing is anpass-sound's
 (no cleared slot is read again); joining the two is milestone 4.
@@ -98,13 +99,49 @@ slot's read and write), and every kind not yet in the model.
    and calls. Left out: a template of several arities or a variadic one
    -- the machine leaves those to the host's apply, and the meaning
    answers :out for them, so ex-tmwf asks one fixed arity.)*
-3. **Throw and try, case, collections** *(next)*: N_THROW, N_TRY's pcs 0..5 and
+2c. **Arities and the call's dispatch** -- split in two:
+2c-i. **Multi-arity, variadic, the arity error** *(done)*: exec-vm
+   retargeted from vmx to vmx2 (`mx2`, `x2wf`, `x2defs-ok`,
+   `vcs2-correct`): a template's def a clause per arity, `(nf body)` or
+   `(nf body :rest)`, the parameters' loop over np = nf (+1 for the rest)
+   copies; `ex-pick-arity`: the arity the tree's count picks is the
+   clause `pick-arity` picks. The machine's entry picks by `ex-arity` (the
+   generated `ex-arfit`: the fixed arity of the count, else the variadic
+   one), a variadic one's rest bound as a list, nil for no extras
+   (`ex-bargs`); a closure no arity fits THROWS (`ex-entry`'s 2): ex-ev's
+   result gains `(:thrown . v)`, threaded through every place a part's
+   value is taken (a part's throw its node's), the machine stopping with
+   a throw record on top (`ex-throwr`; k_unwind's walk is milestone 3's).
+   The value invariant asks no value be the symbol :clo, so a rest list
+   is never closure-shaped; the recur marker became a dotted pair, so no
+   rest list is it. ex-vm-agree, ex-recur-stays, ex-tr-xwf, ex-vm-runs
+   over any arities; ex-machine-correct with the throw. Not claimed: the
+   VM's agreement on a throw (mx2 runs a call's arguments before its head,
+   so a throw in each could answer differently; milestone 3, with try,
+   takes it: translate the head first). Generated: ex_arfit and ex_entry,
+   behind exec.inc's `arity_in_pass`/`pick_arity` (the walk over the
+   arities, used by bind_closure, fixed_arity and call_enter) and
+   call_enter's entry. Wrapper elision (wrapper_of) and the direct link's
+   epoch re-read stay the host's: the elided wrapper's body is its
+   builtin's call on its parameters, so what the call answers is the
+   builtin's -- the runtime's, vmx2's unconstrained `:prim` -- and the
+   link is the namespace's (a Var's value read once more after an
+   install), which the model reads from the node.
+2c-ii. **apply** *(next)*: `apply` spreading its last argument (a seq;
+   a non-seq throws IllegalArgumentException as clj's RT.seq does), then
+   the same dispatch -- a variadic arity's rest the spread tail as it is
+   (bind_closure's restseq: only the variadic arity may take it); a
+   yield inside apply is the scheduler's. Needs a seq in the model's
+   values (the spread list) and apply as a callee the machine knows.
+3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's
    branch (`case_branch`), N_VECTOR/MAP/SET; their nested `exec`s made
-   record steps as recur's were. Needs: a throw's result in ex-ev beside
-   :val and :recur, threaded through every place as :recur is; a VM
-   counterpart for try (vmi's handler stack, or mx grown a throw and a
-   try with vcsx-correct extended); case's table read as data; and
+   record steps as recur's were. Has (2c-i): ex-ev's `:thrown`, threaded
+   through every place, the machine stopping at a throw record. Needs:
+   k_unwind's walk from that record; the VM agreement on a throw (the
+   call's head translated first, as the tree runs it -- vmx2's `:try` is
+   the counterpart, vcs2-correct already covers throws); case's table
+   read as data; and
    ex-xvs over collections, a closure inside a vector still a call's
    possible head.
 4. **Clearing joined**: the machine theorem over anpass's marks, from

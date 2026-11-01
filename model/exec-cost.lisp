@@ -12,15 +12,28 @@
 ; node's children their own. A loop's turns are its inits', then each
 ; iteration's -- its body's and a recur's 2k + 2; a call's of k arguments
 ; its head's (none, and one turn fewer, when direct-linked), its
-; arguments' and 2k + 4, and its callee's body's (ex-call-turns).
+; arguments' and 2k + 4, and its callee's body's (ex-call-turns). The
+; arity a call picks is at most two walks of its callee's a arities, one
+; ex-arfit (10 comparisons) each: at most 2a (ex-arity-steps-bound).
 
 (in-package "ACL2")
 
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (otherwise 0)))
+(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (ex-arfit 10) (ex-entry 2) (otherwise 0)))
 (defthm ex-own-bound (<= (ex-own f) 16) :rule-classes :linear)
+
+; the arity's walk: the arities ex-arfit is asked of, the fixed pass and,
+; when it found none, the variadic one (exec.inc pick_arity)
+(defun ex-arity-pass-steps (ars n pass)
+  (cond ((atom ars) 0)
+        ((equal (ex-arfit pass (nth 0 (car ars)) (if (truthy (nth 1 (car ars))) 1 0) n) 1) 1)
+        (t (1+ (ex-arity-pass-steps (cdr ars) n pass)))))
+(defun ex-arity-steps (ars n)
+  (+ (ex-arity-pass-steps ars n 0) (if (ex-arity-pass ars n 0) 0 (ex-arity-pass-steps ars n 1))))
+(defthm ex-arity-pass-steps-bound (<= (ex-arity-pass-steps ars n pass) (len ars)) :rule-classes :linear)
+(defthm ex-arity-steps-bound (<= (ex-arity-steps ars n) (* 2 (len ars))) :rule-classes :linear)
 
 ; the nodes: flg :kids the children from i on, else the node and its children
 (defun ex-sz (flg e i)

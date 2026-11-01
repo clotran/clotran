@@ -3477,3 +3477,6 @@ x10
 ;; a long sum past 64 bits throws "long overflow" (also in a fn the VM runs, CLOTRAN_VM=1)
 (defn add2 [a b] (+ a b))
 (mapv (fn [[a b]] (try (add2 a b) (catch clotran.host.throwable e [(class e) (ex-message e)]))) [[9223372036854775807 1] [-9223372036854775808 -1] [9223372036854775807 9223372036854775807] [-9223372036854775808 9223372036854775807] [9223372036854775806 1]])
+;; a call's arity (model/exec.lisp ex-arity): the fixed arity of the count wins, else the variadic one, its rest nil for no extras; none fits: ArityException
+[((fn [& r] r)) ((fn [a & r] r) 1) ((fn [a & r] r) 1 2 3) ((fn ([a] [:one a]) ([a & r] [:more a r])) 1) ((fn ([a] [:one a]) ([a & r] [:more a r])) 1 2)]
+[(try ((fn ([x] x) ([x y & r] r))) (catch clotran.host.arity_exception e :arity)) ((fn ([x] x) ([x y & r] r)) 1 2 3 4) ((fn [x & r] (if r (recur (first r) (next r)) x)) 1 2 3)]

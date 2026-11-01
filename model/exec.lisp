@@ -26,13 +26,15 @@
 ;             13 a call's head: push it, or take a direct-linked fn
 ;             14 keep the callee              15 the record's pc and i only
 ;             16 enter the callee: its body pushed, restarting, in a
-;                frame of its own, the caller's kept in the record
+;                frame of its own, the caller's kept in the record (or,
+;                as ex-entry decides, throw the arity error)
 ;             17 the body answered: the caller's frame back, finish
 ;                                              0 not a core kind
 ;   ex-kid   which child a push or a tail takes
 ;   ex-pc    the record's pc after it, ex-i its i
 ;   ex-fin   k_finish: 1 when the record restarts (its flag set and the
 ;            value the recur marker), 0 when it is popped
+;   ex-arfit an arity's fit to a call's count, ex-entry the entry's way
 ;
 ; and run_loop's shim (exec.inc exec_core) does it. THE MACHINE below is
 ; that shim, a turn at a time, the decisions these functions; THE MEANING
@@ -119,6 +121,24 @@
   (declare (xargs :guard t))
   (if (and (equal rf 1) (equal mk 1)) 1 0))
 
+; A CALL'S ARITY (bind_closure's pick, clj's: Compiler FnExpr's arities):
+; ex-arfit answers 1 when an arity of nf fixed parameters, variadic when vr
+; is 1, is pass's pick for m arguments -- pass 0 the fixed arity of exactly
+; m, pass 1 the variadic one of nf <= m, tried only when pass 0 found none.
+(defun ex-arfit (pass nf vr m)
+  (declare (xargs :guard t))
+  (cond ((and (equal pass 0) (equal vr 0) (integerp nf) (equal nf m)) 1)
+        ((and (equal pass 1) (equal vr 1) (integerp nf) (integerp m) (<= 0 nf) (<= nf m)) 1)
+        (t 0)))
+
+; A CALL'S ENTRY (exec_core's action 16): cl 1 when the callee is one of
+; the machine's closures, fit 1 when an arity fits the count. 1: enter
+; it; 2: throw the arity error (clj's ArityException); 0: not a closure
+; -- the host's apply (a builtin, a Var's fn).
+(defun ex-entry (cl fit)
+  (declare (xargs :guard t))
+  (cond ((not (equal cl 1)) 0) ((equal fit 1) 1) (t 2)))
+
 ; ---- THE TREE, as exec.inc reads it ------------------------------------------------------------
 ;
 ; a node (kind i2 kids c s2 mark rstart rn): gc_i1, gc_i2, its children
@@ -142,8 +162,9 @@
 (defun valp (r) (eq (car r) :val))
 
 ; the recur marker (exec.inc recur_marker): one object, no value the
-; program can hold
-(defconst *ex-mk* '(:recur-marker))
+; program can hold -- not even a list of values, a variadic call's rest
+; (so a dotted pair, no true list)
+(defconst *ex-mk* '(:recur-marker . :recur-marker))
 (defun no-mk (l) (not (member-equal *ex-mk* l)))
 
 ; ---- FNS AND CALLS, as exec.inc reads them ---------------------------------------------------
@@ -157,12 +178,16 @@
 ; capture records' slots in pairs (outer inner), oldest first (anbuild-props
 ; anb-fn-caps). A closure is vmx's (:clo template capvals), the values the
 ; outer slots held when it was made (make_closure_from). A call ENTERS a
-; closure with a fixed arity of its count of arguments (is_node_closure,
-; fixed_arity): a frame of nslots with the arguments from the arity's start,
-; the captures in their inner slots and the closure in its self slot
-; (bind_closure, bind_captures), and the arity's body run in it, restarting
-; on a recur. Any other callee -- a builtin, a variadic arity, a Var's fn
-; -- is the host's apply, not modelled here.
+; closure (is_node_closure) by the arity its count picks (ex-arity, the
+; generated ex-arfit: the fixed arity of the count, else the variadic one
+; of at most as many fixed parameters): a frame of nslots with the
+; arguments from the arity's start -- a variadic arity's fixed ones, then
+; the rest as one list, nil when none are left -- the captures in their
+; inner slots and the closure in its self slot (bind_closure,
+; bind_captures), and the arity's body run in it, restarting on a recur.
+; A closure no arity fits THROWS the arity error (raise_arity, clj's
+; ArityException). Any other callee -- a builtin, a Var's fn -- is the
+; host's apply, not modelled here.
 
 (defun ex-linked (h) (and (consp h) (equal (ex-kind h) 3) (equal (ex-i2 h) 1)))
 
@@ -170,12 +195,15 @@
   (if (or (atom capv) (atom (cdr capv))) nil (cons (nth (nfix (car capv)) fr) (ex-caps (cddr capv) fr))))
 (defun ex-mkclo (tm fr) (list :clo tm (ex-caps (nth 2 tm) fr)))
 
-(defun ex-arity (ars n)
+(defun ex-arity-pass (ars n pass)
   (cond ((atom ars) nil)
-        ((and (not (truthy (nth 1 (car ars)))) (equal (nth 0 (car ars)) n)) (car ars))
-        (t (ex-arity (cdr ars) n))))
-(defun ex-callable (f n)
-  (and (consp f) (eq (car f) :clo) (consp (cdr f)) (consp (cddr f)) (consp (ex-arity (nth 1 (cadr f)) n))))
+        ((equal (ex-arfit pass (nth 0 (car ars)) (if (truthy (nth 1 (car ars))) 1 0) n) 1) (car ars))
+        (t (ex-arity-pass (cdr ars) n pass))))
+(defun ex-arity (ars n) (or (ex-arity-pass ars n 0) (ex-arity-pass ars n 1)))
+(defun ex-clo-shape (f) (and (consp f) (eq (car f) :clo) (consp (cdr f)) (consp (cddr f))))
+(defun ex-callable (f n) (and (ex-clo-shape f) (consp (ex-arity (nth 1 (cadr f)) n))))
+; a closure with no arity of the count: the arity error
+(defun ex-arerr (f n) (and (ex-clo-shape f) (not (consp (ex-arity (nth 1 (cadr f)) n)))))
 (defun ex-fbody (f n) (nth 3 (ex-arity (nth 1 (cadr f)) n)))
 
 ; vals into slots start, start+1, ... (exec_core's action 10, a call's arguments)
@@ -183,9 +211,13 @@
   (if (atom vals) fr (ex-write (1+ (nfix start)) (cdr vals) (update-nth (nfix start) (car vals) fr))))
 (defun ex-bind-caps (capv caps fr)
   (if (or (atom capv) (atom (cdr capv))) fr (ex-bind-caps (cddr capv) (cdr caps) (update-nth (nfix (cadr capv)) (car caps) fr))))
+; a variadic arity's locals: its nf fixed arguments, then the rest as one
+; list, nil when there are none (bind_closure; clj's RestFn: nil, not ())
+(defun ex-rest-args (nf args) (append (take nf args) (list (nthcdr nf args))))
+(defun ex-bargs (ar args) (if (truthy (nth 1 ar)) (ex-rest-args (nfix (nth 0 ar)) args) args))
 (defun ex-bind (f args)
   (let* ((tm (cadr f)) (ar (ex-arity (nth 1 tm) (len args)))
-         (fr (ex-bind-caps (nth 2 tm) (caddr f) (ex-write (nth 2 ar) args (make-list (nfix (nth 3 tm)) :initial-element nil)))))
+         (fr (ex-bind-caps (nth 2 tm) (caddr f) (ex-write (nth 2 ar) (ex-bargs ar args) (make-list (nfix (nth 3 tm)) :initial-element nil)))))
     (if (natp (nth 4 tm)) (update-nth (nth 4 tm) f fr) fr)))
 
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
@@ -194,6 +226,10 @@
 ; a recur's temporaries (the value-stack region exec_core opens)
 
 (defun ex-rec (e pc i fl rs tmp) (list e pc i fl rs tmp))
+
+; a throw in flight: a record of no kind, so the machine stops at it;
+; unwinding it is k_unwind's (milestone 3)
+(defun ex-throwr (v) (ex-rec (list :thrown v) 0 0 nil nil nil))
 
 
 ; k_finish
@@ -231,10 +267,11 @@
           (14 (list (cons (ex-rec e pc2 i2 fl rs (list val)) (cdr ks)) val fr))
           (15 (list (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks)) val fr))
           (16 (let ((f (car tmp)) (n (len (cdr tmp))))
-                (if (ex-callable f n)
-                    (list (cons (ex-rec (ex-fbody f n) 0 0 t (ex-fbody f n) nil) (cons (ex-rec e pc2 i2 fl rs fr) (cdr ks)))
-                          val (ex-bind f (cdr tmp)))
-                  s)))
+                (case (ex-entry (if (ex-clo-shape f) 1 0) (if (consp (ex-arity (nth 1 (cadr f)) n)) 1 0))
+                  (1 (list (cons (ex-rec (ex-fbody f n) 0 0 t (ex-fbody f n) nil) (cons (ex-rec e pc2 i2 fl rs fr) (cdr ks)))
+                           val (ex-bind f (cdr tmp))))
+                  (2 (list (cons (ex-throwr :arity) ks) val fr))
+                  (otherwise s))))
           (17 (ex-finish val ks tmp))
           (otherwise s))))))
 
@@ -247,8 +284,10 @@
 ;
 ; (ex-ev flg e i tmp fr fuel) is (res fr2 turns): what a record of e
 ; answers, the frame after, and how many turns it takes; res (:val . v),
-; (:recur) for a recur that went back to its loop, or (:out) -- fuel ran
-; out, or something no core kind. The flags are the record's places:
+; (:recur) for a recur that went back to its loop, (:thrown . v) for a
+; throw -- a call of a closure with no arity of its count throws :arity,
+; clj's ArityException, and a throw goes on out of every place, a part's
+; throw its node's -- or (:out): fuel ran out, or something no core kind. The flags are the record's places:
 ;   :m     a fresh record of e
 ;   :do    a do's record at its i-th child
 ;   :let   a let's or loop's record at its i-th binding
@@ -262,6 +301,12 @@
 ; a loop's iterations take fuel, as vmx's do.
 
 (defun c+ (a b) (+ (nfix a) (nfix b)))
+
+; a part that did not answer a value: a throw goes on, its turns and the
+; one that pushed the part counted; anything else is out
+(defun ex-thp (r) (eq (car r) :thrown))
+(defmacro ex-nv (r fr)
+  `(if (ex-thp (car ,r)) (list (car ,r) (cadr ,r) (c+ 1 (caddr ,r))) (list (list :out) ,fr 0)))
 
 (defun ex-rank (flg) (case flg (:iter 2) ((:do :let :rec :call) 0) (otherwise 1)))
 
@@ -342,7 +387,7 @@
                  ((< i (- nk 1))
                   (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
                     (if (not (valp (car r)))
-                        (list (list :out) fr 0)
+                        (ex-nv r fr)
                       (let ((r2 (ex-ev :do e (1+ i) tmp (cadr r) fuel)))
                         (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (caddr r2))))))))
                  (t (let ((r (ex-ev :m (ex-kid-of e (- nk 1)) 0 nil fr fuel)))
@@ -351,7 +396,7 @@
                   ((< i n2)
                    (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
                      (if (not (valp (car r)))
-                         (list (list :out) fr 0)
+                         (ex-nv r fr)
                        (let ((r2 (ex-ev :let e (1+ i) tmp (update-nth (+ (ex-s2 e) i) (val (car r)) (cadr r)) fuel)))
                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
                   ((equal k 12)
@@ -363,7 +408,7 @@
                   ((< i nk)
                    (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
                      (if (not (valp (car r)))
-                         (list (list :out) fr 0)
+                         (ex-nv r fr)
                        (let ((r2 (ex-ev :rec e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
                   (t (list (list :recur) (ex-write (ex-rstart e) (take (min (ex-rn e) nk) tmp) fr) 1))))
@@ -371,12 +416,13 @@
                    ((< i nk)
                     (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
                       (if (not (valp (car r)))
-                          (list (list :out) fr 0)
+                          (ex-nv r fr)
                         (let ((r2 (ex-ev :call e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
                           (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
                    ((and (ex-enters (car tmp) (len (cdr tmp))) (not (zp fuel)))
                     (let ((rb (ex-ev :iter (ex-fbody (car tmp) (len (cdr tmp))) 0 nil (ex-bind (car tmp) (cdr tmp)) (1- fuel))))
-                      (list (car rb) fr (c+ 1 (c+ 1 (c+ (caddr rb) 1))))))
+                      (list (car rb) fr (c+ 1 (c+ 1 (c+ (caddr rb) (if (ex-thp (car rb)) 0 1)))))))
+                   ((ex-arerr (car tmp) (len (cdr tmp))) (list (cons :thrown :arity) fr (c+ 1 1)))
                    (t (list (list :out) fr 0))))
       (otherwise
        (cond ((not (consp e)) (list (list :out) fr 0))
@@ -384,7 +430,7 @@
              ((equal k 2) (list (cons :val (nth n2 fr)) (if (ex-mark e) (update-nth n2 nil fr) fr) 1))
              ((equal k 4)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
-                (cond ((not (valp (car r))) (list (list :out) fr 0))
+                (cond ((not (valp (car r))) (ex-nv r fr))
                       ((truthy (val (car r)))
                        (let ((r2 (ex-ev :m (ex-kid-of e 1) 0 nil (cadr r) fuel)))
                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))
@@ -404,7 +450,7 @@
                     (list (car r2) (cadr r2) (c+ 1 (c+ 1 (caddr r2)))))
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (if (not (valp (car r)))
-                      (list (list :out) fr 0)
+                      (ex-nv r fr)
                     (let ((r2 (ex-ev :call e 1 (list (val (car r))) (cadr r) fuel)))
                       (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2))))))))))
              (t (list (list :out) fr 0)))))))

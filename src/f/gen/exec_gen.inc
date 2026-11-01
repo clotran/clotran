@@ -1,9 +1,12 @@
   ! GENERATED from model/exec.lisp by scripts/acl2-fortran -b exec. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the tree evaluator's turn for its core kinds -- a constant, a
-  ! local, if, do, let*, loop* and recur -- what run_loop does with the top
-  ! record (ex_act), which child it takes (ex_kid), the record's pc and i after
-  ! (ex_pc, ex_i), and whether k_finish restarts it (ex_fin) -- guard-verified.
+  ! local, a Var, if, do, let*, loop*, recur, fn and a call -- what run_loop
+  ! does with the top record (ex_act), which child it takes (ex_kid), the
+  ! record's pc and i after (ex_pc, ex_i), whether k_finish restarts it
+  ! (ex_fin), the arity a call's count picks (ex_arfit: the fixed one, else
+  ! the variadic one) and how it enters its callee or throws the arity error
+  ! (ex_entry) -- guard-verified.
   ! exec.inc's exec_core does what they decide. exec-proof.lisp proves the
   ! machine they drive answers each node's meaning, exec-vm.lisp that the
   ! meaning is the VM's; exec-cost.lisp counts the turns.
@@ -498,3 +501,89 @@
       return
     end if
   end function ex_fin
+
+  pure function ex_arfit(pass_, nf_, vr_, m_) result(r)
+    integer(int64), value :: pass_
+    integer(int64), value :: nf_
+    integer(int64), value :: vr_
+    integer(int64), value :: m_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    if ((pass_ == 0_int64)) then
+      if ((vr_ == 0_int64)) then
+        if (.true.) then
+          t_1 = (nf_ == m_)
+        else
+          t_1 = .false.
+        end if
+        t_2 = t_1
+      else
+        t_2 = .false.
+      end if
+      t_3 = t_2
+    else
+      t_3 = .false.
+    end if
+    if (t_3) then
+      r = 1_int64
+      return
+    else
+      if ((pass_ == 1_int64)) then
+        if ((vr_ == 1_int64)) then
+          if (.true.) then
+            if (.true.) then
+              if ((.not. (nf_ < 0_int64))) then
+                t_4 = (.not. (m_ < nf_))
+              else
+                t_4 = .false.
+              end if
+              t_5 = t_4
+            else
+              t_5 = .false.
+            end if
+            t_6 = t_5
+          else
+            t_6 = .false.
+          end if
+          t_7 = t_6
+        else
+          t_7 = .false.
+        end if
+        t_8 = t_7
+      else
+        t_8 = .false.
+      end if
+      if (t_8) then
+        r = 1_int64
+        return
+      else
+        r = 0_int64
+        return
+      end if
+    end if
+  end function ex_arfit
+
+  pure function ex_entry(cl_, fit_) result(r)
+    integer(int64), value :: cl_
+    integer(int64), value :: fit_
+    integer(int64) :: r
+    if ((.not. (cl_ == 1_int64))) then
+      r = 0_int64
+      return
+    else
+      if ((fit_ == 1_int64)) then
+        r = 1_int64
+        return
+      else
+        r = 2_int64
+        return
+      end if
+    end if
+  end function ex_entry
