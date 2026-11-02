@@ -139,6 +139,38 @@
   (declare (xargs :guard t))
   (cond ((not (equal cl 1)) 0) ((equal fit 1) 1) (t 2)))
 
+; APPLY (clj's: core.clj's apply builds its last argument's seq after the
+; others -- list*, the language's own -- and IFn.applyTo spreads it into
+; the call: exec.inc's B_APPLY). ap 1 when the callee is apply, n its count
+; of arguments, fk 1 when the fn it applies is one of the machine's
+; closures, sq 1 when its last argument is a seq. 1: spread, then the
+; call's own dispatch (ex-entry) on that fn; 2: apply's own arity error,
+; fewer than two arguments (clj's ArityException); 3: the last is no seq,
+; clj's RT.seq IllegalArgumentException; 0: not apply, or a fn the host
+; applies -- a builtin, a Var's fn, or what is no fn at all, whose
+; ClassCastException clj raises before it looks at the seq.
+(defun ex-apentry (ap n fk sq)
+  (declare (xargs :guard t))
+  (cond ((not (equal ap 1)) 0)
+        ((not (and (integerp n) (<= 2 n))) 2)
+        ((not (equal fk 1)) 0)
+        ((not (equal sq 1)) 3)
+        (t 1)))
+
+; APPLY'S WALK (B_APPLY; clj's RestFn.applyTo): a closure with a variadic
+; arity of req fixed parameters (req -1: none) takes elements off the
+; seq's front only while it has fewer than req -- k taken so far, more 1
+; while the seq has another -- so a lazy seq is realised no further. 1:
+; take one more; 2: the variadic arity, its rest the seq as it is (the
+; arguments past req consed back onto it); 3: spread what there is, the
+; count's dispatch (no variadic arity, or req or fewer and none left).
+(defun ex-apstep (req k more)
+  (declare (xargs :guard t))
+  (cond ((not (and (integerp req) (<= 0 req) (integerp k))) 3)
+        ((and (< k req) (equal more 1)) 1)
+        ((or (< req k) (equal more 1)) 2)
+        (t 3)))
+
 ; ---- THE TREE, as exec.inc reads it ------------------------------------------------------------
 ;
 ; a node (kind i2 kids c s2 mark rstart rn): gc_i1, gc_i2, its children
@@ -220,6 +252,37 @@
          (fr (ex-bind-caps (nth 2 tm) (caddr f) (ex-write (nth 2 ar) (ex-bargs ar args) (make-list (nfix (nth 3 tm)) :initial-element nil)))))
     (if (natp (nth 4 tm)) (update-nth (nth 4 tm) f fr) fr)))
 
+; APPLY, as a callee: the value :apply is clojure.core/apply (core.clj's
+; fn, its list* and the applyTo it ends in, B_APPLY). A call of it with
+; (f a1 .. an coll) is the call of f on a1 .. an and then coll's elements
+; (ex-spread), dispatched as any call is; a seq is the model's list, nil
+; the empty one -- a closure is none, and no list a program holds has the
+; recur marker in it, as no value is it. A vector's or a lazy seq's walk
+; (to_seq, sq_first, sq_rest) is the host's.
+(defun ex-seqp (v) (and (true-listp v) (not (ex-clo-shape v)) (no-mk v)))
+(defun ex-spread (args) (append (butlast args 1) (car (last args))))
+(defun ex-apway (tmp)
+  (ex-apentry (if (equal (car tmp) :apply) 1 0) (len (cdr tmp)) (if (ex-clo-shape (cadr tmp)) 1 0)
+              (if (ex-seqp (car (last (cdr tmp)))) 1 0)))
+; the call a record's callee and arguments make: apply's (f . spread) when
+; it spreads, else themselves
+(defun ex-callee (tmp) (if (equal (ex-apway tmp) 1) (cons (cadr tmp) (ex-spread (cddr tmp))) tmp))
+
+; APPLY'S WALK, as B_APPLY takes it: (way fixed rest), way ex-apstep's 2
+; or 3 -- 2 the variadic arity's fixed arguments and its rest, 3 every
+; argument, spread. fx the arguments taken so far, s the seq's elements.
+(defun ex-apwalk (req fx s)
+  (declare (xargs :measure (len s)))
+  (let ((w (ex-apstep req (len fx) (if (consp s) 1 0))))
+    (cond ((and (equal w 1) (consp s)) (ex-apwalk req (append fx (list (car s))) (cdr s)))
+          ((equal w 2) (list 2 (take (nfix req) fx) (append (nthcdr (nfix req) fx) s)))
+          (t (list 3 (append fx s) nil)))))
+; the variadic arity's count of fixed parameters, -1 for none (B_APPLY's
+; req: exec.inc variadic_req, the first variadic arity's, as the variadic
+; pass of ex-arity takes)
+(defun ex-varnf (ars)
+  (cond ((atom ars) -1) ((truthy (nth 1 (car ars))) (nfix (nth 0 (car ars)))) (t (ex-varnf (cdr ars)))))
+
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;
 ; a state (records val frame); a record (node pc i restart rnode tmp), tmp
@@ -266,12 +329,15 @@
                   (list (cons (ex-rec h 0 0 nil nil nil) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) val fr))))
           (14 (list (cons (ex-rec e pc2 i2 fl rs (list val)) (cdr ks)) val fr))
           (15 (list (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks)) val fr))
-          (16 (let ((f (car tmp)) (n (len (cdr tmp))))
+          (16 (let* ((ct (ex-callee tmp)) (f (car ct)) (n (len (cdr ct))))
                 (case (ex-entry (if (ex-clo-shape f) 1 0) (if (consp (ex-arity (nth 1 (cadr f)) n)) 1 0))
                   (1 (list (cons (ex-rec (ex-fbody f n) 0 0 t (ex-fbody f n) nil) (cons (ex-rec e pc2 i2 fl rs fr) (cdr ks)))
-                           val (ex-bind f (cdr tmp))))
+                           val (ex-bind f (cdr ct))))
                   (2 (list (cons (ex-throwr :arity) ks) val fr))
-                  (otherwise s))))
+                  (otherwise (case (ex-apway tmp)
+                               (2 (list (cons (ex-throwr :arity) ks) val fr))
+                               (3 (list (cons (ex-throwr :not-seq) ks) val fr))
+                               (otherwise s))))))
           (17 (ex-finish val ks tmp))
           (otherwise s))))))
 
@@ -419,10 +485,13 @@
                           (ex-nv r fr)
                         (let ((r2 (ex-ev :call e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
                           (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
-                   ((and (ex-enters (car tmp) (len (cdr tmp))) (not (zp fuel)))
-                    (let ((rb (ex-ev :iter (ex-fbody (car tmp) (len (cdr tmp))) 0 nil (ex-bind (car tmp) (cdr tmp)) (1- fuel))))
+                   ((and (ex-enters (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (not (zp fuel)))
+                    (let ((rb (ex-ev :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0 nil
+                                     (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp))) (1- fuel))))
                       (list (car rb) fr (c+ 1 (c+ 1 (c+ (caddr rb) (if (ex-thp (car rb)) 0 1)))))))
-                   ((ex-arerr (car tmp) (len (cdr tmp))) (list (cons :thrown :arity) fr (c+ 1 1)))
+                   ((ex-arerr (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (list (cons :thrown :arity) fr (c+ 1 1)))
+                   ((equal (ex-apway tmp) 2) (list (cons :thrown :arity) fr (c+ 1 1)))
+                   ((equal (ex-apway tmp) 3) (list (cons :thrown :not-seq) fr (c+ 1 1)))
                    (t (list (list :out) fr 0))))
       (otherwise
        (cond ((not (consp e)) (list (list :out) fr 0))

@@ -369,6 +369,17 @@
     fixed_arity = arity_in_pass(fn, argc, 0)
   end function fixed_arity
 
+  ! The variadic arity's count of fixed parameters, -1 for none
+  ! (ex-varnf, apply's req): the variadic pass at any count takes the
+  ! first variadic arity
+  integer function variadic_req(fn)
+    type(gc_value), intent(in) :: fn
+    integer :: i
+    variadic_req = -1
+    i = arity_in_pass(fn, huge(i), 1)
+    if (i >= 0) variadic_req = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(fn, 1), 1), i), 0))
+  end function variadic_req
+
   ! Picks the arity, builds the frame and binds the arguments, the
   ! captures and the fn's own name. Answers the frame and the body to
   ! run; false with an error set when no arity fits. `argv` is taken

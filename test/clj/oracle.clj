@@ -2202,6 +2202,23 @@
 (try (apply (fn [a b & r] [a b]) [1]) (catch clotran.host.arity_exception e :arity))
 (let [a (atom 0)] (apply (fn [x & r] x) (map (fn [i] (swap! a inc) i) (range 100))) @a)
 (deref (future (apply (fn [x & r] (take 2 r)) (range))) 1000 :timeout)
+;; apply's refusals (model/exec.lisp ex-apentry): a last argument that is
+;; no seq is RT.seq's IllegalArgumentException, apply short of two
+;; arguments its own ArityException, a non-fn's call the (IFn) cast's
+;; ClassCastException (nil's an NPE) -- through apply and called directly
+(let [m (fn [f] (try (f) (catch clotran.host.throwable e [(class e) (first (clojure.string/split (ex-message e) #" \("))])))]
+  [(m #(apply (fn [& r] r) 1 2 3)) (m #(apply (fn [a] a) 1 :x)) (first (m #(apply (fn [a] a) (fn [] 1)))) (m #(apply (fn [x] x)))
+   (m #(apply 1 [2])) (m #(apply "s" [1])) (m #(apply nil 2)) (m #(apply (fn [x & r] x) 1 2 3 4 5 6))
+   (m #(let [f (identity 1.5)] (f))) (m #(let [f (identity "s")] (f 1))) (m #(apply :k {:k 1} 2 3 4 5 6 #{}))
+   (class (m #(let [f (identity nil)] (f 1)))) (class (m #(apply nil [1])))])
+(expect-diff "DEVIATIONS 84: (apply 1 2) refuses the seq first, clj the fn")
+(try (apply 1 2) (catch clotran.host.throwable e (class e)))
+;; and the spread call is the call: the arity of the spread count, a
+;; variadic one's rest the elements past its fixed ones (nil for none)
+(let [f (fn ([] :zero) ([a] [:one a]) ([a b c & r] [:var a b c r]))]
+  [(apply f []) (apply f nil) (apply f [1]) (apply f 1 []) (apply f 1 2 [3]) (apply f 1 2 3 4 [5 6]) (apply f (list 1 2 3)) (apply f 1 2 3 nil)
+   (apply f (range 5)) (apply f (vec (range 4))) (apply f (map inc (range 3))) (apply f 1 (sorted-set 2 3 4))
+   (try (apply f [1 2]) (catch clotran.host.arity_exception e :arity))])
 
 ;; strings are characters (DEVIATIONS 41): counted, indexed, sliced and
 ;; searched by code point, with the Character predicates ICU's

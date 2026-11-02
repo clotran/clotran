@@ -21,7 +21,7 @@
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (ex-arfit 10) (ex-entry 2) (otherwise 0)))
+(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (otherwise 0)))
 (defthm ex-own-bound (<= (ex-own f) 16) :rule-classes :linear)
 
 ; the arity's walk: the arities ex-arfit is asked of, the fixed pass and,
@@ -99,7 +99,7 @@
   (if (< (nfix i) (ex-nk e))
       (let ((r (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel)))
         (+ (caddr r) (ex-call-parts e (1+ (nfix i)) (append tmp (list (val (car r)))) (cadr r) fuel)))
-    (caddr (ex-ev :iter (ex-fbody (car tmp) (len (cdr tmp))) 0 nil (ex-bind (car tmp) (cdr tmp)) (1- fuel)))))
+    (caddr (ex-ev :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0 nil (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp))) (1- fuel)))))
 
 (defthm ex-call-turns
   (implies (and (consp e) (valp (car (ex-ev :call e i tmp fr fuel))))
@@ -108,3 +108,28 @@
   :hints (("Goal" :induct (ex-call-parts e i tmp fr fuel)
                   :in-theory (e/d (c+) (ex-kid-of ex-bind ex-fbody ex-enters))
                   :expand ((ex-ev :call e i tmp fr fuel)))))
+
+; APPLY, COUNTED. B_APPLY's walk is a turn of its loop an element it takes,
+; one ex-apstep (7 comparisons) each and one more for the decision that
+; ends it: at most the seq's length + 1, and at most req - k + 1 -- so a
+; lazy seq is realised no further than the variadic arity's fixed
+; parameters, (apply f 1 (range)) in a constant number of turns.
+(defun ex-apwalk-steps (req fx s)
+  (declare (xargs :measure (len s)))
+  (if (and (equal (ex-apstep req (len fx) (if (consp s) 1 0)) 1) (consp s))
+      (1+ (ex-apwalk-steps req (append fx (list (car s))) (cdr s)))
+    1))
+(defthm ex-apwalk-steps-len (<= (ex-apwalk-steps req fx s) (1+ (len s))) :rule-classes :linear)
+(defthm ex-apwalk-steps-req
+  (implies (natp req) (<= (ex-apwalk-steps req fx s) (1+ (nfix (- req (len fx))))))
+  :rule-classes :linear
+  :hints (("Goal" :in-theory (enable ex-apstep))))
+
+; the spread copies each argument but the last, then the last's elements,
+; once: a step an element and one to end each copy -- n + 2 for n spread
+(defun ex-copy-steps (l) (if (atom l) 1 (1+ (ex-copy-steps (cdr l)))))
+(defthm ex-copy-steps-len (equal (ex-copy-steps l) (1+ (len l))))
+(defthm ex-len-append-c (equal (len (append a b)) (+ (len a) (len b))))
+(defthm ex-spread-steps
+  (equal (+ (ex-copy-steps (butlast args 1)) (ex-copy-steps (car (last args))))
+         (+ 2 (len (ex-spread args)))))

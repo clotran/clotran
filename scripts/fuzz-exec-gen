@@ -44,12 +44,17 @@
      :tv (rnd 2) :rf (rnd 2) :mk (pick [0 1 1 2])
      ;; the callee's arities [nf vr], up to 4, and the call's count
      :ars (vec (repeatedly (inc (rnd 4)) (fn [] [(pick [0 1 1 2 2 3 4 -1]) (pick [0 0 0 1])])))
-     :m (pick [0 1 1 2 2 3 4 5 -1]) :cl (pick [1 1 1 0 2])}))
+     :m (pick [0 1 1 2 2 3 4 5 -1]) :cl (pick [1 1 1 0 2])
+     ;; an apply: whether the callee is apply, its count, whether the fn is a
+     ;; closure and the last a seq; and its walk: the variadic arity's req
+     ;; (-1 none), the leading arguments k and the seq's length
+     :ap (pick [1 1 1 0 2]) :an (pick [0 1 2 2 3 4 -1]) :fk (pick [1 1 1 0 2]) :sq (pick [1 1 1 0 2])
+     :req (pick [-1 0 1 1 2 3]) :ak (pick [0 0 1 2 3 4]) :al (pick [0 1 2 3 5])}))
 
 (def cases (vec (repeatedly n gen-case)))
 (defn row [{:keys [k pc i nk n2 tv]}] (str/join " " [k pc i nk n2 tv]))
-(defn arow [{:keys [ars m cl]}]
-  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl])))
+(defn arow [{:keys [ars m cl ap an fk sq req ak al]}]
+  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl ap an fk sq req ak al])))
 ;; the arities as ACL2 reads a template's: (nf variadic index), the index
 ;; in the start slot so the pick names its place
 (defn acl2-ars [{:keys [ars]}]
@@ -60,8 +65,10 @@
 (defn acl2-case [j {:keys [rf mk] :as c}]
   (let [as (row c)]
     (str "(cw \"~%CASE " j " ~x0~%\" (let ((a (ex-arity " (acl2-ars c) " " (:m c) ")))"
-         " (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")"
-         " (if a (nth 2 a) -1) (ex-entry " (:cl c) " (if a 1 0)))))\n")))
+         " (append (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")"
+         " (if a (nth 2 a) -1) (ex-entry " (:cl c) " (if a 1 0))"
+         " (ex-apentry " (str/join " " (map c [:ap :an :fk :sq])) ")"
+         ") (let ((w (ex-apwalk " (:req c) " (make-list " (:ak c) ") (make-list " (:al c) ")))) (list (car w) (len (cadr w)) (len (caddr w)))))))\n")))
 
 (def driver
   (str "(include-book \"exec-proof\")\n"
@@ -98,12 +105,14 @@
            (mapv (fn [l] (mapv parse-long (str/split (str/trim l) #"\s+"))) (str/split-lines (str/trim (:out r))))))
 (def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))
 (def bad (remove :ok results))
-(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting, variadic flags reversed)")))
+(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting, variadic flags reversed, apply's callee and its seq's end misread)")))
 (println (str "  by action: "
               (str/join ", " (for [[a c] (sort (frequencies (map #(first (:want %)) results)))] (str a ":" c)))
               "; restarts " (count (filter #(= 1 (nth (:want %) 4)) results))
               "; arity picked " (count (filter #(<= 0 (nth (:want %) 5)) results))
-              ", by entry " (str/join "," (for [[a c] (sort (frequencies (map #(nth (:want %) 6) results)))] (str a ":" c)))))
+              ", by entry " (str/join "," (for [[a c] (sort (frequencies (map #(nth (:want %) 6) results)))] (str a ":" c)))
+              "; apply by way " (str/join "," (for [[a c] (sort (frequencies (map #(nth (:want %) 7) results)))] (str a ":" c)))
+              ", walks handing the rest over " (count (filter #(= 2 (nth (:want %) 8)) results))))
 (println (str "generated tree-evaluator decisions against ACL2's: " (count bad) " cases differ"))
 (doseq [b (take 3 bad)]
   (println "  case" (:k b) (pr-str (nth cases (:k b))))

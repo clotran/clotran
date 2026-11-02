@@ -126,17 +126,26 @@
 ; template's pairs and good themselves; any other value is good but the
 ; symbol :clo itself, so a variadic call's rest list of good values is
 ; never closure-shaped (the model's list is the machine's seq, and :clo is
-; no value a program holds)
+; no value a program holds); nor apply, whose spread call vmx2 has no
+; instruction for yet (exec-PLAN 2c-ii: the VM over apply is next)
 (defun ex-xvs (defs l)
   (if (atom l)
       t
     (and (let ((v (car l)))
-           (and (not (equal v :clo))
+           (and (not (equal v :clo)) (not (equal v :apply))
                 (or (not (clop v))
                     (and (equal v (clo (cadr v) (caddr v))) (consp (assoc-equal (cadr v) defs))
                          (true-listp (caddr v)) (equal (len (caddr v)) (len (ex-inners (nth 2 (cadr v)))))
                          (ex-xvs defs (caddr v))))))
          (ex-xvs defs (cdr l)))))
+
+; no good value is apply, so a good record's call is no apply
+(defthm ex-xvs-apway (implies (ex-xvs defs tmp) (equal (ex-apway tmp) 0))
+  :hints (("Goal" :expand ((ex-xvs defs tmp)) :in-theory (enable ex-apway ex-apentry))))
+
+(defthm ex-callee-nop (implies (not (equal (ex-apway tmp) 1)) (equal (ex-callee tmp) tmp))
+  :hints (("Goal" :in-theory (enable ex-callee))))
+(in-theory (disable ex-callee ex-apway))
 
 ; well-formed: the core, every local in scope and unmarked (no clearing:
 ; that is anpass-sound's, joined in milestone 4), every let's and loop's

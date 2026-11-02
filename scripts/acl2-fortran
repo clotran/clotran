@@ -294,7 +294,7 @@
               "  ! no value; anprim-cost.lisp counts the steps."]}
     "exec"
     {:out "src/f/gen/exec_gen.inc" :include true :book "exec-proof"
-     :fns [ex-act ex-kid ex-pc ex-i ex-fin ex-arfit ex-entry]
+     :fns [ex-act ex-kid ex-pc ex-i ex-fin ex-arfit ex-entry ex-apentry ex-apstep]
      :host []
      :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {}
@@ -309,7 +309,8 @@
               "  ! record's pc and i after (ex_pc, ex_i), whether k_finish restarts it"
               "  ! (ex_fin), the arity a call's count picks (ex_arfit: the fixed one, else"
               "  ! the variadic one) and how it enters its callee or throws the arity error"
-              "  ! (ex_entry) -- guard-verified."
+              "  ! (ex_entry), and apply: its way (ex_apentry) and how far its walk takes the"
+              "  ! seq (ex_apstep), B_APPLY the walk -- guard-verified."
               "  ! exec.inc's exec_core does what they decide. exec-proof.lisp proves the"
               "  ! machine they drive answers each node's meaning, exec-vm.lisp that the"
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}

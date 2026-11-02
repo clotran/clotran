@@ -10570,40 +10570,64 @@ contains
     case (B_APPLY)
        ! (apply f a b args) -- the last argument is a SEQUENCE spread
        ! into the call, which is what makes variadic forwarding work.
+       ! The decisions are model/exec.lisp's, generated: ex_apentry the
+       ! way (spread, apply's arity error, a last argument that is no seq),
+       ! ex_apstep how far the seq is walked; the walk is this block.
        block
-         type(gc_value) :: fargs, last, f, arities, ar, s, v
+         type(gc_value) :: fargs, last, f, s, v
          integer :: j, req
+         integer(int64) :: fk, sq, way, step, more
+         character(len=12) :: nb
          fargs = gcv_empty([vs_get(vst, base + 1)])
          do j = 1, n - 2
             fargs = gcv_conj(fargs, gcv_nth(vs_get(vst, base + 1), j), [vs_get(vst, base + 1), fargs])
          end do
          call vs_set(vst, base + 2, fargs)
+         f = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
+         if (gcn_is_var(f)) f = strip_meta(gcn_var_value(f))
+         ! a closure's seq is taken here, its refusal RT.seq's
+         ! IllegalArgumentException; any other fn is the host's, which
+         ! takes the seq below
+         fk = 0
+         sq = 0
+         if (gc_kind(f) == OBJ_CLOSURE .and. n >= 2) then
+            fk = 1
+            s = to_seq(gcv_nth(vs_get(vst, base + 1), n - 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            call vs_set(vst, base + 3, s)
+            if (.not. tctx%has_error) sq = 1
+         end if
+         way = ex_apentry(1_int64, int(n, int64), fk, sq)
          ! A variadic closure gets its rest AS IT IS. RestFn.applyTo walks
          ! the seq only as far as the required arity; what follows is the
          ! rest argument, unrealised, so (apply f 1 (range)) hands f an
          ! infinite seq instead of realising a million elements first.
          ! Anything else -- a native, a keyword, a fixed-arity fn -- takes
          ! its arguments spread, as below.
-         f = strip_meta(gcv_nth(vs_get(vst, base + 1), 0))
-         if (gcn_is_var(f)) f = strip_meta(gcn_var_value(f))
          req = -1
-         if (gc_kind(f) == OBJ_CLOSURE) then
-            arities = gcv_nth(gc_slot(f, 1), 1)
-            do j = 0, gcv_count(arities) - 1
-               ar = gcv_nth(arities, j)
-               if (truthy(gcv_nth(ar, 1))) req = int_of(gcv_nth(ar, 0))
-            end do
-         end if
+         if (way == 1) req = variadic_req(f)
          ! a compiled variadic fn records its required arity as -(req + 2)
          ! (clotran.compiler), and takes its rest the same way
-         if (gc_kind(f) == OBJ_COMPILED) then
-            if (gc_i2(f) <= -2) req = -gc_i2(f) - 2
+         if (way == 0 .and. gc_kind(f) == OBJ_COMPILED) then
+            if (gc_i2(f) <= -2) then
+               req = -gc_i2(f) - 2
+               s = to_seq(gcv_nth(vs_get(vst, base + 1), n - 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+               call vs_set(vst, base + 3, s)
+            end if
          end if
-         if (req >= 0) then
-            s = to_seq(gcv_nth(vs_get(vst, base + 1), n - 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
-            call vs_set(vst, base + 3, s)
+         if (way == 2) then
+            write(nb, '(i0)') n
+            call raise_class("clotran.host.arity_exception", "Wrong number of args (" // trim(nb) // &
+                 ") passed to: clojure.core/apply", [vs_get(vst, base + 1)])
+         else if (way == 3 .or. tctx%has_error) then
+            continue
+         else if (req >= 0) then
             ! the fixed arguments still wanted come off the front of the seq
-            do while (gcv_count(vs_get(vst, base + 2)) < req .and. s%tag /= GCT_NIL .and. .not. tctx%has_error)
+            do
+               s = vs_get(vst, base + 3)
+               more = 0
+               if (s%tag /= GCT_NIL) more = 1
+               step = ex_apstep(int(req, int64), int(gcv_count(vs_get(vst, base + 2)), int64), more)
+               if (step /= 1 .or. tctx%has_error) exit
                v = sq_first(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
                fargs = gcv_conj(vs_get(vst, base + 2), v, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), v])
                call vs_set(vst, base + 2, fargs)
@@ -10614,7 +10638,7 @@ contains
             end do
             if (tctx%has_error) then
                continue
-            else if (gcv_count(vs_get(vst, base + 2)) > req .or. s%tag /= GCT_NIL) then
+            else if (step == 2) then
                ! leading arguments past the fixed ones go onto the seq as it is
                do j = gcv_count(vs_get(vst, base + 2)) - 1, req, -1
                   s = seq_cons(gcv_nth(vs_get(vst, base + 2), j), vs_get(vst, base + 3), &
@@ -10657,7 +10681,7 @@ contains
                   out = invoke_closure(f, v, s)
                end if
             else
-               ! too few for the variadic arity: spread, and a fixed arity may match
+               ! req or fewer and none left: spread, and a fixed arity may match
                fargs = vs_get(vst, base + 2)
                out = apply(gcv_nth(vs_get(vst, base + 1), 0), fargs)
             end if
@@ -19539,8 +19563,14 @@ contains
           return
        end if
     end if
-    call gcp_str(fn, .true., s=t)
-    call fail("not a function: " // t)
+    ! nil is clj's NullPointerException (an invoke on null), anything
+    ! else its (IFn) cast's ClassCastException -- not a message of ours
+    if (tag_of(strip_meta(fn)) == GCT_NIL) then
+       call raise_class("clotran.host.null_pointer_exception", "Cannot invoke clotran.host.i_fn.invoke on nil", [fn])
+       return
+    end if
+    call class_name_of(strip_meta(fn), s=t)
+    call raise_class("clotran.host.class_cast_exception", "class " // t // " cannot be cast to class clotran.host.i_fn", [fn])
   end subroutine not_a_function
 
   ! The transaction lock, made once (DEVIATIONS 10).

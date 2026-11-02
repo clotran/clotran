@@ -127,12 +127,44 @@ slot's read and write), and every kind not yet in the model.
    builtin's -- the runtime's, vmx2's unconstrained `:prim` -- and the
    link is the namespace's (a Var's value read once more after an
    install), which the model reads from the node.
-2c-ii. **apply** *(next)*: `apply` spreading its last argument (a seq;
-   a non-seq throws IllegalArgumentException as clj's RT.seq does), then
-   the same dispatch -- a variadic arity's rest the spread tail as it is
-   (bind_closure's restseq: only the variadic arity may take it); a
-   yield inside apply is the scheduler's. Needs a seq in the model's
-   values (the spread list) and apply as a callee the machine knows.
+2c-ii. **apply** *(done, but its VM agreement -- 2c-iii)*: the value
+   `:apply` is clojure.core/apply (core.clj's fn, its list*, the applyTo
+   it ends in: B_APPLY). A call of it with (f a1 .. an coll) is, at the
+   call's entry, the call of f on a1 .. an and coll's elements
+   (`ex-callee`, `ex-spread`), dispatched as any call (ex-entry); the
+   generated `ex-apentry` decides the way first -- spread; apply's own
+   arity error, fewer than two arguments; a last argument that is no seq,
+   `:not-seq` thrown (clj's RT.seq IllegalArgumentException); or a fn the
+   host applies (a builtin, a Var's fn, a non-fn and its ClassCastException).
+   A seq is the model's list, nil the empty one (no closure is one); a
+   vector's, a lazy seq's walk is the host's (to_seq, sq_first, sq_rest).
+   Proved: `ex-machine-correct` with it (the machine's entry turn on apply
+   is the spread call's, `ex-apply-turn`; the meaning's, `ex-apply-is-call`);
+   B_APPLY's walk (`ex-apwalk`, over the generated `ex-apstep`: elements
+   taken off the seq's front only while fewer than the variadic arity's
+   req) hands a variadic closure its rest as it is exactly when the spread
+   count picks the variadic arity, its locals the walk's fixed arguments
+   and rest (`ex-apwalk-call`, for arities as clj's compiler allows them:
+   no fixed one of more parameters than the variadic's), else spreads
+   everything; counted: the walk at most min(len s, req - k) + 1 steps,
+   the spread n + 2 (exec-cost). Generated: ex_apentry and ex_apstep, behind
+   B_APPLY (its walk) and exec.inc's `variadic_req` (the variadic pass of
+   the arity walk). Host, named: exec.inc reaches the spread call through
+   core's apply's `.` (N_DOT, dot_dispatch, B_APPLY), the callee's body in
+   a nested run (invoke_closure), not a turn of the loop -- the dot's turn
+   is milestone 5's; a yield in apply (the scheduler's); a compiled
+   variadic fn's rest (call_compiled). Found: a call of a non-fn answered
+   RuntimeException "not a function: 1" where clj's cast raises
+   ClassCastException (nil: NullPointerException) -- fixed in
+   not_a_function, for apply and every call; `(apply 1 2)` still refuses
+   the seq first (DEVIATIONS 84: `.` reads no target hint).
+2c-iii. **The VM over apply** *(next)*: vmx2 has no spreading call --
+   `:callv`'s count is the instruction's -- so the value invariant
+   (`ex-xvs`) asks no value be `:apply` and ex-vm-agree leaves apply out.
+   Needs: vmx2's `(:applyv m)` (the last value's elements pushed in its
+   place, then `:callv`'s dispatch at the count that makes), its compiler
+   and vcs2-correct over it; the translation of a call whose head is apply
+   to it; ex-vm-agree, ex-tr-xwf, ex-vm-runs over that.
 3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's
    branch (`case_branch`), N_VECTOR/MAP/SET; their nested `exec`s made

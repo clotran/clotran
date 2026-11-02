@@ -6,7 +6,8 @@
   ! record's pc and i after (ex_pc, ex_i), whether k_finish restarts it
   ! (ex_fin), the arity a call's count picks (ex_arfit: the fixed one, else
   ! the variadic one) and how it enters its callee or throws the arity error
-  ! (ex_entry) -- guard-verified.
+  ! (ex_entry), and apply: its way (ex_apentry) and how far its walk takes the
+  ! seq (ex_apstep), B_APPLY the walk -- guard-verified.
   ! exec.inc's exec_core does what they decide. exec-proof.lisp proves the
   ! machine they drive answers each node's meaning, exec-vm.lisp that the
   ! meaning is the VM's; exec-cost.lisp counts the turns.
@@ -587,3 +588,87 @@
       end if
     end if
   end function ex_entry
+
+  pure function ex_apentry(ap_, n_, fk_, sq_) result(r)
+    integer(int64), value :: ap_
+    integer(int64), value :: n_
+    integer(int64), value :: fk_
+    integer(int64), value :: sq_
+    integer(int64) :: r
+    logical :: t_1
+    if ((.not. (ap_ == 1_int64))) then
+      r = 0_int64
+      return
+    else
+      if (.true.) then
+        t_1 = (.not. (n_ < 2_int64))
+      else
+        t_1 = .false.
+      end if
+      if ((.not. t_1)) then
+        r = 2_int64
+        return
+      else
+        if ((.not. (fk_ == 1_int64))) then
+          r = 0_int64
+          return
+        else
+          if ((.not. (sq_ == 1_int64))) then
+            r = 3_int64
+            return
+          else
+            r = 1_int64
+            return
+          end if
+        end if
+      end if
+    end if
+  end function ex_apentry
+
+  pure function ex_apstep(req_, k_, more_) result(r)
+    integer(int64), value :: req_
+    integer(int64), value :: k_
+    integer(int64), value :: more_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    if (.true.) then
+      if ((.not. (req_ < 0_int64))) then
+        t_1 = .true.
+      else
+        t_1 = .false.
+      end if
+      t_2 = t_1
+    else
+      t_2 = .false.
+    end if
+    if ((.not. t_2)) then
+      r = 3_int64
+      return
+    else
+      if ((k_ < req_)) then
+        t_3 = (more_ == 1_int64)
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        r = 1_int64
+        return
+      else
+        if ((req_ < k_)) then
+          t_4 = (req_ < k_)
+        else
+          t_4 = (more_ == 1_int64)
+        end if
+        if (t_4) then
+          r = 2_int64
+          return
+        else
+          r = 3_int64
+          return
+        end if
+      end if
+    end if
+  end function ex_apstep

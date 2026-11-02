@@ -98,6 +98,31 @@
   (implies (and (no-mk args) (true-listp args) (no-mk (caddr f)) (equal (car f) :clo)) (no-mk (ex-bind f args)))
   :hints (("Goal" :in-theory (disable ex-bind-caps ex-write ex-arity ex-bargs))))
 
+; apply's spread call: its arguments no marker, a true list, when the record's are
+(defthm no-mk-append2 (implies (and (no-mk a) (no-mk b)) (no-mk (append a b))) :hints (("Goal" :in-theory (enable no-mk))))
+(defthm no-mk-butlast (implies (no-mk l) (no-mk (butlast l n))))
+(defthm ex-last-cdr (implies (consp (cdr l)) (equal (last (cdr l)) (last l))))
+(defthm ex-callee-no-mk
+  (implies (and (no-mk tmp) (true-listp tmp)) (and (no-mk (cdr (ex-callee tmp))) (true-listp (cdr (ex-callee tmp)))))
+  :hints (("Goal" :in-theory (enable ex-callee ex-apway ex-apentry ex-spread ex-seqp))))
+(defthm ex-apway-not-apply (implies (not (equal (car tmp) :apply)) (equal (ex-apway tmp) 0))
+  :hints (("Goal" :in-theory (enable ex-apway ex-apentry))))
+(defthm ex-apway-callee-clo
+  (implies (equal (ex-apway tmp) 1)
+           (and (consp (car (ex-callee tmp))) (equal (car (car (ex-callee tmp))) :clo)
+                (consp (cdr (car (ex-callee tmp)))) (consp (cddr (car (ex-callee tmp))))))
+  :hints (("Goal" :in-theory (enable ex-apway ex-callee ex-apentry ex-clo-shape))))
+(defthm ex-apway-callee
+  (implies (equal (ex-apway tmp) 1) (equal (ex-apway (ex-callee tmp)) 0))
+  :hints (("Goal" :in-theory (enable ex-apway ex-callee ex-apentry ex-clo-shape))))
+(defthm ex-callee-callee
+  (implies (equal (ex-apway tmp) 1) (equal (ex-callee (ex-callee tmp)) (ex-callee tmp)))
+  :hints (("Goal" :use ex-apway-callee :in-theory (e/d (ex-callee) (ex-apway-callee)))))
+(defthm ex-callee-id (implies (not (equal (ex-apway tmp) 1)) (equal (ex-callee tmp) tmp))
+  :hints (("Goal" :in-theory (enable ex-callee))))
+
+(in-theory (disable ex-callee ex-apway))
+
 ; the induction: ex-ev's recursion, each call with the records it runs on
 (set-irrelevant-formals-ok t)
 (defun ex-ind (flg e i tmp fr fuel fl rs ks v0 tl)
@@ -142,8 +167,8 @@
                       (list (ex-ind :m (ex-kid-of e i) 0 nil fr fuel nil nil (cons (ex-rec e 3 i fl rs tmp) ks) v0 nil)
                             (ex-ind :call e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel fl rs ks (val (car r)) tl))))
                    ((zp fuel) nil)
-                   (t (let ((bd (ex-fbody (car tmp) (len (cdr tmp)))))
-                        (ex-ind :iter bd 0 nil (ex-bind (car tmp) (cdr tmp)) (1- fuel) t bd
+                   (t (let ((bd (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp))))))
+                        (ex-ind :iter bd 0 nil (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp))) (1- fuel) t bd
                                 (cons (ex-rec e 5 i fl rs fr) ks) v0 nil)))))
       (otherwise
        (cond ((not (consp e)) nil)
@@ -175,11 +200,11 @@
 (defmacro ex-other (flg) `(not (member-equal ,flg '(:iter :do :let :rec :call))))
 (defmacro ex-r (kid fr fuel) `(ex-ev :m ,kid 0 nil ,fr ,fuel))
 
-(defmacro ex-case (name hyps &key (flg 'flg))
+(defmacro ex-case (name hyps &key (flg 'flg) (off 'nil))
   `(defthm ,name
      (implies (and ,@hyps) (ex-good ,flg e i tmp fr fuel fl rs ks v0 tl))
      :hints (("Goal" :expand ((:free (fr fuel tmp) (ex-ev ,flg e i tmp fr fuel)) (:free (tl) (ex-wf ,flg e i tl)))
-                     :in-theory (disable ex-ev ex-wf c+ ex-run ex-kid-of)))))
+                     :in-theory (disable ex-ev ex-wf c+ ex-run ex-kid-of ,@off)))))
 
 (ex-case ex-good-atom ((not (consp e))))
 
@@ -265,9 +290,9 @@
 (ex-case ex-good-call-zp ((consp e) (not (< (nfix i) (ex-nk e))) (zp fuel)) :flg :call)
 (ex-case ex-good-call-enter
   ((consp e) (not (< (nfix i) (ex-nk e))) (not (zp fuel))
-   (ex-good :iter (ex-fbody (car tmp) (len (cdr tmp))) 0 nil (ex-bind (car tmp) (cdr tmp)) (+ -1 fuel) t
-            (ex-fbody (car tmp) (len (cdr tmp))) (cons (ex-rec e 5 (nfix i) fl rs fr) ks) v0 nil))
-  :flg :call)
+   (ex-good :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0 nil (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp))) (+ -1 fuel) t
+            (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (cons (ex-rec e 5 (nfix i) fl rs fr) ks) v0 nil))
+  :flg :call :off (ex-bind))
 
 (ex-case ex-good-iter-zp
   ((consp e) (zp fuel) (ex-good :m e 0 nil fr fuel t e ks v0 t))
@@ -310,3 +335,74 @@
   :hints (("Goal" :in-theory (enable ex-kind ex-i2 ex-s2 ex-nk ex-c ex-mark ex-kids)
                   :expand ((:free (flg i tmp fr) (ex-ev flg (list 11 1 (list init (list 2 s)) nil s) i tmp fr fuel))
                            (:free (fr) (ex-ev :m (list 2 s) 0 nil fr fuel))))))
+
+; ---- APPLY ----------------------------------------------------------------------------------------
+;
+; APPLY OF A CLOSURE IS THE CALL OF IT ON THE SPREAD ARGUMENTS: at a call's
+; entry, a record whose callee is apply answers -- in the meaning, and so
+; (ex-machine-correct) by the machine -- what the record of f and the
+; spread arguments does; and the machine's entry turn, when an arity fits,
+; is that record's (when none does, both throw the arity error).
+
+(defthm ex-apply-is-call
+  (implies (and (equal (ex-apway tmp) 1) (consp e) (<= (ex-nk e) (nfix i)))
+           (equal (ex-ev :call e i tmp fr fuel) (ex-ev :call e i (ex-callee tmp) fr fuel)))
+  :hints (("Goal" :expand ((ex-ev :call e i tmp fr fuel) (ex-ev :call e i (ex-callee tmp) fr fuel))
+                  :in-theory (disable ex-ev ex-enters ex-arerr ex-fbody ex-bind))))
+
+(defthm ex-apply-turn
+  (implies (and (equal (ex-apway tmp) 1) (equal (ex-kind e) 6)
+                (consp (ex-arity (nth 1 (cadr (car (ex-callee tmp)))) (len (cdr (ex-callee tmp))))))
+           (equal (ex-turn (cons (ex-rec e 4 i fl rs tmp) ks) v fr)
+                  (ex-turn (cons (ex-rec e 4 i fl rs (ex-callee tmp)) ks) v fr)))
+  :hints (("Goal" :in-theory (disable ex-fbody ex-bind ex-arity))))
+
+; APPLY'S WALK IS THE CALL'S DISPATCH. For a closure's arities as clj
+; allows them (Compiler FnExpr: every arity's count a natural, no fixed one
+; of more parameters than the variadic one's), B_APPLY's walk with req the
+; variadic arity's count either hands over (way 2) -- and then the arity the
+; spread call's count picks is the variadic one, its locals exactly the
+; walk's fixed arguments and rest -- or spreads everything (way 3), the
+; call itself.
+(defun ex-arsane (ars req)
+  (if (atom ars)
+      t
+    (and (natp (nth 0 (car ars)))
+         (or (truthy (nth 1 (car ars))) (<= (nth 0 (car ars)) (ifix req)))
+         (ex-arsane (cdr ars) req))))
+
+(defthm ex-arsane-no-fixed
+  (implies (and (ex-arsane ars req) (integerp req) (integerp m) (< req m)) (not (ex-arity-pass ars m 0)))
+  :hints (("Goal" :in-theory (enable ex-arfit))))
+(defthm ex-arsane-variadic
+  (implies (and (ex-arsane ars r) (equal req (ex-varnf ars)) (<= 0 req) (<= req m) (integerp m))
+           (and (truthy (nth 1 (ex-arity-pass ars m 1))) (equal (nth 0 (ex-arity-pass ars m 1)) req)))
+  :hints (("Goal" :in-theory (enable ex-arfit))))
+
+(defthm ex-take-append (implies (<= (nfix n) (len a)) (equal (take n (append a b)) (take n a))))
+(defthm ex-nthcdr-append (implies (<= (nfix n) (len a)) (equal (nthcdr n (append a b)) (append (nthcdr n a) b))))
+(defthm ex-len-append (equal (len (append a b)) (+ (len a) (len b))))
+
+(defthm ex-append-assoc (equal (append (append a b) c) (append a (append b c))))
+(defthm ex-len-consp (implies (consp s) (< 0 (len s))) :rule-classes :linear)
+(defthm ex-arity-variadic-pass
+  (implies (and (ex-arsane ars (ex-varnf ars)) (<= 0 (ex-varnf ars)) (integerp m) (<= (ex-varnf ars) m))
+           (and (consp (ex-arity-pass ars m 1)) (nth 1 (ex-arity-pass ars m 1)) (not (equal (nth 1 (ex-arity-pass ars m 1)) :false))
+                (equal (car (ex-arity-pass ars m 1)) (ex-varnf ars))))
+  :hints (("Goal" :use ((:instance ex-arsane-variadic (r (ex-varnf ars)) (req (ex-varnf ars))))
+                  :in-theory (disable ex-arsane-variadic))))
+(defthm ex-arity-variadic
+  (implies (and (ex-arsane ars (ex-varnf ars)) (<= 0 (ex-varnf ars)) (integerp m) (< (ex-varnf ars) m))
+           (equal (ex-arity ars m) (ex-arity-pass ars m 1)))
+  :hints (("Goal" :use ((:instance ex-arsane-no-fixed (req (ex-varnf ars))))
+                  :in-theory (disable ex-arsane-no-fixed))))
+
+(defthm ex-apwalk-call
+  (implies (and (ex-arsane ars req) (equal req (ex-varnf ars)) (true-listp fx) (true-listp s))
+           (let ((w (ex-apwalk req fx s)) (args (append fx s)))
+             (and (implies (equal (car w) 2)
+                           (let ((ar (ex-arity ars (len args))))
+                             (and (truthy (nth 1 ar)) (equal (nth 0 ar) req)
+                                  (equal (ex-bargs ar args) (append (cadr w) (list (caddr w)))))))
+                  (implies (not (equal (car w) 2)) (and (equal (car w) 3) (equal (cadr w) args))))))
+  :hints (("Goal" :induct (ex-apwalk req fx s) :in-theory (e/d (ex-apstep ex-bargs ex-rest-args) (ex-arity)))))

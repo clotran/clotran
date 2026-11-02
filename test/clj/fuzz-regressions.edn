@@ -333,4 +333,9 @@
  ;; an Object[] (scripts/fuzz-forms, seed 1: 13 of 300 differed; model/anbuild.lisp
  ;; anb-call and anb-case, model/anprim.lisp apk-cast-code)
  (mapv #(try (eval %) (catch clotran.host.throwable t (let [c (or (ex-cause t) t)] [(instance? clotran.host.illegal_argument_exception c) (ex-message c)]))) (quote [(nil) (nil 1 2) ((nil)) (:k 0 (nil) 0) (let* [x 1] (case x 1 fz-a fz-b)) (let* [x 1] (case x 5 (nil) 1 fz-a :a)) (let* [^objects a (make-array clotran.host.real8/TYPE 2 2)] (alength a)) (let* [^doubles a (make-array clotran.host.real8/TYPE 2 2)] (try (alength a) (catch clotran.host.class_cast_exception e :cce))) (var clojure.core/max-key) (let* [x 2] (case x 1 :a (2 3) :b :d))]))
+ ;; a call of a non-fn raised RuntimeException "not a function: 1" where clj's
+ ;; (IFn) cast raises ClassCastException, a call of nil an NPE, through apply
+ ;; and called directly (model/exec-PLAN.md 2c-ii)
+ (mapv #(try (%) (catch clotran.host.throwable e [(class e) (first (clojure.string/split (ex-message e) #" \("))])) [#(apply 1 [2]) #(apply "s" [1]) #(let [f (identity 1.5)] (f))])
+ (mapv #(try (%) (catch clotran.host.throwable e (class e))) [#(let [f (identity nil)] (f 1)) #(apply nil [1])])
 ]
