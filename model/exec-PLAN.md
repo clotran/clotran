@@ -99,7 +99,7 @@ slot's read and write), and every kind not yet in the model.
    and calls. Left out: a template of several arities or a variadic one
    -- the machine leaves those to the host's apply, and the meaning
    answers :out for them, so ex-tmwf asks one fixed arity.)*
-2c. **Arities and the call's dispatch** -- split in two:
+2c. **Arities and the call's dispatch** -- split in four:
 2c-i. **Multi-arity, variadic, the arity error** *(done)*: exec-vm
    retargeted from vmx to vmx2 (`mx2`, `x2wf`, `x2defs-ok`,
    `vcs2-correct`): a template's def a clause per arity, `(nf body)` or
@@ -127,7 +127,7 @@ slot's read and write), and every kind not yet in the model.
    builtin's -- the runtime's, vmx2's unconstrained `:prim` -- and the
    link is the namespace's (a Var's value read once more after an
    install), which the model reads from the node.
-2c-ii. **apply** *(done, but its VM agreement -- 2c-iii)*: the value
+2c-ii. **apply** *(done; its VM agreement 2c-iii)*: the value
    `:apply` is clojure.core/apply (core.clj's fn, its list*, the applyTo
    it ends in: B_APPLY). A call of it with (f a1 .. an coll) is, at the
    call's entry, the call of f on a1 .. an and coll's elements
@@ -158,13 +158,40 @@ slot's read and write), and every kind not yet in the model.
    ClassCastException (nil: NullPointerException) -- fixed in
    not_a_function, for apply and every call; `(apply 1 2)` still refuses
    the seq first (DEVIATIONS 84: `.` reads no target hint).
-2c-iii. **The VM over apply** *(next)*: vmx2 has no spreading call --
-   `:callv`'s count is the instruction's -- so the value invariant
-   (`ex-xvs`) asks no value be `:apply` and ex-vm-agree leaves apply out.
-   Needs: vmx2's `(:applyv m)` (the last value's elements pushed in its
-   place, then `:callv`'s dispatch at the count that makes), its compiler
-   and vcs2-correct over it; the translation of a call whose head is apply
-   to it; ex-vm-agree, ex-tr-xwf, ex-vm-runs over that.
+2c-iii. **The VM over apply** *(done)*: vmx2 gains `(:applyv f e1 .. en)`,
+   a call whose head may be apply -- only the head's value tells, so every
+   tree call translates to it. When f's value is `:apply`, its first
+   argument a closure and its last a seq (the model's list, no closure),
+   mx2 calls that closure on the arguments between and the seq's elements
+   (`x2-spreads`, `x2-fn`, `x2-vals`); otherwise it is `:callv`'s call (a
+   call of apply that does not spread -- of a builtin, of no fn, of no seq,
+   too few arguments -- the runtime's `:prim :invoke`, as any non-closure's).
+   The machine's `(:applyv m)`: the spread arguments written where the
+   first argument was, the fn above them (`x2-stk`), then `:callv`'s
+   dispatch at the count that makes (`vcs2-callv`, shared by both). Proved:
+   vcs2-correct over it (vmx2-proof's call lemmas now over the spread
+   callee, arguments and stack: callv2-eff, callv2-step), s2clk-linear and
+   vm-time-bound (vmx2-cost, vmx2-time) unchanged in statement. exec-vm:
+   the value invariant drops "no value is `:apply`" and asks a list's
+   elements good (so a good seq spreads to good arguments,
+   ex-callee-good); a call is mx2's `:applyv`, its spread the tree's
+   ex-callee whenever the tree enters a closure (ex-mxcall-callee);
+   ex-vm-agree, ex-recur-stays, ex-tr-xwf and ex-vm-runs with apply in
+   them (exec-vmrun's example: (apply g 5 '(6 7)) and (apply g nil) --
+   the rest (6 7) and the arity error -- the tree, mx2 and the VM alike).
+   Not yet: the arrays (vmi, and so the Fortran VM) have no `:applyv`;
+   vmic compiles it as a call and refuses it (ce-err), so vmic-correct and
+   the generated compiler hold as before.
+2c-iv. **Seqs past the list** *(next)*: a seq in the model is only a list
+   (nil the empty one); B_APPLY also walks a vector (by index) and a lazy
+   seq (to_seq, sq_first, sq_rest), the host's today. Needs: the model's
+   seq kinds -- a vector read by index, a lazy seq whose realisation is a
+   constrained function (stated as vmx2's `:prim`: the theorems hold
+   whatever it returns), ex-apwalk over them, its bound (the walk realises
+   no further than req, as it says for lists); the per-kind step decisions
+   generated, B_APPLY's vector/lazy walk through them behind named shims,
+   only the thunk's computation itself the host's (the lazy-seq row's);
+   scripts/fuzz-exec-gen drawing vectors and lazy seqs in apply.
 3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's
    branch (`case_branch`), N_VECTOR/MAP/SET; their nested `exec`s made

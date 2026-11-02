@@ -13,7 +13,7 @@
 
 ; THE VM RUN OF A WELL-FORMED TREE'S TRANSLATION ANSWERS THE TREE'S VALUE,
 ; the program's defs every template's the tree can call (ex-defs-ok), its
-; fns of any arities, variadic ones among them
+; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
   (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (valp (car (ex-ev :m e 0 nil fr fuel))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
@@ -67,4 +67,19 @@
 (defthm ex-example-arity
   (and (equal (mx2 (ex-tr :m (ex-callg nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
        (equal (vcs2-run-program (ex-tr :m (ex-callg nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))
+  :rule-classes nil)
+; apply (2c-iii): (apply g 5 '(6 7)) spreads to (g 5 6 7), the rest (6 7);
+; (apply g nil) to (g), the arity error -- the tree, mx2 (:applyv) and the
+; VM alike
+(defun ex-applyg (vs l)
+  (list 6 0 (list* (list 1 0 nil :apply 0 nil 0 0) (list 14 0 nil *ex-tmv* 0 nil 0 0) (ex-consts (append vs (list l))))
+        nil 0 nil 0 0))
+(assert-event (ex-vwf :m (ex-applyg '(5) '(6 7)) 0 nil nil *ex-defs*))
+(assert-event (equal (car (ex-ev :m (ex-applyg '(5) '(6 7)) 0 nil nil 10)) '(:val 6 7)))
+(assert-event (equal (car (ex-ev :m (ex-applyg nil nil) 0 nil nil 10)) '(:thrown . :arity)))
+(defthm ex-example-apply
+  (and (equal (mx2 (ex-tr :m (ex-applyg '(5) '(6 7)) 0 nil) nil nil *ex-defs* 10) '(:val 6 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-applyg '(5) '(6 7)) 0 nil) *ex-defs* 1000) '(:val 6 7))
+       (equal (mx2 (ex-tr :m (ex-applyg nil nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
+       (equal (vcs2-run-program (ex-tr :m (ex-applyg nil nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))
   :rule-classes nil)

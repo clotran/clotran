@@ -34,8 +34,10 @@
 ; ends an expression at the step that throws.
 
 (defmacro x2-rf () '(mx2 (cadr e) env caps defs fuel))
-(defmacro x2-vs () '(val (mx2-args (cddr e) env caps defs fuel)))
-(defmacro x2-cl () '(pick-arity (cdr (assoc-equal (clo-f (val (x2-rf))) defs)) (len (x2-vs))))
+(defmacro x2-vs0 () '(val (mx2-args (cddr e) env caps defs fuel)))
+(defmacro x2-c () '(x2-fn (car e) (val (x2-rf)) (x2-vs0)))
+(defmacro x2-vs () '(x2-vals (car e) (val (x2-rf)) (x2-vs0)))
+(defmacro x2-cl () '(pick-arity (cdr (assoc-equal (clo-f (x2-c)) defs)) (len (x2-vs))))
 (defmacro x2-benv () '(if (restp (x2-cl)) (split-rest (nfix (car (x2-cl))) (x2-vs)) (x2-vs)))
 
 (mutual-recursion
@@ -64,13 +66,14 @@
                        0)))
      (:mkclo (c+ (s2clk-args (cddr e) env caps defs fuel)
                  (if (valp (mx2-args (cddr e) env caps defs fuel)) 1 0)))
-     (:callv (c+ (s2clk-args (cddr e) env caps defs fuel)
+     ((:callv :applyv)
+             (c+ (s2clk-args (cddr e) env caps defs fuel)
                  (if (valp (mx2-args (cddr e) env caps defs fuel))
                      (c+ (s2clk (cadr e) env caps defs fuel)
                          (if (valp (x2-rf))
-                             (c+ 1 (if (and (clop (val (x2-rf))) (consp (x2-cl)) (not (zp fuel)))
-                                       (c+ (s2clk (cadr (x2-cl)) (x2-benv) (clo-caps (val (x2-rf))) defs (1- fuel))
-                                           (if (valp (mx2 (cadr (x2-cl)) (x2-benv) (clo-caps (val (x2-rf))) defs (1- fuel)))
+                             (c+ 1 (if (and (clop (x2-c)) (consp (x2-cl)) (not (zp fuel)))
+                                       (c+ (s2clk (cadr (x2-cl)) (x2-benv) (clo-caps (x2-c)) defs (1- fuel))
+                                           (if (valp (mx2 (cadr (x2-cl)) (x2-benv) (clo-caps (x2-c)) defs (1- fuel)))
                                                1 0))
                                      0))
                            0))
@@ -117,7 +120,7 @@
      (:let (+ (s2code-len (cadr e)) (s2code-len (caddr e)) 1))
      ((:add :lt) (+ (s2code-len (cadr e)) (s2code-len (caddr e)) 1))
      (:mkclo (+ (s2code-len-args (cddr e)) 1))
-     (:callv (+ (s2code-len-args (cddr e)) (s2code-len (cadr e)) 1))
+     ((:callv :applyv) (+ (s2code-len-args (cddr e)) (s2code-len (cadr e)) 1))
      (:loop (+ (s2code-len-args (cadr e)) (s2code-len (caddr e)) (len (cadr e))))
      (:recur (+ (s2code-len-args (cdr e)) 1))
      (:prim (+ (s2code-len-args (cddr e)) 1))
@@ -151,7 +154,7 @@
                     (list (s2c-ind :m (cadr e) depth cenv self pc nil)
                           (s2c-ind :m (caddr e) (1+ depth) cenv self (+ pc (len ac)) nil))))
       ((:mkclo :prim) (s2c-ind :args (cddr e) depth cenv self pc nil))
-      (:callv (let ((ac (vcs2-compile-args (cddr e) depth cenv self pc)))
+      ((:callv :applyv) (let ((ac (vcs2-compile-args (cddr e) depth cenv self pc)))
                 (list (s2c-ind :args (cddr e) depth cenv self pc nil)
                       (s2c-ind :m (cadr e) (+ depth (len (cddr e))) cenv self (+ pc (len ac)) nil))))
       (:loop (let* ((k (len (cadr e)))
@@ -194,7 +197,7 @@
 
 (defthm vcs2-step-old
   (implies (and (natp (car s))
-                (not (member-equal (car (nth (car s) (car prog))) '(:callv :prim :throw :try :endtry))))
+                (not (member-equal (car (nth (car s) (car prog))) '(:callv :applyv :prim :throw :try :endtry))))
            (equal (vcs2-step prog s) (vcsx-step prog s))))
 
 (defthm vcs2-step-nopc
@@ -285,25 +288,54 @@
 
 ; ---- THE CALL'S STEP, by clause ---------------------------------------------------
 
+; a call's arguments read off the stack are as many as its count
+(defthm len-stk-from (equal (len (stk-from a k stk)) (nfix k)))
+
+(local (in-theory (disable x2-spreads x2-fn x2-vals x2-stk vcs2-callv)))
+
 (defthm s2step-callv
-  (implies (and (sstatep s) (equal (car (sins s)) :callv) (<= (1+ (nfix (cadr (sins s)))) (caddr s)))
+  (implies (and (sstatep s) (member-equal (car (sins s)) '(:callv :applyv)) (<= (1+ (nfix (cadr (sins s)))) (caddr s)))
            (equal (vcs2-step prog s)
-                  (let* ((m (nfix (cadr (sins s)))) (c (nth (1- (caddr s)) (cadddr s))) (fb2 (- (caddr s) (1+ m)))
-                         (cl (pick-arity (cdr (assoc-equal (clo-f c) (cdr prog))) m)))
-                    (cond ((not (clop c))
-                           (let ((a (prim :invoke (cons c (stk-from fb2 m (cadddr s))))))
-                             (if (throwp a)
-                                 (unwind (cdr a) (s-ctl s) (cadddr s))
-                               (list (1+ (car s)) (cadr s) (1+ fb2) (ssetreg fb2 a (cadddr s)) (s-ctl s)))))
-                          ((not (consp cl)) (unwind :arity (s-ctl s) (cadddr s)))
-                          ((not (restp cl)) (list (nfix (cadr cl)) fb2 (caddr s) (cadddr s)
-                                                  (cons (list (1+ (car s)) (cadr s)) (s-ctl s))))
-                          (t (let ((n (nfix (car cl))))
-                               (list (nfix (cadr cl)) fb2 (+ fb2 n 2)
-                                     (update-nth (+ fb2 n 1) c
-                                                 (update-nth (+ fb2 n) (stk-from (+ fb2 n) (- m n) (cadddr s)) (cadddr s)))
-                                     (cons (list (1+ (car s)) (cadr s)) (s-ctl s)))))))))
+                  (let* ((op (car (sins s))) (m (nfix (cadr (sins s)))) (c (nth (1- (caddr s)) (cadddr s)))
+                         (fb2 (- (caddr s) (1+ m))) (vs (stk-from fb2 m (cadddr s))))
+                    (vcs2-callv prog (car s) (cadr s) fb2 (x2-fn op c vs) (x2-vals op c vs) (x2-stk op fb2 c vs (cadddr s))
+                                (s-ctl s)))))
   :hints (("Goal" :in-theory (enable vcs2-step sstatep sreg))))
+
+; ---- APPLY'S SPREAD: the stack it makes ------------------------------------------
+
+(defthm x2-nospread
+  (implies (not (x2-spreads op c vs))
+           (and (equal (x2-fn op c vs) c) (equal (x2-vals op c vs) vs) (equal (x2-stk op k c vs stk) stk)))
+  :hints (("Goal" :in-theory (enable x2-fn x2-vals x2-stk))))
+
+(defthm x2-spreads-clop (implies (x2-spreads op c vs) (clop (x2-fn op c vs)))
+  :hints (("Goal" :in-theory (enable x2-spreads x2-fn))))
+
+(defthm x2-spreads-op (implies (not (equal op :applyv)) (not (x2-spreads op c vs)))
+  :hints (("Goal" :in-theory (enable x2-spreads))))
+
+(defthm nth-x2-put-below
+  (implies (and (natp k) (natp r) (< r k)) (equal (nth r (x2-put k l stk)) (nth r stk))))
+
+(defthm cvals-at-x2-put (implies (natp k) (cvals-at k l (x2-put k l stk))))
+
+(defthm cagree-x2-put (implies (natp k) (cagree (x2-put k l stk) stk k))
+  :hints (("Goal" :in-theory (enable cagree))))
+
+(defthm cvals-at-append
+  (implies (natp k)
+           (equal (cvals-at k (append a b) x) (and (cvals-at k a x) (cvals-at (+ k (len a)) b x)))))
+
+(defthm x2-stk-facts
+  (implies (and (natp k) (cvals-at k vs stk) (true-listp vs) (equal (nth (+ k (len vs)) stk) c))
+           (and (cagree (x2-stk op k c vs stk) stk k)
+                (cvals-at k (x2-vals op c vs) (x2-stk op k c vs stk))
+                (equal (nth (+ k (len (x2-vals op c vs))) (x2-stk op k c vs stk)) (x2-fn op c vs))
+                (true-listp (x2-vals op c vs))))
+  :hints (("Goal" :cases ((x2-spreads op c vs)))
+          ("Subgoal 1" :in-theory (enable x2-stk x2-vals x2-fn x2-spreads x2-seqp)
+                       :use ((:instance cvals-at-x2-put (l (append (x2-vals op c vs) (list (car vs)))))))))
 
 ; ---- THE FUNCTION TABLE: an entry per clause, its code where it says -----------
 
@@ -446,9 +478,9 @@
                   (mx2-ind :m (caddr e) (append env (list (val (mx2 (cadr e) env caps defs fuel)))) caps defs fuel)))
       ((:add :lt) (list (mx2-ind :m (cadr e) env caps defs fuel) (mx2-ind :m (caddr e) env caps defs fuel)))
       ((:mkclo :prim) (mx2-ind :args (cddr e) env caps defs fuel))
-      (:callv (list (mx2-ind :args (cddr e) env caps defs fuel) (mx2-ind :m (cadr e) env caps defs fuel)
+      ((:callv :applyv) (list (mx2-ind :args (cddr e) env caps defs fuel) (mx2-ind :m (cadr e) env caps defs fuel)
                     (if (zp fuel) nil
-                      (mx2-ind :m (cadr (x2-cl)) (x2-benv) (clo-caps (val (x2-rf))) defs (1- fuel)))))
+                      (mx2-ind :m (cadr (x2-cl)) (x2-benv) (clo-caps (x2-c)) defs (1- fuel)))))
       ((:loop :recur) (mx2-ind :args (if (eq (car e) :loop) (cadr e) (cdr e)) env caps defs fuel))
       (:throw (mx2-ind :m (cadr e) env caps defs fuel))
       (:try (list (mx2-ind :m (cadr e) env caps defs fuel)
@@ -571,13 +603,13 @@
   :hints (("Goal" :in-theory (disable nth update-nth) :cases ((natp self)))))
 
 (defthm s2good-other
-  (implies (not (member-equal (car e) '(:const :local :capt :if :let :add :lt :mkclo :callv :loop :recur
+  (implies (not (member-equal (car e) '(:const :local :capt :if :let :add :lt :mkclo :callv :applyv :loop :recur
                                         :prim :throw :try)))
            (s2good e depth cenv self caps s env defs fuel prog lc))
   :hints (("Goal" :in-theory (disable nth update-nth))))
 
 (defthm s2good-leaf
-  (implies (not (member-equal (car e) '(:if :let :add :lt :mkclo :callv :loop :recur :prim :throw :try)))
+  (implies (not (member-equal (car e) '(:if :let :add :lt :mkclo :callv :applyv :loop :recur :prim :throw :try)))
            (s2good e depth cenv self caps s env defs fuel prog lc))
   :hints (("Goal" :cases ((equal (car e) :const) (equal (car e) :local) (equal (car e) :capt))
                   :in-theory (union-theories '(s2good-const s2good-local s2good-capt s2good-other member-equal)
@@ -2071,11 +2103,17 @@
 
 (defmacro c2-n () '(len (cddr e)))
 (defmacro c2-ra () '(mx2-args (cddr e) env caps defs fuel))
-(defmacro c2-vs () '(cdr (mx2-args (cddr e) env caps defs fuel)))
+(defmacro c2-vs0 () '(cdr (mx2-args (cddr e) env caps defs fuel)))
 (defmacro c2-s1 () '(vcs2-run prog s (s2clk-args (cddr e) env caps defs fuel)))
 (defmacro c2-rf () '(mx2 (cadr e) env caps defs fuel))
-(defmacro c2-c () '(cdr (mx2 (cadr e) env caps defs fuel)))
+(defmacro c2-c0 () '(cdr (mx2 (cadr e) env caps defs fuel)))
 (defmacro c2-s2 () '(vcs2-run prog (c2-s1) (s2clk (cadr e) env caps defs fuel)))
+; the callee and its arguments once apply has spread them, and the stack
+(defmacro c2-c () '(x2-fn (car e) (c2-c0) (c2-vs0)))
+(defmacro c2-vs () '(x2-vals (car e) (c2-c0) (c2-vs0)))
+(defmacro c2-m () '(len (c2-vs)))
+(defmacro c2-stk () '(x2-stk (car e) (caddr s) (c2-c0) (c2-vs0) (cadddr (c2-s2))))
+(defmacro c2-op () '(or (equal (car e) :callv) (equal (car e) :applyv)))
 (defmacro c2-cls () '(cdr (assoc-equal (clo-f (c2-c)) defs)))
 (defmacro c2-ents () '(cdr (assoc-equal (clo-f (c2-c)) (cdr prog))))
 (defmacro c2-cl () '(pick-arity (c2-cls) (len (c2-vs))))
@@ -2098,13 +2136,13 @@
     (list (nfix (cadr en)) sp (+ sp n 1) stk (cons crec ctl))))
 (in-theory (disable call-nl call-benv call-frame))
 
-(defmacro c2-s3 () '(call-frame (c2-cl) (c2-en) (c2-c) (c2-n) (caddr s) (cadddr (c2-s2)) (c2-crec) (s-ctl s)))
+(defmacro c2-s3 () '(call-frame (c2-cl) (c2-en) (c2-c) (c2-m) (caddr s) (c2-stk) (c2-crec) (s-ctl s)))
 (defmacro c2-bclk () '(s2clk (cadr (c2-cl)) (c2-benv) (clo-caps (c2-c)) defs (1- fuel)))
 (defmacro c2-r () '(mx2 (cadr (c2-cl)) (c2-benv) (clo-caps (c2-c)) defs (1- fuel)))
 (defmacro c2-s4 () '(vcs2-run prog (c2-s3) (c2-bclk)))
 
 (defthm mx2-callv
-  (implies (equal (car e) :callv)
+  (implies (c2-op)
            (equal (mx2 e env caps defs fuel)
                   (cond ((not (valp (c2-ra))) (c2-ra))
                         ((not (valp (c2-rf))) (c2-rf))
@@ -2118,11 +2156,11 @@
 (in-theory (disable mx2-callv))
 
 (defthm callv2-code
-  (implies (and (equal (car e) :callv) (ccode-at code pc (vcs2-compile e depth cenv self pc lc)) (natp pc))
+  (implies (and (c2-op) (ccode-at code pc (vcs2-compile e depth cenv self pc lc)) (natp pc))
            (and (ccode-at code pc (vcs2-compile-args (cddr e) depth cenv self pc))
                 (ccode-at code (+ pc (s2code-len-args (cddr e)))
                           (vcs2-compile (cadr e) (+ depth (c2-n)) cenv self (+ pc (s2code-len-args (cddr e))) nil))
-                (equal (car (nth (+ pc (s2code-len-args (cddr e)) (s2code-len (cadr e))) code)) :callv)
+                (equal (car (nth (+ pc (s2code-len-args (cddr e)) (s2code-len (cadr e))) code)) (car e))
                 (equal (cadr (nth (+ pc (s2code-len-args (cddr e)) (s2code-len (cadr e))) code)) (c2-n))
                 (equal (s2code-len e) (+ (s2code-len-args (cddr e)) (s2code-len (cadr e)) 1))))
   :rule-classes nil
@@ -2130,7 +2168,7 @@
 
 ; the clock, from whatever state the call's step makes
 (defthm callv2-clock-gen
-  (implies (and (equal (car e) :callv) (equal (vcs2-step prog (c2-s2)) s3))
+  (implies (and (c2-op) (equal (vcs2-step prog (c2-s2)) s3))
            (equal (vcs2-run prog s (s2clk e env caps defs fuel))
                   (cond ((not (valp (c2-ra))) (c2-s1))
                         ((not (valp (c2-rf))) (c2-s2))
@@ -2141,12 +2179,12 @@
   :hints (("Goal" :expand ((s2clk e env caps defs fuel)) :in-theory (e/d (call-benv) (c+ pick-arity split-rest)))))
 
 (defthm callv2-wf-parts
-  (implies (and (equal (car e) :callv) (x2wf e n k))
+  (implies (and (c2-op) (x2wf e n k))
            (and (x2wf (cadr e) n nil) (x2wf-args (cddr e) n)))
   :rule-classes nil)
 
 (defmacro c2-hyps ()
-  '(and (equal (car e) :callv) (s2-hyps e depth cenv self caps s env defs prog lc)
+  '(and (c2-op) (s2-hyps e depth cenv self caps s env defs prog lc)
         (s2good-args (cddr e) depth cenv self caps s env defs fuel prog)))
 
 (defthm callv2-args
@@ -2158,8 +2196,8 @@
                               (equal (caddr (c2-s1)) (+ (caddr s) (c2-n)))
                               (equal (s-ctl (c2-s1)) (s-ctl s))
                               (cagree (cadddr (c2-s1)) (cadddr s) (caddr s))
-                              (cvals-at (caddr s) (c2-vs) (cadddr (c2-s1)))
-                              (equal (len (c2-vs)) (c2-n)) (true-listp (c2-vs))))
+                              (cvals-at (caddr s) (c2-vs0) (cadddr (c2-s1)))
+                              (equal (len (c2-vs0)) (c2-n)) (true-listp (c2-vs0))))
                 (s2-thr s (c2-ra) (c2-s1))
                 (not (recurp (c2-ra)))))
   :rule-classes nil
@@ -2206,20 +2244,48 @@
                 (equal (cadr (c2-s2)) (cadr s)) (equal (caddr (c2-s2)) (+ (caddr s) (c2-n) 1))
                 (equal (s-ctl (c2-s2)) (s-ctl s))
                 (cagree (cadddr (c2-s2)) (cadddr s) (caddr s))
-                (cvals-at (caddr s) (c2-vs) (cadddr (c2-s2)))
-                (equal (nth (+ (caddr s) (c2-n)) (cadddr (c2-s2))) (c2-c))
-                (equal (car (nth (c2-pc2) (car prog))) :callv)
+                (cvals-at (caddr s) (c2-vs0) (cadddr (c2-s2)))
+                (equal (nth (+ (caddr s) (c2-n)) (cadddr (c2-s2))) (c2-c0))
+                (equal (car (nth (c2-pc2) (car prog))) (car e))
                 (equal (cadr (nth (c2-pc2) (car prog))) (c2-n))))
   :rule-classes nil
   :hints (("Goal" :in-theory (c2-thy) :do-not-induct t
                   :use ((:instance callv2-args) (:instance callv2-fn) (:instance (:definition s2-hyps))
                         (:instance callv2-code (code (car prog)) (pc (car s)))
                         (:instance s2-val-open (e (cadr e)) (s (c2-s1)) (r (c2-rf)) (s2 (c2-s2)))
-                        (:instance cagree-below-push (a (cadddr (c2-s2))) (b (cadddr (c2-s1))) (sp (+ (caddr s) (c2-n))) (v (c2-c)))
+                        (:instance cagree-below-push (a (cadddr (c2-s2))) (b (cadddr (c2-s1))) (sp (+ (caddr s) (c2-n))) (v (c2-c0)))
                         (:instance cagree-smaller (a (cadddr (c2-s2))) (b (cadddr (c2-s1))) (h (+ (caddr s) (c2-n))) (g (caddr s)))
                         (:instance cagree-trans (a (cadddr (c2-s2))) (b (cadddr (c2-s1))) (c (cadddr s)) (h (caddr s)))
                         (:instance callv-args-stay (r2 (cadddr (c2-s2))) (r1 (cadddr (c2-s1)))
-                                   (g (+ (caddr s) (c2-n))) (w (c2-c)) (k (caddr s)) (vs (c2-vs)))))))
+                                   (g (+ (caddr s) (c2-n))) (w (c2-c0)) (k (caddr s)) (vs (c2-vs0)))))))
+
+; the spread: the arguments where the first one was, the fn above them, the
+; stack below as it was; nothing spread when what is called is no closure
+(defthm callv2-eff
+  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)))
+           (and (cagree (c2-stk) (cadddr s) (caddr s))
+                (cvals-at (caddr s) (c2-vs) (c2-stk))
+                (equal (nth (+ (caddr s) (c2-m)) (c2-stk)) (c2-c))
+                (true-listp (c2-vs))
+                (implies (not (clop (c2-c)))
+                         (and (equal (c2-c) (c2-c0)) (equal (c2-vs) (c2-vs0)) (equal (c2-stk) (cadddr (c2-s2)))))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (c2-thy) :do-not-induct t
+                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
+                        (:instance x2-stk-facts (op (car e)) (k (caddr s)) (c (c2-c0)) (vs (c2-vs0)) (stk (cadddr (c2-s2))))
+                        (:instance x2-nospread (op (car e)) (k (caddr s)) (c (c2-c0)) (vs (c2-vs0)) (stk (cadddr (c2-s2))))
+                        (:instance x2-spreads-clop (op (car e)) (c (c2-c0)) (vs (c2-vs0)))
+                        (:instance cagree-trans (a (c2-stk)) (b (cadddr (c2-s2))) (c (cadddr s)) (h (caddr s)))))))
+
+; the call's step: the dispatch on the spread call
+(defthm callv2-step
+  (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)))
+           (equal (vcs2-step prog (c2-s2))
+                  (vcs2-callv prog (c2-pc2) (cadr s) (caddr s) (c2-c) (c2-vs) (c2-stk) (s-ctl s))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (union-theories '(s2step-callv member-equal) (c2-thy)) :do-not-induct t
+                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
+                        (:instance stk-from-vals (a (caddr s)) (vs (c2-vs0)) (stk (cadddr (c2-s2))))))))
 
 ; NOT ONE OF THE MACHINE'S CLOSURES: the runtime's call, (prim :invoke
 ; (c . args)), its answer where the arguments began -- or its throw
@@ -2232,9 +2298,9 @@
                       (unwind (cdr (c2-a)) (s-ctl s) (cadddr (c2-s2)))
                     (list (1+ (c2-pc2)) (cadr s) (1+ (caddr s)) (update-nth (caddr s) (c2-a) (cadddr (c2-s2))) (s-ctl s)))))
   :rule-classes nil
-  :hints (("Goal" :in-theory (union-theories '(s2step-callv ssetreg) (c2-thy)) :do-not-induct t
-                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
-                        (:instance stk-from-vals (a (caddr s)) (vs (c2-vs)) (stk (cadddr (c2-s2))))))))
+  :hints (("Goal" :in-theory (union-theories '(vcs2-callv ssetreg) (c2-thy)) :do-not-induct t
+                  :use ((:instance callv2-step) (:instance callv2-eff) (:instance callv2-at-call)
+                        (:instance (:definition s2-hyps))))))
 
 (defthm callv2-invoke-val
   (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (not (clop (c2-c))) (not (throwp (c2-a))))
@@ -2260,21 +2326,23 @@
   (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (not (consp (c2-cl))))
            (thrown-at s (cdr (mx2 e env caps defs fuel)) (vcs2-step prog (c2-s2))))
   :rule-classes nil
-  :hints (("Goal" :in-theory (union-theories '(s2step-callv mx2-callv) (c2-thy)) :do-not-induct t
-                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
-                        (:instance pick-arity-corr (cls (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) defs))) (ents (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) (cdr prog)))) (code (car prog)) (m (len (cdr (mx2-args (cddr e) env caps defs fuel))))) (:instance s2fns-ok-necc (name (clo-f (cdr (mx2 (cadr e) env caps defs fuel)))))
-                        (:instance unwind-thrown-at (s (c2-s2)) (v :arity))
-                        (:instance thrown-at-transfer (s1 (c2-s2)) (v (cdr (mx2 e env caps defs fuel)))
-                                   (s2 (vcs2-step prog (c2-s2))))))))
+  :hints (("Goal" :in-theory (union-theories '(vcs2-callv mx2-callv) (c2-thy)) :do-not-induct t
+                  :use ((:instance callv2-step) (:instance callv2-eff) (:instance callv2-at-call) (:instance (:definition s2-hyps))
+                        (:instance pick-arity-corr (cls (c2-cls)) (ents (c2-ents)) (code (car prog)) (m (c2-m)))
+                        (:instance s2fns-ok-necc (name (clo-f (c2-c))))
+                        (:instance unwind-thrown-at (s (list (c2-pc2) (cadr s) (+ (caddr s) (c2-n) 1) (c2-stk) (s-ctl s))) (v :arity))
+                        (:instance thrown-at-transfer (s1 (list (c2-pc2) (cadr s) (+ (caddr s) (c2-n) 1) (c2-stk) (s-ctl s)))
+                                   (v (cdr (mx2 e env caps defs fuel))) (s2 (vcs2-step prog (c2-s2))))))))
 
 ; A CLAUSE: its frame where the first argument is, a return record
 (defthm callv2-s3
   (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (consp (c2-cl)))
            (equal (vcs2-step prog (c2-s2)) (c2-s3)))
   :rule-classes nil
-  :hints (("Goal" :in-theory (union-theories '(s2step-callv call-frame) (c2-thy)) :do-not-induct t
-                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
-                        (:instance pick-arity-corr (cls (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) defs))) (ents (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) (cdr prog)))) (code (car prog)) (m (len (cdr (mx2-args (cddr e) env caps defs fuel))))) (:instance s2fns-ok-necc (name (clo-f (cdr (mx2 (cadr e) env caps defs fuel)))))))))
+  :hints (("Goal" :in-theory (union-theories '(vcs2-callv call-frame) (c2-thy)) :do-not-induct t
+                  :use ((:instance callv2-step) (:instance callv2-eff) (:instance (:definition s2-hyps))
+                        (:instance pick-arity-corr (cls (c2-cls)) (ents (c2-ents)) (code (car prog)) (m (c2-m)))
+                        (:instance s2fns-ok-necc (name (clo-f (c2-c))))))))
 
 (defthm vcs2-body-code
   (implies (and (ccode-at code pc (vcs2-body cl pc)) (natp pc))
@@ -2288,8 +2356,8 @@
 ; the clause the call runs: what the table and the definitions say of it
 (defthm callv2-clause
   (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (consp (c2-cl)))
-           (and (implies (not (restp (c2-cl))) (equal (c2-n0) (c2-n)))
-                (implies (restp (c2-cl)) (<= (c2-n0) (c2-n)))
+           (and (implies (not (restp (c2-cl))) (equal (c2-n0) (c2-m)))
+                (implies (restp (c2-cl)) (<= (c2-n0) (c2-m)))
                 (natp (cadr (c2-en)))
                 (ccode-at (car prog) (cadr (c2-en)) (vcs2-body (c2-cl) (cadr (c2-en))))
                 (x2wf (cadr (c2-cl)) (len (c2-benv)) nil)
@@ -2298,7 +2366,9 @@
   :hints (("Goal" :in-theory (union-theories '(pick-arity-fixed-len pick-arity-rest-len len-split-rest pick-arity-natp call-benv call-nl)
                                              (c2-thy))
                   :do-not-induct t
-                  :use ((:instance callv2-args) (:instance (:definition s2-hyps)) (:instance pick-arity-corr (cls (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) defs))) (ents (cdr (assoc-equal (clo-f (cdr (mx2 (cadr e) env caps defs fuel))) (cdr prog)))) (code (car prog)) (m (len (cdr (mx2-args (cddr e) env caps defs fuel))))) (:instance s2fns-ok-necc (name (clo-f (cdr (mx2 (cadr e) env caps defs fuel)))))
+                  :use ((:instance callv2-eff) (:instance (:definition s2-hyps))
+                        (:instance pick-arity-corr (cls (c2-cls)) (ents (c2-ents)) (code (car prog)) (m (c2-m)))
+                        (:instance s2fns-ok-necc (name (clo-f (c2-c))))
                         (:instance pick-body-wf-fixed (name (clo-f (c2-c))) (vs (c2-vs)))
                         (:instance pick-body-wf-rest (name (clo-f (c2-c))) (vs (c2-vs)))
                         (:instance pick-arity-natp (name (clo-f (c2-c))) (vs (c2-vs)))
@@ -2308,23 +2378,23 @@
 ; the callee's hypotheses in the frame the call made: a fixed clause
 (defthm callv2-body-hyps-fixed
   (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (consp (c2-cl)) (not (restp (c2-cl))))
-           (s2-hyps (cadr (c2-cl)) (1+ (c2-n)) (count-from 0 (c2-n)) (c2-n) (clo-caps (c2-c))
-                    (list (nfix (cadr (c2-en))) (caddr s) (+ (caddr s) (c2-n) 1) (cadddr (c2-s2)) (cons (c2-crec) (s-ctl s)))
+           (s2-hyps (cadr (c2-cl)) (1+ (c2-m)) (count-from 0 (c2-m)) (c2-m) (clo-caps (c2-c))
+                    (list (nfix (cadr (c2-en))) (caddr s) (+ (caddr s) (c2-m) 1) (c2-stk) (cons (c2-crec) (s-ctl s)))
                     (c2-vs) defs prog nil))
   :rule-classes nil
   :hints (("Goal" :in-theory (union-theories '(s2-hyps cself-ok lc-ok lck handlers-ok-call-record handlers-ok-bigger call-benv call-nl)
                                              (c2-thy))
                   :do-not-induct t
-                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance callv2-clause)
+                  :use ((:instance callv2-eff) (:instance callv2-clause)
                         (:instance (:definition s2-hyps))
                         (:instance vcs2-body-code (code (car prog)) (pc (cadr (c2-en))) (cl (c2-cl)))
-                        (:instance cenv-ok-count-from (i 0) (n (c2-n)) (base (caddr s)) (vs (c2-vs))
-                                   (regs (cadddr (c2-s2))) (g (1+ (c2-n))))))))
+                        (:instance cenv-ok-count-from (i 0) (n (c2-m)) (base (caddr s)) (vs (c2-vs))
+                                   (regs (c2-stk)) (g (1+ (c2-m))))))))
 
 (defmacro c2-stk3r ()
   '(update-nth (+ (caddr s) (c2-n0) 1) (c2-c)
-               (update-nth (+ (caddr s) (c2-n0)) (stk-from (+ (caddr s) (c2-n0)) (- (c2-n) (c2-n0)) (cadddr (c2-s2)))
-                           (cadddr (c2-s2)))))
+               (update-nth (+ (caddr s) (c2-n0)) (stk-from (+ (caddr s) (c2-n0)) (- (c2-m) (c2-n0)) (c2-stk))
+                           (c2-stk))))
 
 ; a variadic clause: the rest packed
 (defthm callv2-body-hyps-rest
@@ -2336,10 +2406,10 @@
   :hints (("Goal" :in-theory (union-theories '(s2-hyps cself-ok lc-ok lck handlers-ok-call-record handlers-ok-bigger call-benv call-nl)
                                              (c2-thy))
                   :do-not-induct t
-                  :use ((:instance callv2-args) (:instance callv2-at-call) (:instance callv2-clause)
+                  :use ((:instance callv2-eff) (:instance callv2-clause)
                         (:instance (:definition s2-hyps))
                         (:instance vcs2-body-code (code (car prog)) (pc (cadr (c2-en))) (cl (c2-cl)))
-                        (:instance rest-frame-vals (k (caddr s)) (n0 (c2-n0)) (vs (c2-vs)) (stk (cadddr (c2-s2))) (c (c2-c)))
+                        (:instance rest-frame-vals (k (caddr s)) (n0 (c2-n0)) (vs (c2-vs)) (stk (c2-stk)) (c (c2-c)))
                         (:instance cenv-ok-count-from (i 0) (n (1+ (c2-n0))) (base (caddr s)) (vs (split-rest (c2-n0) (c2-vs)))
                                    (regs (c2-stk3r)) (g (+ 2 (c2-n0))))))))
 
@@ -2363,12 +2433,12 @@
   :rule-classes nil
   :hints (("Goal" :in-theory (union-theories '(call-frame call-nl) (c2-thy)) :do-not-induct t
                   :cases ((restp (c2-cl)))
-                  :use ((:instance callv2-at-call) (:instance callv2-clause) (:instance (:definition s2-hyps))
-                        (:instance cagree-update-above (a (cadddr (c2-s2))) (b (cadddr s)) (g (+ (caddr s) (c2-n0))) (h (caddr s))
-                                   (w (stk-from (+ (caddr s) (c2-n0)) (- (c2-n) (c2-n0)) (cadddr (c2-s2)))))
+                  :use ((:instance callv2-eff) (:instance callv2-clause) (:instance (:definition s2-hyps))
+                        (:instance cagree-update-above (a (c2-stk)) (b (cadddr s)) (g (+ (caddr s) (c2-n0))) (h (caddr s))
+                                   (w (stk-from (+ (caddr s) (c2-n0)) (- (c2-m) (c2-n0)) (c2-stk))))
                         (:instance cagree-update-above
-                                   (a (update-nth (+ (caddr s) (c2-n0)) (stk-from (+ (caddr s) (c2-n0)) (- (c2-n) (c2-n0)) (cadddr (c2-s2)))
-                                                  (cadddr (c2-s2))))
+                                   (a (update-nth (+ (caddr s) (c2-n0)) (stk-from (+ (caddr s) (c2-n0)) (- (c2-m) (c2-n0)) (c2-stk))
+                                                  (c2-stk)))
                                    (b (cadddr s)) (g (+ (caddr s) (c2-n0) 1)) (h (caddr s)) (w (c2-c)))))))
 
 ; the callee's outcome, in the frame
@@ -2473,7 +2543,7 @@
 
 ; THE CALL
 (defthm s2good-callv
-  (implies (and (equal (car e) :callv)
+  (implies (and (c2-op)
                 (s2good-args (cddr e) depth cenv self caps s env defs fuel prog)
                 (s2good (cadr e) (+ depth (c2-n)) cenv self caps (c2-s1) env defs fuel prog nil)
                 (implies (and (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (consp (c2-cl)) (not (zp fuel)))
@@ -2523,7 +2593,7 @@
       ((:add :lt) (list (s2ind :m (cadr e) depth cenv self caps s env defs fuel prog nil nil)
                         (s2ind :m (caddr e) (1+ depth) cenv self caps (b2-s1) env defs fuel prog nil nil)))
       ((:mkclo :prim) (s2ind :args (cddr e) depth cenv self caps s env defs fuel prog nil nil))
-      (:callv (list (s2ind :args (cddr e) depth cenv self caps s env defs fuel prog nil nil)
+      ((:callv :applyv) (list (s2ind :args (cddr e) depth cenv self caps s env defs fuel prog nil nil)
                     (s2ind :m (cadr e) (+ depth (c2-n)) cenv self caps (c2-s1) env defs fuel prog nil nil)
                     (if (and (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (consp (c2-cl)) (not (zp fuel)))
                         (s2ind :m (cadr (c2-cl)) (1+ (c2-nl)) (count-from 0 (c2-nl)) (c2-nl) (clo-caps (c2-c)) (c2-s3)

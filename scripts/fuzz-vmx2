@@ -33,6 +33,7 @@
 (def args (apply hash-map (remove #{"-x" "-i" "-xi" "-xc"} *command-line-args*)))
 ;; --emit FILE: write the generated programs as EDN and stop (scripts/fuzz-vm-gen runs them)
 (def emit (get args "--emit"))
+(def apply-ok (not (or arrays emit)))
 (def n (parse-long (get args "-n" "200")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def state (atom seed))
@@ -91,8 +92,19 @@
       6 (let [[f [a c]] (nth (vec fns) (rnd (count fns)))]
           (list* :callv (list* :mkclo f (rep c #(gen (dec depth) nl nc nil)))
                  (rep a #(list :const (rnd 6)))))
-      ;; a closure made of the locals, called
-      7 (list :callv (list :mkclo 'addc (gen (dec depth) nl nc nil)) (gen (dec depth) nl nc nil))
+      ;; a closure made of the locals, called; or (not on the arrays, which
+      ;; have no :applyv yet) apply's spread call -- of a vmx2 fn on a few
+      ;; values and a list, the wrong counts included, or of what is no
+      ;; closure, or :applyv of no apply
+      7 (if (and apply-ok (zero? (rnd 2)))
+          (let [[f as] (nth (vec fns2) (rnd (count fns2)))
+                lst (list :const (rep (rnd 3) #(rnd 5)))]
+            (case (rnd 4)
+              (0 1) (list* :applyv (list :const :apply) (list :mkclo f)
+                           (concat (rep (rnd 2) #(gen (dec depth) nl nc nil)) [lst]))
+              2 (list :applyv (list :const :apply) (list :const (rnd 3)) lst)
+              3 (list* :applyv (list :mkclo f) (rep (nth as (rnd (count as))) #(list :const (rnd 5))))))
+          (list :callv (list :mkclo 'addc (gen (dec depth) nl nc nil)) (gen (dec depth) nl nc nil)))
       (8 9) (case (rnd 8)
           0 (list :throw (gen (dec depth) nl nc nil))
           1 (list :try (gen (dec depth) nl nc nil) (gen (dec depth) (inc nl) nc nil))

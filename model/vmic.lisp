@@ -25,7 +25,8 @@
 ;
 ; A program vmx2 compiles to something the arrays cannot hold -- a
 ; constant operand that is not a small natural, a local past the
-; environment, a function named other than by its id -- sets ce-err and
+; environment, a function named other than by its id, apply's spread
+; call (:applyv: vmi has no instruction for it yet) -- sets ce-err and
 ; is not run.
 
 (in-package "ACL2")
@@ -91,7 +92,7 @@
            ((rt-is op :let) (+ (vmic-size (rcadr e)) (vmic-size (rcaddr e)) 1))
            ((or (rt-is op :add) (rt-is op :lt)) (+ (vmic-size (rcadr e)) (vmic-size (rcaddr e)) 1))
            ((rt-is op :mkclo) (+ (vmic-size-args (rcddr e)) 1))
-           ((rt-is op :callv) (+ (vmic-size-args (rcddr e)) (vmic-size (rcadr e)) 1))
+           ((or (rt-is op :callv) (rt-is op :applyv)) (+ (vmic-size-args (rcddr e)) (vmic-size (rcadr e)) 1))
            ((rt-is op :loop) (+ (vmic-size-args (rcadr e)) (vmic-size (rcaddr e)) (rt-len (rcadr e))))
            ((rt-is op :recur) (+ (vmic-size-args (rt-cdr e)) 1))
            ((rt-is op :prim) (+ (vmic-size-args (rcddr e)) 1))
@@ -148,11 +149,14 @@
            (if (< f 0)
                (let ((vce (vce-fail vce))) (mv (1+ pa) vmi vce))
              (let ((vmi (vmic-put pa 8 f (rt-len (rcddr e)) 0 nil vmi))) (mv (1+ pa) vmi vce))))))
-      ((rt-is op :callv)
+      ;; apply's spread call compiled as a call, and refused: the arrays have
+      ;; no :applyv yet (exec-PLAN 2c-iii)
+      ((or (rt-is op :callv) (rt-is op :applyv))
        (let ((k (rt-len (rcddr e))))
          (mv-let (pa vmi vce) (vmic-compile-args (rcddr e) depth n self pc vmi vce)
            (mv-let (pb vmi vce) (vmic-compile (rcadr e) (+ depth k) n self pa -1 0 0 vmi vce)
-             (let ((vmi (vmic-put pb 10 k 0 0 nil vmi))) (mv (1+ pb) vmi vce))))))
+             (let* ((vmi (vmic-put pb 10 k 0 0 nil vmi)) (vce (if (rt-is op :applyv) (vce-fail vce) vce)))
+               (mv (1+ pb) vmi vce))))))
       ((rt-is op :loop)
        (let ((k (rt-len (rcadr e))))
          (mv-let (head vmi vce) (vmic-compile-args (rcadr e) depth n self pc vmi vce)

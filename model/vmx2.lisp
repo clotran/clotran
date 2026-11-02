@@ -17,6 +17,15 @@
 ;   so a call of a builtin, a Var or a fn the machine did not compile is a
 ;   call like any other, and the runtime decides what it is.
 ;
+;   APPLY. The value :apply is clojure.core/apply. (:applyv f e1 .. en) is
+;   :callv's call, but when f's value is apply, its first argument a
+;   closure and its last a seq -- the model's list, no closure -- it is the
+;   call of that closure on the arguments between and the seq's elements
+;   (apply's spread, IFn.applyTo): a call whose head may be apply, which
+;   only the head's value tells. Any other call of apply -- of a builtin,
+;   of no fn, of what is no seq, with fewer than two arguments -- is the
+;   runtime's, as any non-closure's call is.
+;
 ;   THROW AND TRY. (:throw e); (:try body handler), the handler's new
 ;   local the thrown value. A call of a closure with no clause of its
 ;   arity THROWS :arity, so a try catches it, as clj's ArityException is
@@ -28,6 +37,10 @@
 ; THE MACHINE adds to vmx.lisp's:
 ;   (:callv m)        as before, by the clause the arity picks; a variadic
 ;                     clause's extra values packed into one list in place
+;   (:applyv m)       as :callv, but when the closure is apply (and its
+;                     arguments spread, as above) the last value's elements
+;                     put in its place, the fn above them, and :callv's
+;                     dispatch at the count that makes
 ;   (:prim op n)      n values popped, the runtime's answer pushed
 ;   (:throw)          the top value thrown
 ;   (:try h d)        a handler record (:h h fb d) on the control stack
@@ -67,6 +80,14 @@
 ; a variadic clause's locals: its first n arguments, then the rest as one list
 (defun split-rest (n vs) (append (take n vs) (list (nthcdr n vs))))
 
+; ---- APPLY: a call's callee and arguments once apply has spread them ------------
+
+(defun x2-seqp (l) (and (true-listp l) (not (clop l))))
+(defun x2-spreads (op c vs)
+  (and (eq op :applyv) (eq c :apply) (consp vs) (consp (cdr vs)) (clop (car vs)) (x2-seqp (car (last vs)))))
+(defun x2-fn (op c vs) (if (x2-spreads op c vs) (car vs) c))
+(defun x2-vals (op c vs) (if (x2-spreads op c vs) (append (butlast (cdr vs) 1) (car (last (cdr vs)))) vs))
+
 ; ---- THE MEANING --------------------------------------------------------------
 ;
 ; An answer is (:val . v), (:recur . vs), (:thrown . v) or (:out).
@@ -97,21 +118,24 @@
                   (t (cons :val (bool (< (rfix (val ra)) (rfix (val rb)))))))))))
      (:mkclo (let ((rs (mx2-args (cddr e) env caps defs fuel)))
                (if (valp rs) (cons :val (clo (cadr e) (val rs))) rs)))
-     (:callv (let ((rs (mx2-args (cddr e) env caps defs fuel)))
-               (if (not (valp rs))
-                   rs
-                 (let ((rf (mx2 (cadr e) env caps defs fuel)))
-                   (cond ((not (valp rf)) rf)
-                         ((not (clop (val rf)))
-                          (let ((a (prim :invoke (cons (val rf) (val rs)))))
-                            (if (throwp a) (cons :thrown (cdr a)) (cons :val a))))
-                         (t (let* ((cls (cdr (assoc-equal (clo-f (val rf)) defs)))
-                                   (cl (pick-arity cls (len (val rs)))))
-                              (cond ((not (consp cl)) (cons :thrown :arity))
-                                    ((zp fuel) (list :out))
-                                    (t (mx2 (cadr cl)
-                                            (if (restp cl) (split-rest (nfix (car cl)) (val rs)) (val rs))
-                                            (clo-caps (val rf)) defs (1- fuel)))))))))))
+     ((:callv :applyv)
+      (let ((rs (mx2-args (cddr e) env caps defs fuel)))
+        (if (not (valp rs))
+            rs
+          (let ((rf (mx2 (cadr e) env caps defs fuel)))
+            (if (not (valp rf))
+                rf
+              (let ((c (x2-fn (car e) (val rf) (val rs))) (vs (x2-vals (car e) (val rf) (val rs))))
+                (if (not (clop c))
+                    (let ((a (prim :invoke (cons c vs))))
+                      (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))
+                  (let* ((cls (cdr (assoc-equal (clo-f c) defs)))
+                         (cl (pick-arity cls (len vs))))
+                    (cond ((not (consp cl)) (cons :thrown :arity))
+                          ((zp fuel) (list :out))
+                          (t (mx2 (cadr cl)
+                                  (if (restp cl) (split-rest (nfix (car cl)) vs) vs)
+                                  (clo-caps c) defs (1- fuel))))))))))))
      (:loop (let ((ri (mx2-args (cadr e) env caps defs fuel)))
               (if (valp ri) (mx2-loop e env (val ri) caps defs fuel) ri)))
      (:recur (let ((rs (mx2-args (cdr e) env caps defs fuel)))
@@ -160,7 +184,7 @@
      (:let (and (x2wf (cadr e) n nil) (x2wf (caddr e) (1+ (nfix n)) k)))
      ((:add :lt) (and (x2wf (cadr e) n nil) (x2wf (caddr e) n nil)))
      (:mkclo (x2wf-args (cddr e) n))
-     (:callv (and (x2wf (cadr e) n nil) (x2wf-args (cddr e) n)))
+     ((:callv :applyv) (and (x2wf (cadr e) n nil) (x2wf-args (cddr e) n)))
      (:loop (and (true-listp (cadr e)) (consp (cadr e)) (x2wf-args (cadr e) n)
                  (x2wf (caddr e) (+ (nfix n) (len (cadr e))) (len (cadr e)))))
      (:recur (and (natp k) (true-listp (cdr e)) (equal (len (cdr e)) k) (x2wf-args (cdr e) n)))
@@ -193,30 +217,45 @@
            (list h hfb (+ hfb hd 1) (update-nth (+ hfb hd) v stk) (cdr ctl))))
         (t (unwind v (cdr ctl) stk))))
 
+; a call's dispatch: the closure c on top of its arguments vs, which begin
+; at fb2 in stk
+(defun vcs2-callv (prog pc fb fb2 c vs stk ctl)
+  (let* ((m (len vs)) (fntab (cdr prog))
+         (cl (and (clop c) (pick-arity (cdr (assoc-equal (clo-f c) fntab)) m))))
+    (cond ((not (clop c))
+           (let ((a (prim :invoke (cons c vs))))
+             (if (throwp a)
+                 (unwind (cdr a) ctl stk)
+               (list (1+ pc) fb (1+ fb2) (ssetreg fb2 a stk) ctl))))
+          ((not (consp cl)) (unwind :arity ctl stk))
+          ((not (restp cl)) (list (nfix (cadr cl)) fb2 (+ fb2 m 1) stk (cons (list (1+ pc) fb) ctl)))
+          (t (let ((n (nfix (car cl))))
+               ;; the rest packed into one list in slot n, the closure above it
+               (list (nfix (cadr cl)) fb2 (+ fb2 n 2)
+                     (update-nth (+ fb2 n 1) c
+                                 (update-nth (+ fb2 n) (stk-from (+ fb2 n) (- m n) stk) stk))
+                     (cons (list (1+ pc) fb) ctl)))))))
+
+; vs written into stk from k on
+(defun x2-put (k vs stk)
+  (if (atom vs) stk (x2-put (1+ (nfix k)) (cdr vs) (update-nth (nfix k) (car vs) stk))))
+
+; the stack apply's spread makes: the spread arguments, the fn above them
+(defun x2-stk (op fb2 c vs stk)
+  (if (x2-spreads op c vs) (x2-put fb2 (append (x2-vals op c vs) (list (car vs))) stk) stk))
+
 (defun vcs2-step (prog s)
-  (let* ((fntab (cdr prog)) (pc (car s)) (fb (nfix (cadr s))) (sp (nfix (caddr s))) (stk (cadddr s))
+  (let* ((pc (car s)) (fb (nfix (cadr s))) (sp (nfix (caddr s))) (stk (cadddr s))
          (ctl (car (cddddr s))))
     (if (not (natp pc))
         s
       (case (car (nth pc (car prog)))
-        (:callv (let* ((ins (nth pc (car prog))) (m (nfix (cadr ins))))
-                  (if (< sp (1+ m))
-                      s
-                    (let* ((c (sreg (1- sp) stk)) (fb2 (- sp (1+ m)))
-                           (cl (and (clop c) (pick-arity (cdr (assoc-equal (clo-f c) fntab)) m))))
-                      (cond ((not (clop c))
-                             (let ((a (prim :invoke (cons c (stk-from fb2 m stk)))))
-                               (if (throwp a)
-                                   (unwind (cdr a) ctl stk)
-                                 (list (1+ pc) fb (1+ fb2) (ssetreg fb2 a stk) ctl))))
-                            ((not (consp cl)) (unwind :arity ctl stk))
-                            ((not (restp cl)) (list (nfix (cadr cl)) fb2 sp stk (cons (list (1+ pc) fb) ctl)))
-                            (t (let ((n (nfix (car cl))))
-                                 ;; the rest packed into one list in slot n, the closure above it
-                                 (list (nfix (cadr cl)) fb2 (+ fb2 n 2)
-                                       (update-nth (+ fb2 n 1) c
-                                                   (update-nth (+ fb2 n) (stk-from (+ fb2 n) (- m n) stk) stk))
-                                       (cons (list (1+ pc) fb) ctl)))))))))
+        ((:callv :applyv)
+         (let* ((ins (nth pc (car prog))) (op (car ins)) (m (nfix (cadr ins))))
+           (if (< sp (1+ m))
+               s
+             (let* ((c (sreg (1- sp) stk)) (fb2 (- sp (1+ m))) (vs (stk-from fb2 m stk)))
+               (vcs2-callv prog pc fb fb2 (x2-fn op c vs) (x2-vals op c vs) (x2-stk op fb2 c vs stk) ctl)))))
         (:prim (let* ((ins (nth pc (car prog))) (n (nfix (caddr ins))))
                  (if (< sp n)
                      s
@@ -257,10 +296,11 @@
         (append ac bc (list (list (car e))))))
      (:mkclo (let ((ac (vcs2-compile-args (cddr e) depth cenv self pc)))
                (append ac (list (list :mkclo (cadr e) (len (cddr e)))))))
-     (:callv (let* ((n (len (cddr e)))
-                    (ac (vcs2-compile-args (cddr e) depth cenv self pc))
-                    (fc (vcs2-compile (cadr e) (+ depth n) cenv self (+ pc (len ac)) nil)))
-               (append ac fc (list (list :callv n)))))
+     ((:callv :applyv)
+      (let* ((n (len (cddr e)))
+             (ac (vcs2-compile-args (cddr e) depth cenv self pc))
+             (fc (vcs2-compile (cadr e) (+ depth n) cenv self (+ pc (len ac)) nil)))
+        (append ac fc (list (list (car e) n)))))
      (:loop (let* ((k (len (cadr e)))
                    (ic (vcs2-compile-args (cadr e) depth cenv self pc))
                    (head (+ pc (len ic)))
@@ -380,6 +420,18 @@
 (check-x2-is (:try (:callv (:mkclo to3)) (:local 0)) (:val . :three))
 (check-x2-is (:try (:prim :div (:const 7) (:const 0)) (:local 0)) (:val . :arith))
 (check-x2-is (:prim :div (:const 7) (:const 2)) (:val . 3))
+; apply: the spread call, fixed and variadic, the arity error from it;
+; apply of what is no closure, and :callv's call of apply, the runtime's
+(check-x2-is (:applyv (:const :apply) (:mkclo f2) (:const 5) (:const (6))) (:val . 11))
+(check-x2-is (:applyv (:const :apply) (:mkclo f2) (:const (5 6 7 8))) (:val . 8))
+(check-x2-is (:applyv (:const :apply) (:mkclo vsum) (:const 1) (:const 2) (:const (3 4))) (:val . 10))
+(check-x2-is (:applyv (:const :apply) (:mkclo vsum) (:const nil)) (:val . 0))
+(check-x2-is (:applyv (:const :apply) (:mkclo f2) (:const nil)) (:thrown . :arity))
+(check-x2-is (:applyv (:const :apply) (:const 3) (:const (1))) (:thrown . :not-fn))
+(check-x2-is (:callv (:const :apply) (:mkclo f2) (:const (5 6))) (:thrown . :not-fn))
+(check-x2-is (:applyv (:mkclo f2) (:const 5) (:const 6)) (:val . 11))
+(check-x2-is (:let (:const 1) (:applyv (:const :apply) (:mkclo vsum) (:local 0) (:add (:local 0) (:const 1)) (:const (10))))
+             (:val . 13))
 ; a try inside a let, its value below the let's local; a throw past two calls
 (check-x2-is (:let (:const 1) (:add (:local 0) (:try (:add (:const 1) (:callv (:mkclo thr) (:const 5))) (:local 1))))
              (:val . 6))

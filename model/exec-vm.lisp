@@ -29,7 +29,9 @@
 ; FNS AND CALLS. A Var is (:const its value) (the namespace is the host's;
 ; the machine reads the value from the node). A fn is (:mkclo template
 ; locals of its outer slots): the tree's closure and mx2's are one value. A
-; call is (:callv head args): mx2 runs the arguments before the head, the
+; call is (:applyv head args) -- :callv's call, or apply's spread when the
+; head's value is apply, as the tree's ex-callee spreads it (apply is a
+; value; only the head's value tells): mx2 runs the arguments before the head, the
 ; tree after, which the scope's agreement after each makes no matter. mx2's
 ; defs are keyed by the template itself (vcs2-correct asks only x2defs-ok,
 ; and both look a name up by equal), the def a clause for each arity, (nf
@@ -112,7 +114,7 @@
         (otherwise
          (cond ((or (equal k 1) (equal k 3)) (list :const (ex-c e)))
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
-               ((equal k 6) (list* :callv (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :call e 1 cm)))
+               ((equal k 6) (list* :applyv (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :call e 1 cm)))
                ((equal k 2) (list :local (ex-pos (ex-i2 e) cm)))
                ((equal k 4) (list :if (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :m (ex-kid-of e 1) 0 cm)
                                   (if (< 2 nk) (ex-tr :m (ex-kid-of e 2) 0 cm) '(:const nil))))
@@ -126,22 +128,34 @@
 ; template's pairs and good themselves; any other value is good but the
 ; symbol :clo itself, so a variadic call's rest list of good values is
 ; never closure-shaped (the model's list is the machine's seq, and :clo is
-; no value a program holds); nor apply, whose spread call vmx2 has no
-; instruction for yet (exec-PLAN 2c-ii: the VM over apply is next)
+; no value a program holds); and a list's elements good too, so apply's
+; spread of a good seq is good arguments (2c-iii: apply is a value like
+; any other, its call spread by vmx2's :applyv)
 (defun ex-xvs (defs l)
   (if (atom l)
       t
     (and (let ((v (car l)))
-           (and (not (equal v :clo)) (not (equal v :apply))
-                (or (not (clop v))
+           (and (not (equal v :clo))
+                (if (clop v)
                     (and (equal v (clo (cadr v) (caddr v))) (consp (assoc-equal (cadr v) defs))
                          (true-listp (caddr v)) (equal (len (caddr v)) (len (ex-inners (nth 2 (cadr v)))))
-                         (ex-xvs defs (caddr v))))))
+                         (ex-xvs defs (caddr v)))
+                  (ex-xvs defs v))))
          (ex-xvs defs (cdr l)))))
 
-; no good value is apply, so a good record's call is no apply
-(defthm ex-xvs-apway (implies (ex-xvs defs tmp) (equal (ex-apway tmp) 0))
-  :hints (("Goal" :expand ((ex-xvs defs tmp)) :in-theory (enable ex-apway ex-apentry))))
+; THE CALL A GOOD RECORD MAKES, apply's spread or itself, is a good record
+(defthm ex-xvs-elem (implies (and (ex-xvs defs (list v)) (not (clop v))) (ex-xvs defs v))
+  :hints (("Goal" :expand ((ex-xvs defs (list v))))))
+(defthm ex-xvs-last (implies (ex-xvs defs l) (ex-xvs defs (list (car (last l))))))
+(defthm ex-xvs-take (implies (ex-xvs defs l) (ex-xvs defs (take n l)))
+  :hints (("Goal" :induct (take n l) :expand ((ex-xvs defs l) (:free (a b) (ex-xvs defs (cons a b)))))))
+(defthm ex-xvs-append (equal (ex-xvs defs (append a b)) (and (ex-xvs defs a) (ex-xvs defs b))))
+(defthm ex-callee-good
+  (implies (and (consp tmp) (true-listp tmp) (ex-xvs defs tmp))
+           (and (consp (ex-callee tmp)) (true-listp (cdr (ex-callee tmp))) (ex-xvs defs (ex-callee tmp))))
+  :hints (("Goal" :in-theory (enable ex-callee ex-apway ex-apentry ex-spread ex-seqp ex-clo-shape)
+                  :expand ((ex-xvs defs tmp) (ex-xvs defs (cdr tmp)))
+                  :use ((:instance ex-xvs-last (l (cddr tmp))) (:instance ex-xvs-elem (v (car (last (cddr tmp)))))))))
 
 (defthm ex-callee-nop (implies (not (equal (ex-apway tmp) 1)) (equal (ex-callee tmp) tmp))
   :hints (("Goal" :in-theory (enable ex-callee))))
@@ -421,7 +435,6 @@
 
 ; ---- VALUES, FNS AND CALLS ------------------------------------------------------------------------
 
-(defthm ex-xvs-append (equal (ex-xvs defs (append a b)) (and (ex-xvs defs a) (ex-xvs defs b))))
 (defthm ex-xvs-cons (implies (syntaxp (not (equal b ''nil)))
                              (equal (ex-xvs defs (cons a b)) (and (ex-xvs defs (list a)) (ex-xvs defs b))))
   :hints (("Goal" :expand ((ex-xvs defs (cons a b)) (ex-xvs defs (list a))))))
@@ -522,8 +535,6 @@
                   :cases ((ex-arity-pass ars (len args) 0)))))
 (defthm ex-true-listp-bargs (implies (true-listp args) (true-listp (ex-bargs ar args)))
   :hints (("Goal" :in-theory (enable ex-bargs ex-rest-args))))
-(defthm ex-xvs-take (implies (ex-xvs defs l) (ex-xvs defs (take n l)))
-  :hints (("Goal" :induct (take n l) :expand ((ex-xvs defs l) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-xvs-nthcdr (implies (and (ex-xvs defs l) (true-listp l)) (ex-xvs defs (list (nthcdr n l))))
   :hints (("Goal" :induct (nthcdr n l) :expand ((ex-xvs defs l) (:free (a) (ex-xvs defs (list a)))))))
 (defthm ex-xvs-bargs (implies (and (ex-xvs defs args) (true-listp args)) (ex-xvs defs (ex-bargs ar args)))
@@ -534,22 +545,32 @@
            (and (equal (cdr (assoc-equal tm ds)) (ex-def tm)) (ex-tmwf tm defs))))
 (defthm ex-defs-ok-alistp (implies (ex-defs-ok ds defs) (alistp ds)))
 
-; a callee's mx2: :callv past its head and arguments
-(defun ex-mxcall (f args defs fuel)
+; a callee's mx2: :callv past its head and arguments, and :applyv's, past
+; apply's spread
+(defun ex-mxcall0 (f args defs fuel)
   (if (not (clop f))
       (let ((a (prim :invoke (cons f args)))) (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))
     (let* ((cls (cdr (assoc-equal (clo-f f) defs))) (cl (pick-arity cls (len args))))
       (cond ((not (consp cl)) (cons :thrown :arity))
             ((zp fuel) (list :out))
             (t (mx2 (cadr cl) (if (restp cl) (split-rest (nfix (car cl)) args) args) (clo-caps f) defs (1- fuel)))))))
-(defthm ex-mx-callv
-  (equal (mx2 (cons :callv x) env caps defs fuel)
+(defun ex-mxcall (f args defs fuel) (ex-mxcall0 (x2-fn :applyv f args) (x2-vals :applyv f args) defs fuel))
+(defthm ex-mx-applyv
+  (equal (mx2 (cons :applyv x) env caps defs fuel)
          (let ((rs (mx2-args (cdr x) env caps defs fuel)))
            (if (not (valp rs))
                rs
              (let ((rf (mx2 (car x) env caps defs fuel)))
                (if (not (valp rf)) rf (ex-mxcall (val rf) (val rs) defs fuel))))))
-  :hints (("Goal" :expand ((mx2 (cons :callv x) env caps defs fuel)))))
+  :hints (("Goal" :expand ((mx2 (cons :applyv x) env caps defs fuel)) :in-theory (disable x2-fn x2-vals))))
+; a call the tree enters: the VM's spread is the tree's (ex-callee)
+(defthm ex-mxcall-callee
+  (implies (ex-enters (car (ex-callee tmp)) (len (cdr (ex-callee tmp))))
+           (equal (ex-mxcall (car tmp) (cdr tmp) defs fuel)
+                  (ex-mxcall0 (car (ex-callee tmp)) (cdr (ex-callee tmp)) defs fuel)))
+  :hints (("Goal" :in-theory (e/d (ex-callee ex-apway ex-apentry ex-spread ex-seqp ex-clo-shape ex-enters ex-callable
+                                    x2-fn x2-vals x2-spreads x2-seqp)
+                                   (ex-mxcall0)))))
 (defthm ex-mx-mkclo
   (equal (mx2 (cons :mkclo x) env caps defs fuel)
          (let ((rs (mx2-args (cdr x) env caps defs fuel))) (if (valp rs) (cons :val (clo (car x) (val rs))) rs)))
@@ -703,8 +724,10 @@
   :hints (("Goal" :expand ((ex-xvs defs tmp)) :in-theory (enable ex-enters))))
 
 ; the same, of a call's record: its callee (car tmp), its arguments (cdr tmp)
+; (ex-defs-ok first: it binds defs, which the rules' left sides do not name,
+; so ex-xvs of apply's spread callee is rewritten, not looked up)
 (defmacro ex-chyp ()
-  '(and (ex-enters (car tmp) (len (cdr tmp))) (consp tmp) (ex-xvs defs tmp) (true-listp (cdr tmp)) (ex-defs-ok defs defs)))
+  '(and (ex-defs-ok defs defs) (ex-enters (car tmp) (len (cdr tmp))) (consp tmp) (ex-xvs defs tmp) (true-listp (cdr tmp))))
 (defmacro ex-cr () '(ex-car (car tmp) (cdr tmp)))
 (defthm ex-call-fbody
   (implies (ex-chyp) (equal (ex-fbody (car tmp) (len (cdr tmp))) (ex-abody (ex-cr))))
@@ -739,7 +762,7 @@
                   :in-theory (disable ex-enter-xvs-vs ex-enter-ehyp))))
 (defthm ex-call-mx
   (implies (and (ex-chyp) (not (zp fuel)))
-           (equal (ex-mxcall (car tmp) (cdr tmp) defs fuel)
+           (equal (ex-mxcall0 (car tmp) (cdr tmp) defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody (ex-cr)) 0
                                                    (append (ex-fcm (cadr (car tmp)) (ex-cr))
                                                            (cons nil (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr)))))))
@@ -770,7 +793,7 @@
            (ex-xvs defs (list (list :clo tm caps)))))
 
 (in-theory (disable ex-anf ex-avar ex-anp ex-astart ex-abody ex-fself ex-fbcm ex-fcm ex-fbtr ex-def ex-tmwf ex-arwf
-                    ex-car ex-fenv ex-fvs ex-callable ex-enters ex-bind ex-mxcall ex-ehyp ex-fbody ex-arerr ex-bargs))
+                    ex-car ex-fenv ex-fvs ex-callable ex-enters ex-bind ex-mxcall ex-mxcall0 ex-ehyp ex-fbody ex-arerr ex-bargs))
 
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
   (and (ex-defs-ok defs defs)
@@ -858,7 +881,7 @@
                         (list (ex-vind :m (ex-kid-of e i) 0 nil cm env fr fuel caps defs nil)
                               (ex-vind :call e (1+ i) (append tmp (list (val (car r)))) cm env (cadr r) fuel caps defs lp))))
                      ((zp fuel) nil)
-                     (t (let* ((f (car tmp)) (args (cdr tmp)) (ar (ex-car f args)))
+                     (t (let* ((f (car (ex-callee tmp))) (args (cdr (ex-callee tmp))) (ar (ex-car f args)))
                           (ex-vind :iter (ex-fbody f (len args)) 0 (cons nil (ex-fvs f args)) (ex-fcm (cadr f) ar)
                                    (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
                                    (cons (ex-astart ar) (ex-anp ar)))))))
