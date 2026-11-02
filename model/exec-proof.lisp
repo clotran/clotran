@@ -461,17 +461,9 @@
                   :in-theory (disable ex-apwalk-els ex-aplwalk-call ex-arity ex-bargs))))
 
 ; HOW FAR IT REALISES: positions k .. req + 1 at most -- clj's
-; boundedLength exactly -- one realisation each; a vector's walk, and a
-; list's, none.
-(defthm ex-apwalk-realises
-  (implies (natp req)
-           (<= (nfix (nth 4 (ex-apwalk req fx c))) (+ (nfix (- (+ req 1) (len fx))) (if (equal (sk-d c) 3) 1 0))))
-  :rule-classes nil
-  :hints (("Goal" :induct (ex-apwalk req fx c) :in-theory (enable ex-apstep ex-aplook)
-                  :expand ((ex-apwalk req fx c)))))
-(defthm ex-apwalk-realise-bound
-  (implies (natp req) (<= (nfix (nth 4 (ex-apwalk req fx c))) (+ 1 (nfix (- (+ req 1) (len fx))))))
-  :hints (("Goal" :use ex-apwalk-realises)))
+; boundedLength exactly -- one realisation each (seqk's
+; ex-apwalk-realise-bound, with the walk); a vector's walk, and a list's,
+; none.
 ; a cursor no step of which realises anything: a vector's view, a list, or a
 ; list's tail -- every step stays one
 (defun ex-noreal (c) (or (not (caddr c)) (and (consp (car c)) (not (member (caar c) (quote (:lazy :cons)))) (eq (caddr c) t))))

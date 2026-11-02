@@ -50,6 +50,18 @@
 
 (declare gen)
 
+;; apply's last argument, of every seq kind (model/seqk.lisp): a list, a
+;; vector, a cell whose rest is any of them, a lazy seq (lc tk l2) that
+;; fz-real below realises, the empty seq, and a number (no seq)
+(defn seqv [& [no-num]]
+  (case (rnd (if no-num 5 6))
+    0 (rep (rnd 3) #(rnd 5))
+    1 (cons :vec (rep (rnd 3) #(rnd 5)))
+    2 (list* :cons (rnd 5) (seqv true))
+    3 (list :lazy (rnd 3) (rnd 3) (rnd 3))
+    4 nil
+    5 (rnd 5)))
+
 (defn leaf [nl nc]
   (case (rnd (+ 2 (if (pos? nl) 2 0) (if (pos? nc) 1 0)))
     0 (list :const (- (rnd 11) 5))
@@ -93,12 +105,12 @@
           (list* :callv (list* :mkclo f (rep c #(gen (dec depth) nl nc nil)))
                  (rep a #(list :const (rnd 6)))))
       ;; a closure made of the locals, called; or (not on the arrays, which
-      ;; have no :applyv yet) apply's spread call -- of a vmx2 fn on a few
-      ;; values and a list, the wrong counts included, or of what is no
-      ;; closure, or :applyv of no apply
+      ;; have no :applyv yet, milestone 2c-v) apply's spread call -- of a
+      ;; vmx2 fn on a few values and a seq of any kind, the wrong counts
+      ;; included, or of what is no closure, or :applyv of no apply
       7 (if (and apply-ok (zero? (rnd 2)))
           (let [[f as] (nth (vec fns2) (rnd (count fns2)))
-                lst (list :const (rep (rnd 3) #(rnd 5)))]
+                lst (list :const (seqv))]
             (case (rnd 4)
               (0 1) (list* :applyv (list :const :apply) (list :mkclo f)
                            (concat (rep (rnd 2) #(gen (dec depth) nl nc nil)) [lst]))
@@ -135,11 +147,24 @@
   (println (str "fuzz-vmx2: " n " programs, seed " seed " -> " emit))
   (System/exit 0))
 
+;; the runtime's realisation, attached (as scripts/fuzz-exec-gen's): a lazy
+;; seq (:lazy lc tk l2) is lc cells of 7, each realising to a cell whose
+;; rest is the next, then none, a list or a vector of l2 sevens
+(def fz-real
+  (str "(defun fz-real (c) (declare (xargs :guard t))\n"
+       "  (let* ((c (if (true-listp c) c nil)) (lc (nfix (nth 0 c))) (tk (nth 1 c)) (l2 (nfix (nth 2 c))))\n"
+       "    (cond ((not (zp lc)) (list* :cons 7 :lazy (1- lc) tk l2 nil))\n"
+       "          ((equal tk 1) (make-list l2 :initial-element 7))\n"
+       "          ((equal tk 2) (cons :vec (make-list l2 :initial-element 7)))\n"
+       "          (t nil))))\n"
+       "(defattach sk-real fz-real)\n"))
+
 (def driver
   (str (if arrays "(include-book \"vmic\")\n" "(include-book \"vmx2\")\n")
        ";; fuzz-vmx's functions, each one clause, and vmx2's\n"
        "(defun strip-to-clauses (ds) (if (atom ds) nil (cons (list (caar ds) (list (cadar ds) (caddar ds))) (strip-to-clauses (cdr ds)))))\n"
        "(defconst *xall-defs* (append (strip-to-clauses *x-defs*) *x2-defs*))\n"
+       fz-real
        (if arrays
          (str ";; the arrays: the defs named by id, each program encoded and run in lockstep\n"
               "(defconst *xall-names* (strip-cars *xall-defs*))\n"

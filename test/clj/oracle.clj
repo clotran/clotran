@@ -2189,6 +2189,7 @@
 ;; fixed arity, a native or a keyword still takes the arguments spread.
 (apply (fn [a & r] [a (take 3 r)]) 1 (range))
 (apply (fn [a b & r] [a b (take 3 r)]) (range))
+(apply (fn [& xs] (first xs)) (range))
 (apply (fn [a b & r] [a b r]) 1 2 3 4 [5 6])
 (apply (fn [a b & r] [a b r]) 1 2 3 4 [])
 (apply (fn [a b & r] [a b r]) 1 [2])

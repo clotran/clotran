@@ -226,9 +226,57 @@ slot's read and write), and every kind not yet in the model.
    lazy seq (a vector's view made, RT.seq's refusal). Bug found and fixed:
    B_APPLY realised a lazy seq one position short of clj ((apply (fn [a b
    & r]) s) realised 3 cells, clj 4).
-2c-v. **`:applyv` in the arrays** *(next)*: vmi and vmg (so the Fortran
+2c-vi. **Apply's spread walks, in vmx2 and the tree** (split in two).
+   The bug: vmx2's `:applyv` reads apply's WHOLE seq (x2-vals over
+   sk-elems, up to *sk-lim* elements) before the dispatch, where clj's
+   RestFn.applyTo reads a variadic callee's seq only through position
+   req + 1 -- `(apply (fn [& xs] (first xs)) (range))` is 0 in clj; a
+   counting seq through `(apply (fn [a & r] a) s)` realises 3 cells. Found
+   too: the TREE has the same bug -- ex-ev and ex-turn spread through
+   ex-callee/ex-spread (the whole seq); only B_APPLY and its generated
+   decisions walk (ex-apwalk, proved to agree with the whole spread for a
+   finite seq). So the fix is both models at once: ex-vm-agree compares
+   them, and a rest bound to an unread seq is not a list of every element.
+   The Fortran VM is unaffected (rt_applyp false: apply is B_APPLY's).
+   - 2c-vi-a *(done)*: ONE WALK. ex-apstep, ex-aplook and ex-apwalk moved
+     into model/seqk.lisp (exec.lisp, B_APPLY's generated decisions and
+     vmx2 all read them there; exec_gen.inc unchanged). seqk's sk-spread
+     is apply's spread as the walk takes it: `(:hand args)` -- a variadic
+     fn handed the seq, its req fixed arguments and then the rest as ONE
+     seq value (sk-consv of the arguments past req onto sk-cval, the seq
+     at the walk's cursor, read at its top; nothing realised), `(:ok
+     args)` every element read (the count's dispatch), `:none`, `:long`.
+     Proved: sk-spread-long (a seq over *sk-lim* -- an infinite one --
+     handed to a variadic fn with req <= *sk-lim* is spread, `:hand`, not
+     the host's) and sk-spread-hand-realises (what it realises is
+     ex-apwalk's, at most req + 2 - k: ex-apwalk-realise-bound, moved to
+     seqk with it). Ported from wip/applyv-arrays: seqk's step reads
+     guard-verified for any value (mbe), ex-apway's redundant :apply guard
+     removed, scripts/fuzz-vmx2 drawing apply over every seq kind (fz-real
+     attached; not on the arrays, which have no :applyv yet).
+   - 2c-vi-b *(next)*: vmx2 and the tree over sk-spread. Designed and
+     half-built on branch `wip/2c-vi` (see its commit): vmx2 -- x2-vals
+     and friends take the function table (mx2's defs, the machine's
+     `(cdr prog)`; x2-req, the variadic clause's count, is one in both),
+     a `:hand` call dispatches through x2-cls/x2-prog: the clause list
+     replaced by the variadic clause as the FIXED clause of req + 1
+     parameters (x2-hcls -- same body, locals and frame, the rest in the
+     last slot), so vcs2-callv and its proofs keep their shape; vmx2
+     certifies with clj's examples as checks (range attached as sk-real).
+     The tree -- ex-callee hands a variadic f over as ex-hclo (f's
+     template with its variadic arity as that fixed one, f itself carried
+     for the self slot, ex-self); exec and exec-proof certify. Left:
+     vmx2-proof (s2fns-ok-x2 et al. written), exec-vm (its ex-ehyp
+     machinery is per closure: restate it over (ex-self f) and the arity
+     ex-car picks -- ex-fbtr of the hand arity is the variadic one's),
+     exec-cost, exec-vmrun's clj examples, vmx2-cost/time, the vmi chain
+     re-certified. Note for the checks: a fn whose fixed arity exceeds its
+     variadic count (vmx2's f2; clj refuses to compile it) is handed to
+     the variadic clause by apply, as RestFn.applyTo does.
+2c-v. **`:applyv` in the arrays**: vmi and vmg (so the Fortran
    VM) get apply's spread -- `(:applyv m)` in vmic/vmicg instead of their
-   refusal, the generated machine spreading through seqk's kinds; then
+   refusal, the generated machine spreading through seqk's kinds. Resumes
+   after 2c-vi-b from `wip/applyv-arrays` (71fe51d7), rebased on it; then
    milestone 3.
 3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's

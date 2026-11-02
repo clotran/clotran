@@ -159,20 +159,6 @@
         ((not (equal sq 1)) 3)
         (t 1)))
 
-; APPLY'S WALK (B_APPLY; clj's RestFn.applyTo): a closure with a variadic
-; arity of req fixed parameters (req -1: none) takes elements off the
-; seq's front only while it has fewer than req -- k taken so far, more 1
-; while the seq has another -- so a lazy seq is realised no further. 1:
-; take one more; 2: the variadic arity, its rest the seq as it is (the
-; arguments past req consed back onto it); 3: spread what there is, the
-; count's dispatch (no variadic arity, or req or fewer and none left).
-(defun ex-apstep (req k more)
-  (declare (xargs :guard t))
-  (cond ((not (and (integerp req) (<= 0 req) (integerp k))) 3)
-        ((and (< k req) (equal more 1)) 1)
-        ((or (< req k) (equal more 1)) 2)
-        (t 3)))
-
 ; ---- THE TREE, as exec.inc reads it ------------------------------------------------------------
 ;
 ; a node (kind i2 kids c s2 mark rstart rn): gc_i1, gc_i2, its children
@@ -270,7 +256,7 @@
   (if (and (equal (car tmp) :apply) (consp (cddr tmp)) (equal (car (sk-elems (car (last (cdr tmp))))) :long))
       0
     (ex-apentry (if (equal (car tmp) :apply) 1 0) (len (cdr tmp)) (if (ex-clo-shape (cadr tmp)) 1 0)
-                (if (and (equal (car tmp) :apply) (ex-seqp (car (last (cdr tmp))))) 1 0))))
+                (if (ex-seqp (car (last (cdr tmp)))) 1 0))))
 ; the call a record's callee and arguments make: apply's (f . spread) when
 ; it spreads, else themselves
 (defun ex-callee (tmp) (if (equal (ex-apway tmp) 1) (cons (cadr tmp) (ex-spread (cddr tmp))) tmp))
@@ -285,34 +271,6 @@
           ((equal w 2) (list 2 (take (nfix req) fx) (append (nthcdr (nfix req) fx) s)))
           (t (list 3 (append fx s) nil)))))
 
-; HOW FAR THE WALK READS (generated): the position k -- the arguments taken
-; so far -- while k <= req + 1. RestFn.applyTo's RT.boundedLength reads
-; req + 1 positions and its last next() realises the one after, so clj
-; realises apply's seq through position req + 1 and no further. 1: read
-; it, 0: not (past it, or no variadic arity).
-(defun ex-aplook (req k)
-  (declare (xargs :guard t))
-  (if (and (integerp req) (<= 0 req) (integerp k) (<= k (+ req 1))) 1 0))
-
-; APPLY'S WALK, as B_APPLY takes it, over the seq's cursor c (seqk): (way
-; fixed extras c nr). way ex-apstep's 2 or 3: 2 the variadic arity's fixed
-; arguments, the arguments past them (consed back onto the rest) and the
-; rest's cursor as it is; 3 every argument taken and the cursor where the
-; walk stopped (the seq's end, for a variadic arity), then nil. nr the realisations
-; it makes: one each time a position it reads is a lazy seq, and when it
-; hands over at position req, the one past it (boundedLength's last
-; next(), the peek).
-(local (defthm ex-len-append-w (equal (len (append a b)) (+ (len a) (len b)))))
-(defun ex-apwalk (req fx c)
-  (declare (xargs :measure (+ (* 2 (nfix (- (ifix req) (len fx)))) (sk-rank c))))
-  (let* ((k (len fx)) (d (if (equal (ex-aplook req k) 1) (sk-d c) 1)))
-    (if (equal d 3)
-        (let ((r (ex-apwalk req fx (sk-next c)))) (update-nth 4 (1+ (nfix (nth 4 r))) r))
-      (let ((w (ex-apstep req k (if (sk-more d) 1 0))))
-        (cond ((and (equal w 1) (sk-more d) (< k (ifix req))) (ex-apwalk req (append fx (list (sk-first c))) (sk-next c)))
-              ((equal w 2) (list 2 (take (nfix req) fx) (nthcdr (nfix req) fx) c
-                                 (if (and (equal (ex-aplook req (1+ k)) 1) (equal (sk-d (sk-next c)) 3)) 1 0)))
-              (t (list 3 fx c nil 0)))))))
 ; the variadic arity's count of fixed parameters, -1 for none (B_APPLY's
 ; req: exec.inc variadic_req, the first variadic arity's, as the variadic
 ; pass of ex-arity takes)
