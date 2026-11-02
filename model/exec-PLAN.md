@@ -182,16 +182,54 @@ slot's read and write), and every kind not yet in the model.
    Not yet: the arrays (vmi, and so the Fortran VM) have no `:applyv`;
    vmic compiles it as a call and refuses it (ce-err), so vmic-correct and
    the generated compiler hold as before.
-2c-iv. **Seqs past the list** *(next)*: a seq in the model is only a list
-   (nil the empty one); B_APPLY also walks a vector (by index) and a lazy
-   seq (to_seq, sq_first, sq_rest), the host's today. Needs: the model's
-   seq kinds -- a vector read by index, a lazy seq whose realisation is a
-   constrained function (stated as vmx2's `:prim`: the theorems hold
-   whatever it returns), ex-apwalk over them, its bound (the walk realises
-   no further than req, as it says for lists); the per-kind step decisions
-   generated, B_APPLY's vector/lazy walk through them behind named shims,
-   only the thunk's computation itself the host's (the lazy-seq row's);
-   scripts/fuzz-exec-gen drawing vectors and lazy seqs in apply.
+2c-iv. **Seqs past the list** *(done)*: model/seqk.lisp's seq kinds -- a
+   list (nil the empty one), a vector `(:vec . elems)` read by index (its
+   seq a view, B_APPLY's OBJ_SEQ), a lazy seq `(:lazy . c)` whose
+   realisation `sk-real` is constrained by nothing (as vmx2's `:prim`: the
+   theorems hold whatever it returns -- its answer read at its top, a lazy
+   seq again none, LazySeq.seq's collapse the host's), and a cell `(:cons x
+   . more)` (a realised lazy seq, its rest any seq). A step over a seq is
+   the generated `sk-step` (0 the end, 1 a list's cell, 2 a vector's
+   element i, 3 realise, 4 no seq, 5 a cell); `sk-els` its elements, at
+   most `*sk-lim*` (B_APPLY's 1000000: more is the host's error, so a seq
+   longer -- an infinite one -- is way 0 in ex-apway, the call the host's,
+   only the variadic walk taking it). The tree's ex-spread and vmx2's
+   x2-vals both spread `sk-elems` -- the translation does nothing to a
+   vector or a lazy seq: `:applyv`'s spread reads them as the tree does.
+   The walk ex-apwalk is over a cursor and reads position k only while
+   the generated `ex-aplook` says k <= req + 1: clj's RestFn.applyTo
+   realises through position req + 1 (boundedLength's last next()), so
+   when it hands over at position req it realises the position past it
+   too (the peek). Proved: ex-apwalk-call over every kind (for a seq of
+   finitely many elements: the walk hands over exactly when the spread
+   count picks the variadic arity, its fixed arguments and its rest's
+   elements the arity's locals, else spreads every argument --
+   ex-apwalk-els reduces it to the list walk ex-aplwalk); ex-apwalk-
+   realise-bound (at most req + 2 - k realisations, one a position read);
+   ex-apwalk-vector and ex-apwalk-list (a vector's walk, and a list's,
+   realise nothing); ex-apply-is-call and ex-apply-turn unchanged in
+   statement over the new ex-callee; ex-vm-agree, ex-recur-stays and
+   ex-vm-runs with the new kinds, under ex-lzok (every realisation's
+   answer good values -- the runtime hands the machine only closures it
+   knows; ex-sk-els-good), exec-vmrun's (apply g 5 [6 7]) the rest (6 7)
+   in the tree, mx2 and the VM alike; cost (exec-cost): the walk at most
+   2t + 3 turns for t elements taken, t at most req - k
+   (ex-apwalk-turns-taken, ex-apwalk-taken-req), the spread's read at most
+   2n + 3 for n elements (sk-elems-turns). Generated: exec_gen.inc gains
+   `ex_aplook` and `sk_step`; B_APPLY's walk and its spread (ap_spread,
+   in place of coll_to_vector) read each position through exec.inc's
+   shims ap_kind, ap_realise, ap_first, ap_next and ap_look. Host, named in
+   docs/model-coverage.md: the thunk's computation (gce_force, the lazy
+   seq row's); a chunked seq, a map's or set's cursor, a string's seq and a
+   deftype's seq (ap_kind's kind 6, read by to_seq, sq_first and sq_rest,
+   which every other caller still uses); the first `to_seq` of what is no
+   lazy seq (a vector's view made, RT.seq's refusal). Bug found and fixed:
+   B_APPLY realised a lazy seq one position short of clj ((apply (fn [a b
+   & r]) s) realised 3 cells, clj 4).
+2c-v. **`:applyv` in the arrays** *(next)*: vmi and vmg (so the Fortran
+   VM) get apply's spread -- `(:applyv m)` in vmic/vmicg instead of their
+   refusal, the generated machine spreading through seqk's kinds; then
+   milestone 3.
 3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's
    branch (`case_branch`), N_VECTOR/MAP/SET; their nested `exec`s made

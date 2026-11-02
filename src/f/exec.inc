@@ -380,6 +380,181 @@
     if (i >= 0) variadic_req = int_of(gcv_nth(gcv_nth(gcv_nth(gc_slot(fn, 1), 1), i), 0))
   end function variadic_req
 
+  ! APPLY'S SEQ, BY KIND (model/seqk.lisp): the shims B_APPLY's walk and
+  ! spread read a seq through, the generated sk_step deciding each step.
+  ! ap_kind: 0 the end (nil, (), a realised-empty lazy seq), 1 a list's
+  ! cell, 2 a vector's view at index i of cnt, 3 a lazy seq to realise
+  ! (pending, or delegating: its realisation the seq it holds), 5 a cell
+  ! (a realised lazy seq: head slot 2, rest slot 3). 6 is the host's --
+  ! a chunked seq, a map's or a set's cursor, a string's seq, a deftype's
+  ! -- read by to_seq, sq_first and sq_rest, outside the model.
+  subroutine ap_kind(s0, kd, i, cnt)
+    type(gc_value), intent(in) :: s0
+    integer(int64), intent(out) :: kd, i, cnt
+    type(gc_value) :: s
+    s = strip_meta(s0)
+    i = 0
+    cnt = 0
+    if (s%tag == GCT_NIL) then
+       kd = 0
+    else if (gcl_is(s)) then
+       kd = 0
+       if (gcl_count(s) > 0) kd = 1
+    else if (gc_kind(s) == OBJ_LAZY) then
+       select case (gc_i1(s))
+       case (LAZY_CONS)
+          kd = 5
+       case (LAZY_EMPTY)
+          kd = 0
+       case default
+          kd = 3
+       end select
+    else if (gc_kind(s) == OBJ_SEQ .and. gc_i2(s) == 0) then
+       kd = 2
+       i = gc_i1(s)
+       cnt = seq_len(gc_slot(s, 1))
+    else
+       kd = 6
+    end if
+  end subroutine ap_kind
+
+  ! sk-next's realisation: the thunk run (gce_force, the host's), then
+  ! what it gives -- the cell itself, nil, or the seq it delegates to
+  recursive function ap_realise(s0, roots) result(out)
+    type(gc_value), intent(in) :: s0
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, s
+    s = strip_meta(s0)
+    call gce_force(s)
+    out = s
+    if (gc_i1(s) == LAZY_EMPTY) out = gc_nil()
+    if (gc_i1(s) == LAZY_DELEG) out = gc_slot(s, 2)
+    if (gc_i1(s) == LAZY_PENDING) out = to_seq(s, roots)   ! an error in flight left it
+  end function ap_realise
+
+  ! sk-first and sk-next for a step d with an element (1, 2, 5; 6 the host's)
+  recursive function ap_first(s0, d, roots) result(out)
+    type(gc_value), intent(in) :: s0
+    integer(int64), intent(in) :: d
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, s
+    s = strip_meta(s0)
+    select case (d)
+    case (1)
+       out = gcl_first(s)
+    case (2)
+       out = seqv_elem(s, gc_i1(s), roots)
+    case (5)
+       out = gc_slot(s, 2)
+    case default
+       out = sq_first(s, roots)
+    end select
+  end function ap_first
+
+  recursive function ap_next(s0, d, roots) result(out)
+    type(gc_value), intent(in) :: s0
+    integer(int64), intent(in) :: d
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, s
+    s = strip_meta(s0)
+    select case (d)
+    case (1)
+       out = gcl_rest(s, roots)
+    case (2)
+       out = gc_obj(OBJ_SEQ, [gc_slot(s, 1)], [roots, s])
+       call gc_set_i1(out, gc_i1(s) + 1)
+       call gc_set_i2(out, 0)
+    case (5)
+       out = gc_slot(s, 3)
+    case default
+       out = sq_rest(s, roots)
+    end select
+  end function ap_next
+
+  ! one step's decision at s: realising while sk_step says 3, the host's
+  ! kind (6) read by to_seq. Answers d (0 the end, 1/2/5 an element, 6 the
+  ! host's element, 4 no seq) and s moved to where the element is; nr
+  ! counts the realisations.
+  recursive subroutine ap_look(s, d, nr, roots)
+    type(gc_value), intent(inout) :: s
+    integer(int64), intent(out) :: d
+    integer, intent(inout) :: nr
+    type(gc_value), intent(in) :: roots(:)
+    type(eval_ctx), pointer :: tctx
+    integer(int64) :: kd, i, cnt
+    tctx => ctx_self()
+    do
+       call ap_kind(s, kd, i, cnt)
+       if (kd == 6) then
+          ! seq'd first (a vector becomes its view), then read by kind
+          s = to_seq(s, [roots, s])
+          if (tctx%has_error) return
+          call ap_kind(s, kd, i, cnt)
+          if (kd == 6) then
+             d = 6
+             return
+          end if
+       end if
+       d = sk_step(kd, i, cnt)
+       if (d /= 3 .or. tctx%has_error) return
+       s = ap_realise(s, [roots, s])
+       nr = nr + 1
+    end do
+  end subroutine ap_look
+
+  ! apply's spread of a seq (sk-elems): every element, at most limit --
+  ! more is the error coll_to_vector's limit raised, not a hang
+  recursive function ap_spread(coll, limit, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(eval_ctx), pointer :: tctx
+    type(gc_value), intent(in) :: coll
+    integer, intent(in) :: limit
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, s, x
+    type(gc_value) :: none(0)
+    integer(int64) :: d
+    integer :: base, k, nr, i, n
+    character(len=16) :: buf
+    vst => gc_my_stack()
+    tctx => ctx_self()
+    n = size(roots)
+    base = vs_enter(vst, 2 + n)
+    do i = 1, n
+       call vs_set(vst, base + 2 + i, roots(i))
+    end do
+    out = gcv_empty(none)
+    call vs_set(vst, base + 1, out)
+    out = gcv_transient(vs_get(vst, base + 1), none)
+    call vs_set(vst, base + 1, out)
+    s = coll
+    call vs_set(vst, base + 2, s)
+    k = 0
+    nr = 0
+    do
+       s = vs_get(vst, base + 2)
+       call ap_look(s, d, nr, [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, s)
+       if (tctx%has_error) exit
+       if (d == 4) then
+          s = to_seq(vs_get(vst, base + 2), none)   ! RT.seq's refusal
+          exit
+       end if
+       if (d == 0) exit
+       k = k + 1
+       if (k > limit) then
+          write(buf, '(I0)') limit
+          call fail("apply: more than " // trim(buf) // " arguments; the argument seq is realised here -- a native or a fixed-arity callee spreads it; only a variadic fn takes a seq as it is)")
+          exit
+       end if
+       x = ap_first(vs_get(vst, base + 2), d, [vs_get(vst, base + 1)])
+       call gcv_tconj(vs_get(vst, base + 1), x, none)
+       s = ap_next(vs_get(vst, base + 2), d, [vs_get(vst, base + 1)])
+       call vs_set(vst, base + 2, s)
+    end do
+    out = gcv_persistent(vs_get(vst, base + 1), none)
+    call vs_leave(vst, base)
+  end function ap_spread
+
   ! Picks the arity, builds the frame and binds the arguments, the
   ! captures and the fn's own name. Answers the frame and the body to
   ! run; false with an error set when no arity fits. `argv` is taken

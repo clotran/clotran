@@ -338,4 +338,8 @@
  ;; and called directly (model/exec-PLAN.md 2c-ii)
  (mapv #(try (%) (catch clotran.host.throwable e [(class e) (first (clojure.string/split (ex-message e) #" \("))])) [#(apply 1 [2]) #(apply "s" [1]) #(let [f (identity 1.5)] (f))])
  (mapv #(try (%) (catch clotran.host.throwable e (class e))) [#(let [f (identity nil)] (f 1)) #(apply nil [1])])
+ ;; B_APPLY realised a lazy seq one position short of clj: RestFn.applyTo's
+ ;; boundedLength realises through position req + 1 (model/exec.lisp ex-aplook,
+ ;; model/exec-PLAN.md 2c-iv)
+ (let [n (atom 0) s (fn s [i] (lazy-seq (swap! n inc) (cons i (s (inc i))))) c (fn [f] (reset! n 0) (f) @n)] [(c #(apply (fn [& r] 1) (s 0))) (c #(apply (fn [a b & r] 1) (s 0))) (c #(apply (fn [a b & r] 1) 9 8 7 (s 0))) (c #(apply (fn [a b c d & r] 1) (s 0)))])
 ]

@@ -49,6 +49,8 @@
 
 (in-package "ACL2")
 
+(include-book "seqk")
+
 (defconst *ex40* 1099511627776)
 
 (defmacro ex40p (x) `(and (natp ,x) (< ,x *ex40*)))
@@ -255,28 +257,62 @@
 ; APPLY, as a callee: the value :apply is clojure.core/apply (core.clj's
 ; fn, its list* and the applyTo it ends in, B_APPLY). A call of it with
 ; (f a1 .. an coll) is the call of f on a1 .. an and then coll's elements
-; (ex-spread), dispatched as any call is; a seq is the model's list, nil
-; the empty one -- a closure is none, and no list a program holds has the
-; recur marker in it, as no value is it. A vector's or a lazy seq's walk
-; (to_seq, sq_first, sq_rest) is the host's.
-(defun ex-seqp (v) (and (true-listp v) (not (ex-clo-shape v)) (no-mk v)))
-(defun ex-spread (args) (append (butlast args 1) (car (last args))))
+; (ex-spread), dispatched as any call is; a seq is seqk's -- a list (nil
+; the empty one), a vector, a lazy seq, a cell -- its elements sk-els's,
+; at most *sk-lim* of them (B_APPLY's bound: a seq longer, or infinite, is
+; spread by no call -- the host's coll_to_vector refuses it -- and only
+; the variadic walk below takes it, so its call is the host's here, way
+; 0); a closure is none, and no seq a program holds has the recur marker
+; among its elements, as no value is it.
+(defun ex-seqp (v) (and (equal (car (sk-elems v)) :ok) (not (ex-clo-shape v)) (no-mk (cdr (sk-elems v)))))
+(defun ex-spread (args) (append (butlast args 1) (cdr (sk-elems (car (last args))))))
 (defun ex-apway (tmp)
-  (ex-apentry (if (equal (car tmp) :apply) 1 0) (len (cdr tmp)) (if (ex-clo-shape (cadr tmp)) 1 0)
-              (if (ex-seqp (car (last (cdr tmp)))) 1 0)))
+  (if (and (equal (car tmp) :apply) (consp (cddr tmp)) (equal (car (sk-elems (car (last (cdr tmp))))) :long))
+      0
+    (ex-apentry (if (equal (car tmp) :apply) 1 0) (len (cdr tmp)) (if (ex-clo-shape (cadr tmp)) 1 0)
+                (if (and (equal (car tmp) :apply) (ex-seqp (car (last (cdr tmp))))) 1 0))))
 ; the call a record's callee and arguments make: apply's (f . spread) when
 ; it spreads, else themselves
 (defun ex-callee (tmp) (if (equal (ex-apway tmp) 1) (cons (cadr tmp) (ex-spread (cddr tmp))) tmp))
 
-; APPLY'S WALK, as B_APPLY takes it: (way fixed rest), way ex-apstep's 2
+; APPLY'S WALK ON A SEQ'S ELEMENTS: (way fixed rest), way ex-apstep's 2
 ; or 3 -- 2 the variadic arity's fixed arguments and its rest, 3 every
 ; argument, spread. fx the arguments taken so far, s the seq's elements.
-(defun ex-apwalk (req fx s)
+(defun ex-aplwalk (req fx s)
   (declare (xargs :measure (len s)))
   (let ((w (ex-apstep req (len fx) (if (consp s) 1 0))))
-    (cond ((and (equal w 1) (consp s)) (ex-apwalk req (append fx (list (car s))) (cdr s)))
+    (cond ((and (equal w 1) (consp s)) (ex-aplwalk req (append fx (list (car s))) (cdr s)))
           ((equal w 2) (list 2 (take (nfix req) fx) (append (nthcdr (nfix req) fx) s)))
           (t (list 3 (append fx s) nil)))))
+
+; HOW FAR THE WALK READS (generated): the position k -- the arguments taken
+; so far -- while k <= req + 1. RestFn.applyTo's RT.boundedLength reads
+; req + 1 positions and its last next() realises the one after, so clj
+; realises apply's seq through position req + 1 and no further. 1: read
+; it, 0: not (past it, or no variadic arity).
+(defun ex-aplook (req k)
+  (declare (xargs :guard t))
+  (if (and (integerp req) (<= 0 req) (integerp k) (<= k (+ req 1))) 1 0))
+
+; APPLY'S WALK, as B_APPLY takes it, over the seq's cursor c (seqk): (way
+; fixed extras c nr). way ex-apstep's 2 or 3: 2 the variadic arity's fixed
+; arguments, the arguments past them (consed back onto the rest) and the
+; rest's cursor as it is; 3 every argument taken and the cursor where the
+; walk stopped (the seq's end, for a variadic arity), then nil. nr the realisations
+; it makes: one each time a position it reads is a lazy seq, and when it
+; hands over at position req, the one past it (boundedLength's last
+; next(), the peek).
+(local (defthm ex-len-append-w (equal (len (append a b)) (+ (len a) (len b)))))
+(defun ex-apwalk (req fx c)
+  (declare (xargs :measure (+ (* 2 (nfix (- (ifix req) (len fx)))) (sk-rank c))))
+  (let* ((k (len fx)) (d (if (equal (ex-aplook req k) 1) (sk-d c) 1)))
+    (if (equal d 3)
+        (let ((r (ex-apwalk req fx (sk-next c)))) (update-nth 4 (1+ (nfix (nth 4 r))) r))
+      (let ((w (ex-apstep req k (if (sk-more d) 1 0))))
+        (cond ((and (equal w 1) (sk-more d) (< k (ifix req))) (ex-apwalk req (append fx (list (sk-first c))) (sk-next c)))
+              ((equal w 2) (list 2 (take (nfix req) fx) (nthcdr (nfix req) fx) c
+                                 (if (and (equal (ex-aplook req (1+ k)) 1) (equal (sk-d (sk-next c)) 3)) 1 0)))
+              (t (list 3 fx c nil 0)))))))
 ; the variadic arity's count of fixed parameters, -1 for none (B_APPLY's
 ; req: exec.inc variadic_req, the first variadic arity's, as the variadic
 ; pass of ex-arity takes)

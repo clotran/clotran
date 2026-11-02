@@ -15,7 +15,7 @@
 ; the program's defs every template's the tree can call (ex-defs-ok), its
 ; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
-  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (valp (car (ex-ev :m e 0 nil fr fuel))) (natp k))
+  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (valp (car (ex-ev :m e 0 nil fr fuel))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :in-theory (disable vcs2-run-program s2clk ex-ev ex-tr ex-vwf mx2 ex-defs-ok)
@@ -82,4 +82,13 @@
        (equal (vcs2-run-program (ex-tr :m (ex-applyg '(5) '(6 7)) 0 nil) *ex-defs* 1000) '(:val 6 7))
        (equal (mx2 (ex-tr :m (ex-applyg nil nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
        (equal (vcs2-run-program (ex-tr :m (ex-applyg nil nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))
+  :rule-classes nil)
+; over a vector (2c-iv): (apply g 5 [6 7]) spreads the vector's elements --
+; the translation the same call, :applyv's spread seqk's (x2-vals) -- the
+; rest (6 7) in the tree, mx2 and the VM alike
+(assert-event (ex-vwf :m (ex-applyg '(5) '(:vec 6 7)) 0 nil nil *ex-defs*))
+(assert-event (equal (car (ex-ev :m (ex-applyg '(5) '(:vec 6 7)) 0 nil nil 10)) '(:val 6 7)))
+(defthm ex-example-apply-vector
+  (and (equal (mx2 (ex-tr :m (ex-applyg '(5) '(:vec 6 7)) 0 nil) nil nil *ex-defs* 10) '(:val 6 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-applyg '(5) '(:vec 6 7)) 0 nil) *ex-defs* 1000) '(:val 6 7)))
   :rule-classes nil)

@@ -150,16 +150,57 @@
 (defthm ex-xvs-take (implies (ex-xvs defs l) (ex-xvs defs (take n l)))
   :hints (("Goal" :induct (take n l) :expand ((ex-xvs defs l) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-xvs-append (equal (ex-xvs defs (append a b)) (and (ex-xvs defs a) (ex-xvs defs b))))
+; A LAZY SEQ'S ELEMENTS are what the runtime's realisations give (seqk's
+; sk-real, constrained by nothing): the agreement asks they be good values
+; too, as it asks it of the scope's -- ex-lzok, the runtime handing the
+; machine only closures it knows. Then a good seq's elements, every kind,
+; are good.
+(defun-sk ex-lzok (defs) (forall c (ex-xvs defs (sk-real c))))
+(defthm ex-xvs-cons1 (implies (syntaxp (not (equal b ''nil)))
+                              (equal (ex-xvs defs (cons a b)) (and (ex-xvs defs (list a)) (ex-xvs defs b))))
+  :hints (("Goal" :expand ((ex-xvs defs (cons a b)) (ex-xvs defs (list a))))))
+(defthm ex-xvs-nth1 (implies (ex-xvs defs l) (ex-xvs defs (list (nth j l))))
+  :hints (("Goal" :in-theory (enable nth) :induct (nth j l) :expand ((ex-xvs defs l)))))
+(defthm ex-xvs-sk-first
+  (implies (and (ex-xvs defs (car c)) (sk-more (sk-d c))) (ex-xvs defs (list (sk-first c))))
+  :hints (("Goal" :in-theory (enable sk-d sk-first) :expand ((ex-xvs defs (car c)) (ex-xvs defs (cdr (car c)))))))
+(defthm ex-xvs-sk-next
+  (implies (and (ex-lzok defs) (ex-xvs defs (car c))) (ex-xvs defs (car (sk-next c))))
+  :hints (("Goal" :in-theory (e/d (sk-d sk-next) (ex-lzok)) :expand ((ex-xvs defs (car c)) (ex-xvs defs (cdr (car c))))
+                  :use ((:instance ex-lzok-necc (c (cdr (car c))))))))
+(defthm ex-sk-els-good
+  (implies (and (ex-lzok defs) (ex-xvs defs (car c))) (ex-xvs defs (cdr (sk-els c l))))
+  :hints (("Goal" :induct (sk-els c l) :in-theory (disable ex-lzok) :expand ((sk-els c l)))))
+(defthm ex-sk-elems-good
+  (implies (and (ex-lzok defs) (ex-xvs defs v)) (ex-xvs defs (cdr (sk-elems v))))
+  :hints (("Goal" :in-theory (e/d (sk-elems sk-cur) (ex-lzok)))))
+(in-theory (disable ex-xvs-cons1 ex-xvs-sk-first ex-xvs-sk-next))
+
+(defthm ex-xvs-noclo
+  (implies (and (ex-xvs defs (list v)) (not (ex-clo-shape v))) (ex-xvs defs v))
+  :hints (("Goal" :expand ((ex-xvs defs (list v))) :in-theory (enable ex-clo-shape))))
+(defthm ex-xvs-atom (implies (atom l) (ex-xvs defs l)))
+(defthm ex-spread-truelist(true-listp (ex-spread args)) :hints (("Goal" :in-theory (enable ex-spread))))
+(defthm ex-last-cdr (implies (consp (cdr l)) (equal (last l) (last (cdr l)))))
+(defthm ex-xvs-butlast(implies (ex-xvs defs l) (ex-xvs defs (butlast l n))) :hints (("Goal" :in-theory (enable butlast))))
+(defthm ex-spread-good
+  (implies (and (ex-xvs defs args) (ex-lzok defs) (not (ex-clo-shape (car (last args)))))
+           (ex-xvs defs (ex-spread args)))
+  :hints (("Goal" :in-theory (e/d (ex-spread) (ex-lzok ex-xvs last ex-xvs-last ex-xvs-noclo ex-sk-elems-good))
+                  :use ((:instance ex-xvs-last (l args)) (:instance ex-xvs-noclo (v (car (last args))))
+                        (:instance ex-sk-elems-good (v (car (last args))))))))
 (defthm ex-callee-good
-  (implies (and (consp tmp) (true-listp tmp) (ex-xvs defs tmp))
+  (implies (and (consp tmp) (true-listp tmp) (ex-xvs defs tmp) (ex-lzok defs))
            (and (consp (ex-callee tmp)) (true-listp (cdr (ex-callee tmp))) (ex-xvs defs (ex-callee tmp))))
-  :hints (("Goal" :in-theory (enable ex-callee ex-apway ex-apentry ex-spread ex-seqp ex-clo-shape)
-                  :expand ((ex-xvs defs tmp) (ex-xvs defs (cdr tmp)))
-                  :use ((:instance ex-xvs-last (l (cddr tmp))) (:instance ex-xvs-elem (v (car (last (cddr tmp)))))))))
+  :hints (("Goal" :cases ((equal (ex-apway tmp) 1)))
+          ("Subgoal 1" :in-theory (e/d (ex-callee ex-apway ex-apentry ex-seqp ex-spread-truelist) (ex-lzok ex-xvs ex-spread))
+                       :expand ((ex-xvs defs tmp) (ex-xvs defs (cdr tmp)) (ex-xvs defs (cons (cadr tmp) (ex-spread (cddr tmp)))))
+                       :use ((:instance ex-spread-good (args (cddr tmp)))))
+          ("Subgoal 2" :in-theory (enable ex-callee))))
 
 (defthm ex-callee-nop (implies (not (equal (ex-apway tmp) 1)) (equal (ex-callee tmp) tmp))
   :hints (("Goal" :in-theory (enable ex-callee))))
-(in-theory (disable ex-callee ex-apway))
+(in-theory (disable ex-callee ex-apway ex-lzok))
 
 ; well-formed: the core, every local in scope and unmarked (no clearing:
 ; that is anpass-sound's, joined in milestone 4), every let's and loop's
@@ -796,7 +837,7 @@
                     ex-car ex-fenv ex-fvs ex-callable ex-enters ex-bind ex-mxcall ex-mxcall0 ex-ehyp ex-fbody ex-arerr ex-bargs))
 
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs)
+  (and (ex-defs-ok defs defs) (ex-lzok defs)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
@@ -920,7 +961,7 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-agree cm env fr) (ex-xvs defs env)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-agree cm env fr) (ex-xvs defs env)
                 (valp (car (ex-ev :m e 0 nil fr fuel))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -928,7 +969,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-agree cm env fr) (ex-xvs defs env))
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-agree cm env fr) (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
 

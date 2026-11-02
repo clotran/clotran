@@ -10,7 +10,11 @@
 ;; value in flight is truthy, and k_finish's restart flag and marker; and a
 ;; call's callee: one to four arities, fixed and variadic, of 0 to 4 fixed
 ;; parameters (a multi-arity fn, a variadic one, both, two that could fit),
-;; the call's count and whether the callee is one of the machine's closures.
+;; the call's count and whether the callee is one of the machine's closures;
+;; and apply: its way, and its walk over a seq of each kind (model/seqk.lisp:
+;; a list, a vector, a lazy seq of cells ending in nothing, a list or a
+;; vector), ACL2's realisation attached (defattach) -- the walk's way, its
+;; fixed arguments, its rest and how many realisations it makes.
 ;; ACL2 runs ex-act, ex-kid, ex-pc, ex-i, ex-fin, ex-arity (the arity the
 ;; count picks) and ex-entry; test/exec/exec_check runs the generated
 ;; Fortran, the arity picked by exec.inc pick_arity's walk over ex_arfit;
@@ -49,12 +53,16 @@
      ;; closure and the last a seq; and its walk: the variadic arity's req
      ;; (-1 none), the leading arguments k and the seq's length
      :ap (pick [1 1 1 0 2]) :an (pick [0 1 2 2 3 4 -1]) :fk (pick [1 1 1 0 2]) :sq (pick [1 1 1 0 2])
-     :req (pick [-1 0 1 1 2 3]) :ak (pick [0 0 1 2 3 4]) :al (pick [0 1 2 3 5])}))
+     :req (pick [-1 0 1 1 2 3]) :ak (pick [0 0 1 2 3 4]) :al (pick [0 1 2 3 5])
+     ;; the seq's kind (model/seqk.lisp): 1 a list of al, 2 a vector of al, 3
+     ;; a lazy seq of al cells, then a tail tk -- 0 none, 1 a list, 2 a vector
+     ;; (a lazy seq delegating to it) -- of l2
+     :sk (pick [1 2 2 3 3 3]) :tk (pick [0 1 2]) :l2 (pick [0 1 2 4])}))
 
 (def cases (vec (repeatedly n gen-case)))
 (defn row [{:keys [k pc i nk n2 tv]}] (str/join " " [k pc i nk n2 tv]))
-(defn arow [{:keys [ars m cl ap an fk sq req ak al]}]
-  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl ap an fk sq req ak al])))
+(defn arow [{:keys [ars m cl ap an fk sq req ak al sk tk l2]}]
+  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl ap an fk sq req ak al sk tk l2])))
 ;; the arities as ACL2 reads a template's: (nf variadic index), the index
 ;; in the start slot so the pick names its place
 (defn acl2-ars [{:keys [ars]}]
@@ -68,12 +76,30 @@
          " (append (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")"
          " (if a (nth 2 a) -1) (ex-entry " (:cl c) " (if a 1 0))"
          " (ex-apentry " (str/join " " (map c [:ap :an :fk :sq])) ")"
-         ") (let ((w (ex-apwalk " (:req c) " (make-list " (:ak c) ") (make-list " (:al c) ")))) (list (car w) (len (cadr w)) (len (caddr w)))))))\n")))
+         ") (fz-walk " (str/join " " (map c [:req :ak :sk :al :tk :l2])) "))))\n")))
 
 (def driver
   (str "(include-book \"exec-proof\")\n"
        "(set-print-case :downcase state)\n"
        "(set-iprint nil)\n"
+       ;; the runtime's realisation, for the fuzzer: a lazy seq (:lazy lc tk
+       ;; l2) is lc cells, each realising to a cell whose rest is the next,
+       ;; then its tail -- none, a list or a vector of l2 (a delegation)
+       "(defun fz-real (c) (declare (xargs :guard t))
+          (let* ((c (if (true-listp c) c nil)) (lc (nfix (nth 0 c))) (tk (nth 1 c)) (l2 (nfix (nth 2 c))))
+            (cond ((not (zp lc)) (list* :cons 7 :lazy (1- lc) tk l2 nil))
+                  ((equal tk 1) (make-list l2 :initial-element 7))
+                  ((equal tk 2) (cons :vec (make-list l2 :initial-element 7)))
+                  (t nil))))\n"
+       "(defattach sk-real fz-real)\n"
+       ;; the walk's way, its fixed arguments' count, its rest's elements and its realisations
+       "(defun fz-walk (req ak sk al tk l2)
+          (let* ((v (case sk (1 (make-list al :initial-element 7)) (2 (cons :vec (make-list al :initial-element 7)))
+                              (t (list :lazy al tk l2))))
+                 (w (ex-apwalk req (make-list ak :initial-element 7) (sk-cur v))))
+            (if (equal (car w) 2)
+                (list 2 (len (cadr w)) (+ (len (caddr w)) (len (cdr (sk-els (cadddr w) 1000)))) (nfix (nth 4 w)))
+              (list 3 (+ (len (cadr w)) (len (cdr (sk-els (caddr w) 1000)))) 0 (nfix (nth 4 w))))))\n"
        (str/join (map-indexed acl2-case cases))
        "(good-bye)\n"))
 
@@ -112,7 +138,9 @@
               "; arity picked " (count (filter #(<= 0 (nth (:want %) 5)) results))
               ", by entry " (str/join "," (for [[a c] (sort (frequencies (map #(nth (:want %) 6) results)))] (str a ":" c)))
               "; apply by way " (str/join "," (for [[a c] (sort (frequencies (map #(nth (:want %) 7) results)))] (str a ":" c)))
-              ", walks handing the rest over " (count (filter #(= 2 (nth (:want %) 8)) results))))
+              ", walks handing the rest over " (count (filter #(= 2 (nth (:want %) 8)) results))
+              ", by seq kind " (str/join "," (for [[a c] (sort (frequencies (map :sk cases)))] (str a ":" c)))
+              ", realising " (count (filter #(pos? (nth (:want %) 11)) results))))
 (println (str "generated tree-evaluator decisions against ACL2's: " (count bad) " cases differ"))
 (doseq [b (take 3 bad)]
   (println "  case" (:k b) (pr-str (nth cases (:k b))))

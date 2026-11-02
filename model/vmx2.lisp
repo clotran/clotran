@@ -19,7 +19,8 @@
 ;
 ;   APPLY. The value :apply is clojure.core/apply. (:applyv f e1 .. en) is
 ;   :callv's call, but when f's value is apply, its first argument a
-;   closure and its last a seq -- the model's list, no closure -- it is the
+;   closure and its last a seq -- seqk's: a list, a vector, a lazy seq or a
+;   cell, its elements sk-elems's (no closure) -- it is the
 ;   call of that closure on the arguments between and the seq's elements
 ;   (apply's spread, IFn.applyTo): a call whose head may be apply, which
 ;   only the head's value tells. Any other call of apply -- of a builtin,
@@ -53,6 +54,7 @@
 (in-package "ACL2")
 
 (include-book "vmx")
+(include-book "seqk")
 
 ; ---- THE RUNTIME ------------------------------------------------------------
 
@@ -82,11 +84,11 @@
 
 ; ---- APPLY: a call's callee and arguments once apply has spread them ------------
 
-(defun x2-seqp (l) (and (true-listp l) (not (clop l))))
+(defun x2-seqp (l) (and (not (clop l)) (equal (car (sk-elems l)) :ok)))
 (defun x2-spreads (op c vs)
   (and (eq op :applyv) (eq c :apply) (consp vs) (consp (cdr vs)) (clop (car vs)) (x2-seqp (car (last vs)))))
 (defun x2-fn (op c vs) (if (x2-spreads op c vs) (car vs) c))
-(defun x2-vals (op c vs) (if (x2-spreads op c vs) (append (butlast (cdr vs) 1) (car (last (cdr vs)))) vs))
+(defun x2-vals (op c vs) (if (x2-spreads op c vs) (append (butlast (cdr vs) 1) (cdr (sk-elems (car (last (cdr vs)))))) vs))
 
 ; ---- THE MEANING --------------------------------------------------------------
 ;

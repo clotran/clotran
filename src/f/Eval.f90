@@ -10575,8 +10575,8 @@ contains
        ! ex_apstep how far the seq is walked; the walk is this block.
        block
          type(gc_value) :: fargs, last, f, s, v
-         integer :: j, req
-         integer(int64) :: fk, sq, way, step, more
+         integer :: j, req, nr
+         integer(int64) :: fk, sq, way, step, more, d, dd, k
          character(len=12) :: nb
          fargs = gcv_empty([vs_get(vst, base + 1)])
          do j = 1, n - 2
@@ -10592,7 +10592,11 @@ contains
          sq = 0
          if (gc_kind(f) == OBJ_CLOSURE .and. n >= 2) then
             fk = 1
-            s = to_seq(gcv_nth(vs_get(vst, base + 1), n - 1), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+            ! a lazy seq as it is: the walk realises it as far as it reads
+            ! (ex-aplook); anything else seq'd here
+            s = gcv_nth(vs_get(vst, base + 1), n - 1)
+            if (gc_kind(strip_meta(s)) /= OBJ_LAZY) &
+                 s = to_seq(s, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
             call vs_set(vst, base + 3, s)
             if (.not. tctx%has_error) sq = 1
          end if
@@ -10621,21 +10625,40 @@ contains
          else if (way == 3 .or. tctx%has_error) then
             continue
          else if (req >= 0) then
-            ! the fixed arguments still wanted come off the front of the seq
+            ! the fixed arguments still wanted come off the front of the
+            ! seq (model/exec.lisp ex-apwalk): each position read while
+            ! ex_aplook says, by its kind (ap_look, sk_step), realising
+            ! a lazy seq there
+            nr = 0
             do
-               s = vs_get(vst, base + 3)
+               k = gcv_count(vs_get(vst, base + 2))
+               d = 1
+               if (ex_aplook(int(req, int64), k) == 1) then
+                  s = vs_get(vst, base + 3)
+                  call ap_look(s, d, nr, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+                  call vs_set(vst, base + 3, s)
+               end if
                more = 0
-               if (s%tag /= GCT_NIL) more = 1
-               step = ex_apstep(int(req, int64), int(gcv_count(vs_get(vst, base + 2)), int64), more)
+               if (d == 1 .or. d == 2 .or. d == 5 .or. d == 6) more = 1
+               step = ex_apstep(int(req, int64), k, more)
                if (step /= 1 .or. tctx%has_error) exit
-               v = sq_first(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+               v = ap_first(vs_get(vst, base + 3), d, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
                fargs = gcv_conj(vs_get(vst, base + 2), v, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), v])
                call vs_set(vst, base + 2, fargs)
-               s = sq_rest(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
-               call vs_set(vst, base + 3, s)
-               s = to_seq(vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+               s = ap_next(vs_get(vst, base + 3), d, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
                call vs_set(vst, base + 3, s)
             end do
+            ! handing over at position req, the position past it realised
+            ! too: RestFn.applyTo's boundedLength reads req + 1 positions
+            ! and its last next() realises the one after (the peek)
+            if (.not. tctx%has_error .and. step == 2) then
+               if (ex_aplook(int(req, int64), k + 1) == 1) then
+                  s = ap_next(vs_get(vst, base + 3), d, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 4, s)
+                  call ap_look(s, dd, nr, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+                  call vs_set(vst, base + 4, gc_nil())
+               end if
+            end if
             if (tctx%has_error) then
                continue
             else if (step == 2) then
@@ -10691,8 +10714,9 @@ contains
          ! vector as often as it is a list, and counting only lists and
          ! vectors made (apply f (seq xs)) call f with no arguments at
          ! all. Bounded, so (apply + (range)) is an error and not a hang.
-         last = coll_to_vector(gcv_nth(vs_get(vst, base + 1), n - 1), &
-              [vs_get(vst, base + 1), vs_get(vst, base + 2)], limit=1000000)
+         ! Read by kind through the walk's shims (ap_spread: sk-elems).
+         last = ap_spread(gcv_nth(vs_get(vst, base + 1), n - 1), 1000000, &
+              [vs_get(vst, base + 1), vs_get(vst, base + 2)])
          call vs_set(vst, base + 3, last)
          fargs = vs_get(vst, base + 2)
          do j = 0, gcv_count(vs_get(vst, base + 3)) - 1

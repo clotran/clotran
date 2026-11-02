@@ -21,7 +21,7 @@
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (otherwise 0)))
+(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 4) (sk-step 7) (otherwise 0)))
 (defthm ex-own-bound (<= (ex-own f) 16) :rule-classes :linear)
 
 ; the arity's walk: the arities ex-arfit is asked of, the fixed pass and,
@@ -109,27 +109,67 @@
                   :in-theory (e/d (c+) (ex-kid-of ex-bind ex-fbody ex-enters))
                   :expand ((ex-ev :call e i tmp fr fuel)))))
 
-; APPLY, COUNTED. B_APPLY's walk is a turn of its loop an element it takes,
-; one ex-apstep (7 comparisons) each and one more for the decision that
-; ends it: at most the seq's length + 1, and at most req - k + 1 -- so a
-; lazy seq is realised no further than the variadic arity's fixed
-; parameters, (apply f 1 (range)) in a constant number of turns.
-(defun ex-apwalk-steps (req fx s)
-  (declare (xargs :measure (len s)))
-  (if (and (equal (ex-apstep req (len fx) (if (consp s) 1 0)) 1) (consp s))
-      (1+ (ex-apwalk-steps req (append fx (list (car s))) (cdr s)))
-    1))
-(defthm ex-apwalk-steps-len (<= (ex-apwalk-steps req fx s) (1+ (len s))) :rule-classes :linear)
-(defthm ex-apwalk-steps-req
-  (implies (natp req) (<= (ex-apwalk-steps req fx s) (1+ (nfix (- req (len fx))))))
-  :rule-classes :linear
-  :hints (("Goal" :in-theory (enable ex-apstep))))
 
-; the spread copies each argument but the last, then the last's elements,
-; once: a step an element and one to end each copy -- n + 2 for n spread
+; APPLY, COUNTED. B_APPLY's walk (ex-apwalk, over a seq of any kind) is a
+; turn of its loop a step: a realisation or an element taken, one ex-aplook
+; (4 comparisons), one sk-step (7) and one ex-apstep (7) each, and one more
+; for the decision that ends it, with the peek. A realisation's answer is
+; never a lazy seq to realise again (seqk), so each element costs at most
+; two turns: at most 2t + 3 for t taken (ex-apwalk-turns-taken), and the
+; walk takes no more than req - k (ex-apwalk-taken-req) -- (apply f 1
+; (range)) in a constant number of turns, whatever the seq's kind.
+(defun ex-apwalk-turns (req fx c)
+  (declare (xargs :measure (+ (* 2 (nfix (- (ifix req) (len fx)))) (sk-rank c))))
+  (let* ((k (len fx)) (d (if (equal (ex-aplook req k) 1) (sk-d c) 1)))
+    (if (equal d 3)
+        (1+ (ex-apwalk-turns req fx (sk-next c)))
+      (let ((w (ex-apstep req k (if (sk-more d) 1 0))))
+        (cond ((and (equal w 1) (sk-more d) (< k (ifix req))) (1+ (ex-apwalk-turns req (append fx (list (sk-first c))) (sk-next c))))
+              ((equal w 2) (if (and (equal (ex-aplook req (1+ k)) 1) (equal (sk-d (sk-next c)) 3)) 2 1))
+              (t 1))))))
+(defun ex-apwalk-taken (req fx c)
+  (declare (xargs :measure (+ (* 2 (nfix (- (ifix req) (len fx)))) (sk-rank c))))
+  (let* ((k (len fx)) (d (if (equal (ex-aplook req k) 1) (sk-d c) 1)))
+    (if (equal d 3)
+        (ex-apwalk-taken req fx (sk-next c))
+      (if (and (equal (ex-apstep req k (if (sk-more d) 1 0)) 1) (sk-more d) (< k (ifix req)))
+          (1+ (ex-apwalk-taken req (append fx (list (sk-first c))) (sk-next c)))
+        0))))
+(defthm ex-apwalk-turns-taken0
+  (<= (ex-apwalk-turns req fx c) (+ 2 (* 2 (ex-apwalk-taken req fx c)) (if (equal (sk-d c) 3) 1 0)))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-apwalk-turns req fx c))))
+(defthm ex-apwalk-turns-taken
+  (<= (ex-apwalk-turns req fx c) (+ 3 (* 2 (ex-apwalk-taken req fx c))))
+  :rule-classes :linear
+  :hints (("Goal" :use ex-apwalk-turns-taken0)))
+(defthm ex-apwalk-taken-req
+  (<= (ex-apwalk-taken req fx c) (nfix (- (ifix req) (len fx))))
+  :rule-classes :linear
+  :hints (("Goal" :induct (ex-apwalk-taken req fx c) :in-theory (enable ex-apstep))))
+
+; THE SPREAD reads the last argument's elements (sk-els): a turn a step, a
+; realisation or an element, and one for its end -- at most 2n + 2 for n
+; elements (2n + 3 from a lazy seq not yet realised) -- then copies each
+; argument but the last and those elements, once: a step an element and
+; one to end each copy, n + 2 for n spread.
+(defun sk-els-turns (c l)
+  (declare (xargs :measure (+ (* 2 (nfix l)) (sk-rank c))))
+  (let ((d (sk-d c)))
+    (cond ((equal d 3) (1+ (sk-els-turns (sk-next c) l)))
+          ((and (sk-more d) (not (zp l))) (1+ (sk-els-turns (sk-next c) (1- l))))
+          (t 1))))
+(defthm sk-els-turns-bound
+  (<= (sk-els-turns c l) (+ 2 (* 2 (len (cdr (sk-els c l)))) (if (equal (sk-d c) 3) 1 0)))
+  :rule-classes nil
+  :hints (("Goal" :induct (sk-els-turns c l) :expand ((sk-els c l)))))
+(defthm sk-elems-turns
+  (<= (sk-els-turns (sk-cur v) *sk-lim*) (+ 3 (* 2 (len (cdr (sk-elems v))))))
+  :rule-classes :linear
+  :hints (("Goal" :in-theory (enable sk-elems) :use ((:instance sk-els-turns-bound (c (sk-cur v)) (l *sk-lim*))))))
 (defun ex-copy-steps (l) (if (atom l) 1 (1+ (ex-copy-steps (cdr l)))))
 (defthm ex-copy-steps-len (equal (ex-copy-steps l) (1+ (len l))))
 (defthm ex-len-append-c (equal (len (append a b)) (+ (len a) (len b))))
 (defthm ex-spread-steps
-  (equal (+ (ex-copy-steps (butlast args 1)) (ex-copy-steps (car (last args))))
+  (equal (+ (ex-copy-steps (butlast args 1)) (ex-copy-steps (cdr (sk-elems (car (last args))))))
          (+ 2 (len (ex-spread args)))))

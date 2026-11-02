@@ -397,12 +397,93 @@
   :hints (("Goal" :use ((:instance ex-arsane-no-fixed (req (ex-varnf ars))))
                   :in-theory (disable ex-arsane-no-fixed))))
 
-(defthm ex-apwalk-call
+(defthm ex-aplwalk-call
   (implies (and (ex-arsane ars req) (equal req (ex-varnf ars)) (true-listp fx) (true-listp s))
-           (let ((w (ex-apwalk req fx s)) (args (append fx s)))
+           (let ((w (ex-aplwalk req fx s)) (args (append fx s)))
              (and (implies (equal (car w) 2)
                            (let ((ar (ex-arity ars (len args))))
                              (and (truthy (nth 1 ar)) (equal (nth 0 ar) req)
                                   (equal (ex-bargs ar args) (append (cadr w) (list (caddr w)))))))
                   (implies (not (equal (car w) 2)) (and (equal (car w) 3) (equal (cadr w) args))))))
-  :hints (("Goal" :induct (ex-apwalk req fx s) :in-theory (e/d (ex-apstep ex-bargs ex-rest-args) (ex-arity)))))
+  :hints (("Goal" :induct (ex-aplwalk req fx s) :in-theory (e/d (ex-apstep ex-bargs ex-rest-args) (ex-arity)))))
+
+; OVER EVERY KIND (seqk): the walk over a seq's cursor is the walk over its
+; elements -- the same way and fixed arguments, the rest's elements the
+; arguments past them and what the cursor it hands over still holds -- for
+; a seq of finitely many (sk-els's :ok, at any bound l).
+(defun ex-apw-ind (req fx c l)
+  (declare (xargs :measure (+ (* 2 (nfix (- (ifix req) (len fx)))) (sk-rank c))))
+  (let* ((k (len fx)) (d (if (equal (ex-aplook req k) 1) (sk-d c) 1)))
+    (if (equal d 3)
+        (ex-apw-ind req fx (sk-next c) l)
+      (if (and (equal (ex-apstep req k (if (sk-more d) 1 0)) 1) (sk-more d) (< k (ifix req)))
+          (ex-apw-ind req (append fx (list (sk-first c))) (sk-next c) l)
+        (list fx c l)))))
+
+(defthm ex-sk-els-step
+  (implies (and (equal (car (sk-els c l)) :ok) (sk-more (sk-d c)))
+           (and (equal (car (sk-els (sk-next c) l)) :ok)
+                (equal (cdr (sk-els c l)) (cons (sk-first c) (cdr (sk-els (sk-next c) l))))))
+  :hints (("Goal" :expand ((sk-els c l)) :use ((:instance sk-els-mono (c (sk-next c)) (l (1- l)) (l2 l))))))
+(defthm ex-sk-els-real
+  (implies (equal (sk-d c) 3) (equal (sk-els c l) (sk-els (sk-next c) l)))
+  :hints (("Goal" :expand ((sk-els c l)))))
+(defthm ex-sk-els-end
+  (implies (and (equal (car (sk-els c l)) :ok) (not (sk-more (sk-d c))) (not (equal (sk-d c) 3)))
+           (equal (cdr (sk-els c l)) nil))
+  :hints (("Goal" :expand ((sk-els c l)))))
+
+(defthm ex-apwalk-els
+  (implies (and (equal (car (sk-els c l)) :ok) (true-listp fx))
+           (let ((w (ex-apwalk req fx c)) (v (ex-aplwalk req fx (cdr (sk-els c l)))))
+             (and (equal (car w) (car v))
+                  (implies (equal (car w) 2)
+                           (and (equal (cadr w) (cadr v)) (equal (car (sk-els (cadddr w) l)) :ok)
+                                (equal (append (caddr w) (cdr (sk-els (cadddr w) l))) (caddr v))))
+                  (implies (not (equal (car w) 2))
+                           (and (equal (car (sk-els (caddr w) l)) :ok)
+                                (equal (append (cadr w) (cdr (sk-els (caddr w) l))) (cadr v)))))))
+  :hints (("Goal" :induct (ex-apw-ind req fx c l)
+                  :in-theory (enable ex-apstep ex-aplook)
+                  :expand ((ex-apwalk req fx c) (:free (s) (ex-aplwalk req fx s))))))
+
+(defthm ex-apwalk-call
+  (implies (and (ex-arsane ars req) (equal req (ex-varnf ars)) (true-listp fx) (equal (car (sk-els c l)) :ok))
+           (let ((w (ex-apwalk req fx c)) (args (append fx (cdr (sk-els c l)))))
+             (and (implies (equal (car w) 2)
+                           (let ((ar (ex-arity ars (len args))))
+                             (and (truthy (nth 1 ar)) (equal (nth 0 ar) req)
+                                  (equal (ex-bargs ar args)
+                                         (append (cadr w) (list (append (caddr w) (cdr (sk-els (cadddr w) l)))))))))
+                  (implies (not (equal (car w) 2))
+                           (and (equal (car w) 3) (equal (append (cadr w) (cdr (sk-els (caddr w) l))) args))))))
+  :hints (("Goal" :use (ex-apwalk-els (:instance ex-aplwalk-call (s (cdr (sk-els c l)))))
+                  :in-theory (disable ex-apwalk-els ex-aplwalk-call ex-arity ex-bargs))))
+
+; HOW FAR IT REALISES: positions k .. req + 1 at most -- clj's
+; boundedLength exactly -- one realisation each; a vector's walk, and a
+; list's, none.
+(defthm ex-apwalk-realises
+  (implies (natp req)
+           (<= (nfix (nth 4 (ex-apwalk req fx c))) (+ (nfix (- (+ req 1) (len fx))) (if (equal (sk-d c) 3) 1 0))))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-apwalk req fx c) :in-theory (enable ex-apstep ex-aplook)
+                  :expand ((ex-apwalk req fx c)))))
+(defthm ex-apwalk-realise-bound
+  (implies (natp req) (<= (nfix (nth 4 (ex-apwalk req fx c))) (+ 1 (nfix (- (+ req 1) (len fx))))))
+  :hints (("Goal" :use ex-apwalk-realises)))
+; a cursor no step of which realises anything: a vector's view, a list, or a
+; list's tail -- every step stays one
+(defun ex-noreal (c) (or (not (caddr c)) (and (consp (car c)) (not (member (caar c) (quote (:lazy :cons)))) (eq (caddr c) t))))
+(defthm ex-noreal-next
+  (implies (ex-noreal c) (and (ex-noreal (sk-next c)) (not (equal (sk-d c) 3))))
+  :hints (("Goal" :in-theory (enable sk-d sk-next))))
+(defthm ex-apwalk-noreal
+  (implies (ex-noreal c) (equal (nth 4 (ex-apwalk req fx c)) 0))
+  :hints (("Goal" :induct (ex-apwalk req fx c) :expand ((ex-apwalk req fx c)) :in-theory (disable ex-noreal))))
+(defthm ex-apwalk-vector (equal (nth 4 (ex-apwalk req fx (list (cons :vec e) i t))) 0)
+  :hints (("Goal" :use ((:instance ex-apwalk-noreal (c (list (cons :vec e) i t)))))))
+(defthm ex-apwalk-list
+  (implies (and (consp v) (not (member (car v) '(:lazy :cons))))
+           (equal (nth 4 (ex-apwalk req fx (sk-cur v))) 0))
+  :hints (("Goal" :in-theory (enable sk-cur) :use ((:instance ex-apwalk-noreal (c (list v 0 t)))))))

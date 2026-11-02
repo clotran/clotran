@@ -7,7 +7,8 @@
   ! (ex_fin), the arity a call's count picks (ex_arfit: the fixed one, else
   ! the variadic one) and how it enters its callee or throws the arity error
   ! (ex_entry), and apply: its way (ex_apentry) and how far its walk takes the
-  ! seq (ex_apstep), B_APPLY the walk -- guard-verified.
+  ! seq (ex_apstep) and how far it reads it (ex_aplook), and each step over a
+  ! seq by its kind (sk_step, model/seqk.lisp), B_APPLY the walk -- guard-verified.
   ! exec.inc's exec_core does what they decide. exec-proof.lisp proves the
   ! machine they drive answers each node's meaning, exec-vm.lisp that the
   ! meaning is the VM's; exec-cost.lisp counts the turns.
@@ -672,3 +673,84 @@
       end if
     end if
   end function ex_apstep
+
+  pure function ex_aplook(req_, k_) result(r)
+    integer(int64), value :: req_
+    integer(int64), value :: k_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    if (.true.) then
+      if ((.not. (req_ < 0_int64))) then
+        if (.true.) then
+          t_1 = (.not. ((req_ + 1_int64) < k_))
+        else
+          t_1 = .false.
+        end if
+        t_2 = t_1
+      else
+        t_2 = .false.
+      end if
+      t_3 = t_2
+    else
+      t_3 = .false.
+    end if
+    if (t_3) then
+      r = 1_int64
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function ex_aplook
+
+  pure function sk_step(kd_, i_, cnt_) result(r)
+    integer(int64), value :: kd_
+    integer(int64), value :: i_
+    integer(int64), value :: cnt_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    select case (kd_)
+    case (1_int64)
+      r = 1_int64
+      return
+    case (2_int64)
+      if (.true.) then
+        if (.true.) then
+          if ((.not. (i_ < 0_int64))) then
+            t_1 = (i_ < cnt_)
+          else
+            t_1 = .false.
+          end if
+          t_2 = t_1
+        else
+          t_2 = .false.
+        end if
+        t_3 = t_2
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        r = 2_int64
+        return
+      else
+        r = 0_int64
+        return
+      end if
+    case (3_int64)
+      r = 3_int64
+      return
+    case (5_int64)
+      r = 5_int64
+      return
+    case (0_int64)
+      r = 0_int64
+      return
+    case default
+      r = 4_int64
+      return
+    end select
+  end function sk_step

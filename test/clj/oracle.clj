@@ -2219,6 +2219,21 @@
   [(apply f []) (apply f nil) (apply f [1]) (apply f 1 []) (apply f 1 2 [3]) (apply f 1 2 3 4 [5 6]) (apply f (list 1 2 3)) (apply f 1 2 3 nil)
    (apply f (range 5)) (apply f (vec (range 4))) (apply f (map inc (range 3))) (apply f 1 (sorted-set 2 3 4))
    (try (apply f [1 2]) (catch clotran.host.arity_exception e :arity))])
+;; apply over each kind of seq (model/seqk.lisp: a list, a vector's view, a
+;; lazy seq, a realised cell; chunked, map, set and string seqs the host's),
+;; and how far a lazy one is realised: through position req + 1, as
+;; RestFn.applyTo's boundedLength walks it (model/exec.lisp ex-aplook) --
+;; B_APPLY stopped one short of clj
+(let [n (atom 0) s (fn s [i] (lazy-seq (swap! n inc) (cons i (s (inc i)))))
+      cnt (fn [f] (reset! n 0) (f) @n)
+      v0 (fn [& r] r) v1 (fn [a & r] [a r]) v2 (fn [a b & r] [a b r]) g2 (fn [a b] [a b]) m2 (fn ([a] [:one a]) ([a b & r] [a b r]))]
+  [(apply v0 []) (apply v0 nil) (apply v1 [1]) (apply v2 0 [1 2 3]) (apply v1 5 nil) (apply m2 [1]) (apply m2 1 [2 3])
+   (apply v1 (range 5)) (apply v2 "abc") (apply v1 {:a 1}) (apply v1 (lazy-seq [1 2 3])) (apply v0 (lazy-seq nil))
+   (apply v2 (lazy-seq (cons 1 [2 3 4]))) (apply v1 (with-meta [1 2] {:m 1})) (apply v1 (subvec [1 2 3 4] 1)) (apply v1 (rseq [1 2 3]))
+   (seq? (second (apply v1 [1 2 3]))) (take 3 (second (apply v1 (s 0))))
+   (cnt #(apply v1 (s 0))) (cnt #(apply v0 (s 0))) (cnt #(apply v2 (s 0))) (cnt #(apply g2 (take 2 (s 0)))) (cnt #(apply m2 (s 0)))
+   (cnt #(apply v1 (lazy-seq (s 0)))) (cnt #(apply v2 (cons 9 (s 0)))) (cnt #(apply v2 9 (lazy-seq (cons 8 (s 0)))))
+   (cnt #(apply v2 9 8 7 (s 0))) (cnt #(apply (fn [a b c d & r] a) (s 0)))])
 
 ;; strings are characters (DEVIATIONS 41): counted, indexed, sliced and
 ;; searched by code point, with the Character predicates ICU's
