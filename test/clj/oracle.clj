@@ -2190,6 +2190,8 @@
 (apply (fn [a & r] [a (take 3 r)]) 1 (range))
 (apply (fn [a b & r] [a b (take 3 r)]) (range))
 (apply (fn [& xs] (first xs)) (range))
+;; a counting seq through (apply (fn [a & r] a) s): 3 cells realised (model/vmx2.lisp, model/exec.lisp)
+(let [n (atom 0) s ((fn s [i] (lazy-seq (swap! n inc) (cons i (s (inc i))))) 0)] (apply (fn [a & r] a) s) @n)
 (apply (fn [a b & r] [a b r]) 1 2 3 4 [5 6])
 (apply (fn [a b & r] [a b r]) 1 2 3 4 [])
 (apply (fn [a b & r] [a b r]) 1 [2])

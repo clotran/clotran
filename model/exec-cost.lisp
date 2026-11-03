@@ -172,4 +172,16 @@
 (defthm ex-len-append-c (equal (len (append a b)) (+ (len a) (len b))))
 (defthm ex-spread-steps
   (equal (+ (ex-copy-steps (butlast args 1)) (ex-copy-steps (cdr (sk-elems (car (last args))))))
-         (+ 2 (len (ex-spread args)))))
+         (+ 2 (len (butlast args 1)) (len (cdr (sk-elems (car (last args))))))))
+; a variadic fn handed the seq (sk-spread's :hand, model/exec-PLAN.md's
+; 2c-vi) gets req + 1 arguments, whatever the seq's length -- its copy
+; req + 2 steps; the seq read only through the walk's turns above
+(defthm ex-apwalk-hand-len
+  (implies (equal (car (ex-apwalk req fx c)) 2) (equal (len (nth 1 (ex-apwalk req fx c))) (nfix req)))
+  :hints (("Goal" :induct (ex-apwalk req fx c) :expand ((ex-apwalk req fx c)) :in-theory (enable ex-apstep ex-aplook))))
+; (sk-els answers :ok, :long or :none -- never :hand, which only the walk hands)
+(defthm sk-els-not-hand (not (equal (car (sk-els c l)) :hand)) :hints (("Goal" :induct (sk-els c l))))
+(defthm sk-spread-hand-steps
+  (implies (equal (car (sk-spread req fx v)) :hand)
+           (equal (ex-copy-steps (cadr (sk-spread req fx v))) (+ 2 (nfix req))))
+  :hints (("Goal" :in-theory (e/d (sk-spread) (ex-apwalk)))))

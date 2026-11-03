@@ -593,7 +593,7 @@
                                    (a (vcs2-compile e 0 nil nil 0 nil))
                                    (b (cons '(:ret) (car (vcs2-defs defs (len (s2v-main))))))
                                    (c '((:ret))))))
-          ("Goal'" :in-theory (enable vcs2-program))))
+          ("Goal'" :in-theory (e/d (vcs2-program) (s2clk mx2)))))
 
 ; ---- THE ENCODER: what goes into the arrays reads back as the program --------------------------
 

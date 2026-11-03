@@ -25,6 +25,10 @@
 
 (include-book "vmx2-proof")
 
+; apply's spread (x2-cls and friends, over sk-spread) is opaque here: the clock
+; and the count name the same callee, clauses and arguments
+(local (in-theory (disable x2-spreads x2-hands x2-fn x2-vals x2-cls x2-sp sk-spread)))
+
 (mutual-recursion
  (defun x2evals (e env caps defs fuel)
    (declare (xargs :measure (make-ord 2 (1+ (nfix fuel)) (make-ord 1 (1+ (acl2-count e)) 1))

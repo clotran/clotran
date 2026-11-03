@@ -84,11 +84,32 @@
 
 ; ---- APPLY: a call's callee and arguments once apply has spread them ------------
 
-(defun x2-seqp (l) (and (not (clop l)) (equal (car (sk-elems l)) :ok)))
-(defun x2-spreads (op c vs)
-  (and (eq op :applyv) (eq c :apply) (consp vs) (consp (cdr vs)) (clop (car vs)) (x2-seqp (car (last vs)))))
-(defun x2-fn (op c vs) (if (x2-spreads op c vs) (car vs) c))
-(defun x2-vals (op c vs) (if (x2-spreads op c vs) (append (butlast (cdr vs) 1) (cdr (sk-elems (car (last (cdr vs)))))) vs))
+; The spread is seqk's sk-spread -- the tree's and B_APPLY's walk
+; (ex-apwalk): the fn's variadic clause's count of fixed parameters req
+; (x2-req, -1 for none), read from fns (mx2's defs, the machine's function
+; table: their clauses' counts and kinds are one), decides how far the
+; seq is read. A variadic fn handed the seq (:hand) gets its req
+; arguments and the rest as one seq value, read only through position
+; req + 1 (RestFn.applyTo): the call is its variadic clause's, as the
+; fixed clause of req + 1 parameters (x2-hcls) -- its locals and frame are
+; the variadic clause's, the rest in the last. Otherwise (:ok) every
+; element is read and the count picks the clause as before; no seq, or
+; one longer than *sk-lim* left, and the call is the runtime's.
+(defun x2-req (cls) (cond ((atom cls) -1) ((restp (car cls)) (nfix (caar cls))) (t (x2-req (cdr cls)))))
+(defun x2-sp (vs fns) (sk-spread (x2-req (cdr (assoc-equal (clo-f (car vs)) fns))) (butlast (cdr vs) 1) (car (last vs))))
+(defun x2-spreads (op c vs fns)
+  (and (eq op :applyv) (eq c :apply) (consp vs) (consp (cdr vs)) (clop (car vs)) (not (clop (car (last vs))))
+       (member-eq (car (x2-sp vs fns)) '(:ok :hand))))
+(defun x2-hands (op c vs fns) (and (x2-spreads op c vs fns) (eq (car (x2-sp vs fns)) :hand)))
+(defun x2-fn (op c vs fns) (if (x2-spreads op c vs fns) (car vs) c))
+(defun x2-vals (op c vs fns) (if (x2-spreads op c vs fns) (cadr (x2-sp vs fns)) vs))
+; the variadic clause, as the fixed one of req + 1 parameters
+(defun x2-hcls (cls)
+  (cond ((atom cls) nil)
+        ((restp (car cls)) (list (list (1+ (nfix (caar cls))) (cadar cls))))
+        (t (x2-hcls (cdr cls)))))
+; the clauses a call picks from
+(defun x2-cls (op c vs fns cls) (if (x2-hands op c vs fns) (x2-hcls cls) cls))
 
 ; ---- THE MEANING --------------------------------------------------------------
 ;
@@ -127,11 +148,11 @@
           (let ((rf (mx2 (cadr e) env caps defs fuel)))
             (if (not (valp rf))
                 rf
-              (let ((c (x2-fn (car e) (val rf) (val rs))) (vs (x2-vals (car e) (val rf) (val rs))))
+              (let ((c (x2-fn (car e) (val rf) (val rs) defs)) (vs (x2-vals (car e) (val rf) (val rs) defs)))
                 (if (not (clop c))
                     (let ((a (prim :invoke (cons c vs))))
                       (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))
-                  (let* ((cls (cdr (assoc-equal (clo-f c) defs)))
+                  (let* ((cls (x2-cls (car e) (val rf) (val rs) defs (cdr (assoc-equal (clo-f c) defs))))
                          (cl (pick-arity cls (len vs))))
                     (cond ((not (consp cl)) (cons :thrown :arity))
                           ((zp fuel) (list :out))
@@ -243,8 +264,15 @@
   (if (atom vs) stk (x2-put (1+ (nfix k)) (cdr vs) (update-nth (nfix k) (car vs) stk))))
 
 ; the stack apply's spread makes: the spread arguments, the fn above them
-(defun x2-stk (op fb2 c vs stk)
-  (if (x2-spreads op c vs) (x2-put fb2 (append (x2-vals op c vs) (list (car vs))) stk) stk))
+(defun x2-stk (op fb2 c vs stk fns)
+  (if (x2-spreads op c vs fns) (x2-put fb2 (append (x2-vals op c vs fns) (list (car vs))) stk) stk))
+
+; the function table a call dispatches in: a variadic fn handed apply's seq
+; finds its variadic clause's entry as the fixed one of req + 1 (x2-hcls)
+(defun x2-prog (op c vs prog)
+  (if (x2-hands op c vs (cdr prog))
+      (cons (car prog) (acons (clo-f (car vs)) (x2-hcls (cdr (assoc-equal (clo-f (car vs)) (cdr prog)))) (cdr prog)))
+    prog))
 
 (defun vcs2-step (prog s)
   (let* ((pc (car s)) (fb (nfix (cadr s))) (sp (nfix (caddr s))) (stk (cadddr s))
@@ -257,7 +285,8 @@
            (if (< sp (1+ m))
                s
              (let* ((c (sreg (1- sp) stk)) (fb2 (- sp (1+ m))) (vs (stk-from fb2 m stk)))
-               (vcs2-callv prog pc fb fb2 (x2-fn op c vs) (x2-vals op c vs) (x2-stk op fb2 c vs stk) ctl)))))
+               (vcs2-callv (x2-prog op c vs prog) pc fb fb2 (x2-fn op c vs (cdr prog)) (x2-vals op c vs (cdr prog))
+                           (x2-stk op fb2 c vs stk (cdr prog)) ctl)))))
         (:prim (let* ((ins (nth pc (car prog))) (n (nfix (caddr ins))))
                  (if (< sp n)
                      s
@@ -364,16 +393,19 @@
 
 ; ---- AS A CHECK ----------------------------------------------------------------------
 ;
-; an executable runtime for the checks: a few list and arithmetic ops, and
-; a division that throws on zero. The theorems are about prim unconstrained.
+; an executable runtime for the checks: a few seq and arithmetic ops (on
+; any seqk seq: apply hands a variadic fn its rest as a seq value), and a
+; division that throws on zero; and a realisation, (:lazy . n) the
+; infinite (n n+1 ...), clj's (range n). The theorems are about prim and
+; sk-real unconstrained.
 
 (defun prim-impl (op vals)
   (declare (xargs :guard t))
   (case op
-    (:first (if (consp vals) (if (consp (car vals)) (car (car vals)) nil) nil))
-    (:rest (if (consp vals) (if (consp (car vals)) (cdr (car vals)) nil) nil))
-    (:empty (if (consp vals) (if (consp (car vals)) nil t) t))
-    (:count (if (consp vals) (len (car vals)) 0))
+    (:first (if (consp vals) (cadr (sk-els (sk-cur (car vals)) 1)) nil))
+    (:rest (if (consp vals) (cddr (sk-elems (car vals))) nil))
+    (:empty (if (consp vals) (atom (cdr (sk-els (sk-cur (car vals)) 1))) t))
+    (:count (if (consp vals) (len (cdr (sk-elems (car vals)))) 0))
     (:div (if (and (consp vals) (consp (cdr vals)) (rationalp (car vals)) (rationalp (cadr vals))
                    (not (equal (cadr vals) 0)))
               (floor (car vals) (cadr vals))
@@ -383,6 +415,8 @@
     (otherwise nil)))
 
 (defattach prim prim-impl)
+(defun x2-range-real (c) (declare (xargs :guard t)) (list* :cons (nfix c) :lazy (1+ (nfix c))))
+(defattach sk-real x2-range-real)
 
 (defconst *x2-defs*
   '(; variadic: the sum of all its arguments, by a loop over the rest
@@ -394,6 +428,9 @@
     (f2 (1 (:add (:local 0) (:const 100)))
         (2 (:add (:local 0) (:local 1)))
         (1 (:add (:local 0) (:prim :count (:local 1))) :rest))
+    ; clj's (fn [& xs] (first xs)) and (fn [a & r] a)
+    (hd (0 (:prim :first (:local 0)) :rest))
+    (fa (1 (:local 0) :rest))
     ; throws its argument
     (thr (1 (:throw (:local 0))))
     ; a loop that throws when it reaches 3
@@ -424,7 +461,9 @@
 (check-x2-is (:prim :div (:const 7) (:const 2)) (:val . 3))
 ; apply: the spread call, fixed and variadic, the arity error from it;
 ; apply of what is no closure, and :callv's call of apply, the runtime's
-(check-x2-is (:applyv (:const :apply) (:mkclo f2) (:const 5) (:const (6))) (:val . 11))
+; f2 has a fixed arity past its variadic clause's count (clj refuses to compile
+; that): apply's walk, as RestFn.applyTo's, hands (5 6) to the variadic one
+(check-x2-is (:applyv (:const :apply) (:mkclo f2) (:const 5) (:const (6))) (:val . 6))
 (check-x2-is (:applyv (:const :apply) (:mkclo f2) (:const (5 6 7 8))) (:val . 8))
 (check-x2-is (:applyv (:const :apply) (:mkclo vsum) (:const 1) (:const 2) (:const (3 4))) (:val . 10))
 (check-x2-is (:applyv (:const :apply) (:mkclo vsum) (:const nil)) (:val . 0))
@@ -434,6 +473,21 @@
 (check-x2-is (:applyv (:mkclo f2) (:const 5) (:const 6)) (:val . 11))
 (check-x2-is (:let (:const 1) (:applyv (:const :apply) (:mkclo vsum) (:local 0) (:add (:local 0) (:const 1)) (:const (10))))
              (:val . 13))
+; apply over a lazy seq: a variadic fn handed the seq reads it only through
+; req + 1 (2c-vi) -- (apply (fn [& xs] (first xs)) (range)) is 0 in clj,
+; and so here (the seq infinite: no spread of all of it, and before 2c-vi
+; the runtime's call); (apply (fn [a & r] a) (range)) 0, realising 3
+; cells as clj's counting seq does; a vector's rest a vector, a list's a
+; list, the arguments past req consed on as cells
+(check-x2-is (:applyv (:const :apply) (:mkclo hd) (:const (:lazy . 0))) (:val . 0))
+(check-x2-is (:applyv (:const :apply) (:mkclo fa) (:const (:lazy . 0))) (:val . 0))
+(assert-event (equal (car (sk-elems '(:lazy . 0))) :long))
+(assert-event (equal (nth 4 (ex-apwalk 1 nil (sk-cur '(:lazy . 0)))) 3))
+(assert-event (equal (x2-vals :applyv :apply '((:clo fa nil) 4 5 (:vec 6)) *x2-defs*) '(4 (:cons 5 :vec 6))))
+(assert-event (equal (x2-vals :applyv :apply '((:clo fa nil) (:vec 5 6 7)) *x2-defs*) '(5 (:vec 6 7))))
+(assert-event (equal (x2-vals :applyv :apply '((:clo f2 nil) (5 6 7)) *x2-defs*) '(5 (6 7))))
+(assert-event (equal (x2-vals :applyv :apply '((:clo vsum nil) 1 2 (3 4)) *x2-defs*) '((:cons 1 :cons 2 3 4))))
+(check-x2-is (:applyv (:const :apply) (:mkclo vsum) (:const (:vec 1 2 3))) (:val . 6))
 ; a try inside a let, its value below the let's local; a throw past two calls
 (check-x2-is (:let (:const 1) (:add (:local 0) (:try (:add (:const 1) (:callv (:mkclo thr) (:const 5))) (:local 1))))
              (:val . 6))

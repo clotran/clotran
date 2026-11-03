@@ -35,9 +35,9 @@
 
 (defmacro x2-rf () '(mx2 (cadr e) env caps defs fuel))
 (defmacro x2-vs0 () '(val (mx2-args (cddr e) env caps defs fuel)))
-(defmacro x2-c () '(x2-fn (car e) (val (x2-rf)) (x2-vs0)))
-(defmacro x2-vs () '(x2-vals (car e) (val (x2-rf)) (x2-vs0)))
-(defmacro x2-cl () '(pick-arity (cdr (assoc-equal (clo-f (x2-c)) defs)) (len (x2-vs))))
+(defmacro x2-c () '(x2-fn (car e) (val (x2-rf)) (x2-vs0) defs))
+(defmacro x2-vs () '(x2-vals (car e) (val (x2-rf)) (x2-vs0) defs))
+(defmacro x2-cl () '(pick-arity (x2-cls (car e) (val (x2-rf)) (x2-vs0) defs (cdr (assoc-equal (clo-f (x2-c)) defs))) (len (x2-vs))))
 (defmacro x2-benv () '(if (restp (x2-cl)) (split-rest (nfix (car (x2-cl))) (x2-vs)) (x2-vs)))
 
 (mutual-recursion
@@ -291,29 +291,44 @@
 ; a call's arguments read off the stack are as many as its count
 (defthm len-stk-from (equal (len (stk-from a k stk)) (nfix k)))
 
-(local (in-theory (disable x2-spreads x2-fn x2-vals x2-stk vcs2-callv)))
+(local (in-theory (disable x2-spreads x2-hands x2-fn x2-vals x2-stk x2-cls x2-prog vcs2-callv)))
 
 (defthm s2step-callv
   (implies (and (sstatep s) (member-equal (car (sins s)) '(:callv :applyv)) (<= (1+ (nfix (cadr (sins s)))) (caddr s)))
            (equal (vcs2-step prog s)
                   (let* ((op (car (sins s))) (m (nfix (cadr (sins s)))) (c (nth (1- (caddr s)) (cadddr s)))
                          (fb2 (- (caddr s) (1+ m))) (vs (stk-from fb2 m (cadddr s))))
-                    (vcs2-callv prog (car s) (cadr s) fb2 (x2-fn op c vs) (x2-vals op c vs) (x2-stk op fb2 c vs (cadddr s))
+                    (vcs2-callv (x2-prog op c vs prog) (car s) (cadr s) fb2 (x2-fn op c vs (cdr prog)) (x2-vals op c vs (cdr prog))
+                                (x2-stk op fb2 c vs (cadddr s) (cdr prog))
                                 (s-ctl s)))))
   :hints (("Goal" :in-theory (enable vcs2-step sstatep sreg))))
 
 ; ---- APPLY'S SPREAD: the stack it makes ------------------------------------------
 
 (defthm x2-nospread
-  (implies (not (x2-spreads op c vs))
-           (and (equal (x2-fn op c vs) c) (equal (x2-vals op c vs) vs) (equal (x2-stk op k c vs stk) stk)))
-  :hints (("Goal" :in-theory (enable x2-fn x2-vals x2-stk))))
+  (implies (not (x2-spreads op c vs fns))
+           (and (equal (x2-fn op c vs fns) c) (equal (x2-vals op c vs fns) vs) (equal (x2-stk op k c vs stk fns) stk)
+                (not (x2-hands op c vs fns)) (equal (x2-cls op c vs fns cls) cls)))
+  :hints (("Goal" :in-theory (enable x2-fn x2-vals x2-stk x2-hands x2-cls))))
 
-(defthm x2-spreads-clop (implies (x2-spreads op c vs) (clop (x2-fn op c vs)))
+(defthm x2-nohand-prog (implies (not (x2-hands op c vs (cdr prog))) (equal (x2-prog op c vs prog) prog))
+  :hints (("Goal" :in-theory (enable x2-prog))))
+
+(defthm x2-spreads-clop (implies (x2-spreads op c vs fns) (clop (x2-fn op c vs fns)))
   :hints (("Goal" :in-theory (enable x2-spreads x2-fn))))
 
-(defthm x2-spreads-op (implies (not (equal op :applyv)) (not (x2-spreads op c vs)))
+(defthm x2-spreads-op (implies (not (equal op :applyv)) (not (x2-spreads op c vs fns)))
   :hints (("Goal" :in-theory (enable x2-spreads))))
+; a spread call's fn is no longer apply
+(defthm x2-fn-c-nohand
+  (implies (equal (x2-fn op c vs fns) c) (and (not (x2-hands op c vs fns)) (not (x2-spreads op c vs fns))))
+  :hints (("Goal" :in-theory (enable x2-hands x2-spreads x2-fn clop))))
+; :callv's call: nothing spread, the table as it is
+(defthm x2-op-id
+  (implies (not (equal op :applyv))
+           (and (equal (x2-fn op c vs fns) c) (equal (x2-vals op c vs fns) vs) (equal (x2-stk op k c vs stk fns) stk)
+                (not (x2-hands op c vs fns)) (equal (x2-cls op c vs fns cls) cls) (equal (x2-prog op c vs prog) prog)))
+  :hints (("Goal" :in-theory (enable x2-fn x2-vals x2-stk x2-hands x2-cls x2-prog x2-spreads))))
 
 (defthm nth-x2-put-below
   (implies (and (natp k) (natp r) (< r k)) (equal (nth r (x2-put k l stk)) (nth r stk))))
@@ -329,13 +344,13 @@
 
 (defthm x2-stk-facts
   (implies (and (natp k) (cvals-at k vs stk) (true-listp vs) (equal (nth (+ k (len vs)) stk) c))
-           (and (cagree (x2-stk op k c vs stk) stk k)
-                (cvals-at k (x2-vals op c vs) (x2-stk op k c vs stk))
-                (equal (nth (+ k (len (x2-vals op c vs))) (x2-stk op k c vs stk)) (x2-fn op c vs))
-                (true-listp (x2-vals op c vs))))
-  :hints (("Goal" :cases ((x2-spreads op c vs)))
-          ("Subgoal 1" :in-theory (enable x2-stk x2-vals x2-fn x2-spreads x2-seqp)
-                       :use ((:instance cvals-at-x2-put (l (append (x2-vals op c vs) (list (car vs)))))))))
+           (and (cagree (x2-stk op k c vs stk fns) stk k)
+                (cvals-at k (x2-vals op c vs fns) (x2-stk op k c vs stk fns))
+                (equal (nth (+ k (len (x2-vals op c vs fns))) (x2-stk op k c vs stk fns)) (x2-fn op c vs fns))
+                (true-listp (x2-vals op c vs fns))))
+  :hints (("Goal" :cases ((x2-spreads op c vs fns)))
+          ("Subgoal 1" :in-theory (e/d (x2-stk x2-vals x2-fn x2-spreads) (sk-spread))
+                       :use ((:instance cvals-at-x2-put (l (append (x2-vals op c vs fns) (list (car vs)))))))))
 
 ; ---- THE FUNCTION TABLE: an entry per clause, its code where it says -----------
 
@@ -383,6 +398,39 @@
 (defun-sk s2fns-ok (prog defs)
   (forall name (entries-ok (cdr (assoc-equal name defs)) (cdr (assoc-equal name (cdr prog))) (car prog))))
 (in-theory (disable s2fns-ok))
+
+; APPLY'S SPREAD in the table and in the definitions: the variadic clause's
+; count is one in both, so the spread is; a fn handed its seq finds the
+; variadic clause, as the fixed one of one more, in both
+(defthm entries-ok-x2-req (implies (entries-ok cls ents code) (equal (x2-req ents) (x2-req cls)))
+  :hints (("Goal" :induct (ents-ind cls ents) :in-theory (disable vcs2-body ccode-at))))
+(defthm entries-ok-x2-hcls (implies (entries-ok cls ents code) (entries-ok (x2-hcls cls) (x2-hcls ents) code))
+  :hints (("Goal" :induct (ents-ind cls ents) :in-theory (disable ccode-at) :expand ((:free (cl pc) (vcs2-body cl pc))))))
+(defthm entries-ok-x2-cls (implies (entries-ok cls ents code) (entries-ok (x2-cls op c vs fns cls) (x2-cls op c vs fns ents) code))
+  :hints (("Goal" :in-theory (enable x2-cls))))
+(defthm s2fns-ok-x2-sp (implies (s2fns-ok prog defs) (equal (x2-sp vs (cdr prog)) (x2-sp vs defs)))
+  :hints (("Goal" :in-theory (disable sk-spread) :use ((:instance s2fns-ok-necc (name (clo-f (car vs))))))))
+(defthm s2fns-ok-x2
+  (implies (s2fns-ok prog defs)
+           (and (equal (x2-spreads op c vs (cdr prog)) (x2-spreads op c vs defs))
+                (equal (x2-hands op c vs (cdr prog)) (x2-hands op c vs defs))
+                (equal (x2-fn op c vs (cdr prog)) (x2-fn op c vs defs))
+                (equal (x2-vals op c vs (cdr prog)) (x2-vals op c vs defs))
+                (equal (x2-stk op k c vs stk (cdr prog)) (x2-stk op k c vs stk defs))
+                (equal (x2-cls op c vs (cdr prog) cls) (x2-cls op c vs defs cls))))
+  :hints (("Goal" :in-theory (e/d (x2-spreads x2-hands x2-fn x2-vals x2-stk x2-cls) (x2-sp)))))
+(defthm s2fns-ok-x2-cls
+  (implies (s2fns-ok prog defs)
+           (entries-ok (x2-cls op c vs fns (cdr (assoc-equal name defs))) (x2-cls op c vs fns (cdr (assoc-equal name (cdr prog))))
+                       (car prog)))
+  :hints (("Goal" :in-theory (disable x2-cls) :use ((:instance s2fns-ok-necc)))))
+; the table the machine dispatches in, after the spread
+(defthm x2-prog-table
+  (implies (equal (x2-spreads op c vs fns) (x2-spreads op c vs (cdr prog)))
+  (equal (cdr (assoc-equal (clo-f (x2-fn op c vs fns)) (cdr (x2-prog op c vs prog))))
+         (x2-cls op c vs (cdr prog) (cdr (assoc-equal (clo-f (x2-fn op c vs fns)) (cdr prog))))))
+  :hints (("Goal" :in-theory (enable x2-prog x2-cls x2-hands x2-fn) :cases ((x2-spreads op c vs fns)))))
+(defthm x2-prog-car (equal (car (x2-prog op c vs prog)) (car prog)) :hints (("Goal" :in-theory (enable x2-prog))))
 
 ; ---- THE PROPERTY -------------------------------------------------------------------
 
@@ -520,21 +568,41 @@
   :hints (("Goal" :use ((:instance pick-rest-is-rest) (:instance pick-fixed-not-rest)))))
 
 ; the clause a call runs is well formed for the locals the call gives it
-(defmacro pk () (quote (pick-arity (cdr (assoc-equal name defs)) (len vs))))
+(defthm clauses-ok-x2-hcls (implies (clauses-ok cls) (clauses-ok (x2-hcls cls))))
+(defthm clauses-ok-x2-cls (implies (clauses-ok cls) (clauses-ok (x2-cls op c vs0 fns cls)))
+  :hints (("Goal" :in-theory (enable x2-cls))))
+(defmacro pk () (quote (pick-arity (x2-cls op c vs0 fns (cdr (assoc-equal name defs))) (len vs))))
 
 (defthm pick-arity-natp
   (implies (and (x2defs-ok defs) (consp (pk))) (and (integerp (car (pk))) (<= 0 (car (pk)))))
   :hints (("Goal" :in-theory (disable pick-arity clauses-ok-pick)
-                  :use ((:instance clauses-ok-pick (cls (cdr (assoc-equal name defs))) (m (len vs)))))))
+                  :use ((:instance clauses-ok-pick (cls (x2-cls op c vs0 fns (cdr (assoc-equal name defs)))) (m (len vs)))))))
 
 (defthm pick-body-wf-fixed
   (implies (and (x2defs-ok defs) (consp (pk)) (not (restp (pk)))) (x2wf (cadr (pk)) (len vs) nil))
   :hints (("Goal" :in-theory (disable pick-arity clauses-ok-pick pick-arity-fixed-len)
-                  :use ((:instance clauses-ok-pick (cls (cdr (assoc-equal name defs))) (m (len vs)))
-                        (:instance pick-arity-fixed-len (cls (cdr (assoc-equal name defs))) (m (len vs)))))))
+                  :use ((:instance clauses-ok-pick (cls (x2-cls op c vs0 fns (cdr (assoc-equal name defs)))) (m (len vs)))
+                        (:instance pick-arity-fixed-len (cls (x2-cls op c vs0 fns (cdr (assoc-equal name defs)))) (m (len vs)))))))
 
 (defthm pick-body-wf-rest
   (implies (and (x2defs-ok defs) (consp (pk)) (restp (pk))) (x2wf (cadr (pk)) (len (split-rest (car (pk)) vs)) nil))
+  :hints (("Goal" :in-theory (disable pick-arity clauses-ok-pick pick-arity-rest-len split-rest)
+                  :use ((:instance clauses-ok-pick (cls (x2-cls op c vs0 fns (cdr (assoc-equal name defs)))) (m (len vs)))
+                        (:instance pick-arity-rest-len (cls (x2-cls op c vs0 fns (cdr (assoc-equal name defs)))) (m (len vs)))))))
+
+; the same, a call that is no hand-over's (its clauses the def's)
+(defmacro pk0 () (quote (pick-arity (cdr (assoc-equal name defs)) (len vs))))
+(defthm pick-arity-natp0
+  (implies (and (x2defs-ok defs) (consp (pk0))) (and (integerp (car (pk0))) (<= 0 (car (pk0)))))
+  :hints (("Goal" :in-theory (disable pick-arity clauses-ok-pick)
+                  :use ((:instance clauses-ok-pick (cls (cdr (assoc-equal name defs))) (m (len vs)))))))
+(defthm pick-body-wf-fixed0
+  (implies (and (x2defs-ok defs) (consp (pk0)) (not (restp (pk0)))) (x2wf (cadr (pk0)) (len vs) nil))
+  :hints (("Goal" :in-theory (disable pick-arity clauses-ok-pick pick-arity-fixed-len)
+                  :use ((:instance clauses-ok-pick (cls (cdr (assoc-equal name defs))) (m (len vs)))
+                        (:instance pick-arity-fixed-len (cls (cdr (assoc-equal name defs))) (m (len vs)))))))
+(defthm pick-body-wf-rest0
+  (implies (and (x2defs-ok defs) (consp (pk0)) (restp (pk0))) (x2wf (cadr (pk0)) (len (split-rest (car (pk0)) vs)) nil))
   :hints (("Goal" :in-theory (disable pick-arity clauses-ok-pick pick-arity-rest-len split-rest)
                   :use ((:instance clauses-ok-pick (cls (cdr (assoc-equal name defs))) (m (len vs)))
                         (:instance pick-arity-rest-len (cls (cdr (assoc-equal name defs))) (m (len vs)))))))
@@ -2099,7 +2167,7 @@
   :hints (("Goal" :use mx2-args-val-shape)))
 (in-theory (disable mx2-args-len))
 
-(defmacro c2-thy () '(union-theories '(mx2-args-len) (l2-thy)))
+(defmacro c2-thy () '(union-theories '(mx2-args-len s2fns-ok-x2 x2-prog-table x2-prog-car x2-op-id x2-nospread x2-nohand-prog x2-fn-c-nohand) (l2-thy)))
 
 (defmacro c2-n () '(len (cddr e)))
 (defmacro c2-ra () '(mx2-args (cddr e) env caps defs fuel))
@@ -2109,13 +2177,14 @@
 (defmacro c2-c0 () '(cdr (mx2 (cadr e) env caps defs fuel)))
 (defmacro c2-s2 () '(vcs2-run prog (c2-s1) (s2clk (cadr e) env caps defs fuel)))
 ; the callee and its arguments once apply has spread them, and the stack
-(defmacro c2-c () '(x2-fn (car e) (c2-c0) (c2-vs0)))
-(defmacro c2-vs () '(x2-vals (car e) (c2-c0) (c2-vs0)))
+(defmacro c2-c () '(x2-fn (car e) (c2-c0) (c2-vs0) defs))
+(defmacro c2-vs () '(x2-vals (car e) (c2-c0) (c2-vs0) defs))
+(defmacro c2-prog () '(x2-prog (car e) (c2-c0) (c2-vs0) prog))
 (defmacro c2-m () '(len (c2-vs)))
-(defmacro c2-stk () '(x2-stk (car e) (caddr s) (c2-c0) (c2-vs0) (cadddr (c2-s2))))
+(defmacro c2-stk () '(x2-stk (car e) (caddr s) (c2-c0) (c2-vs0) (cadddr (c2-s2)) defs))
 (defmacro c2-op () '(or (equal (car e) :callv) (equal (car e) :applyv)))
-(defmacro c2-cls () '(cdr (assoc-equal (clo-f (c2-c)) defs)))
-(defmacro c2-ents () '(cdr (assoc-equal (clo-f (c2-c)) (cdr prog))))
+(defmacro c2-cls () '(x2-cls (car e) (c2-c0) (c2-vs0) defs (cdr (assoc-equal (clo-f (c2-c)) defs))))
+(defmacro c2-ents () '(x2-cls (car e) (c2-c0) (c2-vs0) defs (cdr (assoc-equal (clo-f (c2-c)) (cdr prog)))))
 (defmacro c2-cl () '(pick-arity (c2-cls) (len (c2-vs))))
 (defmacro c2-en () '(pick-arity (c2-ents) (len (c2-vs))))
 (defmacro c2-n0 () '(nfix (car (c2-cl))))
@@ -2272,16 +2341,16 @@
   :rule-classes nil
   :hints (("Goal" :in-theory (c2-thy) :do-not-induct t
                   :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
-                        (:instance x2-stk-facts (op (car e)) (k (caddr s)) (c (c2-c0)) (vs (c2-vs0)) (stk (cadddr (c2-s2))))
-                        (:instance x2-nospread (op (car e)) (k (caddr s)) (c (c2-c0)) (vs (c2-vs0)) (stk (cadddr (c2-s2))))
-                        (:instance x2-spreads-clop (op (car e)) (c (c2-c0)) (vs (c2-vs0)))
+                        (:instance x2-stk-facts (op (car e)) (k (caddr s)) (c (c2-c0)) (vs (c2-vs0)) (stk (cadddr (c2-s2))) (fns defs))
+                        (:instance x2-nospread (op (car e)) (k (caddr s)) (c (c2-c0)) (vs (c2-vs0)) (stk (cadddr (c2-s2))) (fns defs))
+                        (:instance x2-spreads-clop (op (car e)) (c (c2-c0)) (vs (c2-vs0)) (fns defs))
                         (:instance cagree-trans (a (c2-stk)) (b (cadddr (c2-s2))) (c (cadddr s)) (h (caddr s)))))))
 
 ; the call's step: the dispatch on the spread call
 (defthm callv2-step
   (implies (and (c2-hyps-fn) (valp (c2-ra)) (valp (c2-rf)))
            (equal (vcs2-step prog (c2-s2))
-                  (vcs2-callv prog (c2-pc2) (cadr s) (caddr s) (c2-c) (c2-vs) (c2-stk) (s-ctl s))))
+                  (vcs2-callv (c2-prog) (c2-pc2) (cadr s) (caddr s) (c2-c) (c2-vs) (c2-stk) (s-ctl s))))
   :rule-classes nil
   :hints (("Goal" :in-theory (union-theories '(s2step-callv member-equal) (c2-thy)) :do-not-induct t
                   :use ((:instance callv2-args) (:instance callv2-at-call) (:instance (:definition s2-hyps))
@@ -2329,7 +2398,7 @@
   :hints (("Goal" :in-theory (union-theories '(vcs2-callv mx2-callv) (c2-thy)) :do-not-induct t
                   :use ((:instance callv2-step) (:instance callv2-eff) (:instance callv2-at-call) (:instance (:definition s2-hyps))
                         (:instance pick-arity-corr (cls (c2-cls)) (ents (c2-ents)) (code (car prog)) (m (c2-m)))
-                        (:instance s2fns-ok-necc (name (clo-f (c2-c))))
+                        (:instance s2fns-ok-x2-cls (name (clo-f (c2-c))) (op (car e)) (c (c2-c0)) (vs (c2-vs0)) (fns defs))
                         (:instance unwind-thrown-at (s (list (c2-pc2) (cadr s) (+ (caddr s) (c2-n) 1) (c2-stk) (s-ctl s))) (v :arity))
                         (:instance thrown-at-transfer (s1 (list (c2-pc2) (cadr s) (+ (caddr s) (c2-n) 1) (c2-stk) (s-ctl s)))
                                    (v (cdr (mx2 e env caps defs fuel))) (s2 (vcs2-step prog (c2-s2))))))))
@@ -2342,7 +2411,7 @@
   :hints (("Goal" :in-theory (union-theories '(vcs2-callv call-frame) (c2-thy)) :do-not-induct t
                   :use ((:instance callv2-step) (:instance callv2-eff) (:instance (:definition s2-hyps))
                         (:instance pick-arity-corr (cls (c2-cls)) (ents (c2-ents)) (code (car prog)) (m (c2-m)))
-                        (:instance s2fns-ok-necc (name (clo-f (c2-c))))))))
+                        (:instance s2fns-ok-x2-cls (name (clo-f (c2-c))) (op (car e)) (c (c2-c0)) (vs (c2-vs0)) (fns defs))))))
 
 (defthm vcs2-body-code
   (implies (and (ccode-at code pc (vcs2-body cl pc)) (natp pc))
@@ -2368,10 +2437,10 @@
                   :do-not-induct t
                   :use ((:instance callv2-eff) (:instance (:definition s2-hyps))
                         (:instance pick-arity-corr (cls (c2-cls)) (ents (c2-ents)) (code (car prog)) (m (c2-m)))
-                        (:instance s2fns-ok-necc (name (clo-f (c2-c))))
-                        (:instance pick-body-wf-fixed (name (clo-f (c2-c))) (vs (c2-vs)))
-                        (:instance pick-body-wf-rest (name (clo-f (c2-c))) (vs (c2-vs)))
-                        (:instance pick-arity-natp (name (clo-f (c2-c))) (vs (c2-vs)))
+                        (:instance s2fns-ok-x2-cls (name (clo-f (c2-c))) (op (car e)) (c (c2-c0)) (vs (c2-vs0)) (fns defs))
+                        (:instance pick-body-wf-fixed (name (clo-f (c2-c))) (vs (c2-vs)) (op (car e)) (c (c2-c0)) (vs0 (c2-vs0)) (fns defs))
+                        (:instance pick-body-wf-rest (name (clo-f (c2-c))) (vs (c2-vs)) (op (car e)) (c (c2-c0)) (vs0 (c2-vs0)) (fns defs))
+                        (:instance pick-arity-natp (name (clo-f (c2-c))) (vs (c2-vs)) (op (car e)) (c (c2-c0)) (vs0 (c2-vs0)) (fns defs))
                         (:instance pick-arity-fixed-len (cls (c2-cls)) (m (len (c2-vs))))
                         (:instance pick-arity-rest-len (cls (c2-cls)) (m (len (c2-vs))))))))
 

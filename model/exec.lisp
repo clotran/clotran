@@ -235,31 +235,54 @@
 ; list, nil when there are none (bind_closure; clj's RestFn: nil, not ())
 (defun ex-rest-args (nf args) (append (take nf args) (list (nthcdr nf args))))
 (defun ex-bargs (ar args) (if (truthy (nth 1 ar)) (ex-rest-args (nfix (nth 0 ar)) args) args))
+; the self slot's value: the closure, or for apply's hand-over (ex-hclo)
+; the closure it stands for
+(defun ex-self (f) (if (and (consp (cdddr f)) (consp (cadddr f)) (eq (car (cadddr f)) :clo)) (cadddr f) f))
 (defun ex-bind (f args)
   (let* ((tm (cadr f)) (ar (ex-arity (nth 1 tm) (len args)))
          (fr (ex-bind-caps (nth 2 tm) (caddr f) (ex-write (nth 2 ar) (ex-bargs ar args) (make-list (nfix (nth 3 tm)) :initial-element nil)))))
-    (if (natp (nth 4 tm)) (update-nth (nth 4 tm) f fr) fr)))
+    (if (natp (nth 4 tm)) (update-nth (nth 4 tm) (ex-self f) fr) fr)))
+
+; the variadic arity's count of fixed parameters, -1 for none (B_APPLY's
+; req: exec.inc variadic_req, the first variadic arity's, as the variadic
+; pass of ex-arity takes)
+(defun ex-varnf (ars)
+  (cond ((atom ars) -1) ((truthy (nth 1 (car ars))) (nfix (nth 0 (car ars)))) (t (ex-varnf (cdr ars)))))
 
 ; APPLY, as a callee: the value :apply is clojure.core/apply (core.clj's
 ; fn, its list* and the applyTo it ends in, B_APPLY). A call of it with
-; (f a1 .. an coll) is the call of f on a1 .. an and then coll's elements
-; (ex-spread), dispatched as any call is; a seq is seqk's -- a list (nil
-; the empty one), a vector, a lazy seq, a cell -- its elements sk-els's,
-; at most *sk-lim* of them (B_APPLY's bound: a seq longer, or infinite, is
-; spread by no call -- the host's coll_to_vector refuses it -- and only
-; the variadic walk below takes it, so its call is the host's here, way
-; 0); a closure is none, and no seq a program holds has the recur marker
-; among its elements, as no value is it.
-(defun ex-seqp (v) (and (equal (car (sk-elems v)) :ok) (not (ex-clo-shape v)) (no-mk (cdr (sk-elems v)))))
-(defun ex-spread (args) (append (butlast args 1) (cdr (sk-elems (car (last args))))))
+; (f a1 .. an coll) is the call of f on a1 .. an and coll as seqk's
+; sk-spread takes them -- B_APPLY's walk, ex-apwalk (model/exec-PLAN.md's
+; 2c-vi): a seq is seqk's -- a list (nil the empty one), a vector, a lazy
+; seq, a cell. A variadic f is handed the seq once it has its fixed
+; arguments and one more is there (:hand), the seq read no further: its
+; variadic arity's call, the rest one seq value. Otherwise every element
+; is read, at most *sk-lim* of them (B_APPLY's bound: a longer seq is the
+; host's call, way 0), and the count dispatches as any call's. A closure
+; is no seq, and no argument a program holds is the recur marker, as no
+; value is it.
+(defun ex-apsp (tmp) (sk-spread (ex-varnf (nth 1 (cadr (cadr tmp)))) (butlast (cddr tmp) 1) (car (last (cdr tmp)))))
+(defun ex-seqp (tmp)
+  (and (member-equal (car (ex-apsp tmp)) '(:ok :hand)) (not (ex-clo-shape (car (last (cdr tmp))))) (no-mk (cadr (ex-apsp tmp)))))
 (defun ex-apway (tmp)
-  (if (and (equal (car tmp) :apply) (consp (cddr tmp)) (equal (car (sk-elems (car (last (cdr tmp))))) :long))
+  (if (and (equal (car tmp) :apply) (consp (cddr tmp)) (equal (car (ex-apsp tmp)) :long))
       0
     (ex-apentry (if (equal (car tmp) :apply) 1 0) (len (cdr tmp)) (if (ex-clo-shape (cadr tmp)) 1 0)
-                (if (ex-seqp (car (last (cdr tmp)))) 1 0))))
+                (if (ex-seqp tmp) 1 0))))
+; the handed-over call's callee: f with its variadic arity as the fixed
+; one of one more parameter -- the same slots, body and frame, the rest in
+; the last -- and f itself its self slot's value
+(defun ex-hars (ars)
+  (cond ((atom ars) nil)
+        ((truthy (nth 1 (car ars))) (list (list* (1+ (nfix (nth 0 (car ars)))) nil (cddr (car ars)))))
+        (t (ex-hars (cdr ars)))))
+(defun ex-hclo (f) (list :clo (update-nth 1 (ex-hars (nth 1 (cadr f))) (cadr f)) (caddr f) f))
 ; the call a record's callee and arguments make: apply's (f . spread) when
-; it spreads, else themselves
-(defun ex-callee (tmp) (if (equal (ex-apway tmp) 1) (cons (cadr tmp) (ex-spread (cddr tmp))) tmp))
+; it spreads (ex-hclo's f when handed over), else themselves
+(defun ex-callee (tmp)
+  (if (equal (ex-apway tmp) 1)
+      (cons (if (equal (car (ex-apsp tmp)) :hand) (ex-hclo (cadr tmp)) (cadr tmp)) (cadr (ex-apsp tmp)))
+    tmp))
 
 ; APPLY'S WALK ON A SEQ'S ELEMENTS: (way fixed rest), way ex-apstep's 2
 ; or 3 -- 2 the variadic arity's fixed arguments and its rest, 3 every
@@ -270,12 +293,6 @@
     (cond ((and (equal w 1) (consp s)) (ex-aplwalk req (append fx (list (car s))) (cdr s)))
           ((equal w 2) (list 2 (take (nfix req) fx) (append (nthcdr (nfix req) fx) s)))
           (t (list 3 (append fx s) nil)))))
-
-; the variadic arity's count of fixed parameters, -1 for none (B_APPLY's
-; req: exec.inc variadic_req, the first variadic arity's, as the variadic
-; pass of ex-arity takes)
-(defun ex-varnf (ars)
-  (cond ((atom ars) -1) ((truthy (nth 1 (car ars))) (nfix (nth 0 (car ars)))) (t (ex-varnf (cdr ars)))))
 
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;

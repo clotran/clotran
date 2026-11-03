@@ -24,6 +24,9 @@
 
 (include-book "vmx2-cost")
 
+; apply's spread opaque here, as in vmx2-cost
+(local (in-theory (disable x2-spreads x2-hands x2-fn x2-vals x2-cls x2-sp sk-spread)))
+
 ; ---- THE PRIM STEPS THE MACHINE TAKES ------------------------------------------------
 
 (mutual-recursion

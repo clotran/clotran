@@ -254,23 +254,20 @@ slot's read and write), and every kind not yet in the model.
      guard-verified for any value (mbe), ex-apway's redundant :apply guard
      removed, scripts/fuzz-vmx2 drawing apply over every seq kind (fz-real
      attached; not on the arrays, which have no :applyv yet).
-   - 2c-vi-b *(next)*: vmx2 and the tree over sk-spread. Designed and
-     half-built on branch `wip/2c-vi` (see its commit): vmx2 -- x2-vals
+   - 2c-vi-b *(done)*: vmx2 and the tree over sk-spread. vmx2 -- x2-vals
      and friends take the function table (mx2's defs, the machine's
      `(cdr prog)`; x2-req, the variadic clause's count, is one in both),
      a `:hand` call dispatches through x2-cls/x2-prog: the clause list
      replaced by the variadic clause as the FIXED clause of req + 1
      parameters (x2-hcls -- same body, locals and frame, the rest in the
-     last slot), so vcs2-callv and its proofs keep their shape; vmx2
-     certifies with clj's examples as checks (range attached as sk-real).
-     The tree -- ex-callee hands a variadic f over as ex-hclo (f's
-     template with its variadic arity as that fixed one, f itself carried
-     for the self slot, ex-self); exec and exec-proof certify. Left:
-     vmx2-proof (s2fns-ok-x2 et al. written), exec-vm (its ex-ehyp
-     machinery is per closure: restate it over (ex-self f) and the arity
-     ex-car picks -- ex-fbtr of the hand arity is the variadic one's),
-     exec-cost, exec-vmrun's clj examples, vmx2-cost/time, the vmi chain
-     re-certified. Note for the checks: a fn whose fixed arity exceeds its
+     last slot), so vcs2-callv and its proofs keep their shape; vmx2's
+     checks are clj's examples (range attached as sk-real). The tree --
+     ex-callee hands a variadic f over as ex-hclo (f's template with its
+     variadic arity as that fixed one, f itself carried for the self
+     slot, ex-self); exec-vm's ex-ehyp is over (ex-self f) and the arity
+     ex-car picks. vmx2-proof, vmx2-cost, vmx2-time, exec-vm, exec-cost,
+     exec-vmrun and the vmi chain certify, statements unchanged but for
+     the spread. Note for the checks: a fn whose fixed arity exceeds its
      variadic count (vmx2's f2; clj refuses to compile it) is handed to
      the variadic clause by apply, as RestFn.applyTo does.
 2c-v. **`:applyv` in the arrays**: vmi and vmg (so the Fortran

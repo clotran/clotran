@@ -104,7 +104,7 @@
 (defthm ex-last-cdr (implies (consp (cdr l)) (equal (last (cdr l)) (last l))))
 (defthm ex-callee-no-mk
   (implies (and (no-mk tmp) (true-listp tmp)) (and (no-mk (cdr (ex-callee tmp))) (true-listp (cdr (ex-callee tmp)))))
-  :hints (("Goal" :in-theory (enable ex-callee ex-apway ex-apentry ex-spread ex-seqp))))
+  :hints (("Goal" :in-theory (e/d (ex-callee ex-apway ex-apentry ex-seqp) (sk-spread)))))
 (defthm ex-apway-not-apply (implies (not (equal (car tmp) :apply)) (equal (ex-apway tmp) 0))
   :hints (("Goal" :in-theory (enable ex-apway ex-apentry))))
 (defthm ex-apway-callee-clo
