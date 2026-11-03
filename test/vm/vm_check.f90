@@ -5,7 +5,8 @@
 !   vm_check FILE
 !
 ! FILE: "ncode npool nfn ncl nstk nctl", the code words, the pool (one
-! per line: "I n", "T", "N" or "K name"), each function's first clause
+! per line: "I n", "T", "N", "K name" or "C" and a cons in prefix
+! tokens, each "C car cdr" -- a seq constant apply spreads), each function's first clause
 ! and count, each clause's arity, entry and rest flag.
 program vm_check
   use iso_fortran_env, only: int64
@@ -13,7 +14,9 @@ program vm_check
   use vm_gen
   implicit none
   type(vm_state) :: st
-  character(len=512) :: path, line, mode
+  character(len=4096) :: path, line, mode
+  character(len=64) :: toks(512)
+  integer :: ntok, tp
   integer :: u, k
   integer(int64) :: ncode, npool, nfn, ncl, nstk, nctl, i, n
   logical :: last, fused
@@ -23,7 +26,7 @@ program vm_check
   fused = (trim(mode) == 'fused')
   open(newunit=u, file=trim(path), status='old', action='read')
   read(u, *) ncode, npool, nfn, ncl, nstk, nctl
-  allocate(st%code(0:ncode-1), st%pool(0:npool-1), st%stk(0:nstk-1))
+  allocate(st%code(0:ncode-1), st%pool(0:npool-1), st%stk(0:nstk-1), st%tmp(0:nstk-1))
   allocate(st%ckind(0:nctl-1), st%ca(0:nctl-1), st%cb(0:nctl-1), st%cc(0:nctl-1), st%cprev(0:nctl-1))
   allocate(st%fnfirst(0:nfn-1), st%fncount(0:nfn-1), st%cln(0:ncl-1), st%clent(0:ncl-1), st%clrest(0:ncl-1))
   st%ckind = 0; st%ca = 0; st%cb = 0; st%cc = 0; st%cprev = 0
@@ -40,6 +43,10 @@ program vm_check
         st%pool(i) = value(VT_T, 0)
      case ('K')
         st%pool(i) = rt_keyword(trim(adjustl(line(2:))))
+     case ('C')
+        call tokenize(line(2:))
+        tp = 1
+        st%pool(i) = parse_val()
      case default
         st%pool(i) = value(VT_NIL, 0)
      end select
@@ -78,6 +85,52 @@ program vm_check
   end do
 
 contains
+
+  subroutine tokenize(s)
+    character(len=*), intent(in) :: s
+    integer :: a, b
+    ntok = 0
+    a = 1
+    do
+       do while (a <= len_trim(s) .and. s(a:a) == ' ')
+          a = a + 1
+       end do
+       if (a > len_trim(s)) exit
+       b = a
+       do while (b <= len_trim(s) .and. s(b:b) /= ' ')
+          b = b + 1
+       end do
+       ntok = ntok + 1
+       toks(ntok) = s(a:b-1)
+       a = b
+    end do
+  end subroutine tokenize
+
+  ! a value in prefix tokens: I n, T, N, K name, C car cdr
+  recursive function parse_val() result(v)
+    type(value) :: v, a, d
+    integer(int64) :: n
+    select case (trim(toks(tp)))
+    case ('I')
+       read(toks(tp + 1), *) n
+       v = vint(n)
+       tp = tp + 2
+    case ('T')
+       v = value(VT_T, 0)
+       tp = tp + 1
+    case ('K')
+       v = rt_keyword(trim(toks(tp + 1)))
+       tp = tp + 2
+    case ('C')
+       tp = tp + 1
+       a = parse_val()
+       d = parse_val()
+       v = cons(a, d)
+    case default
+       v = value(VT_NIL, 0)
+       tp = tp + 1
+    end select
+  end function parse_val
 
   subroutine show()
     integer(int64) :: j

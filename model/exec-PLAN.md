@@ -270,10 +270,16 @@ slot's read and write), and every kind not yet in the model.
      the spread. Note for the checks: a fn whose fixed arity exceeds its
      variadic count (vmx2's f2; clj refuses to compile it) is handed to
      the variadic clause by apply, as RestFn.applyTo does.
-2c-v. **`:applyv` in the arrays**: vmi and vmg (so the Fortran
+2c-v *(done)*. **`:applyv` in the arrays**: vmi and vmg (so the Fortran
    VM) get apply's spread -- `(:applyv m)` in vmic/vmicg instead of their
-   refusal, the generated machine spreading through seqk's kinds. Resumes
-   after 2c-vi-b from `wip/applyv-arrays` (71fe51d7), rebased on it; then
+   refusal, the generated machine spreading through seqk's kinds, over
+   vmx2's lazy sk-spread (a variadic fn handed the seq gets its req
+   arguments and the rest as one value, its variadic clause entered as
+   the fixed one of req + 1). vmi-proof: vmi-applyv-refines and -keeps (the
+   scratch's walks are tawalk/twalk, tawalk is ex-apwalk, the spread is
+   tspread = sk-spread), so vmi-correct and vmic-correct hold with it;
+   vmg-applyv-bnd. Live in the runtime only when rt_applyp is: the VM
+   step loop row of docs/model-coverage.md says what that needs. Next:
    milestone 3.
 3. **Throw and try, case, collections**: N_THROW, N_TRY's pcs 0..5 and
    `k_unwind`'s catch walk (vmi's handler stack is the model), N_CASE's

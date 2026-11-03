@@ -20,6 +20,10 @@
 ;                  of the handler below it
 ;   the functions  per function id, its clauses' first index and count;
 ;                  per clause its arity, entry pc and whether variadic
+;   the scratch    values apply's spread reads its seq into before it
+;                  touches the stack (slot 0 the seq's cursor), so a
+;                  call that turns out not to spread finds the stack
+;                  as it was; nothing reads it back as vmx2's state
 ;
 ; A throw truncates the control stack to the nearest handler's index
 ; and takes that handler's own link as the next: one step, however many
@@ -58,7 +62,8 @@
   (v-fncount :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
   (v-cln :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
   (v-clent :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
-  (v-clrest :type (array (signed-byte 64) (0)) :initially 0 :resizable t))
+  (v-clrest :type (array (signed-byte 64) (0)) :initially 0 :resizable t)
+  (v-tmp :type (array t (0)) :initially nil :resizable t))
 
 ; ---- READING AND WRITING, bounded ---------------------------------------------------
 
@@ -168,6 +173,7 @@
 ;
 ; 1 push  2 load  3 add  4 lt  5 slide  6 jmpf  7 jmp  8 mkclo  9 capt
 ; 10 callv  11 ret  12 recur  13 prim  14 throw  15 try  16 endtry
+; 17 applyv
 
 (defmacro vmi-next (vmi) `(update-v-pc (1+ (nfix (v-pc ,vmi))) ,vmi))
 
@@ -243,12 +249,12 @@
          (vmi (update-v-sp (1+ sp) vmi)))
     (vmi-next vmi)))
 
-; A CALL, by clause: the frame begins at the first argument; a variadic
-; clause has its extra values packed into one list in place, the
-; closure moved above it
-(defun vmi-callv (vmi)
+; A CALL of the closure on top of the m values below it, by clause: the
+; frame begins at the first argument; a variadic clause has its extra
+; values packed into one list in place, the closure moved above it
+(defun vmi-call (m vmi)
   (declare (xargs :stobjs vmi :verify-guards nil))
-  (let ((sp (nfix (v-sp vmi))) (m (nfix (vmi-w (v-pc vmi) 1 vmi))))
+  (let ((sp (nfix (v-sp vmi))) (m (nfix m)))
     (if (< sp (1+ m))
         vmi
       (let ((c (vmi-sreg (1- sp) vmi)))
@@ -273,6 +279,191 @@
                       (update-v-pc ent vmi))
                   (let* ((vmi (update-v-fb fb2 vmi)))
                     (update-v-pc ent vmi)))))))))))
+
+(defun vmi-callv (vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (vmi-call (vmi-w (v-pc vmi) 1 vmi) vmi))
+
+; ---- APPLY'S SPREAD (vmx2's (:applyv m)) ----------------------------------------------
+;
+; The scratch: read and written as the stack is, a write past it an
+; overflow.
+(defun vmi-treg (i vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (if (< (nfix i) (v-tmp-length vmi)) (v-tmpi (nfix i) vmi) nil))
+
+(defun vmi-tset (i v vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (if (< (nfix i) (v-tmp-length vmi))
+      (update-v-tmpi (nfix i) v vmi)
+    (update-v-status 2 vmi)))
+
+; the slots a..a+k-1 into the scratch from j on
+(defun vmi-to-tmp (a j k vmi)
+  (declare (xargs :stobjs vmi :measure (nfix k) :verify-guards nil))
+  (if (zp k)
+      vmi
+    (let ((vmi (vmi-tset j (vmi-sreg a vmi) vmi)))
+      (vmi-to-tmp (1+ (nfix a)) (1+ (nfix j)) (1- k) vmi))))
+
+; the scratch's j..j+k-1 into the slots from a on
+(defun vmi-from-tmp (j a k vmi)
+  (declare (xargs :stobjs vmi :measure (nfix k) :verify-guards nil))
+  (if (zp k)
+      vmi
+    (let ((vmi (vmi-sset a (vmi-treg j vmi) vmi)))
+      (vmi-from-tmp (1+ (nfix j)) (1+ (nfix a)) (1- k) vmi))))
+
+; THE SEQ'S READS (model/seqk.lisp's cursor taken apart: the value, its
+; index, and top as 1 t, 0 nil, 2 :r): each the runtime's on a value --
+; the vector's count, the element a step d reads, the value it moves on
+; to (a realisation, sk-real, for 3), the value the walk hands over at a
+; cursor (sk-cval), and a cell (sk-consv's)
+(defun sk-topk (top) (declare (xargs :guard t)) (case top (1 t) (2 :r) (otherwise nil)))
+(defun sk-cnt (v) (declare (xargs :guard t)) (mbe :logic (len (cdr v)) :exec (sk-safe-len (sk-safe-cdr v))))
+(defun sk-elem (v d i)
+  (declare (xargs :guard t))
+  (mbe :logic (case d (1 (car v)) (2 (nth (nfix i) (cdr v))) (5 (cadr v)) (otherwise nil))
+       :exec (case d (1 (sk-safe-car v)) (2 (sk-safe-nth (nfix i) (sk-safe-cdr v)))
+               (5 (sk-safe-car (sk-safe-cdr v))) (otherwise nil))))
+(defun sk-nextv (v d)
+  (declare (xargs :guard t))
+  (mbe :logic (case d (1 (cdr v)) (3 (sk-real (cdr v))) (5 (cddr v)) (otherwise v))
+       :exec (case d (1 (sk-safe-cdr v)) (3 (sk-real (sk-safe-cdr v))) (5 (sk-safe-cdr (sk-safe-cdr v)))
+               (otherwise v))))
+(defun sk-cvalv (v i top) (ec-call (sk-cval (list v i (sk-topk top)))))
+(defun sk-cell (a s) (list* :cons a s))
+
+(defun vmi-walk-d (i top vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let ((v (vmi-treg 0 vmi))) (sk-step (sk-kind v (sk-topk top)) i (sk-cnt v))))
+
+; THE WALK TO THE END, sk-els on the arrays: the cursor's value in scratch
+; slot 0, each element written to slot k + 1, at most l of them. Answers a
+; status (0 :ok, 1 :none, 2 :long) and k past the last element written.
+(defun vmi-walk (k l i top vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil
+                  :measure (+ (* 2 (nfix l)) (if (equal (vmi-walk-d i top vmi) 3) 1 0))))
+  (let* ((v (vmi-treg 0 vmi)) (d (sk-step (sk-kind v (sk-topk top)) i (sk-cnt v))))
+    (cond ((equal d 0) (mv 0 k vmi))
+          ((equal d 3) (let ((vmi (vmi-tset 0 (sk-nextv v 3) vmi))) (vmi-walk k l 0 2 vmi)))
+          ((sk-more d)
+           (if (zp l)
+               (mv 2 k vmi)
+             (let* ((vmi (vmi-tset (1+ (nfix k)) (sk-elem v d i) vmi))
+                    (vmi (vmi-tset 0 (sk-nextv v d) vmi)))
+               (vmi-walk (1+ (nfix k)) (1- l) (if (equal d 2) (1+ (nfix i)) 0) (if (equal d 1) 0 1) vmi))))
+          (t (mv 1 k vmi)))))
+
+; APPLY'S WALK on the arrays, seqk's ex-apwalk step for step (its
+; decisions ex-aplook and ex-apstep, the generated ones): the cursor as
+; above, the k arguments taken so far in slots 1..k, req the variadic
+; clause's count (-1 none). Takes elements while ex-apstep says 1;
+; answers its way (2 the hand-over, 3 the count's dispatch), k and the
+; cursor's index and top.
+(defun vmi-awalk-d (req k i top vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (if (equal (ex-aplook req k) 1) (vmi-walk-d i top vmi) 1))
+(defun vmi-awalk (req k i top vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil
+                  :measure (+ (* 2 (nfix (- (ifix req) (nfix k)))) (if (equal (vmi-awalk-d req k i top vmi) 3) 1 0))))
+  (let* ((v (vmi-treg 0 vmi)) (d (vmi-awalk-d req k i top vmi)))
+    (if (equal d 3)
+        (let ((vmi (vmi-tset 0 (sk-nextv v 3) vmi))) (vmi-awalk req k 0 2 vmi))
+      (let ((w (ex-apstep req k (if (sk-more d) 1 0))))
+        (if (and (equal w 1) (sk-more d) (< (nfix k) req))
+            (let* ((vmi (vmi-tset (1+ (nfix k)) (sk-elem v d i) vmi))
+                   (vmi (vmi-tset 0 (sk-nextv v d) vmi)))
+              (vmi-awalk req (1+ (nfix k)) (if (equal d 2) (1+ (nfix i)) 0) (if (equal d 1) 0 1) vmi))
+          (mv (if (equal w 2) 2 3) k i top vmi))))))
+
+; the hand-over's rest: the arguments in slots lo+1..j consed onto slot 0
+(defun vmi-consv (j lo vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil :measure (nfix (- (nfix j) (nfix lo)))))
+  (if (<= (nfix j) (nfix lo))
+      vmi
+    (let ((vmi (vmi-tset 0 (sk-cell (vmi-treg j vmi) (vmi-treg 0 vmi)) vmi)))
+      (vmi-consv (1- (nfix j)) lo vmi))))
+
+(defun vmi-applyp (c) (eq c :apply))
+
+; the first variadic clause of the k from ci (vmx2's x2-req and x2-hcls), or -1
+(defun vmi-rest-at (ci k vmi)
+  (declare (xargs :stobjs vmi :measure (nfix k) :verify-guards nil))
+  (cond ((zp k) -1)
+        ((equal (v-clresti (nfix ci) vmi) 1) (nfix ci))
+        (t (vmi-rest-at (1+ (nfix ci)) (1- k) vmi))))
+(defun vmi-rest-ci (f vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (if (and (natp f) (< f (v-fnfirst-length vmi))) (vmi-rest-at (v-fnfirsti f vmi) (v-fncounti f vmi) vmi) -1))
+
+; THE SPREAD INTO THE SCRATCH (seqk's sk-spread): the arguments between
+; into slots 1.., the seq into slot 0; no seq at its top and it does not
+; spread (way 1); else the walk, and on its hand-over (way 2) the req
+; fixed arguments and the rest as one value in slot req + 1, or on its
+; dispatch the walk on to the seq's end (way 0 if it ends, 1 if not).
+; Answers the way and the count of arguments in slots 1..
+(defun vmi-spread-in (req m fb2 vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((vmi (vmi-to-tmp (1+ (nfix fb2)) 1 (- (nfix m) 2) vmi))
+         (vmi (vmi-tset 0 (vmi-sreg (+ (nfix fb2) (nfix m) -1) vmi) vmi)))
+    (cond ((not (equal (v-status vmi) 0)) (mv 1 0 vmi))
+          ((equal (vmi-walk-d 0 1 vmi) 4) (mv 1 0 vmi))
+          (t (mv-let (w k i top vmi)
+               (vmi-awalk req (- (nfix m) 2) 0 1 vmi)
+               (if (equal w 2)
+                   (let* ((vmi (vmi-tset 0 (sk-cvalv (vmi-treg 0 vmi) i top) vmi))
+                          (vmi (vmi-consv k (nfix req) vmi))
+                          (vmi (vmi-tset (1+ (nfix req)) (vmi-treg 0 vmi) vmi)))
+                     (mv 2 (1+ (nfix req)) vmi))
+                 (mv-let (st k vmi)
+                   (vmi-walk k *sk-lim* i top vmi)
+                   (mv (if (equal st 0) 0 1) (nfix k) vmi))))))))
+
+; the scratch's k arguments written where the first argument was, the
+; closure above, sp past it
+(defun vmi-spread-out (fb2 k vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((vmi (vmi-tset (1+ (nfix k)) (vmi-sreg fb2 vmi) vmi))
+         (vmi (vmi-from-tmp 1 fb2 (1+ (nfix k)) vmi)))
+    (if (not (equal (v-status vmi) 0))
+        vmi
+      (update-v-sp (+ (nfix fb2) (nfix k) 1) vmi))))
+
+; the hand-over's call: clause ci, the variadic one, entered as the fixed
+; clause of its count + 1 (vmx2's x2-hcls), the closure on top of them
+(defun vmi-hcall (ci m vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let* ((fb2 (- (nfix (v-sp vmi)) (1+ (nfix m)))) (ent (nfix (v-clenti (nfix ci) vmi)))
+         (vmi (vmi-push-rec 1 (1+ (nfix (v-pc vmi))) (nfix (v-fb vmi)) 0 vmi))
+         (vmi (update-v-fb fb2 vmi)))
+    (update-v-pc ent vmi)))
+
+; (:applyv m): the call on top of m values -- unless the closure is apply,
+; its first argument a closure and its last a seq apply spreads (vmx2's
+; x2-spreads): then the spread, read into the scratch, is written where
+; the first argument was, the closure above, and that is the call -- the
+; variadic clause's as a fixed one on a hand-over (vmx2's x2-stk, x2-vals,
+; x2-fn, x2-prog)
+(defun vmi-applyv (vmi)
+  (declare (xargs :stobjs vmi :verify-guards nil))
+  (let ((sp (nfix (v-sp vmi))) (m (nfix (vmi-w (v-pc vmi) 1 vmi))))
+    (if (< sp (1+ m))
+        vmi
+      (let ((fb2 (- sp (1+ m))))
+        (if (and (<= 2 m) (vmi-applyp (vmi-sreg (1- sp) vmi)) (clop (vmi-sreg fb2 vmi))
+                 (not (clop (vmi-sreg (+ fb2 m -1) vmi))))
+            (let ((ci (vmi-rest-ci (clo-f (vmi-sreg fb2 vmi)) vmi)))
+              (mv-let (w k vmi)
+                (vmi-spread-in (if (< ci 0) -1 (nfix (v-clni (nfix ci) vmi))) m fb2 vmi)
+                (cond ((not (equal (v-status vmi) 0)) vmi)
+                      ((equal w 1) (vmi-call m vmi))
+                      ((<= (v-stk-length vmi) (+ fb2 k)) (update-v-status 2 vmi))
+                      (t (let ((vmi (vmi-spread-out fb2 k vmi)))
+                           (cond ((not (equal (v-status vmi) 0)) vmi)
+                                 ((and (equal w 2) (<= 0 ci)) (vmi-hcall ci k vmi))
+                                 (t (vmi-call k vmi))))))))
+          (vmi-call m vmi))))))
 
 ; a return: the value to the frame's base, the caller's pc and frame back;
 ; a handler record on top is read as vmx2 reads it -- pc 0, frame its
@@ -343,7 +534,7 @@
       (1 (vmi-push vmi)) (2 (vmi-load vmi)) (3 (vmi-add vmi)) (4 (vmi-lt vmi)) (5 (vmi-slide vmi))
       (6 (vmi-jmpf vmi)) (7 (vmi-jmp vmi)) (8 (vmi-mkclo vmi)) (9 (vmi-capt vmi)) (10 (vmi-callv vmi))
       (11 (vmi-ret vmi)) (12 (vmi-recur vmi)) (13 (vmi-prim vmi)) (14 (vmi-throw vmi)) (15 (vmi-try vmi))
-      (16 (vmi-endtry vmi))
+      (16 (vmi-endtry vmi)) (17 (vmi-applyv vmi))
       (otherwise vmi))))
 
 (defun vmi-run (n vmi)
@@ -379,7 +570,7 @@
       (1 (list :push (vmi-poolv a vmi))) (2 (list :load a)) (3 (list :add)) (4 (list :lt)) (5 (list :slide))
       (6 (list :jmpf a)) (7 (list :jmp a)) (8 (list :mkclo a b)) (9 (list :capt a b)) (10 (list :callv a))
       (11 (list :ret)) (12 (list :recur a b c)) (13 (list :prim (vmi-poolv a vmi) b)) (14 (list :throw))
-      (15 (list :try a b)) (16 (list :endtry))
+      (15 (list :try a b)) (16 (list :endtry)) (17 (list :applyv a))
       (otherwise nil))))
 
 (defun vmi-code-list (pc k vmi)
@@ -416,7 +607,7 @@
 
 (defun op-of (key)
   (case key (:push 1) (:load 2) (:add 3) (:lt 4) (:slide 5) (:jmpf 6) (:jmp 7) (:mkclo 8) (:capt 9)
-    (:callv 10) (:ret 11) (:recur 12) (:prim 13) (:throw 14) (:try 15) (:endtry 16) (otherwise 0)))
+    (:callv 10) (:ret 11) (:recur 12) (:prim 13) (:throw 14) (:try 15) (:endtry 16) (:applyv 17) (otherwise 0)))
 
 (defun small-natp (x) (and (natp x) (< x 2147483648)))
 
@@ -431,7 +622,7 @@
 (defun enc-ok-ins (ins)
   (let ((op (op-of (car ins))))
     (and (not (equal op 0)) (true-listp ins)
-         (equal (len ins) (case op ((3 4 5 11 14 16) 1) ((1 2 6 7 10) 2) ((8 9 13 15) 3) (otherwise 4)))
+         (equal (len ins) (case op ((3 4 5 11 14 16) 1) ((1 2 6 7 10 17) 2) ((8 9 13 15) 3) (otherwise 4)))
          (or (member op '(1 13)) (small-natp (if (consp (cdr ins)) (cadr ins) 0)))
          (small-natp (if (consp (cddr ins)) (caddr ins) 0))
          (small-natp (if (consp (cdddr ins)) (cadddr ins) 0)))))
@@ -497,6 +688,7 @@
          (vmi (resize-v-cc nctl vmi)) (vmi (resize-v-cprev nctl vmi))
          (vmi (resize-v-fnfirst nf vmi)) (vmi (resize-v-fncount nf vmi))
          (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)) (vmi (resize-v-clrest nc vmi))
+         (vmi (resize-v-tmp nstk vmi))
          (vmi (enc-code (car prog) 0 vmi))
          (vmi (enc-fntab (cdr prog) 0 0 vmi))
          (vmi (update-v-pc 0 vmi)) (vmi (update-v-fb 0 vmi)) (vmi (update-v-sp 0 vmi))
@@ -585,3 +777,27 @@
 (check-vmi (:try (:prim :div (:const 7) (:const 0)) (:local 0)))
 (check-vmi (:prim :div (:const 7) (:const 2)))
 (check-vmi (:let (:try (:const 4) (:throw (:local 0))) (:add (:local 0) (:const 0))))
+
+; apply's spread on the arrays, in lockstep with vcs2-step: a list, a
+; vector, a cell whose rest is a vector, the empty seq, the arity error
+; through it, and what does not spread (no closure, no seq, no apply)
+(check-vmi (:applyv (:const :apply) (:mkclo f2) (:const 5) (:const (6))))
+(check-vmi (:applyv (:const :apply) (:mkclo f2) (:const (5 6 7 8))))
+(check-vmi (:applyv (:const :apply) (:mkclo vsum) (:const 1) (:const 2) (:const (3 4))))
+(check-vmi (:applyv (:const :apply) (:mkclo vsum) (:const 1) (:const (:vec 2 3))))
+(check-vmi (:applyv (:const :apply) (:mkclo vsum) (:const (:cons 2 :vec 3 4))))
+(check-vmi (:applyv (:const :apply) (:mkclo vsum) (:const nil)))
+(check-vmi (:applyv (:const :apply) (:mkclo f2) (:const nil)))
+(check-vmi (:applyv (:const :apply) (:const 3) (:const (1))))
+(check-vmi (:applyv (:const :apply) (:mkclo vsum) (:const 7)))
+(check-vmi (:applyv (:mkclo f2) (:const 5) (:const 6)))
+; the hand-over (2c-vi's lazy spread): a variadic fn handed the seq reads
+; it only through req + 1 -- an infinite seq, (apply (fn [& xs] (first
+; xs)) (range)), and (apply (fn [a & r] a) (range)); the arguments past
+; req consed on as cells, a vector's rest a vector; past req + 1 fixed
+; arguments the seq not read at all
+(check-vmi (:applyv (:const :apply) (:mkclo hd) (:const (:lazy . 0))))
+(check-vmi (:applyv (:const :apply) (:mkclo fa) (:const (:lazy . 0))))
+(check-vmi (:applyv (:const :apply) (:mkclo fa) (:const 4) (:const 5) (:const (:vec 6))))
+(check-vmi (:applyv (:const :apply) (:mkclo fa) (:const (:vec 5 6 7))))
+(check-vmi (:applyv (:const :apply) (:mkclo fa) (:const 4) (:const 5) (:const 6) (:const 7)))

@@ -52,7 +52,7 @@ module vm_runtime
   type, public :: vm_state
      integer(int64) :: pc = 0, fb = 0, sp = 0, status = 0, ctop = 0, hidx = -1
      integer(int64), pointer, contiguous :: code(:) => null()
-     type(value), pointer, contiguous :: pool(:) => null(), stk(:) => null()
+     type(value), pointer, contiguous :: pool(:) => null(), stk(:) => null(), tmp(:) => null()
      integer(int64), pointer, contiguous :: ckind(:) => null(), ca(:) => null(), cb(:) => null(), cc(:) => null()
      integer(int64), pointer, contiguous :: cprev(:) => null(), fnfirst(:) => null(), fncount(:) => null()
      integer(int64), pointer, contiguous :: cln(:) => null(), clent(:) => null(), clrest(:) => null()
@@ -64,7 +64,8 @@ module vm_runtime
 
   public :: rt_add, rt_capt, rt_car, rt_cdr, rt_clo, rt_clo_f, rt_clop, rt_consp, rt_is, rt_keyword, rt_len
   public :: rt_list_from, rt_lt, rt_nat, rt_nil, rt_t, rt_prim, rt_prim1, rt_prim2, rt_prim3, rt_resize_int, rt_resize_val
-  public :: rt_thrown, rt_throwp, rt_truthy, rt_cons
+  public :: rt_thrown, rt_throwp, rt_truthy, rt_cons, rt_applyp, rt_sk_kind, rt_sk_cnt, rt_sk_elem, rt_sk_next
+  public :: rt_sk_cval, rt_sk_cell
   public :: vmrt_throw_of, vmrt_init
 
   ! THE HOOKS. call: fn applied to the nargs values in value-stack slots
@@ -343,6 +344,70 @@ contains
     integer(int64) :: f
     f = vrt_clo_f(hs, vx, int(c%tag, int64), int(c%ref, int64))
   end function rt_clo_f
+
+  ! APPLY'S SPREAD (model/vmi.lisp's (:applyv m), opcode 17). The arrays
+  ! spread as vmx2 does, lazily (2c-v: seqk's sk-spread, a variadic callee
+  ! reading the seq only through req + 1), proved and fuzzed against the
+  ! model on test/vm's runtime. Here no clotran value is the model's
+  ! :apply yet, so a call of clojure.core/apply stays the evaluator's
+  ! (:callv's :invoke, B_APPLY's walk, which walks the same way): vm.inc's
+  ! translation emits no :applyv, and these reads are not wired to the
+  ! heap -- they would be exec.inc's ap_kind/ap_realise/ap_first/ap_next
+  ! and ap_spread's rest through new hooks, with the scratch (st%tmp) a GC
+  ! root while a walk realises (docs/model-coverage.md, the VM step loop's
+  ! row). rt_applyp answers false, so the generated step never reads a seq
+  ! here; the reads answer "no seq", the model's kind 4.
+  logical function rt_applyp(c)
+    type(value), intent(in) :: c
+    rt_applyp = .false.
+    if (c%tag < 0) rt_applyp = .false.
+  end function rt_applyp
+
+  function rt_sk_kind(v, top) result(k)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: top
+    integer(int64) :: k
+    k = 4
+    if (v%tag < 0 .or. top < 0) k = 4
+  end function rt_sk_kind
+
+  function rt_sk_cnt(v) result(n)
+    type(value), intent(in) :: v
+    integer(int64) :: n
+    n = 0
+    if (v%tag < 0) n = 0
+  end function rt_sk_cnt
+
+  function rt_sk_elem(v, d, i) result(r)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: d, i
+    type(value) :: r
+    r = gc_nil()
+    if (d < 0 .or. i < 0) r = v
+  end function rt_sk_elem
+
+  function rt_sk_next(v, d) result(r)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: d
+    type(value) :: r
+    r = v
+    if (d < 0) r = gc_nil()
+  end function rt_sk_next
+
+  function rt_sk_cval(v, i, top) result(r)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: i, top
+    type(value) :: r
+    r = v
+    if (i < 0 .or. top < 0) r = gc_nil()
+  end function rt_sk_cval
+
+  function rt_sk_cell(a, s) result(r)
+    type(value), intent(in) :: a, s
+    type(value) :: r
+    r = s
+    if (a%tag < 0) r = gc_nil()
+  end function rt_sk_cell
 
   ! (nth i (clo-caps c)); a compiled closure's capture ncap is itself
   function rt_capt(i, c) result(r)

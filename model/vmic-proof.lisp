@@ -758,7 +758,7 @@
 
 ; ---- THE MACHINE'S SHAPE: every write lands inside the 19 fields --------------------------------
 
-(defmacro shape19 (x) `(and (true-listp ,x) (equal (len ,x) 19)))
+(defmacro shape19 (x) `(and (true-listp ,x) (equal (len ,x) 20)))
 
 (defthm vmic-put-shape (implies (shape19 vmi) (shape19 (vmic-put pc op a b c v vmi))) :hints (("Goal" :in-theory (enable vmic-put))))
 (defthm vmic-slides-shape (implies (shape19 vmi) (shape19 (vmic-slides pc i vmi)))

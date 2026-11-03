@@ -679,6 +679,586 @@ contains
     end if
   end function vmg_pick
 
+  pure function sk_step(kd_, i_, cnt_) result(r)
+    integer(int64), value :: kd_
+    integer(int64), value :: i_
+    integer(int64), value :: cnt_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    select case (kd_)
+    case (1_int64)
+      r = 1_int64
+      return
+    case (2_int64)
+      if (.true.) then
+        if (.true.) then
+          if ((.not. (i_ < 0_int64))) then
+            t_1 = (i_ < cnt_)
+          else
+            t_1 = .false.
+          end if
+          t_2 = t_1
+        else
+          t_2 = .false.
+        end if
+        t_3 = t_2
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        r = 2_int64
+        return
+      else
+        r = 0_int64
+        return
+      end if
+    case (3_int64)
+      r = 3_int64
+      return
+    case (5_int64)
+      r = 5_int64
+      return
+    case (0_int64)
+      r = 0_int64
+      return
+    case default
+      r = 4_int64
+      return
+    end select
+  end function sk_step
+
+  pure function sk_more(d_) result(r)
+    integer(int64), value :: d_
+    logical :: r
+    if ((d_ == 1_int64)) then
+      r = (d_ == 1_int64)
+      return
+    else
+      if ((d_ == 2_int64)) then
+        r = (d_ == 2_int64)
+        return
+      else
+        r = (d_ == 5_int64)
+        return
+      end if
+    end if
+  end function sk_more
+
+  pure function ex_aplook(req_, k_) result(r)
+    integer(int64), value :: req_
+    integer(int64), value :: k_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    if (.true.) then
+      if ((.not. (req_ < 0_int64))) then
+        if (.true.) then
+          t_1 = (.not. ((req_ + 1_int64) < k_))
+        else
+          t_1 = .false.
+        end if
+        t_2 = t_1
+      else
+        t_2 = .false.
+      end if
+      t_3 = t_2
+    else
+      t_3 = .false.
+    end if
+    if (t_3) then
+      r = 1_int64
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function ex_aplook
+
+  pure function ex_apstep(req_, k_, more_) result(r)
+    integer(int64), value :: req_
+    integer(int64), value :: k_
+    integer(int64), value :: more_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    if (.true.) then
+      if ((.not. (req_ < 0_int64))) then
+        t_1 = .true.
+      else
+        t_1 = .false.
+      end if
+      t_2 = t_1
+    else
+      t_2 = .false.
+    end if
+    if ((.not. t_2)) then
+      r = 3_int64
+      return
+    else
+      if ((k_ < req_)) then
+        t_3 = (more_ == 1_int64)
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        r = 1_int64
+        return
+      else
+        if ((req_ < k_)) then
+          t_4 = (req_ < k_)
+        else
+          t_4 = (more_ == 1_int64)
+        end if
+        if (t_4) then
+          r = 2_int64
+          return
+        else
+          r = 3_int64
+          return
+        end if
+      end if
+    end if
+  end function ex_apstep
+
+  function vmg_treg(st, i_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: i_
+    type(value) :: r
+    if ((max(0_int64, i_) < size(st%tmp, kind=int64))) then
+      r = st%tmp(max(0_int64, i_))
+      return
+    else
+      r = rt_nil()
+      return
+    end if
+  end function vmg_treg
+
+  subroutine vmg_tset(st, i_, v_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: i_
+    type(value), value :: v_
+    integer(int64) :: i_1
+    type(value) :: v_2
+    if ((max(0_int64, i_) < size(st%tmp, kind=int64))) then
+      i_1 = max(0_int64, i_)
+      v_2 = v_
+      st%tmp(i_1) = v_2
+    else
+      st%status = 2_int64
+    end if
+  end subroutine vmg_tset
+
+  subroutine vmg_to_tmp(st, a_, j_, k_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: a_
+    integer(int64), value :: j_
+    integer(int64), value :: k_
+    integer(int64) :: a_2
+    integer(int64) :: j_4
+    integer(int64) :: k_5
+    integer(int64) :: var_1
+    integer(int64) :: var_3
+    do
+      if ((k_ <= 0_int64)) then
+      else
+        call vmg_tset(st, j_, vmg_sreg(st, a_))
+        var_1 = (1_int64 + max(0_int64, a_))
+        a_2 = var_1
+        var_3 = (1_int64 + max(0_int64, j_))
+        j_4 = var_3
+        k_5 = ((-1_int64) + k_)
+        a_ = a_2
+        j_ = j_4
+        k_ = k_5
+        cycle
+      end if
+      exit
+    end do
+  end subroutine vmg_to_tmp
+
+  subroutine vmg_from_tmp(st, j_, a_, k_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: j_
+    integer(int64), value :: a_
+    integer(int64), value :: k_
+    integer(int64) :: a_4
+    integer(int64) :: j_2
+    integer(int64) :: k_5
+    integer(int64) :: var_1
+    integer(int64) :: var_3
+    do
+      if ((k_ <= 0_int64)) then
+      else
+        call vmg_sset(st, a_, vmg_treg(st, j_))
+        var_1 = (1_int64 + max(0_int64, j_))
+        j_2 = var_1
+        var_3 = (1_int64 + max(0_int64, a_))
+        a_4 = var_3
+        k_5 = ((-1_int64) + k_)
+        j_ = j_2
+        a_ = a_4
+        k_ = k_5
+        cycle
+      end if
+      exit
+    end do
+  end subroutine vmg_from_tmp
+
+  subroutine vmg_walk(st, k_, l_, i_, top_, r1, r2)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: k_
+    integer(int64), value :: l_
+    integer(int64), value :: i_
+    integer(int64), value :: top_
+    integer(int64), intent(out) :: r1
+    integer(int64), intent(out) :: r2
+    integer(int64) :: d_2
+    integer(int64) :: i_13
+    integer(int64) :: i_5
+    integer(int64) :: k_3
+    integer(int64) :: k_9
+    integer(int64) :: l_10
+    integer(int64) :: l_4
+    integer(int64) :: t_12
+    integer(int64) :: t_14
+    integer(int64) :: top_15
+    integer(int64) :: top_6
+    type(value) :: v_1
+    integer(int64) :: var_11
+    integer(int64) :: var_7
+    integer(int64) :: var_8
+    do
+      v_1 = vmg_treg(st, 0_int64)
+      d_2 = sk_step(rt_sk_kind(v_1, top_), i_, rt_sk_cnt(v_1))
+      if ((d_2 == 0_int64)) then
+        r1 = 0_int64
+        r2 = k_
+      else
+        if ((d_2 == 3_int64)) then
+          call vmg_tset(st, 0_int64, rt_sk_next(v_1, 3_int64))
+          k_3 = k_
+          l_4 = l_
+          i_5 = 0_int64
+          top_6 = 2_int64
+          k_ = k_3
+          l_ = l_4
+          i_ = i_5
+          top_ = top_6
+          cycle
+        else
+          if (sk_more(d_2)) then
+            if ((l_ <= 0_int64)) then
+              r1 = 2_int64
+              r2 = k_
+            else
+              var_7 = (1_int64 + max(0_int64, k_))
+              call vmg_tset(st, var_7, rt_sk_elem(v_1, d_2, i_))
+              call vmg_tset(st, 0_int64, rt_sk_next(v_1, d_2))
+              var_8 = (1_int64 + max(0_int64, k_))
+              k_9 = var_8
+              l_10 = ((-1_int64) + l_)
+              if ((d_2 == 2_int64)) then
+                var_11 = (1_int64 + max(0_int64, i_))
+                t_12 = var_11
+              else
+                t_12 = 0_int64
+              end if
+              i_13 = t_12
+              if ((d_2 == 1_int64)) then
+                t_14 = 0_int64
+              else
+                t_14 = 1_int64
+              end if
+              top_15 = t_14
+              k_ = k_9
+              l_ = l_10
+              i_ = i_13
+              top_ = top_15
+              cycle
+            end if
+          else
+            r1 = 1_int64
+            r2 = k_
+          end if
+        end if
+      end if
+      exit
+    end do
+  end subroutine vmg_walk
+
+  function vmg_awalk_d(st, req_, k_, i_, top_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: req_
+    integer(int64), value :: k_
+    integer(int64), value :: i_
+    integer(int64), value :: top_
+    integer(int64) :: r
+    type(value) :: v_1
+    if ((ex_aplook(req_, k_) == 1_int64)) then
+      v_1 = vmg_treg(st, 0_int64)
+      r = sk_step(rt_sk_kind(v_1, top_), i_, rt_sk_cnt(v_1))
+      return
+    else
+      r = 1_int64
+      return
+    end if
+  end function vmg_awalk_d
+
+  subroutine vmg_awalk(st, req_, k_, i_, top_, r1, r2, r3, r4)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: req_
+    integer(int64), value :: k_
+    integer(int64), value :: i_
+    integer(int64), value :: top_
+    integer(int64), intent(out) :: r1
+    integer(int64), intent(out) :: r2
+    integer(int64), intent(out) :: r3
+    integer(int64), intent(out) :: r4
+    integer(int64) :: d_2
+    integer(int64) :: i_17
+    integer(int64) :: i_5
+    integer(int64) :: k_14
+    integer(int64) :: k_4
+    integer(int64) :: req_12
+    integer(int64) :: req_3
+    logical :: t_10
+    integer(int64) :: t_16
+    integer(int64) :: t_18
+    integer(int64) :: t_20
+    integer(int64) :: t_7
+    logical :: t_9
+    integer(int64) :: top_19
+    integer(int64) :: top_6
+    type(value) :: v_1
+    integer(int64) :: var_11
+    integer(int64) :: var_13
+    integer(int64) :: var_15
+    integer(int64) :: w_8
+    do
+      v_1 = vmg_treg(st, 0_int64)
+      d_2 = vmg_awalk_d(st, req_, k_, i_, top_)
+      if ((d_2 == 3_int64)) then
+        call vmg_tset(st, 0_int64, rt_sk_next(v_1, 3_int64))
+        req_3 = req_
+        k_4 = k_
+        i_5 = 0_int64
+        top_6 = 2_int64
+        req_ = req_3
+        k_ = k_4
+        i_ = i_5
+        top_ = top_6
+        cycle
+      else
+        if (sk_more(d_2)) then
+          t_7 = 1_int64
+        else
+          t_7 = 0_int64
+        end if
+        w_8 = ex_apstep(req_, k_, t_7)
+        if ((w_8 == 1_int64)) then
+          if (sk_more(d_2)) then
+            t_9 = (max(0_int64, k_) < req_)
+          else
+            t_9 = .false.
+          end if
+          t_10 = t_9
+        else
+          t_10 = .false.
+        end if
+        if (t_10) then
+          var_11 = (1_int64 + max(0_int64, k_))
+          call vmg_tset(st, var_11, rt_sk_elem(v_1, d_2, i_))
+          call vmg_tset(st, 0_int64, rt_sk_next(v_1, d_2))
+          req_12 = req_
+          var_13 = (1_int64 + max(0_int64, k_))
+          k_14 = var_13
+          if ((d_2 == 2_int64)) then
+            var_15 = (1_int64 + max(0_int64, i_))
+            t_16 = var_15
+          else
+            t_16 = 0_int64
+          end if
+          i_17 = t_16
+          if ((d_2 == 1_int64)) then
+            t_18 = 0_int64
+          else
+            t_18 = 1_int64
+          end if
+          top_19 = t_18
+          req_ = req_12
+          k_ = k_14
+          i_ = i_17
+          top_ = top_19
+          cycle
+        else
+          if ((w_8 == 2_int64)) then
+            t_20 = 2_int64
+          else
+            t_20 = 3_int64
+          end if
+          r1 = t_20
+          r2 = k_
+          r3 = i_
+          r4 = top_
+        end if
+      end if
+      exit
+    end do
+  end subroutine vmg_awalk
+
+  subroutine vmg_consv(st, j_, lo_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: j_
+    integer(int64), value :: lo_
+    integer(int64) :: j_2
+    integer(int64) :: lo_3
+    integer(int64) :: var_1
+    do
+      if ((.not. (max(0_int64, lo_) < max(0_int64, j_)))) then
+      else
+        call vmg_tset(st, 0_int64, rt_sk_cell(vmg_treg(st, j_), vmg_treg(st, 0_int64)))
+        var_1 = ((-1_int64) + max(0_int64, j_))
+        j_2 = var_1
+        lo_3 = lo_
+        j_ = j_2
+        lo_ = lo_3
+        cycle
+      end if
+      exit
+    end do
+  end subroutine vmg_consv
+
+  pure function vmg_rest_at(st, ci_, k_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: ci_
+    integer(int64), value :: k_
+    integer(int64) :: r
+    integer(int64) :: ci_2
+    integer(int64) :: k_3
+    integer(int64) :: var_1
+    do
+      if ((k_ <= 0_int64)) then
+        r = (-1_int64)
+        return
+      else
+        if ((st%clrest(max(0_int64, ci_)) == 1_int64)) then
+          r = max(0_int64, ci_)
+          return
+        else
+          var_1 = (1_int64 + max(0_int64, ci_))
+          ci_2 = var_1
+          k_3 = ((-1_int64) + k_)
+          ci_ = ci_2
+          k_ = k_3
+          cycle
+        end if
+      end if
+    end do
+  end function vmg_rest_at
+
+  pure function vmg_rest_ci(st, f_) result(r)
+    type(vm_state), intent(in) :: st
+    integer(int64), value :: f_
+    integer(int64) :: r
+    logical :: t_1
+    if ((f_ >= 0_int64)) then
+      t_1 = (f_ < size(st%fnfirst, kind=int64))
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = vmg_rest_at(st, st%fnfirst(f_), st%fncount(f_))
+      return
+    else
+      r = (-1_int64)
+      return
+    end if
+  end function vmg_rest_ci
+
+  subroutine vmg_call(st, m_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: m_
+    type(value) :: a_9
+    type(value) :: c_5
+    integer(int64) :: ci_12
+    integer(int64) :: ent_17
+    integer(int64) :: fb2_15
+    integer(int64) :: fb2_8
+    integer(int64) :: m_2
+    integer(int64) :: n_16
+    integer(int64) :: sp_1
+    integer(int64) :: var_10
+    integer(int64) :: var_11
+    integer(int64) :: var_13
+    integer(int64) :: var_14
+    integer(int64) :: var_18
+    integer(int64) :: var_19
+    integer(int64) :: var_20
+    integer(int64) :: var_21
+    integer(int64) :: var_22
+    integer(int64) :: var_23
+    integer(int64) :: var_3
+    integer(int64) :: var_4
+    integer(int64) :: var_6
+    integer(int64) :: var_7
+    sp_1 = max(0_int64, st%sp)
+    m_2 = max(0_int64, m_)
+    var_3 = (1_int64 + m_2)
+    if ((sp_1 < var_3)) then
+    else
+      var_4 = ((-1_int64) + sp_1)
+      c_5 = vmg_sreg(st, var_4)
+      if ((.not. rt_clop(c_5))) then
+        var_6 = (1_int64 + m_2)
+        var_7 = (sp_1 + (-var_6))
+        fb2_8 = var_7
+        a_9 = vmg_invoke_call(st, c_5, fb2_8, m_2)
+        if (rt_throwp(a_9)) then
+          call vmg_unwind(st, rt_thrown(a_9))
+        else
+          call vmg_sset(st, fb2_8, a_9)
+          var_10 = (1_int64 + fb2_8)
+          st%sp = var_10
+          var_11 = (1_int64 + max(0_int64, st%pc))
+          st%pc = var_11
+        end if
+      else
+        ci_12 = vmg_pick(st, rt_clo_f(c_5), m_2)
+        if ((ci_12 < 0_int64)) then
+          call vmg_unwind(st, rt_keyword("arity"))
+        else
+          var_13 = (1_int64 + m_2)
+          var_14 = (sp_1 + (-var_13))
+          fb2_15 = var_14
+          n_16 = max(0_int64, st%cln(ci_12))
+          ent_17 = max(0_int64, st%clent(ci_12))
+          var_18 = (1_int64 + max(0_int64, st%pc))
+          call vmg_push_rec(st, 1_int64, var_18, max(0_int64, st%fb), 0_int64)
+          if ((st%clrest(ci_12) == 1_int64)) then
+            var_19 = (fb2_15 + n_16)
+            var_20 = (fb2_15 + n_16)
+            var_21 = (m_2 + (-n_16))
+            call vmg_sset(st, var_19, rt_list_from(st, var_20, var_21))
+            var_22 = (fb2_15 + (n_16 + 1_int64))
+            call vmg_sset(st, var_22, c_5)
+            st%fb = fb2_15
+            var_23 = (fb2_15 + (n_16 + 2_int64))
+            st%sp = var_23
+            st%pc = ent_17
+          else
+            st%fb = fb2_15
+            st%pc = ent_17
+          end if
+        end if
+      end if
+    end if
+  end subroutine vmg_call
+
   subroutine vmg_push(st)
     type(vm_state), intent(inout) :: st
     integer(int64) :: sp_1
@@ -838,81 +1418,202 @@ contains
 
   subroutine vmg_callv(st)
     type(vm_state), intent(inout) :: st
-    type(value) :: a_9
-    type(value) :: c_5
-    integer(int64) :: ci_12
-    integer(int64) :: ent_17
-    integer(int64) :: fb2_15
-    integer(int64) :: fb2_8
-    integer(int64) :: m_2
-    integer(int64) :: n_16
-    integer(int64) :: sp_1
-    integer(int64) :: var_10
-    integer(int64) :: var_11
+    call vmg_call(st, max(0_int64, vmg_w(st, st%pc, 1_int64)))
+  end subroutine vmg_callv
+
+  subroutine vmg_spread_in(st, req_, m_, fb2_, r1, r2)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: req_
+    integer(int64), value :: m_
+    integer(int64), value :: fb2_
+    integer(int64), intent(out) :: r1
+    integer(int64), intent(out) :: r2
+    integer(int64) :: i_11
+    integer(int64) :: k_10
+    integer(int64) :: k_18
+    integer(int64) :: mv_15
+    integer(int64) :: mv_16
+    integer(int64) :: mv_4
+    integer(int64) :: mv_5
+    integer(int64) :: mv_6
+    integer(int64) :: mv_7
+    integer(int64) :: st_17
+    integer(int64) :: t_19
+    integer(int64) :: top_12
+    integer(int64) :: var_1
     integer(int64) :: var_13
     integer(int64) :: var_14
+    integer(int64) :: var_2
+    integer(int64) :: var_3
+    integer(int64) :: var_8
+    integer(int64) :: w_9
+    var_1 = (1_int64 + fb2_)
+    var_2 = ((-2_int64) + m_)
+    call vmg_to_tmp(st, var_1, 1_int64, var_2)
+    var_3 = (fb2_ + (m_ + (-1_int64)))
+    call vmg_tset(st, 0_int64, vmg_sreg(st, var_3))
+    if ((.not. (st%status == 0_int64))) then
+      r1 = 1_int64
+      r2 = 0_int64
+    else
+      if ((sk_step(rt_sk_kind(vmg_treg(st, 0_int64), 1_int64), 0_int64, rt_sk_cnt(vmg_treg(st, 0_int64))) == 4_int64)) then
+        r1 = 1_int64
+        r2 = 0_int64
+      else
+        var_8 = ((-2_int64) + m_)
+        call vmg_awalk(st, req_, var_8, 0_int64, 1_int64, mv_4, mv_5, mv_6, mv_7)
+        w_9 = mv_4
+        k_10 = mv_5
+        i_11 = mv_6
+        top_12 = mv_7
+        if ((w_9 == 2_int64)) then
+          call vmg_tset(st, 0_int64, rt_sk_cval(vmg_treg(st, 0_int64), i_11, top_12))
+          call vmg_consv(st, k_10, max(0_int64, req_))
+          var_13 = (1_int64 + max(0_int64, req_))
+          call vmg_tset(st, var_13, vmg_treg(st, 0_int64))
+          r1 = 2_int64
+          var_14 = (1_int64 + max(0_int64, req_))
+          r2 = var_14
+        else
+          call vmg_walk(st, k_10, 1000000_int64, i_11, top_12, mv_15, mv_16)
+          st_17 = mv_15
+          k_18 = mv_16
+          if ((st_17 == 0_int64)) then
+            t_19 = 0_int64
+          else
+            t_19 = 1_int64
+          end if
+          r1 = t_19
+          r2 = max(0_int64, k_18)
+        end if
+      end if
+    end if
+  end subroutine vmg_spread_in
+
+  subroutine vmg_spread_out(st, fb2_, k_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: fb2_
+    integer(int64), value :: k_
+    integer(int64) :: var_1
+    integer(int64) :: var_2
+    integer(int64) :: var_3
+    var_1 = (1_int64 + k_)
+    call vmg_tset(st, var_1, vmg_sreg(st, fb2_))
+    var_2 = (1_int64 + k_)
+    call vmg_from_tmp(st, 1_int64, fb2_, var_2)
+    if ((.not. (st%status == 0_int64))) then
+    else
+      var_3 = (fb2_ + (k_ + 1_int64))
+      st%sp = var_3
+    end if
+  end subroutine vmg_spread_out
+
+  subroutine vmg_hcall(st, ci_, m_)
+    type(vm_state), intent(inout) :: st
+    integer(int64), value :: ci_
+    integer(int64), value :: m_
+    integer(int64) :: ent_4
+    integer(int64) :: fb2_3
+    integer(int64) :: var_1
+    integer(int64) :: var_2
+    integer(int64) :: var_5
+    var_1 = (1_int64 + max(0_int64, m_))
+    var_2 = (max(0_int64, st%sp) + (-var_1))
+    fb2_3 = var_2
+    ent_4 = max(0_int64, st%clent(max(0_int64, ci_)))
+    var_5 = (1_int64 + max(0_int64, st%pc))
+    call vmg_push_rec(st, 1_int64, var_5, max(0_int64, st%fb), 0_int64)
+    st%fb = fb2_3
+    st%pc = ent_4
+  end subroutine vmg_hcall
+
+  subroutine vmg_applyv(st)
+    type(vm_state), intent(inout) :: st
+    integer(int64) :: ci_12
+    integer(int64) :: fb2_6
+    integer(int64) :: k_17
+    integer(int64) :: m_2
+    integer(int64) :: mv_13
+    integer(int64) :: mv_14
+    integer(int64) :: sp_1
+    logical :: t_10
+    logical :: t_11
+    integer(int64) :: t_15
+    logical :: t_19
+    logical :: t_9
     integer(int64) :: var_18
-    integer(int64) :: var_19
-    integer(int64) :: var_20
-    integer(int64) :: var_21
-    integer(int64) :: var_22
-    integer(int64) :: var_23
     integer(int64) :: var_3
     integer(int64) :: var_4
-    integer(int64) :: var_6
+    integer(int64) :: var_5
     integer(int64) :: var_7
+    integer(int64) :: var_8
+    integer(int64) :: w_16
     sp_1 = max(0_int64, st%sp)
     m_2 = max(0_int64, vmg_w(st, st%pc, 1_int64))
     var_3 = (1_int64 + m_2)
     if ((sp_1 < var_3)) then
     else
-      var_4 = ((-1_int64) + sp_1)
-      c_5 = vmg_sreg(st, var_4)
-      if ((.not. rt_clop(c_5))) then
-        var_6 = (1_int64 + m_2)
-        var_7 = (sp_1 + (-var_6))
-        fb2_8 = var_7
-        a_9 = vmg_invoke_call(st, c_5, fb2_8, m_2)
-        if (rt_throwp(a_9)) then
-          call vmg_unwind(st, rt_thrown(a_9))
-        else
-          call vmg_sset(st, fb2_8, a_9)
-          var_10 = (1_int64 + fb2_8)
-          st%sp = var_10
-          var_11 = (1_int64 + max(0_int64, st%pc))
-          st%pc = var_11
-        end if
-      else
-        ci_12 = vmg_pick(st, rt_clo_f(c_5), m_2)
-        if ((ci_12 < 0_int64)) then
-          call vmg_unwind(st, rt_keyword("arity"))
-        else
-          var_13 = (1_int64 + m_2)
-          var_14 = (sp_1 + (-var_13))
-          fb2_15 = var_14
-          n_16 = max(0_int64, st%cln(ci_12))
-          ent_17 = max(0_int64, st%clent(ci_12))
-          var_18 = (1_int64 + max(0_int64, st%pc))
-          call vmg_push_rec(st, 1_int64, var_18, max(0_int64, st%fb), 0_int64)
-          if ((st%clrest(ci_12) == 1_int64)) then
-            var_19 = (fb2_15 + n_16)
-            var_20 = (fb2_15 + n_16)
-            var_21 = (m_2 + (-n_16))
-            call vmg_sset(st, var_19, rt_list_from(st, var_20, var_21))
-            var_22 = (fb2_15 + (n_16 + 1_int64))
-            call vmg_sset(st, var_22, c_5)
-            st%fb = fb2_15
-            var_23 = (fb2_15 + (n_16 + 2_int64))
-            st%sp = var_23
-            st%pc = ent_17
+      var_4 = (1_int64 + m_2)
+      var_5 = (sp_1 + (-var_4))
+      fb2_6 = var_5
+      if ((.not. (m_2 < 2_int64))) then
+        var_7 = ((-1_int64) + sp_1)
+        if (rt_applyp(vmg_sreg(st, var_7))) then
+          if (rt_clop(vmg_sreg(st, fb2_6))) then
+            var_8 = (fb2_6 + (m_2 + (-1_int64)))
+            t_9 = (.not. rt_clop(vmg_sreg(st, var_8)))
           else
-            st%fb = fb2_15
-            st%pc = ent_17
+            t_9 = .false.
+          end if
+          t_10 = t_9
+        else
+          t_10 = .false.
+        end if
+        t_11 = t_10
+      else
+        t_11 = .false.
+      end if
+      if (t_11) then
+        ci_12 = vmg_rest_ci(st, rt_clo_f(vmg_sreg(st, fb2_6)))
+        if ((ci_12 < 0_int64)) then
+          t_15 = (-1_int64)
+        else
+          t_15 = max(0_int64, st%cln(max(0_int64, ci_12)))
+        end if
+        call vmg_spread_in(st, t_15, m_2, fb2_6, mv_13, mv_14)
+        w_16 = mv_13
+        k_17 = mv_14
+        if ((.not. (st%status == 0_int64))) then
+        else
+          if ((w_16 == 1_int64)) then
+            call vmg_call(st, m_2)
+          else
+            var_18 = (fb2_6 + k_17)
+            if ((.not. (var_18 < size(st%stk, kind=int64)))) then
+              st%status = 2_int64
+            else
+              call vmg_spread_out(st, fb2_6, k_17)
+              if ((.not. (st%status == 0_int64))) then
+              else
+                if ((w_16 == 2_int64)) then
+                  t_19 = (.not. (ci_12 < 0_int64))
+                else
+                  t_19 = .false.
+                end if
+                if (t_19) then
+                  call vmg_hcall(st, ci_12, k_17)
+                else
+                  call vmg_call(st, k_17)
+                end if
+              end if
+            end if
           end if
         end if
+      else
+        call vmg_call(st, m_2)
       end if
     end if
-  end subroutine vmg_callv
+  end subroutine vmg_applyv
 
   subroutine vmg_ret(st)
     type(vm_state), intent(inout) :: st
@@ -1090,6 +1791,8 @@ contains
         call vmg_try(st)
       case (16_int64)
         call vmg_endtry(st)
+      case (17_int64)
+        call vmg_applyv(st)
       case default
       end select
     end if

@@ -25,8 +25,7 @@
 ;
 ; A program vmx2 compiles to something the arrays cannot hold -- a
 ; constant operand that is not a small natural, a local past the
-; environment, a function named other than by its id, apply's spread
-; call (:applyv: vmi has no instruction for it yet) -- sets ce-err and
+; environment, a function named other than by its id -- sets ce-err and
 ; is not run.
 
 (in-package "ACL2")
@@ -149,13 +148,13 @@
            (if (< f 0)
                (let ((vce (vce-fail vce))) (mv (1+ pa) vmi vce))
              (let ((vmi (vmic-put pa 8 f (rt-len (rcddr e)) 0 nil vmi))) (mv (1+ pa) vmi vce))))))
-      ;; apply's spread call compiled as a call, and refused: the arrays have
-      ;; no :applyv yet (exec-PLAN 2c-iii)
+      ;; a call, and apply's spread call (:applyv m): the arrays have both
+      ;; (exec-PLAN 2c-v)
       ((or (rt-is op :callv) (rt-is op :applyv))
        (let ((k (rt-len (rcddr e))))
          (mv-let (pa vmi vce) (vmic-compile-args (rcddr e) depth n self pc vmi vce)
            (mv-let (pb vmi vce) (vmic-compile (rcadr e) (+ depth k) n self pa -1 0 0 vmi vce)
-             (let* ((vmi (vmic-put pb 10 k 0 0 nil vmi)) (vce (if (rt-is op :applyv) (vce-fail vce) vce)))
+             (let ((vmi (vmic-put pb (if (rt-is op :applyv) 17 10) k 0 0 nil vmi)))
                (mv (1+ pb) vmi vce))))))
       ((rt-is op :loop)
        (let ((k (rt-len (rcadr e))))
@@ -257,8 +256,8 @@
          (vmi (resize-v-ckind nctl vmi)) (vmi (resize-v-ca nctl vmi)) (vmi (resize-v-cb nctl vmi))
          (vmi (resize-v-cc nctl vmi)) (vmi (resize-v-cprev nctl vmi))
          (vmi (resize-v-fnfirst nf vmi)) (vmi (resize-v-fncount nf vmi))
-         (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)))
-    (resize-v-clrest nc vmi)))
+         (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)) (vmi (resize-v-clrest nc vmi)))
+    (resize-v-tmp nstk vmi)))
 
 ; THE PROGRAM: main, its return, then every function's clauses; the
 ; machine set up to run it, with a stack of nstk slots and a control
@@ -313,3 +312,6 @@
 (check-vmic (:try (:prim :div (:const 7) (:const 0)) (:local 0)))
 (check-vmic (:prim :div (:const 7) (:const 2)))
 (check-vmic (:let (:try (:const 4) (:throw (:local 0))) (:add (:local 0) (:const 0))))
+(check-vmic (:applyv (:const :apply) (:mkclo vsum) (:const 1) (:const (:vec 2 3))))
+(check-vmic (:applyv (:const :apply) (:mkclo f2) (:const nil)))
+(check-vmic (:applyv (:mkclo f2) (:const 5) (:const 6)))

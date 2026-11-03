@@ -210,8 +210,30 @@
 (vmj-keeps vmj-push-rec-keeps (vmi-push-rec kind a b c vmi) :hints (("Goal" :in-theory (disable nth update-nth))))
 (vmj-keeps vmj-pop-rec-keeps (vmi-pop-rec vmi) :hints (("Goal" :in-theory (disable nth update-nth))))
 (vmj-keeps vmj-unwind-keeps (vmi-unwind v vmi) :hints (("Goal" :in-theory (disable vmi-sset nth update-nth))))
+; apply's spread: the scratch's writes, its walks, and the calls after
+(vmj-keeps vmj-tset-keeps (vmi-tset i v vmi) :hints (("Goal" :in-theory (enable vmi-tset))))
+(vmj-keeps vmj-to-tmp-keeps (vmi-to-tmp a j k vmi)
+           :hints (("Goal" :induct (vmi-to-tmp a j k vmi) :in-theory (disable vmi-tset vmi-sreg nth update-nth))))
+(vmj-keeps vmj-from-tmp-keeps (vmi-from-tmp j a k vmi)
+           :hints (("Goal" :induct (vmi-from-tmp j a k vmi) :in-theory (disable vmi-sset vmi-treg nth update-nth))))
+(vmj-keeps vmj-walk-keeps (mv-nth 2 (vmi-walk k l i top vmi))
+           :hints (("Goal" :induct (vmi-walk k l i top vmi) :expand ((:free (top) (vmi-walk k l i top vmi))) :in-theory (disable vmi-tset vmi-treg sk-step sk-kind nth update-nth))))
+(vmj-keeps vmj-awalk-keeps (mv-nth 4 (vmi-awalk req k i top vmi))
+           :hints (("Goal" :induct (vmi-awalk req k i top vmi) :expand ((:free (top) (vmi-awalk req k i top vmi)))
+                           :in-theory (disable vmi-tset vmi-treg sk-step sk-kind ex-aplook ex-apstep nth update-nth))))
+(vmj-keeps vmj-consv-keeps (vmi-consv j lo vmi)
+           :hints (("Goal" :induct (vmi-consv j lo vmi) :in-theory (disable vmi-tset vmi-treg nth update-nth))))
+(vmj-keeps vmj-spread-in-keeps (mv-nth 2 (vmi-spread-in req m fb2 vmi))
+           :hints (("Goal" :in-theory (disable vmi-walk vmi-awalk vmi-consv vmi-to-tmp vmi-tset vmi-treg nth update-nth))))
+(vmj-keeps vmj-spread-out-keeps (vmi-spread-out fb2 k vmi)
+           :hints (("Goal" :in-theory (disable vmi-from-tmp vmi-tset vmi-sreg nth update-nth))))
+(vmj-keeps vmj-call-keeps (vmi-call m vmi) :hints (("Goal" :in-theory (disable nth update-nth))))
+(vmj-keeps vmj-hcall-keeps (vmi-hcall ci m vmi) :hints (("Goal" :in-theory (disable nth update-nth))))
+(vmj-keeps vmj-applyv-keeps (vmi-applyv vmi)
+           :hints (("Goal" :in-theory (disable vmi-spread-in vmi-spread-out vmi-call vmi-hcall vmi-rest-ci vmi-sreg nth update-nth))))
 
-(in-theory (disable vmi-sset vmi-copy-down vmi-push-rec vmi-pop-rec vmi-unwind vmi-sreg vmi-stk-from vmi-pick vmi-poolv))
+(in-theory (disable vmi-sset vmi-copy-down vmi-push-rec vmi-pop-rec vmi-unwind vmi-sreg vmi-stk-from vmi-pick vmi-poolv
+                    vmi-tset vmi-to-tmp vmi-from-tmp vmi-walk vmi-awalk vmi-consv vmi-spread-in vmi-spread-out vmi-call vmi-hcall vmi-applyv))
 
 (vmj-keeps vmj-step-keeps (vmi-step vmi) :hints (("Goal" :in-theory (e/d (vmi-step) (nth update-nth)))))
 

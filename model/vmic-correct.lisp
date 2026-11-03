@@ -103,6 +103,9 @@
 
 (defthm vp-shape (implies (and (vmip vmi) (natp nstk) (natp nctl)) (shape19 (vprog)))
   :hints (("Goal" :use ((:instance lp-resize-facts (prog (vcs2-program e defs)))) :in-theory (disable lp-resize-facts vmip))))
+; the scratch, as the loader sizes it
+(defthm vp-tmp (implies (and (vmip vmi) (natp nstk) (natp nctl)) (true-listp (nth 19 (vprog))))
+  :hints (("Goal" :use ((:instance lp-resize-facts (prog (vcs2-program e defs)))) :in-theory (disable lp-resize-facts vmip))))
 
 ; the table fields
 (defthm vp-table
@@ -133,7 +136,7 @@
 (defthm vp-shape-ok
   (implies (and (vmip vmi) (natp nstk) (natp nctl) (vp-ok)) (and (vmi-shape (vprog)) (vmi-ok (vprog))))
   :hints (("Goal" :in-theory (e/d (vmi-shape vmi-ok) (vmip vmic-program-stages))
-                  :use (vp-shape vp-regs (:instance lp-resize-facts (prog (vcs2-program e defs)))))))
+                  :use (vp-shape vp-tmp vp-regs (:instance lp-resize-facts (prog (vcs2-program e defs)))))))
 
 (defthm vmi-prog-fntab
   (implies (equal (vmi-prog x) p) (equal (vmi-fntab 0 (len (nth 14 x)) x) (cdr p)))

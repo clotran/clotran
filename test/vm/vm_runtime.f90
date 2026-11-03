@@ -21,7 +21,7 @@ module vm_runtime
   type vm_state
      integer(int64) :: pc = 0, fb = 0, sp = 0, status = 0, ctop = 0, hidx = -1
      integer(int64), allocatable :: code(:)
-     type(value), allocatable :: pool(:), stk(:)
+     type(value), allocatable :: pool(:), stk(:), tmp(:)
      integer(int64), allocatable :: ckind(:), ca(:), cb(:), cc(:), cprev(:)
      integer(int64), allocatable :: fnfirst(:), fncount(:), cln(:), clent(:), clrest(:)
   end type vm_state
@@ -215,29 +215,83 @@ contains
     end do
   end function len_of
 
+  ! seqk's sk-els from v's cursor (index 0, top t): at most lim elements,
+  ! as a list; st 0 :ok, 1 :none, 2 :long; n how many (prim-impl's reads)
+  subroutine sk_els_rt(v0, lim, st, els, n)
+    type(value), intent(in) :: v0
+    integer(int64), intent(in) :: lim
+    integer(int64), intent(out) :: st, n
+    type(value), intent(out) :: els
+    type(value) :: v, rev
+    integer(int64) :: i, top, kd, d
+    v = v0; i = 0; top = 1; n = 0; st = 0
+    rev = value(VT_NIL, 0)
+    do
+       kd = rt_sk_kind(v, top)
+       select case (kd)
+       case (1); d = 1
+       case (2)
+          d = 0
+          if (i >= 0 .and. i < rt_sk_cnt(v)) d = 2
+       case (3); d = 3
+       case (5); d = 5
+       case (0); d = 0
+       case default; d = 4
+       end select
+       if (d == 0) exit
+       if (d == 4) then
+          st = 1; exit
+       end if
+       if (d == 3) then
+          v = rt_sk_next(v, 3_int64); i = 0; top = 2; cycle
+       end if
+       if (n >= lim) then
+          st = 2; exit
+       end if
+       rev = cons(rt_sk_elem(v, d, i), rev); n = n + 1
+       if (d == 2) then
+          i = i + 1; top = 1
+       else
+          v = rt_sk_next(v, d); i = 0
+          top = 1
+          if (d == 1) top = 0
+       end if
+    end do
+    els = value(VT_NIL, 0)
+    do while (consp(rev))
+       els = cons(car(rev), els); rev = cdr(rev)
+    end do
+  end subroutine sk_els_rt
+
   ! vmx2.lisp's prim-impl
   function rt_prim(op, vals) result(r)
     type(value), intent(in) :: op, vals
     type(value) :: r
-    type(value) :: a, b
-    integer(int64) :: q
+    type(value) :: a, b, els
+    integer(int64) :: q, st, n
     r = value(VT_NIL, 0)
     if (is_kw(op, "first")) then
        if (consp(vals)) then
-          if (consp(car(vals))) r = car(car(vals))
+          call sk_els_rt(car(vals), 1_int64, st, els, n)
+          if (consp(els)) r = car(els)
        end if
     else if (is_kw(op, "rest")) then
        if (consp(vals)) then
-          if (consp(car(vals))) r = cdr(car(vals))
+          call sk_els_rt(car(vals), 1000000_int64, st, els, n)
+          if (consp(els)) r = cdr(els)
        end if
     else if (is_kw(op, "empty")) then
        r = value(VT_T, 0)
        if (consp(vals)) then
-          if (consp(car(vals))) r = value(VT_NIL, 0)
+          call sk_els_rt(car(vals), 1_int64, st, els, n)
+          if (consp(els)) r = value(VT_NIL, 0)
        end if
     else if (is_kw(op, "count")) then
        r = vint(0_int64)
-       if (consp(vals)) r = vint(len_of(car(vals)))
+       if (consp(vals)) then
+          call sk_els_rt(car(vals), 1000000_int64, st, els, n)
+          r = vint(n)
+       end if
     else if (is_kw(op, "invoke")) then
        ! a call of what is not a closure: here nothing else is callable
        r = cons(rt_keyword("throw"), rt_keyword("not-fn"))
@@ -348,6 +402,151 @@ contains
     n = len_of(x)
   end function rt_len
 
+
+  ! ---- apply's seq (model/seqk.lisp, vmi.lisp's sk-* reads) ---------------
+
+  ! sk-kind on v read at top (0 nil, 1 t, 2 :r)
+  function rt_sk_kind(v, top) result(k)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: top
+    integer(int64) :: k
+    if (v%tag == VT_NIL) then
+       k = 0
+    else if (.not. consp(v)) then
+       k = 4
+    else if (top /= 1 .and. top /= 2) then
+       k = 1
+    else if (is_kw(car(v), "vec")) then
+       k = 2
+    else if (is_kw(car(v), "lazy")) then
+       k = 3
+       if (top == 2) k = 4
+    else if (is_kw(car(v), "cons")) then
+       k = 4
+       if (consp(cdr(v))) k = 5
+    else
+       k = 1
+    end if
+  end function rt_sk_kind
+
+  function rt_sk_cnt(v) result(n)
+    type(value), intent(in) :: v
+    integer(int64) :: n
+    n = len_of(cdr(v))
+  end function rt_sk_cnt
+
+  function rt_sk_elem(v, d, i) result(r)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: d, i
+    type(value) :: r
+    integer(int64) :: j
+    r = value(VT_NIL, 0)
+    select case (d)
+    case (1)
+       r = car(v)
+    case (2)
+       r = cdr(v)
+       do j = 1, max(i, 0_int64)
+          r = cdr(r)
+       end do
+       r = car(r)
+    case (5)
+       r = car(cdr(v))
+    end select
+  end function rt_sk_elem
+
+  function rt_sk_next(v, d) result(r)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: d
+    type(value) :: r
+    select case (d)
+    case (1)
+       r = cdr(v)
+    case (3)
+       r = sk_real(cdr(v))
+    case (5)
+       r = cdr(cdr(v))
+    case default
+       r = v
+    end select
+  end function rt_sk_next
+
+  ! the fuzzer's realisation (scripts/fuzz-vmx2's fz-real, attached to
+  ! sk-real): (lc tk l2) is lc cells of 7, each realising to a cell whose
+  ! rest is the next, then none, a list or a vector of l2 sevens
+  function sk_real(c) result(r)
+    type(value), intent(in) :: c
+    type(value) :: r
+    integer(int64) :: lc, tk, l2, j
+    type(value) :: x
+    lc = max(fixv(car(c)), 0_int64)
+    tk = fixv(car(cdr(c)))
+    l2 = max(fixv(car(cdr(cdr(c)))), 0_int64)
+    ! not a true list: read as nil, as fz-real reads it
+    x = c
+    do while (consp(x))
+       x = cdr(x)
+    end do
+    if (x%tag /= VT_NIL) then
+       lc = 0; tk = 0; l2 = 0
+    end if
+    if (lc > 0) then
+       r = cons(rt_keyword("cons"), cons(vint(7_int64), cons(rt_keyword("lazy"), &
+            cons(vint(lc - 1), cons(vint(tk), cons(vint(l2), value(VT_NIL, 0)))))))
+       return
+    end if
+    r = value(VT_NIL, 0)
+    if (tk == 1 .or. tk == 2) then
+       do j = 1, l2
+          r = cons(vint(7_int64), r)
+       end do
+       if (tk == 2) r = cons(rt_keyword("vec"), r)
+    end if
+  end function sk_real
+
+  logical function rt_applyp(c)
+    type(value), intent(in) :: c
+    rt_applyp = is_kw(c, "apply")
+  end function rt_applyp
+
+  ! seqk's sk-cval at the cursor (v i top): what apply's walk hands over
+  function rt_sk_cval(v, i, top) result(r)
+    type(value), intent(in) :: v
+    integer(int64), intent(in) :: i, top
+    type(value) :: r
+    integer(int64) :: j
+    if (top /= 1 .and. top /= 2) then
+       r = sk_topv(v)
+    else if (rt_sk_kind(v, top) == 2 .and. i >= 0 .and. i < rt_sk_cnt(v)) then
+       r = cdr(v)
+       do j = 1, i
+          r = cdr(r)
+       end do
+       r = cons(rt_keyword("vec"), r)
+    else
+       r = v
+    end if
+  end function rt_sk_cval
+
+  ! seqk's sk-topv: a list's tail read at its top, its tag heads in cells
+  recursive function sk_topv(v) result(r)
+    type(value), intent(in) :: v
+    type(value) :: r
+    if (consp(v)) then
+       if (is_kw(car(v), "vec") .or. is_kw(car(v), "lazy") .or. is_kw(car(v), "cons")) then
+          r = cons(rt_keyword("cons"), cons(car(v), sk_topv(cdr(v))))
+          return
+       end if
+    end if
+    r = v
+  end function sk_topv
+
+  ! sk-consv's cell
+  function rt_sk_cell(a, s) result(r)
+    type(value), intent(in) :: a, s
+    type(value) :: r
+    r = cons(rt_keyword("cons"), cons(a, s))
+  end function rt_sk_cell
   ! a stobj array resized as ACL2 resizes it: the elements kept, the new
   ! ones the initial value
   subroutine rt_resize_int(a, n)

@@ -33,7 +33,6 @@
 (def args (apply hash-map (remove #{"-x" "-i" "-xi" "-xc"} *command-line-args*)))
 ;; --emit FILE: write the generated programs as EDN and stop (scripts/fuzz-vm-gen runs them)
 (def emit (get args "--emit"))
-(def apply-ok (not (or arrays emit)))
 (def n (parse-long (get args "-n" "200")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def state (atom seed))
@@ -104,11 +103,10 @@
       6 (let [[f [a c]] (nth (vec fns) (rnd (count fns)))]
           (list* :callv (list* :mkclo f (rep c #(gen (dec depth) nl nc nil)))
                  (rep a #(list :const (rnd 6)))))
-      ;; a closure made of the locals, called; or (not on the arrays, which
-      ;; have no :applyv yet, milestone 2c-v) apply's spread call -- of a
+      ;; a closure made of the locals, called; or apply's spread call -- of a
       ;; vmx2 fn on a few values and a seq of any kind, the wrong counts
       ;; included, or of what is no closure, or :applyv of no apply
-      7 (if (and apply-ok (zero? (rnd 2)))
+      7 (if (zero? (rnd 2))
           (let [[f as] (nth (vec fns2) (rnd (count fns2)))
                 lst (list :const (seqv))]
             (case (rnd 4)

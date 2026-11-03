@@ -155,7 +155,7 @@
        (let ((k (rt-len (rcddr e))))
          (mv-let (pa vmi vce) (vmicg-compile-args (rcddr e) depth n self pc vmi vce)
            (mv-let (pb vmi vce) (vmicg-compile (rcadr e) (i64 (+ depth k)) n self pa -1 0 0 vmi vce)
-             (let* ((vmi (vmicg-put pb 10 k 0 0 nil vmi)) (vce (if (rt-is op :applyv) (vmicg-fail vce) vce)))
+             (let ((vmi (vmicg-put pb (if (rt-is op :applyv) 17 10) k 0 0 nil vmi)))
                (mv (i64 (1+ pb)) vmi vce))))))
       ((rt-is op :loop)
        (let ((k (rt-len (rcadr e))))
@@ -249,8 +249,8 @@
          (vmi (resize-v-ckind nctl vmi)) (vmi (resize-v-ca nctl vmi)) (vmi (resize-v-cb nctl vmi))
          (vmi (resize-v-cc nctl vmi)) (vmi (resize-v-cprev nctl vmi))
          (vmi (resize-v-fnfirst nf vmi)) (vmi (resize-v-fncount nf vmi))
-         (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)))
-    (resize-v-clrest nc vmi)))
+         (vmi (resize-v-cln nc vmi)) (vmi (resize-v-clent nc vmi)) (vmi (resize-v-clrest nc vmi)))
+    (resize-v-tmp nstk vmi)))
 
 ; too large a program: an overflow, nothing compiled
 (defmacro vmicg-too-big (n nf nc) `(or (<= *b39* ,n) (<= *b40* ,nf) (<= *b40* ,nc)))
