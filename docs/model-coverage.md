@@ -11,7 +11,10 @@ This table is where that stands. Each row is one of:
 
 - **Generated** -- the Fortran is written from proved ACL2 by
   `scripts/acl2-fortran`, and nobody edits it: change the model, prove
-  it, `make gen-vm`.
+  it, `make gen-vm`. The translation itself is not proved yet. It is
+  trusted, and checked by the fuzzers that run the generated code
+  against the model. Lemmis's milestone 2 (lemmis/PLAN.md) proves it,
+  over Stage A's meaning of the Fortran it emits.
 - **Modeled** -- the design is proved, but the Fortran is hand-written
   to it, so nothing mechanical ties the two; it can drift.
 - **Owed** -- not modeled yet, and should be.
