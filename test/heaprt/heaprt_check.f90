@@ -9,10 +9,12 @@
 ! 0 enter a, 1 leave to a, 2 set slot a to b (0 is nil), 3 get slot a,
 ! 4 reset; on the global roots 5 claim one holding a, 6 keep handle (a . b)
 ! holding c, 7 get (a . b), 8 live (a . b), 9 set root a to b, 10 root a,
-! 11 a new heap. After each: "r r2 top hi", every slot (0 nil, else its
-! integer), the generation, the count, the table's size and every root.
+! 11 a new heap; 12 push the stack, 13 push the global roots (r the
+! pushes, r2 the checksum sum of k (1000 tag + ref) over the k-th).
+! After each: "r r2 top hi", every slot (0 nil, else its integer), the generation, the count, the table's size and every root.
 ! broken is the negative control: a leave below the top leaves one slot
-! too many on the stack, and a set by index writes the root after.
+! too many on the stack, a set by index writes the root after, and a
+! stack's push starts at its second slot.
 module hrt
   use iso_fortran_env, only: int64
   implicit none
@@ -32,6 +34,10 @@ module hrt
      integer(int64) :: gen = 0, count = 0
      type(gc_value), allocatable :: tbl(:)
   end type gc_globals
+  ! the marker, cut to a record of what was pushed
+  type :: heap_state
+     integer(int64) :: n = 0, sum = 0
+  end type heap_state
 contains
   subroutine rt_resize_val(a, n)
     type(gc_value), allocatable, intent(inout) :: a(:)
@@ -54,13 +60,29 @@ contains
   type(gc_value) function ival(b)
     integer(int64), intent(in) :: b
     ival = nilv
-    if (b /= 0) ival = gc_value(GCT_INT, 0, b)
+    if (b /= 0) ival = gc_value(GCT_INT, int(b), b)
   end function ival
 
   pure function rt_nil() result(v)
     type(gc_value) :: v
     v = nilv
   end function rt_nil
+
+  subroutine hpg_push(hs, tag, ref)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: tag, ref
+    hs%n = hs%n + 1
+    hs%sum = hs%sum + hs%n * (1000 * tag + ref)
+  end subroutine hpg_push
+
+  pure integer(int64) function gv_tag(v)
+    type(gc_value), intent(in) :: v
+    gv_tag = int(v%tag, int64)
+  end function gv_tag
+  pure integer(int64) function gv_ref(v)
+    type(gc_value), intent(in) :: v
+    gv_ref = int(v%ref, int64)
+  end function gv_ref
 
   include "heaprt_gen.inc"
 end module hrt
@@ -70,6 +92,7 @@ program heaprt_check
   implicit none
   type(gc_stack), target :: st
   type(gc_globals) :: gr
+  type(heap_state) :: hs
   character(len=512) :: path, mode
   integer :: u, l, n, i, j, op
   integer(int64) :: a, b, c, r, r2
@@ -109,8 +132,18 @@ program heaprt_check
         call glg_set(gr, a, ival(b))
      case (10)
         r = vint(glg_at(gr, a))
-     case default
+     case (11)
         call glg_init(gr)
+     case (12)
+        hs = heap_state()
+        call vsg_push(st, hs, merge(1_int64, 0_int64, mode == "broken"))
+        r = hs%n
+        r2 = hs%sum
+     case default
+        hs = heap_state()
+        call glg_push(gr, hs, 0_int64)
+        r = hs%n
+        r2 = hs%sum
      end select
      write(*, '(i0, 3(1x, i0))', advance="no") r, r2, st%vs_top, st%vs_hi
      do j = 0, l - 1

@@ -30,6 +30,7 @@
 (in-package "ACL2")
 
 (include-book "heaprt")
+(include-book "heapg")
 
 ; no stack has 2^40 slots: CLOTRAN_STACK_SLOTS is a default integer, so
 ; top + n is inside 64 bits
@@ -407,3 +408,109 @@
   (implies (and (glgp x) (glg-inv x) (< (1+ (nth 0 x)) *glb*))
            (and (equal (glg-init x) (gl-init x))
                 (glg-inv (glg-init x)))))
+
+; ---- THE ROOTS PUSHED (generated) ----------------------------------------------------------
+;
+; push_roots: every global root, then every thread's stack to its top, then
+; the allocation's own, each pushed onto the collector's mark stack by
+; heapg's hpg-push (push_mark). The two loops over the stobjs are
+; generated; the walk over the threads (stacks(i)%s, a thread with no
+; stack skipped) and over the allocation's roots(:) is the shim's.
+;
+; A value reaches the marker as its tag and its ref: gv-tag, gv-ref, the
+; host's v%tag and v%ref (a nil slot is tag 0, ref 0, which hpg-push
+; ignores).
+
+(defun gv-tag (v) (declare (xargs :guard t)) (if (and (consp v) (sb64p (car v))) (car v) 0))
+(defun gv-ref (v) (declare (xargs :guard t)) (if (and (consp v) (sb64p (cdr v))) (cdr v) 0))
+
+; values vs pushed in order: what push_roots does with the rootset
+(defun push-vals (vs hpg)
+  (declare (xargs :stobjs hpg :verify-guards nil))
+  (if (atom vs) hpg
+    (let ((hpg (hpg-push (gv-tag (car vs)) (gv-ref (car vs)) hpg)))
+      (push-vals (cdr vs) hpg))))
+
+; a stack's slots i .. top-1 (slots i+1 .. top)
+(defun vsg-push (i vsg hpg)
+  (declare (xargs :stobjs (vsg hpg)
+                  :guard (and (natp i) (vsg-bounds vsg) (hpg-ok hpg))
+                  :measure (nfix (- (ifix (s-top vsg)) (ifix i)))))
+  (if (or (not (integerp i)) (not (integerp (s-top vsg))) (<= (s-top vsg) i))
+      hpg
+    (let* ((v (s-slots0i i vsg))
+           (hpg (hpg-push (gv-tag v) (gv-ref v) hpg)))
+      (vsg-push (1+ i) vsg hpg))))
+
+; the global roots i .. count-1
+(defun glg-push (i glg hpg)
+  (declare (xargs :stobjs (glg hpg)
+                  :guard (and (natp i) (glg-bounds glg) (hpg-ok hpg))
+                  :measure (nfix (- (ifix (g-count glg)) (ifix i)))))
+  (if (or (not (integerp i)) (not (integerp (g-count glg))) (<= (g-count glg) i))
+      hpg
+    (let* ((v (g-tbli i glg))
+           (hpg (hpg-push (gv-tag v) (gv-ref v) hpg)))
+      (glg-push (1+ i) glg hpg))))
+
+; ---- the roots pushed: refinement
+
+(defthm nthcdr-cons-nth-hr
+  (implies (and (natp i) (< i (len l))) (equal (nthcdr i l) (cons (nth i l) (nthcdr (1+ i) l))))
+  :rule-classes nil :hints (("Goal" :induct (nthcdr i l))))
+
+(defthm nthcdr-take-past
+  (implies (and (natp i) (natp k) (<= k i)) (not (consp (nthcdr i (take k a)))))
+  :hints (("Goal" :in-theory (enable take) :induct (ind-ia i k a))))
+
+(defthm vsg-push-is
+  (implies (and (natp i) (natp (nth 0 x)) (<= (nth 0 x) (len (nth *s-slots0i* x))))
+           (equal (vsg-push i x h) (push-vals (nthcdr i (take (nth 0 x) (nth *s-slots0i* x))) h)))
+  :hints (("Goal" :induct (vsg-push i x h))
+          ("Subgoal *1/2" :use ((:instance nthcdr-cons-nth-hr (l (take (nth 0 x) (nth *s-slots0i* x))))))))
+
+; a stack's push is its live slots' -- heaprt's (car (vsg-abs x)), what
+; rootset takes of each stack
+(defthm vsg-push-refines
+  (implies (and (vsgp x) (vsg-inv x))
+           (equal (vsg-push 0 x h) (push-vals (car (vsg-abs x)) h))))
+
+(defthm glg-push-is
+  (implies (and (natp i) (natp (nth 1 x)) (<= (nth 1 x) (len (nth 2 x))))
+           (equal (glg-push i x h) (push-vals (nthcdr i (take (nth 1 x) (nth 2 x))) h)))
+  :hints (("Goal" :induct (glg-push i x h))
+          ("Subgoal *1/2" :use ((:instance nthcdr-cons-nth-hr (l (take (nth 1 x) (nth 2 x))))))))
+
+; the globals' push is heaprt's gl-globals'
+(defthm glg-push-refines
+  (implies (and (glgp x) (glg-inv x))
+           (equal (glg-push 0 x h) (push-vals (gl-globals x) h))))
+
+(defthm push-vals-append
+  (equal (push-vals (append a b) h) (push-vals b (push-vals a h))))
+
+; each stack's push in turn, as the shim walks the threads
+(defun push-stacks (stacks hpg)
+  (declare (xargs :stobjs hpg :verify-guards nil))
+  (if (atom stacks) hpg (let ((hpg (push-vals (car (car stacks)) hpg))) (push-stacks (cdr stacks) hpg))))
+
+(defthm push-stacks-is-lives
+  (equal (push-stacks stacks h) (push-vals (lives stacks) h)))
+
+; push_roots -- the globals' push, each stack's, then the own -- pushes
+; exactly heaprt's rootset, the set heaprt's rooted-path-survives keeps
+(defthm push-roots-refines
+  (equal (push-vals own (push-stacks stacks (push-vals globals h)))
+         (push-vals (rootset globals stacks own) h)))
+
+; COST: one turn a root, heaprt's push-roots-steps
+(defun push-turns (i e)
+  (declare (xargs :measure (nfix (- (ifix e) (ifix i)))))
+  (if (or (not (integerp i)) (not (integerp e)) (<= e i)) 0 (1+ (push-turns (1+ i) e))))
+(defthm push-turns-count
+  (implies (and (natp i) (natp e) (<= i e)) (equal (push-turns i e) (- e i)))
+  :hints (("Goal" :induct (push-turns i e))))
+(defthm vsg-push-cost
+  (implies (and (vsgp x) (vsg-inv x)) (equal (push-turns 0 (nth 0 x)) (len (car (vsg-abs x))))))
+(defthm glg-push-cost
+  (implies (and (glgp x) (glg-inv x)) (equal (push-turns 0 (nth 1 x)) (len (gl-globals x)))))

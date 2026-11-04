@@ -587,20 +587,20 @@
 ; pool, the pools' marks, free flags and free lists, the global roots,
 ; the live counts, and stack 1's binding frame.
 
-(defun h-objs (h) (nth 0 h))
-(defun h-vecs (h) (nth 1 h))
-(defun h-store (h) (nth 2 h))
-(defun h-sused (h) (nth 3 h))
-(defun h-chead (h) (nth 4 h))
-(defun h-texts (h) (nth 5 h))
-(defun h-flags (h) (nth 6 h))
-(defun h-g (h) (nth 7 h))
-(defun h-live (h) (nth 8 h))
-(defun h-b (h) (nth 9 h))
+(defun hi-objs (h) (nth 0 h))
+(defun hi-vecs (h) (nth 1 h))
+(defun hi-store (h) (nth 2 h))
+(defun hi-sused (h) (nth 3 h))
+(defun hi-chead (h) (nth 4 h))
+(defun hi-texts (h) (nth 5 h))
+(defun hi-flags (h) (nth 6 h))
+(defun hi-g (h) (nth 7 h))
+(defun hi-live (h) (nth 8 h))
+(defun hi-b (h) (nth 9 h))
 (defun heap-ok (h)
-  (and (true-listp (h-store h)) (natp (h-sused h)) (<= (h-sused h) (len (h-store h)))
-       (all-nil (nthcdr (h-sused h) (h-store h)))   ; past store_used the arena is nil
-       (texts-ok (h-texts h)) (gl-ok (h-g h))))
+  (and (true-listp (hi-store h)) (natp (hi-sused h)) (<= (hi-sused h) (len (hi-store h)))
+       (all-nil (nthcdr (hi-sused h) (hi-store h)))   ; past store_used the arena is nil
+       (texts-ok (hi-texts h)) (gl-ok (hi-g h))))
 
 ; a text slot as written: -1 when not allocated, else its length and bytes
 (defun enc-texts (ts)
@@ -617,8 +617,8 @@
   (if (atom ts) nil (cons (if (eq (car (car ts)) :none) :none (car ts)) (tview (cdr ts)))))
 
 (defun image-write (h)
-  (list :v1 (h-objs h) (h-vecs h) (len (h-store h)) (take (h-sused h) (h-store h)) (h-sused h)
-        (h-chead h) (enc-texts (h-texts h)) (h-flags h) (h-g h) (h-live h) (h-b h)))
+  (list :v1 (hi-objs h) (hi-vecs h) (len (hi-store h)) (take (hi-sused h) (hi-store h)) (hi-sused h)
+        (hi-chead h) (enc-texts (hi-texts h)) (hi-flags h) (hi-g h) (hi-live h) (hi-b h)))
 
 ; gc_image_read: the pools replaced; the arena past store_used nil; the
 ; young, remembered and aged sets empty, stack 1 fresh, its spares and
@@ -655,20 +655,20 @@
 (defthm image-roundtrip
   (implies (heap-ok h)
            (let ((r (image-read (image-write h))))
-             (and (equal (h-objs r) (h-objs h)) (equal (h-vecs r) (h-vecs h))
-                  (equal (h-store r) (h-store h)) (equal (h-sused r) (h-sused h))
-                  (equal (h-chead r) (h-chead h)) (equal (tview (h-texts r)) (tview (h-texts h)))
-                  (equal (h-flags r) (h-flags h)) (equal (h-live r) (h-live h))
-                  (equal (gl-gen (h-g r)) (gl-gen (h-g h)))
-                  (equal (gl-globals (h-g r)) (append (gl-globals (h-g h)) (list (h-b h)))))))
-  :hints (("Goal" :in-theory (disable store-roundtrip) :use ((:instance store-roundtrip (s (h-store h)) (k (h-sused h)))))))
+             (and (equal (hi-objs r) (hi-objs h)) (equal (hi-vecs r) (hi-vecs h))
+                  (equal (hi-store r) (hi-store h)) (equal (hi-sused r) (hi-sused h))
+                  (equal (hi-chead r) (hi-chead h)) (equal (tview (hi-texts r)) (tview (hi-texts h)))
+                  (equal (hi-flags r) (hi-flags h)) (equal (hi-live r) (hi-live h))
+                  (equal (gl-gen (hi-g r)) (gl-gen (hi-g h)))
+                  (equal (gl-globals (hi-g r)) (append (gl-globals (hi-g h)) (list (hi-b h)))))))
+  :hints (("Goal" :in-theory (disable store-roundtrip) :use ((:instance store-roundtrip (s (hi-store h)) (k (hi-sused h)))))))
 
 ; so the graph the roots reach is the one saved: every path from a root
 ; of the written heap is a path from a root of the read one
 (defthm image-same-graph
-  (implies (and (heap-ok h) (path-ok p (h-objs h)) (member-equal (car p) (gl-globals (h-g h))))
+  (implies (and (heap-ok h) (path-ok p (hi-objs h)) (member-equal (car p) (gl-globals (hi-g h))))
            (let ((r (image-read (image-write h))))
-             (and (path-ok p (h-objs r)) (member-equal (car p) (gl-globals (h-g r))))))
+             (and (path-ok p (hi-objs r)) (member-equal (car p) (gl-globals (hi-g r))))))
   :hints (("Goal" :use ((:instance image-roundtrip)) :in-theory (disable image-roundtrip image-read image-write gl-globals))))
 
 ; gc_collect before the write: forget_young keeps a remembered object
@@ -689,11 +689,11 @@
 ; the rest are whole arrays: each pool's slots, the arena's used words,
 ; the global table, and a dozen scalars
 (defun image-steps (h)
-  (+ (len (h-objs h)) (len (h-vecs h)) (h-sused h) (enc-turns (h-texts h)) (enc-bytes (h-texts h))
-     (len (gl-tbl (h-g h))) 12))
+  (+ (len (hi-objs h)) (len (hi-vecs h)) (hi-sused h) (enc-turns (hi-texts h)) (enc-bytes (hi-texts h))
+     (len (gl-tbl (hi-g h))) 12))
 (defthm image-cost
   (implies (heap-ok h)
            (<= (image-steps h)
-               (+ (len (h-objs h)) (len (h-vecs h)) (len (h-store h)) (len (h-texts h))
-                  (enc-bytes (h-texts h)) (len (gl-tbl (h-g h))) 12)))
+               (+ (len (hi-objs h)) (len (hi-vecs h)) (len (hi-store h)) (len (hi-texts h))
+                  (enc-bytes (hi-texts h)) (len (gl-tbl (hi-g h))) 12)))
   :rule-classes :linear)

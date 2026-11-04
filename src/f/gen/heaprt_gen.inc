@@ -5,7 +5,8 @@
   ! heaprtg proves each is heaprt's (vsg-enter-refines, vsg-leave-refines,
   ! vsg-set-refines, vsg-get-refines, vsg-reset-refines), so heaprt's frame-balance
   ! and ops-keep-callers hold of this stack; and equal to heaprt's gl-new, keep-g,
-  ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...).
+  ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...); push_roots'
+  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines).
   subroutine vsg_enter(s, n_, r)
     type(gc_stack), intent(inout) :: s
     integer(int64), value :: n_
@@ -304,3 +305,67 @@
     n_5 = 8_int64
     call rt_resize_val(gr%tbl, n_5)
   end subroutine glg_init
+
+  subroutine vsg_push(s, hs, i_)
+    type(gc_stack), intent(in) :: s
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: i_4
+    logical :: t_1
+    logical :: t_2
+    type(gc_value) :: v_3
+    type(gc_value), pointer, contiguous :: slots0_p(:)
+    slots0_p => s%slots0
+    do
+      if ((.not. .true.)) then
+        t_2 = (.not. .true.)
+      else
+        if ((.not. .true.)) then
+          t_1 = (.not. .true.)
+        else
+          t_1 = (.not. (i_ < s%vs_top))
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+      else
+        v_3 = slots0_p(i_)
+        call hpg_push(hs, gv_tag(v_3), gv_ref(v_3))
+        i_4 = (1_int64 + i_)
+        i_ = i_4
+        cycle
+      end if
+      exit
+    end do
+  end subroutine vsg_push
+
+  subroutine glg_push(gr, hs, i_)
+    type(gc_globals), intent(in) :: gr
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: i_
+    integer(int64) :: i_4
+    logical :: t_1
+    logical :: t_2
+    type(gc_value) :: v_3
+    do
+      if ((.not. .true.)) then
+        t_2 = (.not. .true.)
+      else
+        if ((.not. .true.)) then
+          t_1 = (.not. .true.)
+        else
+          t_1 = (.not. (i_ < gr%count))
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+      else
+        v_3 = gr%tbl(i_)
+        call hpg_push(hs, gv_tag(v_3), gv_ref(v_3))
+        i_4 = (1_int64 + i_)
+        i_ = i_4
+        cycle
+      end if
+      exit
+    end do
+  end subroutine glg_push

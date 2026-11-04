@@ -2864,20 +2864,17 @@ contains
   end subroutine collect_auto
 
   ! Every root: the global ones, every thread's value stack, and the
-  ! allocation's own.
+  ! allocation's own. The loops over the globals and over a stack are
+  ! GENERATED (heaprt_gen.inc's glg_push, vsg_push: heaprtg's
+  ! push-roots-refines, the pushes are heaprt's rootset); the walk over
+  ! the threads and the allocation's roots(:) are this shim's.
   subroutine push_roots(roots)
     type(gc_value), intent(in) :: roots(:)
-    integer :: i, k
-    do i = 0, int(groots%count) - 1
-       call push_mark(groots%tbl(i))
-    end do
+    integer :: i
+    call glg_push(groots, hstate, 0_int64)
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
-       if (associated(stacks(i)%s%vstack)) then
-          do k = 1, stacks(i)%s%vs_top
-             call push_mark(stacks(i)%s%vstack(k))
-          end do
-       end if
+       if (associated(stacks(i)%s%vstack)) call vsg_push(stacks(i)%s, hstate, 0_int64)
     end do
     do i = 1, size(roots)
        call push_mark(roots(i))
@@ -4721,6 +4718,16 @@ contains
     type(gc_value) :: v
     v = nilv
   end function rt_nil
+
+  ! a value to the marker, for the generated push_roots loops (heaprtg's gv-tag, gv-ref)
+  pure integer(int64) function gv_tag(v)
+    type(gc_value), intent(in) :: v
+    gv_tag = int(v%tag, int64)
+  end function gv_tag
+  pure integer(int64) function gv_ref(v)
+    type(gc_value), intent(in) :: v
+    gv_ref = int(v%ref, int64)
+  end function gv_ref
 
   include "gen/heaprt_gen.inc"
 

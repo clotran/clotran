@@ -15,9 +15,13 @@
 ;; high-water, every slot, the generation, the count and the whole table
 ;; must agree.
 ;;
+;; Pushes (push_roots' loops): every slot to the top and every claimed root,
+;; each one's tag and ref, in order, must be what vsg-push-refines and
+;; glg-push-refines say -- heaprt's live slots and gl-globals.
+;;
 ;; -x is the NEGATIVE CONTROL: the generated side's leave below the top keeps
-;; one slot too many and a set by index writes the next root, and the runs
-;; must part.
+;; one slot too many, a set by index writes the next root, and a stack's push
+;; starts at its second slot, and the runs must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -37,7 +41,7 @@
 (defn gen-op [l]
   (let [k #(- (rnd (+ l 4)) 1) v #(pick [0 (+ 1 (rnd 99)) (+ 1 (rnd 99))])
         g #(rnd 4) i #(- (rnd 14) 1)]
-    (case (pick [0 0 0 1 1 2 2 2 3 3 3 4 5 5 5 6 6 6 7 7 8 9 10 11])
+    (case (pick [0 0 0 1 1 2 2 2 3 3 3 4 5 5 5 6 6 6 7 7 8 9 10 11 12 12 13])
       0 [0 (pick [0 1 1 2 3 (rnd (+ l 3)) -1 1099511627777 9223372036854775807]) 0 0]
       1 [1 (k) 0 0]
       2 [2 (k) (v) 0]
@@ -49,7 +53,9 @@
       8 [8 (g) (i) 0]
       9 [9 (i) (v) 0]
       10 [10 (i) 0 0]
-      11 [11 0 0 0])))
+      11 [11 0 0 0]
+      12 [12 0 0 0]
+      13 [13 0 0 0])))
 
 (defn gen-case []
   (let [l (+ 1 (rnd 16))]
@@ -63,12 +69,19 @@
   (str "(include-book \"heaprtg\")\n"
        "(set-print-case :downcase state)\n"
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
-       "(defun vv (x) (if (integerp x) x 0))\n"
+       "(defun vv (x) (if (and (consp x) (integerp (cdr x))) (cdr x) 0))\n"
+       ;; what a push hands the marker: how many, and a checksum of each (tag, ref) by its place
+       "(defun chk (vs k) (if (atom vs) 0 (+ (* k (+ (* 1000 (gv-tag (car vs))) (gv-ref (car vs)))) (chk (cdr vs) (1+ k)))))\n"
        "(defun arr (i vsg) (declare (xargs :stobjs vsg :mode :program))\n"
        "  (if (<= (s-slots0-length vsg) i) nil (cons (vv (s-slots0i i vsg)) (arr (1+ i) vsg))))\n"
        "(defun tbl (i glg) (declare (xargs :stobjs glg :mode :program))\n"
        "  (if (<= (g-tbl-length glg) i) nil (cons (vv (g-tbli i glg)) (tbl (1+ i) glg))))\n"
-       "(defun nv (b) (if (equal b 0) nil b))\n"
+       ";; (car (vsg-abs vsg)) and (gl-globals glg), read off the stobjs\n"
+       "(defun live-of (i vsg) (declare (xargs :stobjs vsg :mode :program))\n"
+       "  (if (<= (s-top vsg) i) nil (cons (s-slots0i i vsg) (live-of (1+ i) vsg))))\n"
+       "(defun roots-of (i glg) (declare (xargs :stobjs glg :mode :program))\n"
+       "  (if (<= (g-count glg) i) nil (cons (g-tbli i glg) (roots-of (1+ i) glg))))\n"
+       "(defun nv (b) (if (equal b 0) nil (cons 2 b)))\n"
        "(defun step1 (op vsg glg) (declare (xargs :stobjs (vsg glg) :mode :program))\n"
        "  (let ((c (nth 0 op)) (a (nth 1 op)) (b (nth 2 op)) (d (nth 3 op)))\n"
        "    (case c\n"
@@ -83,7 +96,10 @@
        "      (8 (mv (if (glg-live a b glg) 1 0) 0 vsg glg))\n"
        "      (9 (let ((glg (glg-set a (nv b) glg))) (mv 0 0 vsg glg)))\n"
        "      (10 (mv (vv (glg-at a glg)) 0 vsg glg))\n"
-       "      (t (let ((glg (glg-init glg))) (mv 0 0 vsg glg))))))\n"
+       "      (11 (let ((glg (glg-init glg))) (mv 0 0 vsg glg)))\n"
+       ;; the pushes vsg-push-refines and glg-push-refines say: the live slots, the claimed roots
+       "      (12 (let ((l (live-of 0 vsg))) (mv (len l) (chk l 1) vsg glg)))\n"
+       "      (t (let ((l (roots-of 0 glg))) (mv (len l) (chk l 1) vsg glg))))))\n"
        "(defun run-ops (ops vsg glg) (declare (xargs :stobjs (vsg glg) :mode :program))\n"
        "  (if (endp ops) (mv nil vsg glg)\n"
        "    (mv-let (r r2 vsg glg) (step1 (car ops) vsg glg)\n"
@@ -135,11 +151,12 @@
 (def bad (remove :ok results))
 (def steps (mapcat :want results))
 (def gsteps (map #(drop (+ 4 (:l (cases %2))) %1) (mapcat :want results) (mapcat (fn [r] (repeat (count (:want r)) (:k r))) results)))
-(println (str n " stacks, seed " seed (when broken " (negative control: a leave keeps one slot too many, a set writes the next root)")))
+(println (str n " stacks, seed " seed (when broken " (negative control: a leave keeps one slot too many, a set writes the next root, a push skips a slot)")))
 (println (str "  " (count steps) " operations, " (count (filter #(pos? (nth % 1)) steps)) " with a frame on the stack, "
               (count (filter #(= -1 (first %)) steps)) " enters refused full, "
               (count (filter #(some pos? (drop 4 %)) steps)) " with a value in a slot or root, "
-              (count (filter #(< 8 (nth % 2)) gsteps)) " with the root table grown"))
+              (count (filter #(< 8 (nth % 2)) gsteps)) " with the root table grown, "
+              (count (filter identity (map #(and (#{12 13} (first %1)) (pos? (first %2))) (mapcat :ops cases) steps))) " pushes of a root or more"))
 (println (str "generated value stack and global roots against ACL2's: " (count bad) " cases differ"))
 (doseq [b (take 2 bad)]
   (println "  case" (:k b))

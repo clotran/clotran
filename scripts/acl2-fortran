@@ -201,10 +201,14 @@
     "heaprtg"
     {:out "src/f/gen/heaprt_gen.inc" :include true
      :fns [vsg-enter vsg-clear vsg-leave vsg-set vsg-get vsg-reset
-           glg-new glg-live glg-get glg-keep glg-set glg-at glg-init]
+           glg-new glg-live glg-get glg-keep glg-set glg-at glg-init vsg-push glg-push]
+     ;; push_roots calls the marking (heap_gen.inc)
+     :host [hpg-push]
+     ;; a value to the marker: its tag and its ref (GC.f90)
+     :rt {gv-tag ["gv_tag" [:val] :int] gv-ref ["gv_ref" [:val] :int]}
      ;; a thread's gc_stack, its slots 0-based: slots0(j) is vstack(j + 1);
      ;; GC.f90's global roots, groots, the table 0-based
-     :stobjs {vsg "s" glg "gr"} :stobj-types {"s" "gc_stack" "gr" "gc_globals"}
+     :stobjs {vsg "s" glg "gr" hpg "hs"} :stobj-types {"s" "gc_stack" "gr" "gc_globals" "hs" "heap_state"}
      :fields {s-top ["s" "vs_top"] s-hi ["s" "vs_hi"] g-gen ["gr" "gen"] g-count ["gr" "count"]}
      :array-names {"s" ["slots0"] "gr" ["tbl"]} :prefix {"s" "s-" "gr" "g-"}
      :value-arrays #{"slots0" "tbl"} :val-type "gc_value" :local-arrays [["s" "slots0"]]
@@ -217,7 +221,8 @@
               "  ! heaprtg proves each is heaprt's (vsg-enter-refines, vsg-leave-refines,"
               "  ! vsg-set-refines, vsg-get-refines, vsg-reset-refines), so heaprt's frame-balance"
               "  ! and ops-keep-callers hold of this stack; and equal to heaprt's gl-new, keep-g,"
-              "  ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...)."]}
+              "  ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...); push_roots'"
+              "  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines)."]}
     "anpass"
     {:out "src/f/gen/anpass_gen.inc" :include true
      :fns [anp-nn anp-ch anp-tc anp-hfr anp-get anp-put anp-copy anp-or anp-zero anp-set anp-mark anp-local
