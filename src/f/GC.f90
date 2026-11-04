@@ -349,7 +349,7 @@ module GC
 
   ! A claim on a global root slot. Two fields rather than one integer
   ! because an index alone is ambiguous across a gc_init -- see
-  ! global_gen. Modules keep one of these instead of a bare index.
+  ! groots%gen. Modules keep one of these instead of a bare index.
   type, public :: gc_root
      integer :: idx = 0
      integer :: gen = -1
@@ -496,14 +496,19 @@ module GC
   ! nine today -- and nothing claims one per object: a million deftypes
   ! live inside the one types_root map, a million namespaces inside
   ! registry_root. So this doubles once, at startup, and never again.
-  type(gc_value), allocatable :: global_root(:)
-  integer :: global_count = 0
-  ! Bumped by gc_init. A module holding a slot index across a reset
+  !
+  ! The table, its count and the generation: heaprt's gl, read and written
+  ! by the operations GENERATED from model/heaprtg.lisp (heaprt_gen.inc).
+  ! gen is bumped by gc_init. A module holding a slot index across a reset
   ! cannot tell "my slot" from "someone else's slot that now has my
   ! number" -- and a stale index that lands back IN range silently
   ! overwrites another module's root. The generation is what makes
   ! that distinguishable; see gc_root and gc_global_keep.
-  integer :: global_gen = 0
+  type :: gc_globals
+     integer(int64) :: gen = 0, count = 0
+     type(gc_value), allocatable :: tbl(:)   ! 0-based: root idx is tbl(idx - 1)
+  end type gc_globals
+  type(gc_globals) :: groots
 
   ! --- finalizers for storage the heap does not own ----------------
   !
@@ -594,6 +599,9 @@ module GC
      ! (ClotranABI, clotran_slots). calloc'd, so its pages are real only
      ! once touched; vstack_make.
      type(gc_value), pointer, contiguous :: vstack(:) => null()
+     ! the same slots 0-based, slots0(j) = vstack(j + 1): the view the
+     ! generated stack operations take (model/heaprtg.lisp, heaprt_gen.inc)
+     type(gc_value), pointer, contiguous :: slots0(:) => null()
      integer :: vs_hi = 0   ! the highest top reached; above it, untouched
      ! a stack overflow raised in the reserve, which the handlers unwinding
      ! it may now use (Eval.f90, stack_low)
@@ -1089,11 +1097,7 @@ contains
     obj_live = 0; vec_live = 0; str_live = 0; arena_live_now = 0
     old_at_full = 0; promoted_since_full = 0; gc_young_collections = 0
 
-    if (allocated(global_root)) deallocate(global_root)
-    allocate(global_root(8))
-    global_root = nilv
-    global_count = 0
-    global_gen = global_gen + 1
+    call glg_init(groots)
     gc_allocs = 0; gc_frees = 0; gc_collections = 0
     gc_no_collect = .false.
     call heap_sync_init()
@@ -1138,8 +1142,8 @@ contains
           write(u) -1
        end if
     end do
-    write(u) size(global_root), global_count, global_gen
-    write(u) global_root
+    write(u) size(groots%tbl), int(groots%count), int(groots%gen)
+    write(u) groots%tbl
     write(u) obj_live, vec_live, str_live, arena_live_now, old_at_full, promoted_since_full
     write(u) gc_root_get(stacks(1)%s%bindings)
   end subroutine gc_image_write
@@ -1180,10 +1184,12 @@ contains
           call str_index(i)
        end if
     end do
-    read(u) n, global_count, global_gen
-    if (allocated(global_root)) deallocate(global_root)
-    allocate(global_root(n))
-    read(u) global_root
+    read(u) n, i, k
+    groots%count = i
+    groots%gen = k
+    if (allocated(groots%tbl)) deallocate(groots%tbl)
+    allocate(groots%tbl(0:n - 1))
+    read(u) groots%tbl
     read(u) obj_live, vec_live, str_live, arena_live_now, old_at_full, promoted_since_full
     if (allocated(obj_young)) deallocate(obj_young, vec_young, str_young, obj_rem, vec_rem, rem_set)
     allocate(obj_young(1024), vec_young(1024), str_young(1024), rem_set(1024))
@@ -1239,13 +1245,10 @@ contains
     end if
     n_stacks = max(n_stacks, id)
     if (.not. associated(stacks(id)%s)) allocate(stacks(id)%s)
-    if (associated(stacks(id)%s%vstack)) then
-       stacks(id)%s%vstack(1:stacks(id)%s%vs_hi) = nilv
-    else
-       call vstack_make(stacks(id)%s)
-    end if
-    stacks(id)%s%vs_top = 0
-    stacks(id)%s%vs_hi = 0
+    ! a reused stack's slots up to its high-water nil, top 0 (generated:
+    ! vsg_reset, heaprtg's vsg-reset-refines)
+    if (.not. associated(stacks(id)%s%vstack)) call vstack_make(stacks(id)%s)
+    call vsg_reset(stacks(id)%s)
     ! NOT the batches: Eval empties a reused context's stack here, and its
     ! batches and young list must survive -- dropping the young list lost
     ! live young objects from the next young collection's view
@@ -1283,6 +1286,7 @@ contains
     p = calloc(int(slots, c_size_t), int(storage_size(nilv) / 8, c_size_t))
     if (.not. c_associated(p)) error stop "clotran: no memory for a value stack"
     call c_f_pointer(p, s%vstack, [slots])
+    s%slots0(0:slots - 1) => s%vstack
   end subroutine vstack_make
 
   subroutine vstack_free(s)
@@ -1295,7 +1299,7 @@ contains
     end interface
     if (.not. associated(s%vstack)) return
     call free(c_loc(s%vstack(1)))
-    nullify(s%vstack)
+    nullify(s%vstack, s%slots0)
   end subroutine vstack_free
 
   subroutine gc_stack_bind(id)
@@ -1309,7 +1313,7 @@ contains
   ! Which heap this is: gc_init starts a new one. A cache of heap values
   ! outside the heap (CompiledFn's flat pools) is good for one generation.
   integer function gc_generation()
-    gc_generation = global_gen
+    gc_generation = int(groots%gen)
   end function gc_generation
 
   ! Context `id`'s stack, made if need be. Stacks never move, so a
@@ -2864,8 +2868,8 @@ contains
   subroutine push_roots(roots)
     type(gc_value), intent(in) :: roots(:)
     integer :: i, k
-    do i = 1, global_count
-       call push_mark(global_root(i))
+    do i = 0, int(groots%count) - 1
+       call push_mark(groots%tbl(i))
     end do
     do i = 1, n_stacks
        if (.not. associated(stacks(i)%s)) cycle
@@ -3741,23 +3745,23 @@ contains
     base = vs_enter_on(my_stack(), n)
   end function vs_enter_self
 
+  ! The operations themselves are GENERATED from model/heaprtg.lisp
+  ! (src/f/gen/heaprt_gen.inc, included below), each proved heaprt's:
+  ! enter does not clear -- every slot above the top is nil (vsg-inv: a
+  ! new stack starts nil, and leave clears what it pops; clearing twice
+  ! was a fifth of a compiled call, dtrace) -- and leave clears on the way
+  ! out, since a stale value above the top would be marked on the next
+  ! collection and keep dead data alive.
   function vs_enter_on(s, n) result(base)
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: n
     integer :: base
-    if (s%vs_top + n > size(s%vstack)) &
-         error stop "clotran: the value stack is full; CLOTRAN_STACK_SLOTS raises it"
-    ! Not cleared here: every slot above the top is already nil -- a new
-    ! stack starts nil, growing fills with nil, and vs_leave clears what
-    ! it pops. Clearing twice was a fifth of a compiled call (dtrace).
-    base = s%vs_top
-    s%vs_top = base + n
-    if (s%vs_top > s%vs_hi) s%vs_hi = s%vs_top
+    integer(int64) :: b
+    call vsg_enter(s, int(n, int64), b)
+    if (b < 0) error stop "clotran: the value stack is full; CLOTRAN_STACK_SLOTS raises it"
+    base = int(b)
   end function vs_enter_on
 
-  ! Pops back to base. Clearing on the way out is not tidiness: a stale
-  ! value above the top would be traced on the next collection and keep
-  ! dead data alive, which is the leak a stack collector is prone to.
   subroutine vs_leave_self(base)
     integer, intent(in) :: base
     call vs_leave_on(my_stack(), base)
@@ -3766,17 +3770,7 @@ contains
   subroutine vs_leave_on(s, base)
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: base
-    type(gc_value), pointer, contiguous :: v(:)
-    integer :: i
-    if (base < 0 .or. base > s%vs_top) return
-    ! through a local contiguous pointer: on the component itself every
-    ! slot reloaded the stride from the descriptor and multiplied (lldb),
-    ! and this is a sixth of a compiled call
-    v => s%vstack
-    do i = base + 1, s%vs_top
-       v(i) = nilv
-    end do
-    s%vs_top = base
+    call vsg_leave(s, int(base, int64))
   end subroutine vs_leave_on
 
   subroutine vs_set_self(slot, v)
@@ -3789,7 +3783,7 @@ contains
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: slot
     type(gc_value), intent(in) :: v
-    if (slot >= 1 .and. slot <= s%vs_top) s%vstack(slot) = v
+    call vsg_set(s, int(slot, int64), v)
   end subroutine vs_set_on
 
   function vs_get_self(slot) result(v)
@@ -3802,8 +3796,7 @@ contains
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: slot
     type(gc_value) :: v
-    v = nilv
-    if (slot >= 1 .and. slot <= s%vs_top) v = s%vstack(slot)
+    v = vsg_get(s, int(slot, int64))
   end function vs_get_on
 
   function vs_depth_self() result(n)
@@ -4131,9 +4124,15 @@ contains
   ! Claims a slot and returns its index. Registration is permanent:
   ! there is no unregister, because the only things that belong here
   ! live until the process exits.
+  ! The operations are GENERATED from model/heaprtg.lisp (heaprt_gen.inc),
+  ! each proved equal to heaprt's (glg-new-refines, glg-keep-refines, ...);
+  ! what is hand-written here is the state lock round them and the error
+  ! stop. A claimed slot's INDEX never moves as the table grows --
+  ! modules hold those indices across calls (heaprt's glob-new-keeps).
   function gc_global_new(v) result(idx)
     type(gc_value), intent(in) :: v
     integer :: idx
+    integer(int64) :: i
     ! Grows rather than refusing. Returning 0 here used to leave the
     ! caller holding an UNREGISTERED root: everything worked until the
     ! first collection, which then swept something genuinely live.
@@ -4142,30 +4141,27 @@ contains
     ! other threads read it (types_root, tasks_root), and the table
     ! grows with no reader able to be inside it
     call gc_state_lock()
-    if (.not. allocated(global_root)) then
-       allocate(global_root(8))
-       global_root = nilv
-    end if
-    if (global_count >= size(global_root)) call grow_global_roots()
-    global_count = global_count + 1
-    global_root(global_count) = v
-    idx = global_count
+    if (.not. allocated(groots%tbl)) allocate(groots%tbl(0:-1))
+    call glg_new(groots, v, i)
     call gc_state_unlock()
+    if (i <= 0) error stop "clotran: no room for another global root"
+    idx = int(i)
   end function gc_global_new
 
-  ! Doubles the root table, preserving every claimed slot INDEX --
-  ! modules hold those indices across calls, so the copy has to land
-  ! at the same positions or every held handle would point at someone
-  ! else's root. Growing is what makes that safe; the addresses do not
-  ! matter, only the indices, and nothing outside this module ever
-  ! sees a pointer to the array.
-  subroutine grow_global_roots()
-    type(gc_value), allocatable :: bigger(:)
-    allocate(bigger(max(8, 2 * size(global_root))))
-    bigger = nilv
-    bigger(1:global_count) = global_root(1:global_count)
-    call move_alloc(bigger, global_root)
-  end subroutine grow_global_roots
+  ! a value array grown or cut to n, its elements kept, the new ones nil
+  ! (ACL2's resize, for the generated operations)
+  subroutine rt_resize_val(a, n)
+    type(gc_value), allocatable, intent(inout) :: a(:)
+    integer(int64), intent(in) :: n
+    type(gc_value), allocatable :: b(:)
+    integer(int64) :: k
+    allocate(b(0:n - 1))
+    b = nilv
+    k = 0
+    if (allocated(a)) k = min(n, size(a, kind=int64))
+    if (k > 0) b(0:k - 1) = a(0:k - 1)
+    call move_alloc(b, a)
+  end subroutine rt_resize_val
 
   ! Register-or-update, for a caller holding its slot index in a
   ! module variable across a gc_init.
@@ -4215,51 +4211,50 @@ contains
   subroutine gc_global_keep(h, v)
     type(gc_root), intent(inout) :: h
     type(gc_value), intent(in) :: v
+    integer(int64) :: g, i
     call gc_state_lock()
-    if (h%gen == global_gen .and. h%idx >= 1 .and. h%idx <= global_count) then
-       global_root(h%idx) = v
-    else
-       h%idx = gc_global_new(v)
-       h%gen = global_gen
-    end if
+    if (.not. allocated(groots%tbl)) allocate(groots%tbl(0:-1))
+    call glg_keep(groots, int(h%gen, int64), int(h%idx, int64), v, g, i)
     call gc_state_unlock()
+    if (i <= 0) error stop "clotran: no room for another global root"
+    h%gen = int(g)
+    h%idx = int(i)
   end subroutine gc_global_keep
 
   ! The value in a claimed slot, or nil if the claim is stale.
   function gc_root_get(h) result(v)
     type(gc_root), intent(in) :: h
     type(gc_value) :: v
-    v = nilv
-    if (h%gen /= global_gen) return
-    v = gc_global_get(h%idx)
+    call gc_state_lock()
+    v = glg_get(groots, int(h%gen, int64), int(h%idx, int64))
+    call gc_state_unlock()
   end function gc_root_get
 
   function gc_root_live(h) result(yes)
     type(gc_root), intent(in) :: h
     logical :: yes
-    yes = (h%gen == global_gen .and. h%idx >= 1 .and. h%idx <= global_count)
+    yes = glg_live(groots, int(h%gen, int64), int(h%idx, int64))
   end function gc_root_live
 
   subroutine gc_global_set(idx, v)
     integer, intent(in) :: idx
     type(gc_value), intent(in) :: v
     call gc_state_lock()
-    if (idx >= 1 .and. idx <= global_count) global_root(idx) = v
+    call glg_set(groots, int(idx, int64), v)
     call gc_state_unlock()
   end subroutine gc_global_set
 
   function gc_global_get(idx) result(v)
     integer, intent(in) :: idx
     type(gc_value) :: v
-    v = nilv
     call gc_state_lock()
-    if (idx >= 1 .and. idx <= global_count) v = global_root(idx)
+    v = glg_at(groots, int(idx, int64))
     call gc_state_unlock()
   end function gc_global_get
 
   function gc_global_count() result(n)
     integer :: n
-    n = global_count
+    n = int(groots%count)
   end function gc_global_count
 
   ! A collection's marking begins: the stack empty and big enough for every
@@ -4720,6 +4715,14 @@ contains
   end subroutine hp_release_str
 
   include "gen/heap_gen.inc"
+
+  ! nil, for the generated stack operations
+  pure function rt_nil() result(v)
+    type(gc_value) :: v
+    v = nilv
+  end function rt_nil
+
+  include "gen/heaprt_gen.inc"
 
   ! A per-slot free FLAG, not a scan of the free list: scanning made
   ! sweep O(free^2), quadratic in exactly the case that matters -- a

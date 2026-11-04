@@ -223,9 +223,7 @@
  "GC.f90/gc_marked" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/gc_no_collect" {:class :fixed, :note "a test switch, set before a run"}
  "GC.f90/gc_torture" {:class :fixed, :note "a test switch, set before a run"}
- "GC.f90/global_count" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
- "GC.f90/global_gen" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
- "GC.f90/global_root" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
+ "GC.f90/groots" {:class :shared, :note "the global roots (gen, count, table; model/heaprtg.lisp): written under the state lock"}
  "GC.f90/last_marked" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
  "GC.f90/hstate" {:class :shared, :note "the collector's marker (heap_gen.inc): used only by a collection, which runs with the world stopped (14c)"}
  "GC.f90/obj_free" {:class :shared, :note "the collector: allocation from per-thread batches (14d), collection and growth at a safepoint (14c)"}
