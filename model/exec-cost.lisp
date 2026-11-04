@@ -1,6 +1,6 @@
 ; THE TREE EVALUATOR'S CORE, COUNTED (model/exec.lisp). A turn of
 ; run_loop is one ex-step: the generated decisions are a fixed number of
-; comparisons (ex-own, at most 16 on any path), and its action a push, a
+; comparisons (ex-own, at most 18 on any path), and its action a push, a
 ; tail, a finish or a slot written, each a constant number of steps but a
 ; recur's last, which writes its k slots, a closure's making, which copies
 ; its c captures, and a call's entry, which makes a frame of its callee's
@@ -21,8 +21,8 @@
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 16) (ex-kid 6) (ex-pc 11) (ex-i 9) (ex-fin 2) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 4) (sk-step 7) (otherwise 0)))
-(defthm ex-own-bound (<= (ex-own f) 16) :rule-classes :linear)
+(defun ex-own (f) (case f (ex-act 18) (ex-kid 7) (ex-pc 14) (ex-i 9) (ex-fin 2) (ex-unw 9) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 4) (sk-step 7) (otherwise 0)))
+(defthm ex-own-bound (<= (ex-own f) 18) :rule-classes :linear)
 
 ; the arity's walk: the arities ex-arfit is asked of, the fixed pass and,
 ; when it found none, the variadic one (exec.inc pick_arity)
@@ -185,3 +185,32 @@
   (implies (equal (car (sk-spread req fx v)) :hand)
            (equal (ex-copy-steps (cadr (sk-spread req fx v))) (+ 2 (nfix req))))
   :hints (("Goal" :in-theory (e/d (sk-spread) (ex-apwalk)))))
+
+; THROW AND TRY, COUNTED. A throw is its value's turns and 3: its push,
+; the throw, and k_unwind's pop of its record -- k_unwind takes a turn for
+; each record a throw leaves (ex-unw, 9 comparisons). A try is the turns
+; of the parts that run (ex-try-parts: its body, the catch that takes a
+; throw from it, its finally) and at most 5 more: its push, the unwind
+; that catches, the finally's push and its end, a rethrow's pop. Finding
+; the catch is one test a clause (ex-catchw-steps).
+(defthm ex-throw-turns
+  (implies (and (consp e) (equal (ex-kind e) 17))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel)) (+ 3 (caddr (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
+  :hints (("Goal" :expand ((ex-ev :m e 0 nil fr fuel)) :in-theory (e/d (c+) (ex-kid-of)))))
+
+(defun ex-try-parts (e fr fuel)
+  (let* ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)) (w (ex-catchw (ex-c e) (val (car r)) 0)))
+    (if (and (ex-thp (car r)) (equal (car w) 1))
+        (let ((rh (ex-ev :m (ex-cbody e (cdr w)) 0 nil (update-nth (ex-cslot e (cdr w)) (val (car r)) (cadr r)) fuel)))
+          (+ (caddr r) (caddr rh) (caddr (ex-ev :m (ex-kid-of e 1) 0 nil (cadr rh) fuel))))
+      (+ (caddr r) (caddr (ex-ev :m (ex-kid-of e 1) 0 nil (cadr r) fuel))))))
+
+(defthm ex-try-turns
+  (implies (and (consp e) (equal (ex-kind e) 18))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel)) (+ 5 (ex-try-parts e fr fuel))))
+  :hints (("Goal" :expand ((ex-ev :m e 0 nil fr fuel) (:free (tmp fr) (ex-ev :fin e 0 tmp fr fuel)))
+                  :in-theory (e/d (c+) (ex-kid-of ex-catchw)))))
+
+(defun ex-catchw-steps (cs v)
+  (cond ((atom cs) 0) ((truthy (prim :isa (list (nth 0 (car cs)) v))) 1) (t (1+ (ex-catchw-steps (cdr cs) v)))))
+(defthm ex-catchw-steps-bound (<= (ex-catchw-steps cs v) (len cs)) :rule-classes :linear)

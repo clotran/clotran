@@ -41,7 +41,7 @@
 
 (defn gen-case []
   (let [nk (pick [0 1 2 2 3 3 4 5 9])]
-    {:k (pick [1 2 3 4 4 4 5 5 5 6 6 6 6 6 11 11 11 12 12 12 14 16 16 16 17 0 -1])
+    {:k (pick [1 2 3 4 4 4 5 5 5 6 6 6 6 6 11 11 11 12 12 12 14 16 16 16 17 17 18 18 18 18 19 0 -1])
      :pc (pick [0 0 1 1 2 2 3 4 5 -1])
      :i (pick [0 0 1 2 3 4 8 -1 (dec nk) nk])
      :nk nk :n2 (pick [0 1 2 3 4 -1 (dec nk)])
@@ -57,12 +57,14 @@
      ;; the seq's kind (model/seqk.lisp): 1 a list of al, 2 a vector of al, 3
      ;; a lazy seq of al cells, then a tail tk -- 0 none, 1 a list, 2 a vector
      ;; (a lazy seq delegating to it) -- of l2
-     :sk (pick [1 2 2 3 3 3]) :tk (pick [0 1 2]) :l2 (pick [0 1 2 4])}))
+     :sk (pick [1 2 2 3 3 3]) :tk (pick [0 1 2]) :l2 (pick [0 1 2 4])
+     ;; k_unwind's: whether a catch takes the throw, whether the try has a finally
+     :mt (pick [0 1 1 2]) :fin (rnd 2)}))
 
 (def cases (vec (repeatedly n gen-case)))
 (defn row [{:keys [k pc i nk n2 tv]}] (str/join " " [k pc i nk n2 tv]))
-(defn arow [{:keys [ars m cl ap an fk sq req ak al sk tk l2]}]
-  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl ap an fk sq req ak al sk tk l2])))
+(defn arow [{:keys [ars m cl ap an fk sq req ak al sk tk l2 mt fin]}]
+  (str/join " " (concat [(count ars)] (flatten (take 4 (concat ars (repeat [0 0])))) [m cl ap an fk sq req ak al sk tk l2 mt fin])))
 ;; the arities as ACL2 reads a template's: (nf variadic index), the index
 ;; in the start slot so the pick names its place
 (defn acl2-ars [{:keys [ars]}]
@@ -76,7 +78,7 @@
          " (append (list (ex-act " as ") (ex-kid " as ") (ex-pc " as ") (ex-i " as ") (ex-fin " rf " " mk ")"
          " (if a (nth 2 a) -1) (ex-entry " (:cl c) " (if a 1 0))"
          " (ex-apentry " (str/join " " (map c [:ap :an :fk :sq])) ")"
-         ") (fz-walk " (str/join " " (map c [:req :ak :sk :al :tk :l2])) "))))\n")))
+         ") (fz-walk " (str/join " " (map c [:req :ak :sk :al :tk :l2])) ") (list (ex-unw " (:k c) " " (:pc c) " " (:mt c) " " (:fin c) ")))))\n")))
 
 (def driver
   (str "(include-book \"exec-proof\")\n"
@@ -131,7 +133,7 @@
            (mapv (fn [l] (mapv parse-long (str/split (str/trim l) #"\s+"))) (str/split-lines (str/trim (:out r))))))
 (def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))
 (def bad (remove :ok results))
-(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting, variadic flags reversed, apply's callee and its seq's end misread)")))
+(println (str n " cases, seed " seed (when broken " (negative control: truthiness reversed, every record restarting, variadic flags reversed, apply's callee and its seq's end misread, catches' matches reversed)")))
 (println (str "  by action: "
               (str/join ", " (for [[a c] (sort (frequencies (map #(first (:want %)) results)))] (str a ":" c)))
               "; restarts " (count (filter #(= 1 (nth (:want %) 4)) results))

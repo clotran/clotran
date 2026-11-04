@@ -11,11 +11,12 @@
 ! the callee is one of the machine's closures); an apply: ap an fk sq (ex_apentry's),
 ! and its walk: req, the leading arguments k, the seq's length, its kind
 ! (1 a list, 2 a vector, 3 a lazy seq of that many cells), its tail's kind and length.
+! Then k_unwind's mt fin (ex_unw's: a catch takes the throw, the try has a finally).
 ! Out: a line a case, the answers ex_act, ex_kid, ex_pc, ex_i, ex_fin, the
 ! arity the count picks (exec.inc pick_arity's walk over ex_arfit: the
 ! fixed pass, then the variadic one; -1 for none), ex_entry, ex_apentry and
 ! the walk B_APPLY takes over ex_apstep: its way, its fixed arguments' count
-! its rest's length and the realisations it makes.
+! its rest's length and the realisations it makes, then ex_unw.
 module exec_mock
   use iso_fortran_env, only: int64
   implicit none
@@ -32,7 +33,7 @@ program exec_check
   implicit none
   character(len=4096) :: path, arg
   integer :: u, ios, p, j, pick
-  integer(int64) :: a(29), tv, rf, vr(0:3), fit, ap, more, step, k, left, nfx, nrest, d, dd, nr
+  integer(int64) :: a(31), mt, tv, rf, vr(0:3), fit, ap, more, step, k, left, nfx, nrest, d, dd, nr
   integer(int64) :: md, rem, ix, cnt, lc, smd, srem, six, scnt, slc
   logical :: broken
   call get_command_argument(1, path)
@@ -45,6 +46,7 @@ program exec_check
      tv = a(6)
      ap = a(20)
      rf = a(7)
+     mt = a(30)
      do j = 0, 3
         vr(j) = a(11 + 2 * j)
      end do
@@ -53,6 +55,7 @@ program exec_check
         rf = 1
         vr = 1 - vr
         ap = 1 - a(20)
+        mt = 1 - a(30)
      end if
      pick = -1
      do p = 0, 1
@@ -127,9 +130,10 @@ program exec_check
         nfx = k + left
         nrest = 0
      end if
-     write(*, '(i0,11(1x,i0))') ex_act(a(1), a(2), a(3), a(4), a(5), tv), ex_kid(a(1), a(2), a(3), a(4), a(5), tv), &
+     write(*, '(i0,12(1x,i0))') ex_act(a(1), a(2), a(3), a(4), a(5), tv), ex_kid(a(1), a(2), a(3), a(4), a(5), tv), &
           ex_pc(a(1), a(2), a(3), a(4), a(5), tv), ex_i(a(1), a(2), a(3), a(4), a(5), tv), ex_fin(rf, a(8)), &
-          pick, ex_entry(a(19), fit), ex_apentry(ap, a(21), a(22), a(23)), step, nfx, nrest, nr
+          pick, ex_entry(a(19), fit), ex_apentry(ap, a(21), a(22), a(23)), step, nfx, nrest, nr, &
+          ex_unw(a(1), a(2), mt, a(31))
   end do
   close(u)
 contains

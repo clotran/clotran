@@ -334,7 +334,7 @@
               "  ! no value; anprim-cost.lisp counts the steps."]}
     "exec"
     {:out "src/f/gen/exec_gen.inc" :include true :book "exec-proof"
-     :fns [ex-act ex-kid ex-pc ex-i ex-fin ex-arfit ex-entry ex-apentry ex-apstep ex-aplook sk-step]
+     :fns [ex-act ex-kid ex-pc ex-i ex-fin ex-unw ex-arfit ex-entry ex-apentry ex-apstep ex-aplook sk-step]
      :host []
      :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {}
@@ -344,10 +344,10 @@
      :header ["  ! GENERATED from model/exec.lisp by scripts/acl2-fortran -b exec. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the tree evaluator's turn for its core kinds -- a constant, a"
-              "  ! local, a Var, if, do, let*, loop*, recur, fn and a call -- what run_loop"
-              "  ! does with the top record (ex_act), which child it takes (ex_kid), the"
-              "  ! record's pc and i after (ex_pc, ex_i), whether k_finish restarts it"
-              "  ! (ex_fin), the arity a call's count picks (ex_arfit: the fixed one, else"
+              "  ! local, a Var, if, do, let*, loop*, recur, fn, a call, throw and try -- what"
+              "  ! run_loop does with the top record (ex_act), which child it takes (ex_kid),"
+              "  ! the record's pc and i after (ex_pc, ex_i), whether k_finish restarts it"
+              "  ! (ex_fin), what k_unwind does with the record under a throw (ex_unw), the arity a call's count picks (ex_arfit: the fixed one, else"
               "  ! the variadic one) and how it enters its callee or throws the arity error"
               "  ! (ex_entry), and apply: its way (ex_apentry) and how far its walk takes the"
               "  ! seq (ex_apstep) and how far it reads it (ex_aplook), and each step over a"

@@ -292,6 +292,44 @@ slot's read and write), and every kind not yet in the model.
    read as data; and
    ex-xvs over collections, a closure inside a vector still a call's
    possible head.
+3a. **Throw and try in the machine** *(done)*: N_THROW (kind 17: its
+   value pushed, then thrown -- no nested `exec`) and N_TRY (18: children
+   the body and, when there is one, the finally, nk 1 or 2; slot 2 its
+   catches (class slot body)) are core kinds of ex-act (actions 18 throw
+   the value, 19 finish, 20 keep it and push the finally, 21 finish with
+   the kept value, 22 throw the kept throw again). A throw record now sits
+   over the record it left, nothing in flight, and each turn k_unwind takes
+   the record under it (ex-unwind over the generated `ex-unw`): a try at
+   pc 1 runs the first catch (ex-catchw) whose class the runtime's
+   instance? -- vmx2's `prim :isa`, whatever it answers -- takes, its slot
+   bound, the try at pc 3; a try at pc 1 or 3 with a finally runs it (pc 4,
+   the throw kept, then thrown again from pc 5); a call's record at pc 5
+   gives the caller's frame back; any other record is popped; the last
+   record stops the machine. ex-ev: a part's throw costs the pop turn too
+   (ex-nv), `:fin` the try's end through its finally. Proved:
+   ex-machine-correct with the throw clause exact -- a throw leaves
+   `(cons (ex-throwr v) ks)`, nil in flight, the meaning's frame, v never the
+   recur marker -- over throw and try (ex-good-m-throw, ex-good-try);
+   counted (exec-cost): ex-throw-turns, ex-try-turns (at most 5 beyond the
+   parts that run), ex-catchw-steps-bound. Generated: `ex_unw`, behind
+   k_unwind (its catch walk over catch_matches); exec_core runs N_THROW and
+   N_TRY; fuzz-exec-gen draws kinds 17 and 18 and ex-unw (-x reverses the
+   catch's match). exec-vm is unchanged but for `:fin` refused by ex-vwf.
+   **Next (3b)**: the VM's agreement on a throw. The plan: ex-vpost's
+   thrown clause (m = res, the scope agreeing, the value good) at every
+   place; a call translated head first, `(:let H (:if (:prim :ifn (:local
+   p)) (:applyv (:local p) args..) (:throw (:const :not-fn))))`, its
+   arguments in scope cm ++ (nil) (ex-vwf's :call place taking that scope)
+   -- with the tree's pc 1 asking the same `prim :ifn` of the callee (tv at
+   a call's pc 1: 1 a fn, else action 23 throws :not-fn, or prim's own
+   throw), which is DEVIATIONS 84's fix (Fortran: call_dispatch's IFn test
+   before the arguments; oracle case `(f (g))`, f a string); apply's
+   refusals (ex-apway 2, 3) agreeing with mx2's prim :invoke under a
+   defun-sk hypothesis as ex-lzok is; a try `(:try B H)`, H the catch walk
+   `(:if (:prim :isa (:const c) (:local p)) Hj ...(:throw (:local p)))`,
+   clause j's body in scope cm ++ (slot j), a finally F as vmx2's comment
+   says -- `(:let (:try X (:if F' (:throw t) (:throw t))) (:if F'' r r))` --
+   under the hypothesis that prim :isa never throws.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,

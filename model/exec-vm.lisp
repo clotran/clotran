@@ -262,6 +262,7 @@
                        (if (< i nk)
                            (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :call e (1+ i) cm lp defs))
                          t)))
+           (:fin nil)
            (otherwise
             (cond ((or (equal k 1) (equal k 3)) (ex-xvs defs (list (ex-c e))))
                   ((equal k 2) (and (member-equal (ex-i2 e) cm) (not (ex-mark e))))
@@ -1110,6 +1111,7 @@
                           (ex-vind :iter (ex-fbody f (len args)) 0 (cons nil (ex-fvs f args)) (ex-fcm (ex-ftm f) ar)
                                    (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
                                    (cons (ex-astart ar) (ex-anp ar)))))))
+        (:fin nil)
         (otherwise
          (cond ((equal k 4)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))

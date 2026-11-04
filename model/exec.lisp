@@ -50,6 +50,7 @@
 (in-package "ACL2")
 
 (include-book "seqk")
+(include-book "vmx2")
 
 (defconst *ex40* 1099511627776)
 
@@ -81,6 +82,12 @@
                             (t 10)))
         ((equal k 3) 11)
         ((equal k 14) 12)
+        ((equal k 17) (if (equal pc 0) 3 18))
+        ((equal k 18) (cond ((equal pc 0) 3)
+                            ((or (equal pc 1) (equal pc 3)) (if (and (integerp nk) (< 1 nk)) 20 19))
+                            ((equal pc 2) 21)
+                            ((equal pc 4) 22)
+                            (t 0)))
         ((equal k 6) (cond ((equal pc 0) 13)
                            ((equal pc 1) 14)
                            ((equal pc 2) (if (and (integerp i) (integerp nk) (< i nk)) 3 15))
@@ -95,11 +102,14 @@
   (cond ((equal k 4) (cond ((equal pc 0) 0) ((equal tv 1) 1) (t 2)))
         ((equal k 5) (if (and (integerp i) (integerp nk) (< i (- nk 1))) i (if (and (ex40p nk) (< 0 nk)) (- nk 1) 0)))
         ((or (equal k 11) (equal k 12)) (if (and (integerp i) (integerp n2) (< i n2)) i (if (ex40p n2) n2 0)))
+        ((equal k 18) (if (or (equal pc 1) (equal pc 3)) 1 0))
         (t (if (ex40p i) i 0))))
 
 (defun ex-pc (k pc i nk n2 tv)
   (declare (xargs :guard t) (ignore n2 tv))
   (cond ((equal k 4) 1)
+        ((equal k 17) 1)
+        ((equal k 18) (cond ((equal pc 0) 1) ((or (equal pc 1) (equal pc 3)) 2) ((equal pc 4) 5) (t pc)))
         ((or (equal k 11) (equal k 12)) (if (equal pc 1) 0 1))
         ((equal k 16) (if (equal pc 1) 2 1))
         ((equal k 6) (cond ((equal pc 0) 1)
@@ -122,6 +132,19 @@
 (defun ex-fin (rf mk)
   (declare (xargs :guard t))
   (if (and (equal rf 1) (equal mk 1)) 1 0))
+
+; k_unwind, a record at a time: a throw in flight over a record of kind k
+; at pc; mt 1 when one of the try's catches takes the thrown value, fin 1
+; when the try has a finally. 1: catch -- the clause's slot bound, its body
+; pushed, the try at pc 3; 2: the finally pushed, the try at pc 4 keeping
+; the throw; 3: pop the record; 5: pop a call's record whose callee was
+; running, the caller's frame back. Nothing is in flight after.
+(defun ex-unw (k pc mt fin)
+  (declare (xargs :guard t))
+  (cond ((and (equal k 18) (equal pc 1) (equal mt 1)) 1)
+        ((and (equal k 18) (or (equal pc 1) (equal pc 3)) (equal fin 1)) 2)
+        ((and (equal k 6) (equal pc 5)) 5)
+        (t 3)))
 
 ; A CALL'S ARITY (bind_closure's pick, clj's: Compiler FnExpr's arities):
 ; ex-arfit answers 1 when an arity of nf fixed parameters, variadic when vr
@@ -294,6 +317,20 @@
           ((equal w 2) (list 2 (take (nfix req) fx) (append (nthcdr (nfix req) fx) s)))
           (t (list 3 (append fx s) nil)))))
 
+;; THROW AND TRY. An N_THROW's child is the value thrown; an N_TRY's
+; children its body and, when it has one, its finally (nk 1 or 2), slot 2
+; its catches, each (class slot body) (analyze.inc anb_trynode). A catch's
+; test is clj's instance? of its class -- the runtime's type system, so
+; vmx2's prim (op :isa), whatever it answers (instance? throws nothing:
+; exec-vm asks that of it) -- walked in order (k_unwind): (1 . j) clause j
+; matched, (0) none did.
+(defun ex-catchw (cs v j)
+  (cond ((atom cs) (list 0))
+        ((truthy (prim :isa (list (nth 0 (car cs)) v))) (cons 1 (nfix j)))
+        (t (ex-catchw (cdr cs) v (1+ (nfix j))))))
+(defun ex-cbody (e j) (nth 2 (nth j (ex-c e))))
+(defun ex-cslot (e j) (nfix (nth 1 (nth j (ex-c e)))))
+
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;
 ; a state (records val frame); a record (node pc i restart rnode tmp), tmp
@@ -301,9 +338,24 @@
 
 (defun ex-rec (e pc i fl rs tmp) (list e pc i fl rs tmp))
 
-; a throw in flight: a record of no kind, so the machine stops at it;
-; unwinding it is k_unwind's (milestone 3)
+; a throw in flight: a record of no node kind, over the record it left;
+; each turn k_unwind takes the record under it (ex-unw), until a try
+; catches it or it is the last record, where the machine stops
 (defun ex-throwr (v) (ex-rec (list :thrown v) 0 0 nil nil nil))
+
+(defun ex-unwind (ks val fr)
+  (let ((v (cadr (car (car ks)))))
+    (if (atom (cdr ks))
+        (list ks val fr)
+      (let* ((r (cadr ks)) (e (nth 0 r)) (pc (nth 1 r)) (i (nth 2 r)) (fl (nth 3 r)) (rs (nth 4 r)) (tmp (nth 5 r))
+             (w (if (and (equal (ex-kind e) 18) (equal pc 1)) (ex-catchw (ex-c e) v 0) (list 0)))
+             (rest (cddr ks)))
+        (case (ex-unw (ex-kind e) pc (car w) (if (< 1 (ex-nk e)) 1 0))
+          (1 (list (cons (ex-rec (ex-cbody e (cdr w)) 0 0 nil nil nil) (cons (ex-rec e 3 i fl rs tmp) rest)) nil
+                   (update-nth (ex-cslot e (cdr w)) v fr)))
+          (2 (list (cons (ex-rec (ex-kid-of e 1) 0 0 nil nil nil) (cons (ex-rec e 4 i fl rs (list v)) rest)) nil fr))
+          (5 (list (cons (car ks) rest) nil tmp))
+          (otherwise (list (cons (car ks) rest) nil fr)))))))
 
 
 ; k_finish
@@ -316,8 +368,10 @@
 ; one turn with records ks, at least one
 (defun ex-turn (ks val fr)
   (let ((s (list ks val fr)))
-    (if (atom ks)
-        s
+    (cond
+     ((atom ks) s)
+     ((equal (ex-kind (nth 0 (car ks))) :thrown) (ex-unwind ks val fr))
+     (t
       (let* ((r (car ks)) (e (nth 0 r)) (pc (nth 1 r)) (i (nth 2 r)) (fl (nth 3 r)) (rs (nth 4 r)) (tmp (nth 5 r))
              (k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (tv (if (truthy val) 1 0))
              (j (ex-kid k pc i nk n2 tv)) (pc2 (ex-pc k pc i nk n2 tv)) (i2 (ex-i k pc i nk n2 tv)))
@@ -344,13 +398,18 @@
                 (case (ex-entry (if (ex-clo-shape f) 1 0) (if (consp (ex-arity (nth 1 (cadr f)) n)) 1 0))
                   (1 (list (cons (ex-rec (ex-fbody f n) 0 0 t (ex-fbody f n) nil) (cons (ex-rec e pc2 i2 fl rs fr) (cdr ks)))
                            val (ex-bind f (cdr ct))))
-                  (2 (list (cons (ex-throwr :arity) ks) val fr))
+                  (2 (list (cons (ex-throwr :arity) ks) nil fr))
                   (otherwise (case (ex-apway tmp)
-                               (2 (list (cons (ex-throwr :arity) ks) val fr))
-                               (3 (list (cons (ex-throwr :not-seq) ks) val fr))
+                               (2 (list (cons (ex-throwr :arity) ks) nil fr))
+                               (3 (list (cons (ex-throwr :not-seq) ks) nil fr))
                                (otherwise s))))))
           (17 (ex-finish val ks tmp))
-          (otherwise s))))))
+          (18 (list (cons (ex-throwr val) ks) nil fr))
+          (19 (ex-finish val ks fr))
+          (20 (list (cons (ex-rec (ex-kid-of e j) 0 0 nil nil nil) (cons (ex-rec e pc2 i2 fl rs (list val)) (cdr ks))) val fr))
+          (21 (ex-finish (car tmp) ks fr))
+          (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
+          (otherwise s)))))))
 
 (defun ex-step (s) (if (atom (car s)) s (ex-turn (car s) (cadr s) (caddr s))))
 
@@ -375,6 +434,12 @@
 ;          arguments so far; past the last it enters the callee, whose
 ;          body takes fuel, as vmx's calls do, and answers in the
 ;          caller's frame
+;   :fin   a try's end: tmp (res tt), what its body or catch answered --
+;          a value, the try's record on top, or a throw over it no catch
+;          took -- after tt turns; its finally runs, when it has one, and
+;          a finally's throw is the try's
+; A throw is (k_unwind) caught by the first clause whose class the
+; runtime's instance? says it is (ex-catchw), its slot bound to it.
 ; a loop's iterations take fuel, as vmx's do.
 
 (defun c+ (a b) (+ (nfix a) (nfix b)))
@@ -383,9 +448,9 @@
 ; one that pushed the part counted; anything else is out
 (defun ex-thp (r) (eq (car r) :thrown))
 (defmacro ex-nv (r fr)
-  `(if (ex-thp (car ,r)) (list (car ,r) (cadr ,r) (c+ 1 (caddr ,r))) (list (list :out) ,fr 0)))
+  `(if (ex-thp (car ,r)) (list (car ,r) (cadr ,r) (c+ 1 (c+ (caddr ,r) 1))) (list (list :out) ,fr 0)))
 
-(defun ex-rank (flg) (case flg (:iter 2) ((:do :let :rec :call) 0) (otherwise 1)))
+(defun ex-rank (flg) (case flg (:iter 2) ((:do :let :rec :call :fin) 0) (otherwise 1)))
 
 (defun ex-left (flg e i)
   (case flg
@@ -393,11 +458,20 @@
     ((:do :rec :call) (nfix (- (ex-nk e) (nfix i))))
     (otherwise 0)))
 
+; ex-wf's measure: its catches' walk too
+(defun ex-wrank (flg) (if (eq flg :cs) 0 (ex-rank flg)))
+(defun ex-wleft (flg e i) (if (eq flg :cs) (nfix (- (len (ex-c e)) (nfix i))) (ex-left flg e i)))
+
 (defthm ex-nth-count (<= (acl2-count (nth j l)) (acl2-count l)) :rule-classes :linear)
 (defthm ex-nth-count-strict (implies (consp l) (< (acl2-count (nth j l)) (acl2-count l))) :rule-classes :linear)
 (defthm ex-kid-count (implies (consp e) (< (acl2-count (ex-kid-of e j)) (acl2-count e))) :rule-classes :linear
   :hints (("Goal" :in-theory (disable ex-nth-count ex-nth-count-strict)
                   :use ((:instance ex-nth-count (l (nth 2 e))) (:instance ex-nth-count-strict (j 2) (l e))))))
+(defthm ex-cbody-count (implies (consp e) (< (acl2-count (ex-cbody e j)) (acl2-count e))) :rule-classes :linear
+  :hints (("Goal" :in-theory (disable ex-nth-count ex-nth-count-strict)
+                  :use ((:instance ex-nth-count (l (nth j (nth 3 e))) (j 2)) (:instance ex-nth-count (l (nth 3 e)))
+                        (:instance ex-nth-count-strict (j 3) (l e))))))
+(in-theory (disable ex-cbody))
 
 ; WELL FORMED, as the machine theorem assumes and a call asks of the body
 ; it enters: every node a modelled kind; an if 2 or 3 children; a let or
@@ -406,7 +480,7 @@
 ; tail check passes it, with as many arguments as its target's slots; no
 ; constant nor Var's value the recur marker
 (defun ex-wf (flg e i tl)
-  (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-rank flg)) (ex-left flg e i)))
+  (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-wrank flg)) (ex-wleft flg e i)))
                   :well-founded-relation o<
                   :hints (("Goal" :in-theory (disable ex-kid-of)))))
   (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
@@ -427,6 +501,10 @@
            (:call (cond ((not (equal k 6)) nil)
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :call e (1+ i) tl)))
                         (t t)))
+           (:fin nil)
+           (:cs (cond ((not (equal k 18)) nil)
+                      ((< i (len (ex-c e))) (and (ex-wf :m (ex-cbody e i) 0 nil) (ex-wf :cs e (1+ i) tl)))
+                      (t t)))
            (otherwise
             (cond ((or (equal k 1) (equal k 3)) (not (equal (ex-c e) *ex-mk*)))
                   ((or (equal k 2) (equal k 14)) t)
@@ -437,6 +515,9 @@
                   ((or (equal k 11) (equal k 12)) (and (equal nk (1+ n2)) (ex-wf :let e 0 tl)))
                   ((equal k 16) (and tl (equal (ex-rn e) nk) (ex-wf :rec e 0 tl)))
                   ((equal k 6) (and (< 0 nk) (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :call e 1 tl)))
+                  ((equal k 17) (and (equal nk 1) (ex-wf :m (ex-kid-of e 0) 0 nil)))
+                  ((equal k 18) (and (or (equal nk 1) (equal nk 2)) (ex-wf :m (ex-kid-of e 0) 0 nil)
+                                     (or (equal nk 1) (ex-wf :m (ex-kid-of e 1) 0 nil)) (ex-wf :cs e 0 nil)))
                   (t nil)))))))
 
 ; a call enters f with n arguments, in the meaning: a closure with that
@@ -449,7 +530,8 @@
                                      (make-ord 2 (1+ (acl2-count e))
                                                (make-ord 1 (1+ (ex-rank flg)) (ex-left flg e i))))
                   :well-founded-relation o<
-                  :hints (("Goal" :in-theory (disable ex-kid-of)))))
+                  :hints (("Goal" :in-theory (disable ex-kid-of ex-callee ex-apway ex-enters ex-arerr ex-catchw ex-fbody ex-bind ex-mkclo
+                                                 ex-linked ex-write truthy valp val ex-thp take update-nth)))))
   (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
     (case flg
       (:iter (if (not (consp e))
@@ -489,6 +571,14 @@
                        (let ((r2 (ex-ev :rec e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
                   (t (list (list :recur) (ex-write (ex-rstart e) (take (min (ex-rn e) nk) tmp) fr) 1))))
+      (:fin (cond ((not (consp e)) (list (list :out) fr 0))
+                  ((< 1 nk)
+                   (let ((rf (ex-ev :m (ex-kid-of e 1) 0 nil fr fuel)))
+                     (cond ((valp (car rf))
+                            (list (car tmp) (cadr rf) (c+ (cadr tmp) (c+ 1 (c+ (caddr rf) (if (ex-thp (car tmp)) 2 1))))))
+                           ((ex-thp (car rf)) (list (car rf) (cadr rf) (c+ (cadr tmp) (c+ 1 (c+ (caddr rf) 1)))))
+                           (t (list (list :out) fr 0)))))
+                  (t (list (car tmp) fr (c+ (cadr tmp) 1)))))
       (:call (cond ((not (consp e)) (list (list :out) fr 0))
                    ((< i nk)
                     (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
@@ -499,10 +589,10 @@
                    ((and (ex-enters (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (not (zp fuel)))
                     (let ((rb (ex-ev :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0 nil
                                      (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp))) (1- fuel))))
-                      (list (car rb) fr (c+ 1 (c+ 1 (c+ (caddr rb) (if (ex-thp (car rb)) 0 1)))))))
-                   ((ex-arerr (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (list (cons :thrown :arity) fr (c+ 1 1)))
-                   ((equal (ex-apway tmp) 2) (list (cons :thrown :arity) fr (c+ 1 1)))
-                   ((equal (ex-apway tmp) 3) (list (cons :thrown :not-seq) fr (c+ 1 1)))
+                      (list (car rb) fr (c+ 1 (c+ 1 (c+ (caddr rb) 1))))))
+                   ((ex-arerr (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (list (cons :thrown :arity) fr (c+ 1 (c+ 1 1))))
+                   ((equal (ex-apway tmp) 2) (list (cons :thrown :arity) fr (c+ 1 (c+ 1 1))))
+                   ((equal (ex-apway tmp) 3) (list (cons :thrown :not-seq) fr (c+ 1 (c+ 1 1))))
                    (t (list (list :out) fr 0))))
       (otherwise
        (cond ((not (consp e)) (list (list :out) fr 0))
@@ -533,4 +623,19 @@
                       (ex-nv r fr)
                     (let ((r2 (ex-ev :call e 1 (list (val (car r))) (cadr r) fuel)))
                       (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2))))))))))
+             ((equal k 17)
+              (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                (if (valp (car r)) (list (cons :thrown (val (car r))) (cadr r) (c+ 1 (c+ (caddr r) 2))) (ex-nv r fr))))
+             ((equal k 18)
+              (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                (cond ((valp (car r)) (ex-ev :fin e 0 (list (car r) (c+ 1 (caddr r))) (cadr r) fuel))
+                      ((not (ex-thp (car r))) (list (list :out) fr 0))
+                      ((equal (car (ex-catchw (ex-c e) (val (car r)) 0)) 1)
+                       (let ((rh (ex-ev :m (ex-cbody e (cdr (ex-catchw (ex-c e) (val (car r)) 0))) 0 nil
+                                        (update-nth (ex-cslot e (cdr (ex-catchw (ex-c e) (val (car r)) 0))) (val (car r)) (cadr r))
+                                        fuel)))
+                         (if (or (valp (car rh)) (ex-thp (car rh)))
+                             (ex-ev :fin e 0 (list (car rh) (c+ 1 (c+ (caddr r) (c+ 1 (caddr rh))))) (cadr rh) fuel)
+                           (list (list :out) fr 0))))
+                      (t (ex-ev :fin e 0 (list (car r) (c+ 1 (caddr r))) (cadr r) fuel)))))
              (t (list (list :out) fr 0)))))))
