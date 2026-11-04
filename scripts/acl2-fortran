@@ -21,8 +21,11 @@
 ;; macros, only lambda, if, quoted constants and calls -- with its
 ;; formals, its results (stobjs-out), and whether its guards are
 ;; verified. A function whose guards are not verified is refused: guard
-;; verification is what makes every index in bounds and every integer
-;; inside 64 bits, and Fortran's integer overflow is undefined.
+;; verification is what makes every index in bounds. It does NOT keep
+;; every integer inside 64 bits -- ACL2's integers are unbounded, and
+;; Fortran's integer overflow is undefined -- so a function's guard must
+;; bound its arithmetic itself (Lemmis's gen-disch proves which do; it
+;; found ex-aplook's (+ req 1) unbounded).
 ;;
 ;; The translation:
 ;;   a stobj                      a derived type, updated in place: the
@@ -680,10 +683,14 @@
                       :code tmp :type t})
         (and (seq? op) (= 'lambda (first op)))
         (let [[_ vars body] op
+              saved @(:env ctx)
               binds (vec (for [[v a] (map vector vars xs) :when (not= v a)]
                            (let [r (expr ctx a) f (fresh ctx v (:type r))] [v f r])))]
           (doseq [[v f r] binds] (swap! (:env ctx) assoc v {:f f :type (:type r)}))
+          ;; the bindings are the body's only: in (+ (let ((x (f x))) ..) x)
+          ;; the second x is the outer one (found by Lemmis's g-module)
           (let [rb (expr ctx body)]
+            (reset! (:env ctx) saved)
             (update rb :stmts #(vec (concat (mapcat (fn [[_ f r]] (conj (:stmts r) (str f " = " (:code r)))) binds) %)))))
         (and (defs op) (not (sub? op)))
         (let [{:keys [sts rs]} (call-args ctx op xs)]
