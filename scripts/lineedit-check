@@ -236,7 +236,7 @@
    {:name "tab-alias-publics" :steps ["(require '[clojure.string :as s])" :enter (res "nil") "(s/upper-c" :tab " \"a\")" :enter (res "\"A\"") "plot/" :tab [:mark] :ctrl-c :ctrl-d]
     :check #(all (result-after % "(s/upper-case \"a\")" "\"A\"")
                  (when-not (= [(str prompt "plot/")] (:rows ((:at %) 0))) "plot/ was completed to something"))}
-   {:name "tab-several-lists" :steps ["(def qq-alpha 1) (def qq-beta 2)" :enter (res "user=> #'user/qq-beta") "qq-" :tab :tab [:mark] :ctrl-c :ctrl-d]
+   {:name "tab-several-lists" :steps ["(def qq-alpha 1) (def qq-beta 2)" :enter (res "user=> #'user/qq-beta") "qq-" :tab :tab [:until "qq-alpha"] [:until "qq-beta"] [:until "qq-"] [:mark] :ctrl-c :ctrl-d]
     :check #(all (has-row % "#'user/qq-alpha") (has-row % (str prompt "#'user/qq-beta"))
                  (when-not (some (fn [r] (re-matches #"qq-alpha +qq-beta" r)) (:rows ((:abs %) 0))) "no listing of qq-alpha qq-beta")
                  (when-not (= [(str prompt "qq-")] (:rows ((:at %) 0))) "the input is not drawn again below the listing"))}
