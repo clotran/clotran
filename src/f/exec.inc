@@ -1435,6 +1435,7 @@
     integer, intent(in) :: kbot
     type(gc_value) :: nd, exc, catches, cl, fin
     integer :: b, i, n
+    integer(int64) :: mt
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
@@ -1448,6 +1449,10 @@
           call flat_catch(tctx, b)
           return
        end if
+       ! a try at its body (pc 1) or a catch (pc 3): the thrown value kept,
+       ! the catches walked at pc 1; then the generated ex_unw (model/exec.lisp
+       ! ex-unwind) decides: catch, the finally, or pop the record
+       mt = 0
        if (gc_i1(nd) == N_TRY .and. (tctx%kst(tctx%ksp)%pc == 1 .or. tctx%kst(tctx%ksp)%pc == 3)) then
           exc = thrown_value()
           if (exc%tag == GCT_NIL) then
@@ -1463,29 +1468,36 @@
              do i = 0, n - 1
                 cl = gcv_nth(catches, i)
                 call vs_set(vst, b + 4, cl)
-                if (.not. catch_matches(gcv_nth(vs_get(vst, b + 4), 0), vs_get(vst, b + 3), gc_nil())) cycle
-                call gce_clear_error()
-                ! the calls the error unwound out of are gone: a call
-                ! pushed by a native and never popped on the way out
-                ! stayed on the stack and showed in every later trace
-                tctx%fstack_top = min(tctx%fstack_top, tctx%kst(tctx%ksp)%ftop)
-                call frame_set(vs_get(vst, b + 2), int_of(gcv_nth(vs_get(vst, b + 4), 1)), vs_get(vst, b + 3))
-                tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(vs_get(vst, b + 4), 2), vs_get(vst, b + 2), 0, gc_nil())
-                return
+                if (catch_matches(gcv_nth(vs_get(vst, b + 4), 0), vs_get(vst, b + 3), gc_nil())) then
+                   mt = 1
+                   exit
+                end if
              end do
           end if
-          ! not caught here: a finally still runs, then the error goes on
-          fin = gcv_nth(gc_slot(vs_get(vst, b + 1), 1), 1)
-          if (gc_kind(fin) == OBJ_AST) then
-             tctx%kst(tctx%ksp)%msg = tctx%last_error
-             call gce_clear_error()
-             tctx%fstack_top = min(tctx%fstack_top, tctx%kst(tctx%ksp)%ftop)
-             tctx%kst(tctx%ksp)%pc = 4
-             call k_push(fin, vs_get(vst, b + 2), 0, gc_nil())
-             return
-          end if
        end if
+       fin = gc_nil()
+       if (gc_i1(nd) == N_TRY) fin = gcv_nth(gc_slot(nd, 1), 1)
+       select case (ex_unw(int(gc_i1(nd), int64), int(tctx%kst(tctx%ksp)%pc, int64), mt, &
+                           merge(1_int64, 0_int64, gc_kind(fin) == OBJ_AST)))
+       case (1)
+          call gce_clear_error()
+          ! the calls the error unwound out of are gone: a call
+          ! pushed by a native and never popped on the way out
+          ! stayed on the stack and showed in every later trace
+          tctx%fstack_top = min(tctx%fstack_top, tctx%kst(tctx%ksp)%ftop)
+          call frame_set(vs_get(vst, b + 2), int_of(gcv_nth(vs_get(vst, b + 4), 1)), vs_get(vst, b + 3))
+          tctx%kst(tctx%ksp)%pc = 3
+          call k_push(gcv_nth(vs_get(vst, b + 4), 2), vs_get(vst, b + 2), 0, gc_nil())
+          return
+       case (2)
+          ! not caught here: the finally runs, then the error goes on
+          tctx%kst(tctx%ksp)%msg = tctx%last_error
+          call gce_clear_error()
+          tctx%fstack_top = min(tctx%fstack_top, tctx%kst(tctx%ksp)%ftop)
+          tctx%kst(tctx%ksp)%pc = 4
+          call k_push(fin, vs_get(vst, b + 2), 0, gc_nil())
+          return
+       end select
        ! a flat body waiting on a thunk it forced in the loop: the thunk
        ! threw, so its cell is pending again (flat.inc flat_force)
        if (gc_i1(nd) == N_FLAT .and. tctx%kst(tctx%ksp)%aux == -1) then
@@ -1606,7 +1618,7 @@
        case (N_VMB)
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
-       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR)
+       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
@@ -1621,34 +1633,6 @@
              v = case_branch(vs_get(vst, b + 1), vs_get(vst, b + 3))
              call k_tail(v, tctx)
           end if
-       case (N_TRY)
-          select case (tctx%kst(tctx%ksp)%pc)
-          case (0)
-             tctx%kst(tctx%ksp)%pc = 1
-             tctx%kst(tctx%ksp)%ftop = tctx%fstack_top
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-          case (1, 3)
-             ! the body, or a catch, finished normally
-             call vs_set(vst, b + 3, val)
-             v = gcv_nth(kids, 1)
-             if (gc_kind(v) == OBJ_AST) then
-                tctx%kst(tctx%ksp)%pc = 2
-                call k_push(v, vs_get(vst, b + 2), 0, gc_nil(), tctx)
-             else
-                call k_finish(val, tctx)
-             end if
-          case (2)
-             val = vs_get(vst, b + 3)
-             call k_finish(val, tctx)
-          case (4)
-             ! the finally ran after an uncaught error: the error goes on
-             tctx%has_error = .true.
-             tctx%last_error = tctx%kst(tctx%ksp)%msg
-             call set_thrown(vs_get(vst, b + 3))
-             tctx%kst(tctx%ksp)%pc = 5
-          case default
-             call k_finish(val, tctx)
-          end select
        case (N_VECTOR, N_MAP, N_SET)
           ! children collected into slot 4, one frame each, then built
           select case (tctx%kst(tctx%ksp)%pc)
@@ -1673,19 +1657,6 @@
              tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
              tctx%kst(tctx%ksp)%pc = 2
           end select
-       case (N_THROW)
-          v = exec(gcv_nth(kids, 0), vs_get(vst, b + 2))
-          if (.not. tctx%has_error) then
-             ! the throw's own place, for its trace's innermost frame
-             call note_site(vs_get(vst, b + 1))
-             call set_thrown(v)
-             tctx%has_error = .true.
-             block
-                call gcp_str(v, .true., s=dlt_1)
-                tctx%last_error = dlt_1
-             end block
-             call capture_trace()
-          end if
        case (N_LAZY)
           v = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
           call vs_set(vst, b + 3, v)
@@ -2231,7 +2202,9 @@
     pc = tctx%kst(tctx%ksp)%pc
     i = tctx%kst(tctx%ksp)%i
     nk = 0
-    if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL) nk = gcv_count(kids)
+    if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL .or. k == N_THROW) nk = gcv_count(kids)
+    ! a try's children: its body, and its finally when it has one
+    if (k == N_TRY) nk = merge(2, 1, gc_kind(gcv_nth(kids, 1)) == OBJ_AST)
     n2 = gc_i2(nd)
     tv = 0
     if (truthy(val)) tv = 1
@@ -2246,6 +2219,8 @@
        if (tag_of(gc_slot(nd, 3)) == GCT_BOOL) call frame_set(vs_get(vst, b + 2), int(n2), gc_nil())
        call k_finish(val, tctx)
     case (3)
+       ! a try's body: the call stack's height, for k_unwind to cut back to
+       if (k == N_TRY) tctx%kst(tctx%ksp)%ftop = tctx%fstack_top
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
        tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
        call k_push(gcv_nth(kids, int(j)), vs_get(vst, b + 2), 0, gc_nil(), tctx)
@@ -2311,6 +2286,35 @@
        call give_frame(vs_get(vst, b + 4))
        call vs_set(vst, b + 4, gc_nil())
        call k_finish(val, tctx)
+    case (18)
+       ! a throw: the value in flight thrown, its own place its trace's
+       ! innermost frame; k_unwind takes it from here
+       call note_site(vs_get(vst, b + 1))
+       call set_thrown(val)
+       tctx%has_error = .true.
+       block
+          character(len=:), allocatable :: dlt_1
+          call gcp_str(val, .true., s=dlt_1)
+          tctx%last_error = dlt_1
+       end block
+       call capture_trace()
+    case (19)
+       ! a try's body, or a catch, answered and there is no finally
+       call k_finish(val, tctx)
+    case (20)
+       ! ... and there is one: the value kept while it runs
+       call vs_set(vst, b + 3, val)
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       call k_push(gcv_nth(kids, int(j)), vs_get(vst, b + 2), 0, gc_nil(), tctx)
+    case (21)
+       val = vs_get(vst, b + 3)
+       call k_finish(val, tctx)
+    case (22)
+       ! the finally ran after an uncaught error: the error goes on
+       tctx%has_error = .true.
+       tctx%last_error = tctx%kst(tctx%ksp)%msg
+       call set_thrown(vs_get(vst, b + 3))
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
     end select
   end subroutine exec_core
 

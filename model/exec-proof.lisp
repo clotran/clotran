@@ -42,7 +42,7 @@
 (defun ex-below (ks l) (cond ((equal l ks) t) ((atom l) nil) (t (ex-below ks (cdr l)))))
 
 (defun ex-good (flg e i tmp fr fuel fl rs ks v0 tl)
-  (implies (and (ex-wf flg e i tl) (implies tl fl) (no-mk fr) (no-mk tmp) (true-listp tmp) (natp i))
+  (implies (and (not (member-equal flg '(:cs :fin))) (ex-wf flg e i tl) (implies tl fl) (no-mk fr) (no-mk tmp) (true-listp tmp) (natp i))
            (let* ((r (ex-ev flg e i tmp fr fuel)) (res (car r)) (fr2 (cadr r))
                   (s2 (ex-run (list (cons (ex-start flg e i tmp fl rs) ks) v0 fr) (caddr r))))
              (and (no-mk fr2)
@@ -50,7 +50,8 @@
                   (implies (equal (car res) :recur)
                            (and tl (equal s2 (list (cons (ex-rec rs 0 0 fl rs nil) ks) nil fr2))))
                   (implies (ex-thp res)
-                           (and (equal (car (car s2)) (ex-throwr (val res))) (ex-below ks (cdr (car s2)))))))))
+                           (and (not (equal (val res) *ex-mk*))
+                                (equal s2 (list (cons (ex-throwr (val res)) ks) nil fr2))))))))
 
 (defthm ex-below-cons (ex-below ks (cons x ks)))
 (defthm ex-below-weaken (implies (ex-below (cons x ks) l) (ex-below ks l)))
@@ -68,12 +69,14 @@
 (defthm ex-run-1 (equal (ex-run s 1) (ex-step s)) :hints (("Goal" :in-theory (disable ex-step))))
 (defthm ex-run-2 (equal (ex-run s 2) (ex-step (ex-step s)))
   :hints (("Goal" :in-theory (disable ex-step) :expand ((ex-run s 2) (ex-run (ex-step s) 1)))))
+(defthm ex-run-3 (equal (ex-run s 3) (ex-step (ex-step (ex-step s))))
+  :hints (("Goal" :in-theory (disable ex-step) :expand ((ex-run s 3)))))
 (in-theory (disable c+))
 (defthm ex-step-list (implies (consp ks) (equal (ex-step (list ks v fr)) (ex-turn ks v fr))))
-; a throw's record stops the machine
-(defthm ex-turn-throwr (equal (ex-turn (cons (ex-throwr v) l) val fr) (list (cons (ex-throwr v) l) val fr)))
-(defthm ex-run-throwr (equal (ex-run (list (cons (ex-throwr v) l) val fr) n) (list (cons (ex-throwr v) l) val fr))
-  :hints (("Goal" :induct (ex-run (list (cons (ex-throwr v) l) val fr) n) :in-theory (disable ex-turn ex-throwr))))
+; a throw's record: k_unwind takes the record under it
+(defthm ex-turn-throwr (equal (ex-turn (cons (ex-throwr v) l) val fr) (ex-unwind (cons (ex-throwr v) l) val fr)))
+(defthm ex-throwr-v (equal (cadr (car (ex-throwr v))) v))
+(defthm ex-throwr-kind (equal (ex-kind (nth 0 (ex-throwr v))) :thrown))
 (in-theory (disable ex-step ex-throwr))
 
 (defthm no-mk-update (implies (and (no-mk l) (not (equal v *ex-mk*))) (no-mk (update-nth n v l))))
@@ -130,7 +133,8 @@
                                      (make-ord 2 (1+ (acl2-count e))
                                                (make-ord 1 (1+ (ex-rank flg)) (ex-left flg e i))))
                   :well-founded-relation o<
-                  :hints (("Goal" :in-theory (disable ex-kid-of)))))
+                  :hints (("Goal" :in-theory (disable ex-kid-of ex-callee ex-apway ex-enters ex-arerr ex-catchw ex-fbody ex-bind ex-mkclo
+                                                 ex-linked ex-write truthy valp val ex-thp take update-nth ex-ev)))))
   (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
     (case flg
       (:iter (if (not (consp e))
@@ -161,6 +165,7 @@
                      (list (ex-ind :m (ex-kid-of e i) 0 nil fr fuel nil nil (cons (ex-rec e 2 i fl rs tmp) ks) v0 nil)
                            (ex-ind :rec e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel fl rs ks (val (car r)) tl))))
                   (t nil)))
+      ((:cs :fin) nil)
       (:call (cond ((not (consp e)) nil)
                    ((< i nk)
                     (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
@@ -180,6 +185,17 @@
              ((equal k 5) (ex-ind :do e 0 nil fr fuel fl rs ks v0 tl))
              ((or (equal k 11) (equal k 12)) (ex-ind :let e 0 nil fr fuel fl rs ks v0 tl))
              ((equal k 16) (ex-ind :rec e 0 nil fr fuel fl rs ks v0 tl))
+             ((equal k 17) (ex-ind :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
+             ((equal k 18)
+              (let* ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)) (x (val (car r))) (w (ex-catchw (ex-c e) x 0))
+                     (fh (update-nth (ex-cslot e (cdr w)) x (cadr r)))
+                     (rh (ex-ev :m (ex-cbody e (cdr w)) 0 nil fh fuel)) (f (ex-kid-of e 1)))
+                (list (ex-ind :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)
+                      (ex-ind :m f 0 nil (cadr r) fuel nil nil (cons (ex-rec e 2 0 fl rs (list x)) ks) x nil)
+                      (ex-ind :m f 0 nil (cadr r) fuel nil nil (cons (ex-rec e 4 0 fl rs (list x)) ks) nil nil)
+                      (ex-ind :m (ex-cbody e (cdr w)) 0 nil fh fuel nil nil (cons (ex-rec e 3 0 fl rs nil) ks) nil nil)
+                      (ex-ind :m f 0 nil (cadr rh) fuel nil nil (cons (ex-rec e 2 0 fl rs (list (val (car rh)))) ks) (val (car rh)) nil)
+                      (ex-ind :m f 0 nil (cadr rh) fuel nil nil (cons (ex-rec e 4 0 fl rs (list (val (car rh)))) ks) nil nil))))
              ((equal k 6)
               (let* ((h (ex-kid-of e 0)) (r (ex-ev :m h 0 nil fr fuel)))
                 (if (ex-linked h)
@@ -197,18 +213,18 @@
 (defthm ex-rn-natp (natp (ex-rn e)) :rule-classes :type-prescription)
 (in-theory (disable ex-kind ex-i2 ex-s2 ex-nk ex-c ex-mark ex-rstart ex-rn ex-kids))
 
-(defmacro ex-other (flg) `(not (member-equal ,flg '(:iter :do :let :rec :call))))
+(defmacro ex-other (flg) `(not (member-equal ,flg '(:iter :do :let :rec :call :cs :fin))))
 (defmacro ex-r (kid fr fuel) `(ex-ev :m ,kid 0 nil ,fr ,fuel))
 
-(defmacro ex-case (name hyps &key (flg 'flg) (off 'nil))
+(defmacro ex-case (name hyps &key (flg 'flg) (off 'nil) (ex 'nil))
   `(defthm ,name
      (implies (and ,@hyps) (ex-good ,flg e i tmp fr fuel fl rs ks v0 tl))
-     :hints (("Goal" :expand ((:free (fr fuel tmp) (ex-ev ,flg e i tmp fr fuel)) (:free (tl) (ex-wf ,flg e i tl)))
+     :hints (("Goal" :expand ((:free (fr fuel tmp) (ex-ev ,flg e i tmp fr fuel)) (:free (tl) (ex-wf ,flg e i tl)) ,@ex)
                      :in-theory (disable ex-ev ex-wf c+ ex-run ex-kid-of ,@off)))))
 
 (ex-case ex-good-atom ((not (consp e))))
 
-(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 11 12 16)))))
+(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 11 12 16 17 18)))))
 
 ; an if, a case for each way its test goes
 (defmacro ex-if-test () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
@@ -302,7 +318,66 @@
    (ex-good :iter e 0 nil (cadr (ex-r e fr fuel)) (+ -1 fuel) fl rs ks nil tl))
   :flg :iter)
 
+;; a throw: its value, then the throw over its record, which k_unwind pops
+(ex-case ex-good-m-throw
+  ((ex-other flg) (consp e) (equal (ex-kind e) 17)
+   (ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)))
+
+; a try: its body; a throw from it caught by a clause, whose body runs;
+; the finally after either, when there is one
+(defthm ex-catchw-j
+  (implies (equal (car (ex-catchw cs v j)) 1)
+           (and (natp (cdr (ex-catchw cs v j))) (<= (nfix j) (cdr (ex-catchw cs v j)))
+                (< (cdr (ex-catchw cs v j)) (+ (nfix j) (len cs)))))
+  :rule-classes nil)
+(defun ex-csind (e i j)
+  (declare (xargs :measure (nfix (- (len (ex-c e)) (nfix i)))))
+  (if (and (< (nfix i) (len (ex-c e))) (< (nfix i) (nfix j))) (ex-csind e (1+ (nfix i)) j) i))
+(defthm ex-wf-cs-body
+  (implies (and (ex-wf :cs e i tl) (natp i) (natp j) (<= i j) (< j (len (ex-c e))))
+           (ex-wf :m (ex-cbody e j) 0 nil))
+  :hints (("Goal" :induct (ex-csind e i j) :expand ((ex-wf :cs e i tl)) :in-theory (disable ex-kid-of))))
+(defthm ex-wf-catch
+  (implies (and (ex-wf :cs e 0 tl) (equal (car (ex-catchw (ex-c e) v 0)) 1))
+           (ex-wf :m (ex-cbody e (cdr (ex-catchw (ex-c e) v 0))) 0 nil))
+  :hints (("Goal" :use ((:instance ex-catchw-j (cs (ex-c e)) (j 0))) :in-theory (disable ex-wf))))
+(in-theory (disable ex-catchw))
+
+(defmacro ex-tB () '(ex-r (ex-kid-of e 0) fr fuel))
+(defmacro ex-tw () '(ex-catchw (ex-c e) (val (car (ex-tB))) 0))
+(defmacro ex-tfh () '(update-nth (ex-cslot e (cdr (ex-tw))) (val (car (ex-tB))) (cadr (ex-tB))))
+(defmacro ex-tH () '(ex-r (ex-cbody e (cdr (ex-tw))) (ex-tfh) fuel))
+(defmacro ex-tcase (name hyps) `(ex-case ,name ,hyps :ex ((:free (tmp fr) (ex-ev :fin e 0 tmp fr fuel)))))
+(defmacro ex-tgB () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
+(defmacro ex-tgF (fr pc v v0)
+  `(ex-good :m (ex-kid-of e 1) 0 nil ,fr fuel nil nil (cons (ex-rec e ,pc 0 fl rs (list ,v)) ks) ,v0 nil))
+(defmacro ex-tgH () '(ex-good :m (ex-cbody e (cdr (ex-tw))) 0 nil (ex-tfh) fuel nil nil (cons (ex-rec e 3 0 fl rs nil) ks) nil nil))
+
+(ex-tcase ex-good-try-val
+  ((ex-other flg) (consp e) (equal (ex-kind e) 18) (valp (car (ex-tB))) (ex-tgB) (ex-tgF (cadr (ex-tB)) 2 (val (car (ex-tB))) (val (car (ex-tB))))))
+(ex-tcase ex-good-try-uncaught
+  ((ex-other flg) (consp e) (equal (ex-kind e) 18) (ex-thp (car (ex-tB))) (not (equal (car (ex-tw)) 1)) (ex-tgB)
+   (ex-tgF (cadr (ex-tB)) 4 (val (car (ex-tB))) nil)))
+(ex-tcase ex-good-try-caught
+  ((ex-other flg) (consp e) (equal (ex-kind e) 18) (ex-thp (car (ex-tB))) (equal (car (ex-tw)) 1) (ex-tgB) (ex-tgH)
+   (ex-tgF (cadr (ex-tH)) 2 (val (car (ex-tH))) (val (car (ex-tH))))
+   (ex-tgF (cadr (ex-tH)) 4 (val (car (ex-tH))) nil)))
+(ex-tcase ex-good-try-out
+  ((ex-other flg) (consp e) (equal (ex-kind e) 18) (not (valp (car (ex-tB)))) (not (ex-thp (car (ex-tB)))) (ex-tgB)))
+(defthm ex-good-try
+  (implies (and (ex-other flg) (consp e) (equal (ex-kind e) 18) (ex-tgB)
+                (ex-tgF (cadr (ex-tB)) 2 (val (car (ex-tB))) (val (car (ex-tB))))
+                (ex-tgF (cadr (ex-tB)) 4 (val (car (ex-tB))) nil) (ex-tgH)
+                (ex-tgF (cadr (ex-tH)) 2 (val (car (ex-tH))) (val (car (ex-tH))))
+                (ex-tgF (cadr (ex-tH)) 4 (val (car (ex-tH))) nil))
+           (ex-good flg e i tmp fr fuel fl rs ks v0 tl))
+  :hints (("Goal" :in-theory (disable ex-good ex-ev ex-wf ex-kid-of ex-nk valp val ex-rec ex-thp
+                                      ex-good-try-val ex-good-try-uncaught ex-good-try-caught ex-good-try-out)
+                  :use (ex-good-try-val ex-good-try-uncaught ex-good-try-caught ex-good-try-out))))
+
 ; ---- THE THEOREM ----------------------------------------------------------------------------------
+
+(defthm ex-good-cs-fin (implies (member-equal flg '(:cs :fin)) (ex-good flg e i tmp fr fuel fl rs ks v0 tl)))
 
 (defthm ex-machine-correct-flag
   (ex-good flg e i tmp fr fuel fl rs ks v0 tl)

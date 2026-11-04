@@ -1,10 +1,10 @@
   ! GENERATED from model/exec.lisp by scripts/acl2-fortran -b exec. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the tree evaluator's turn for its core kinds -- a constant, a
-  ! local, a Var, if, do, let*, loop*, recur, fn and a call -- what run_loop
-  ! does with the top record (ex_act), which child it takes (ex_kid), the
-  ! record's pc and i after (ex_pc, ex_i), whether k_finish restarts it
-  ! (ex_fin), the arity a call's count picks (ex_arfit: the fixed one, else
+  ! local, a Var, if, do, let*, loop*, recur, fn, a call, throw and try -- what
+  ! run_loop does with the top record (ex_act), which child it takes (ex_kid),
+  ! the record's pc and i after (ex_pc, ex_i), whether k_finish restarts it
+  ! (ex_fin), what k_unwind does with the record under a throw (ex_unw), the arity a call's count picks (ex_arfit: the fixed one, else
   ! the variadic one) and how it enters its callee or throws the arity error
   ! (ex_entry), and apply: its way (ex_apentry) and how far its walk takes the
   ! seq (ex_apstep) and how far it reads it (ex_aplook), and each step over a
@@ -22,6 +22,8 @@
     integer(int64) :: r
     logical :: t_1
     logical :: t_10
+    logical :: t_11
+    logical :: t_12
     logical :: t_2
     logical :: t_3
     logical :: t_4
@@ -153,6 +155,52 @@
         case (14_int64)
           r = 12_int64
           return
+        case (17_int64)
+          if ((pc_ == 0_int64)) then
+            r = 3_int64
+            return
+          else
+            r = 18_int64
+            return
+          end if
+        case (18_int64)
+          if ((pc_ == 0_int64)) then
+            r = 3_int64
+            return
+          else
+            if ((pc_ == 1_int64)) then
+              t_9 = (pc_ == 1_int64)
+            else
+              t_9 = (pc_ == 3_int64)
+            end if
+            if (t_9) then
+              if (.true.) then
+                t_10 = (1_int64 < nk_)
+              else
+                t_10 = .false.
+              end if
+              if (t_10) then
+                r = 20_int64
+                return
+              else
+                r = 19_int64
+                return
+              end if
+            else
+              if ((pc_ == 2_int64)) then
+                r = 21_int64
+                return
+              else
+                if ((pc_ == 4_int64)) then
+                  r = 22_int64
+                  return
+                else
+                  r = 0_int64
+                  return
+                end if
+              end if
+            end if
+          end if
         case (6_int64)
           select case (pc_)
           case (0_int64)
@@ -164,15 +212,15 @@
           case (2_int64)
             if (.true.) then
               if (.true.) then
-                t_9 = (i_ < nk_)
+                t_11 = (i_ < nk_)
               else
-                t_9 = .false.
+                t_11 = .false.
               end if
-              t_10 = t_9
+              t_12 = t_11
             else
-              t_10 = .false.
+              t_12 = .false.
             end if
-            if (t_10) then
+            if (t_12) then
               r = 3_int64
               return
             else
@@ -209,6 +257,7 @@
     integer(int64), value :: tv_
     integer(int64) :: r
     logical :: t_1
+    logical :: t_10
     logical :: t_2
     logical :: t_3
     logical :: t_4
@@ -299,17 +348,32 @@
             end if
           end if
         else
-          if ((i_ >= 0_int64)) then
-            t_9 = (i_ < 1099511627776_int64)
+          if ((k_ == 18_int64)) then
+            if ((pc_ == 1_int64)) then
+              t_9 = (pc_ == 1_int64)
+            else
+              t_9 = (pc_ == 3_int64)
+            end if
+            if (t_9) then
+              r = 1_int64
+              return
+            else
+              r = 0_int64
+              return
+            end if
           else
-            t_9 = .false.
-          end if
-          if (t_9) then
-            r = i_
-            return
-          else
-            r = 0_int64
-            return
+            if ((i_ >= 0_int64)) then
+              t_10 = (i_ < 1099511627776_int64)
+            else
+              t_10 = .false.
+            end if
+            if (t_10) then
+              r = i_
+              return
+            else
+              r = 0_int64
+              return
+            end if
           end if
         end if
       end if
@@ -327,16 +391,44 @@
     logical :: t_1
     logical :: t_2
     logical :: t_3
-    if ((k_ == 4_int64)) then
+    logical :: t_4
+    select case (k_)
+    case (4_int64)
       r = 1_int64
       return
-    else
-      if ((k_ == 11_int64)) then
-        t_1 = (k_ == 11_int64)
+    case (17_int64)
+      r = 1_int64
+      return
+    case (18_int64)
+      if ((pc_ == 0_int64)) then
+        r = 1_int64
+        return
       else
-        t_1 = (k_ == 12_int64)
+        if ((pc_ == 1_int64)) then
+          t_1 = (pc_ == 1_int64)
+        else
+          t_1 = (pc_ == 3_int64)
+        end if
+        if (t_1) then
+          r = 2_int64
+          return
+        else
+          if ((pc_ == 4_int64)) then
+            r = 5_int64
+            return
+          else
+            r = pc_
+            return
+          end if
+        end if
       end if
-      if (t_1) then
+    case default
+      if ((k_ == 11_int64)) then
+        t_2 = (k_ == 11_int64)
+      else
+        t_2 = (k_ == 12_int64)
+      end if
+      if (t_2) then
         if ((pc_ == 1_int64)) then
           r = 0_int64
           return
@@ -365,15 +457,15 @@
             case (2_int64)
               if (.true.) then
                 if (.true.) then
-                  t_2 = (i_ < nk_)
+                  t_3 = (i_ < nk_)
                 else
-                  t_2 = .false.
+                  t_3 = .false.
                 end if
-                t_3 = t_2
+                t_4 = t_3
               else
-                t_3 = .false.
+                t_4 = .false.
               end if
-              if (t_3) then
+              if (t_4) then
                 r = 3_int64
                 return
               else
@@ -396,7 +488,7 @@
           end if
         end if
       end if
-    end if
+    end select
   end function ex_pc
 
   pure function ex_i(k_, pc_, i_, nk_, n2_, tv_) result(r)
@@ -503,6 +595,67 @@
       return
     end if
   end function ex_fin
+
+  pure function ex_unw(k_, pc_, mt_, fin_) result(r)
+    integer(int64), value :: k_
+    integer(int64), value :: pc_
+    integer(int64), value :: mt_
+    integer(int64), value :: fin_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    if ((k_ == 18_int64)) then
+      if ((pc_ == 1_int64)) then
+        t_1 = (mt_ == 1_int64)
+      else
+        t_1 = .false.
+      end if
+      t_2 = t_1
+    else
+      t_2 = .false.
+    end if
+    if (t_2) then
+      r = 1_int64
+      return
+    else
+      if ((k_ == 18_int64)) then
+        if ((pc_ == 1_int64)) then
+          t_3 = (pc_ == 1_int64)
+        else
+          t_3 = (pc_ == 3_int64)
+        end if
+        if (t_3) then
+          t_4 = (fin_ == 1_int64)
+        else
+          t_4 = .false.
+        end if
+        t_5 = t_4
+      else
+        t_5 = .false.
+      end if
+      if (t_5) then
+        r = 2_int64
+        return
+      else
+        if ((k_ == 6_int64)) then
+          t_6 = (pc_ == 5_int64)
+        else
+          t_6 = .false.
+        end if
+        if (t_6) then
+          r = 5_int64
+          return
+        else
+          r = 3_int64
+          return
+        end if
+      end if
+    end if
+  end function ex_unw
 
   pure function ex_arfit(pass_, nf_, vr_, m_) result(r)
     integer(int64), value :: pass_
