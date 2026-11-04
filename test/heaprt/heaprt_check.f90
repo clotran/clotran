@@ -29,6 +29,8 @@ module hrt
      integer :: vs_hi = 0
      integer :: vs_top = 0
      type(gc_value), pointer, contiguous :: slots0(:) => null()
+     type(gc_value) :: spare0(0:255)
+     integer :: nspare0(0:31) = 0
   end type gc_stack
   type :: gc_globals
      integer(int64) :: gen = 0, count = 0
@@ -38,6 +40,9 @@ module hrt
   type :: heap_state
      integer(int64) :: n = 0, sum = 0
   end type heap_state
+  ! the pools, cut to six runs and an arena of 40 words, for the spare frames
+  integer(int64) :: vlen(0:6) = 0, voff(0:6) = 0
+  integer(int64) :: atag(0:39), aref(0:39), aival(0:39)
 contains
   subroutine rt_resize_val(a, n)
     type(gc_value), allocatable, intent(inout) :: a(:)
@@ -84,7 +89,84 @@ contains
     gv_ref = int(v%ref, int64)
   end function gv_ref
 
+  integer(int64) function hp_vlen(i)
+    integer(int64), intent(in) :: i
+    hp_vlen = vlen(i)
+  end function hp_vlen
+  integer(int64) function hp_voff(i)
+    integer(int64), intent(in) :: i
+    hp_voff = voff(i)
+  end function hp_voff
+  subroutine hp_set_atag(j, x)
+    integer(int64), intent(in) :: j, x
+    atag(j) = x
+  end subroutine hp_set_atag
+  subroutine hp_set_aref(j, x)
+    integer(int64), intent(in) :: j, x
+    aref(j) = x
+  end subroutine hp_set_aref
+  subroutine hp_set_aival(j, x)
+    integer(int64), intent(in) :: j, x
+    aival(j) = x
+  end subroutine hp_set_aival
+
   include "heaprt_gen.inc"
+
+  ! a spare-frame case: "-1 n", the six runs' "off len", then n lines
+  ! "op a 0 0": 14 give run a (0: an integer), 15 take size a, 16 reset.
+  ! After each: "r r2" (a take's value and tag), the 32 counts, a checksum
+  ! of the spares, the arena's 40 tags and a checksum of its refs and ivals.
+  ! broken: a give leaves its run's last word as it was.
+  subroutine spare_case(u, n, broken)
+    integer, intent(in) :: u, n
+    logical, intent(in) :: broken
+    type(gc_stack) :: st
+    type(heap_state) :: hs
+    type(gc_value) :: v
+    integer :: i, op
+    integer(int64) :: a, b, c, r, r2, j, k, last
+    read(u, *) (voff(j), vlen(j), j = 1, 6)
+    do j = 0, 39
+       atag(j) = j + 1; aref(j) = 100 + j; aival(j) = 200 + j
+    end do
+    do i = 1, n
+       read(u, *) op, a, b, c
+       r = 0; r2 = 0
+       select case (op)
+       case (14)
+          v = gc_value(2, 7, 7)
+          if (a > 0) v = gc_value(9, int(a), a)
+          last = -1
+          if (a > 0 .and. vlen(a) > 0) last = voff(a) + vlen(a) - 1
+          call spg_give(st, hs, v)
+          if (broken .and. last >= 0) then
+             if (atag(last) == 0) atag(last) = last + 1
+          end if
+       case (15)
+          call spg_take(st, a, v)
+          r = vint(v); r2 = v%tag
+       case default
+          call spg_reset(st, 0_int64)
+       end select
+       k = 0
+       do j = 0, 255
+          k = k + (j + 1) * vint(st%spare0(j))
+       end do
+       write(*, '(i0, 1x, i0)', advance="no") r, r2
+       do j = 0, 31
+          write(*, '(1x, i0)', advance="no") st%nspare0(j)
+       end do
+       write(*, '(1x, i0)', advance="no") k
+       do j = 0, 39
+          write(*, '(1x, i0)', advance="no") atag(j)
+       end do
+       k = 0
+       do j = 0, 39
+          k = k + (j + 1) * (aref(j) + 1000 * aival(j))
+       end do
+       write(*, '(1x, i0)') k
+    end do
+  end subroutine spare_case
 end module hrt
 
 program heaprt_check
@@ -100,6 +182,10 @@ program heaprt_check
   call get_command_argument(2, mode)
   open(newunit=u, file=trim(path), status="old", action="read")
   read(u, *) l, n
+  if (l == -1) then
+     call spare_case(u, n, mode == "broken")
+     stop
+  end if
   allocate(st%slots0(0:l - 1))
   st%slots0 = nilv
   allocate(gr%tbl(0:-1))

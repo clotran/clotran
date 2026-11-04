@@ -6,7 +6,9 @@
   ! vsg-set-refines, vsg-get-refines, vsg-reset-refines), so heaprt's frame-balance
   ! and ops-keep-callers hold of this stack; and equal to heaprt's gl-new, keep-g,
   ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...); push_roots'
-  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines).
+  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines);
+  ! each size's spare frames are a stack of at most 8, a give clearing the frame's
+  ! words and nothing else (spg-take-refines, spg-give-refines, spg-reset-refines).
   subroutine vsg_enter(s, n_, r)
     type(gc_stack), intent(inout) :: s
     integer(int64), value :: n_
@@ -369,3 +371,145 @@
       exit
     end do
   end subroutine glg_push
+
+  subroutine spg_take(s, n_, r)
+    type(gc_stack), intent(inout) :: s
+    integer(int64), value :: n_
+    type(gc_value), intent(out) :: r
+    integer(int64) :: d_2
+    integer(int64) :: i_4
+    logical :: t_1
+    type(gc_value) :: v_3
+    integer(int64) :: v_5
+    if ((.not. (n_ < 1_int64))) then
+      t_1 = (.not. (32_int64 < n_))
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      d_2 = s%nspare0(((-1_int64) + n_))
+      if ((0_int64 < d_2)) then
+        v_3 = s%spare0(((8_int64 * ((-1_int64) + n_)) + ((-1_int64) + d_2)))
+        i_4 = ((-1_int64) + n_)
+        v_5 = ((-1_int64) + d_2)
+        s%nspare0(i_4) = v_5
+        r = v_3
+      else
+        r = rt_nil()
+      end if
+    else
+      r = rt_nil()
+    end if
+  end subroutine spg_take
+
+  subroutine spg_clr(hs, j_, e_)
+    type(heap_state), intent(inout) :: hs
+    integer(int64), value :: j_
+    integer(int64), value :: e_
+    integer(int64) :: e_10
+    integer(int64) :: i_3
+    integer(int64) :: i_5
+    integer(int64) :: i_7
+    integer(int64) :: j_9
+    logical :: t_1
+    logical :: t_2
+    integer(int64) :: v_4
+    integer(int64) :: v_6
+    integer(int64) :: v_8
+    do
+      if ((.not. .true.)) then
+        t_2 = (.not. .true.)
+      else
+        if ((.not. .true.)) then
+          t_1 = (.not. .true.)
+        else
+          t_1 = (.not. (j_ < e_))
+        end if
+        t_2 = t_1
+      end if
+      if (t_2) then
+      else
+        i_3 = j_
+        v_4 = 0_int64
+        call hp_set_atag(i_3, v_4)
+        i_5 = j_
+        v_6 = 0_int64
+        call hp_set_aref(i_5, v_6)
+        i_7 = j_
+        v_8 = 0_int64
+        call hp_set_aival(i_7, v_8)
+        j_9 = (1_int64 + j_)
+        e_10 = e_
+        j_ = j_9
+        e_ = e_10
+        cycle
+      end if
+      exit
+    end do
+  end subroutine spg_clr
+
+  subroutine spg_give(s, hs, v_)
+    type(gc_stack), intent(inout) :: s
+    type(heap_state), intent(inout) :: hs
+    type(gc_value), value :: v_
+    integer(int64) :: d_4
+    integer(int64) :: i_6
+    integer(int64) :: i_8
+    integer(int64) :: n_2
+    integer(int64) :: off_5
+    integer(int64) :: ref_1
+    logical :: t_3
+    type(gc_value) :: v_7
+    integer(int64) :: v_9
+    if ((.not. (gv_tag(v_) == 9_int64))) then
+    else
+      ref_1 = gv_ref(v_)
+      n_2 = hp_vlen(ref_1)
+      if ((.not. (n_2 < 1_int64))) then
+        t_3 = (.not. (32_int64 < n_2))
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        d_4 = s%nspare0(((-1_int64) + n_2))
+        if ((d_4 < 8_int64)) then
+          off_5 = hp_voff(ref_1)
+          call spg_clr(hs, off_5, (off_5 + n_2))
+          i_6 = ((8_int64 * ((-1_int64) + n_2)) + d_4)
+          v_7 = v_
+          s%spare0(i_6) = v_7
+          i_8 = ((-1_int64) + n_2)
+          v_9 = (1_int64 + d_4)
+          s%nspare0(i_8) = v_9
+        else
+        end if
+      else
+      end if
+    end if
+  end subroutine spg_give
+
+  subroutine spg_reset(s, k_)
+    type(gc_stack), intent(inout) :: s
+    integer(int64), value :: k_
+    integer(int64) :: i_2
+    integer(int64) :: k_4
+    logical :: t_1
+    integer(int64) :: v_3
+    do
+      if ((.not. (k_ >= 0_int64))) then
+        t_1 = (.not. (k_ >= 0_int64))
+      else
+        t_1 = (.not. (k_ < 32_int64))
+      end if
+      if (t_1) then
+      else
+        i_2 = k_
+        v_3 = 0_int64
+        s%nspare0(i_2) = v_3
+        k_4 = (1_int64 + k_)
+        k_ = k_4
+        cycle
+      end if
+      exit
+    end do
+  end subroutine spg_reset

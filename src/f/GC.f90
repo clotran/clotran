@@ -620,8 +620,11 @@ module GC
      ! has returned (gc_frame_give) -- nothing keeps a frame after its
      ! call -- by size, a few of each. Not roots: every collection empties
      ! them (forget_spares), so a spare is never one the sweep freed.
-     type(gc_value) :: spare(SPARE_DEPTH, SPARE_SIZES)
-     integer :: nspare(SPARE_SIZES) = 0
+     ! 0-based, as the generated operations take them (model/heaprtg.lisp's
+     ! spg, which fixes SPARE_DEPTH 8 and SPARE_SIZES 32): size n's d-th is
+     ! spare0(SPARE_DEPTH * (n - 1) + d - 1), its count nspare0(n - 1).
+     type(gc_value) :: spare0(0:SPARE_DEPTH * SPARE_SIZES - 1)
+     integer :: nspare0(0:SPARE_SIZES - 1) = 0
      ! SPARE ARGUMENT VECTORS: a builtin that touches its arguments only
      ! by element (argsafe.inc) is handed one of these and it comes back
      ! after the call, so a call allocates none. Forgotten at every
@@ -2332,7 +2335,7 @@ contains
   subroutine clear_batches(s)
     type(gc_stack), pointer, intent(in) :: s
     s%n_obj_b = 0; s%n_vec_b = 0; s%n_str_b = 0; s%n_run_b = 0
-    s%nspare = 0; s%naspare = 0   ! spares name the old heap's vectors (heaprt: spare-survives-reset-is-stale)
+    call spg_reset(s, 0_int64); s%naspare = 0   ! spares name the old heap's vectors (heaprt: spare-survives-reset-is-stale)
     s%np_obj = 0; s%np_vec = 0; s%np_str = 0; s%cp_obj = 0; s%cp_vec = 0; s%cp_str = 0
     s%n_defer = 0; s%n_loose = 0
     s%n_y_obj = 0; s%n_y_vec = 0; s%n_y_str = 0
@@ -3188,7 +3191,7 @@ contains
     integer :: i, j, m
     logical :: keep
     do i = 1, n_stacks
-       if (associated(stacks(i)%s)) stacks(i)%s%nspare = 0
+       if (associated(stacks(i)%s)) call spg_reset(stacks(i)%s, 0_int64)
        if (associated(stacks(i)%s)) stacks(i)%s%naspare = 0
     end do
     ! an old object still pointing at an aged one stays remembered:
@@ -4081,32 +4084,23 @@ contains
   end function gc_cell_cas
 
   ! A spare frame of n slots, all nil, or nil if there is none.
+  ! GENERATED (heaprt_gen.inc's spg_take: heaprtg's spg-take-refines).
   function gc_frame_take(s, n) result(v)
     type(gc_stack), pointer, intent(in) :: s
     integer, intent(in) :: n
     type(gc_value) :: v
-    v = nilv
-    if (n < 1 .or. n > SPARE_SIZES) return
-    if (s%nspare(n) == 0) return
-    v = s%spare(s%nspare(n), n)
-    s%nspare(n) = s%nspare(n) - 1
+    call spg_take(s, int(n, int64), v)
   end function gc_frame_take
 
   ! A frame whose call has returned: cleared -- a stale slot would keep
   ! its value alive -- and kept for the next call of its size.
+  ! GENERATED (heaprt_gen.inc's spg_give: heaprtg's spg-give-refines); its
+  ! guard, a vector's run in the pool and its words in the arena, is the
+  ! caller's: a frame its own call allocated (heaprt's D4).
   subroutine gc_frame_give(s, v)
     type(gc_stack), pointer, intent(in) :: s
     type(gc_value), intent(in) :: v
-    integer :: n, i
-    if (v%tag /= GCT_VEC) return
-    n = vec_pool(v%ref)%len
-    if (n < 1 .or. n > SPARE_SIZES) return
-    if (s%nspare(n) >= SPARE_DEPTH) return
-    do i = 0, n - 1
-       vec_store(vec_pool(v%ref)%off + i) = nilv
-    end do
-    s%nspare(n) = s%nspare(n) + 1
-    s%spare(s%nspare(n), n) = v
+    call spg_give(s, hstate, v)
   end subroutine gc_frame_give
 
   ! This thread's stack, for vs_*_on.

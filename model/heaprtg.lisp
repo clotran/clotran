@@ -514,3 +514,282 @@
   (implies (and (vsgp x) (vsg-inv x)) (equal (push-turns 0 (nth 0 x)) (len (car (vsg-abs x))))))
 (defthm glg-push-cost
   (implies (and (glgp x) (glg-inv x)) (equal (push-turns 0 (nth 1 x)) (len (gl-globals x)))))
+
+; ---- THE SPARE FRAMES (generated) ----------------------------------------------------------
+;
+; heaprt's spares (s%spare, s%nspare: gc_frame_take, gc_frame_give) as a
+; thread's gc_stack holds them, a few of each size: s-nspare0(n - 1) the
+; count of size n (1 .. 32, SPARE_SIZES), s-spare0 their frames, size n's
+; d-th at 8(n - 1) + d - 1 (SPARE_DEPTH 8: the 2-D spare(d, n), in its
+; own order, 0-based). A second stobj of the same gc_stack as vsg: the
+; operations here touch none of vsg's fields.
+;
+; gc_frame_give clears the frame's slots before keeping it -- the vector's
+; run in the arena, through heapg's accessors (h-atag, h-aref, h-aival:
+; vec_store's tag, ref and ival, nil being all three 0).
+
+(defconst *sps* 32)
+
+(defstobj spg
+  (s-nspare0 :type (array (signed-byte 64) (32)) :initially 0)
+  (s-spare0 :type (array t (256)) :initially nil))
+
+; every count 0 .. 8: the guard, kept by each operation
+(defun spg-counts (k spg)
+  (declare (xargs :stobjs spg :guard (natp k) :measure (nfix (- 32 (nfix k)))))
+  (if (or (not (natp k)) (<= 32 k)) t
+    (and (natp (s-nspare0i k spg)) (<= (s-nspare0i k spg) *spare-depth*) (spg-counts (1+ k) spg))))
+
+(defthm spg-counts-nth
+  (implies (and (spg-counts i x) (natp i) (natp k) (<= i k) (< k 32))
+           (and (natp (nth k (car x))) (<= (nth k (car x)) 8)))
+  :rule-classes ((:rewrite)
+                 (:linear :corollary (implies (and (spg-counts i x) (natp i) (natp k) (<= i k) (< k 32))
+                                              (and (<= 0 (nth k (car x))) (<= (nth k (car x)) 8)))))
+  :hints (("Goal" :induct (spg-counts i x))))
+(defthm spg-count-0
+  (implies (and (spg-counts 0 x) (natp k) (< k 32))
+           (and (integerp (nth k (car x))) (rationalp (nth k (car x))) (acl2-numberp (nth k (car x)))
+                (<= 0 (nth k (car x))) (<= (nth k (car x)) 8)))
+  :rule-classes ((:rewrite)
+                 (:linear :corollary (implies (and (spg-counts 0 x) (natp k) (< k 32))
+                                              (and (<= 0 (nth k (car x))) (<= (nth k (car x)) 8))))
+                 (:type-prescription :corollary (implies (and (spg-counts 0 x) (natp k) (< k 32))
+                                                         (integerp (nth k (car x))))))
+  :hints (("Goal" :use ((:instance spg-counts-nth (i 0))) :in-theory (disable spg-counts-nth spg-counts))))
+(defthm spg-count-le-8
+  (implies (and (spg-counts 0 x) (natp k) (< k 32)) (and (<= 0 (nth k (car x))) (<= (nth k (car x)) 8)))
+  :rule-classes :linear :hints (("Goal" :use spg-count-0 :in-theory (disable spg-count-0))))
+(in-theory (disable spg-counts))
+
+; gc_frame_take: size n's last given, or nil when it has none
+(defun spg-take (n spg)
+  (declare (xargs :stobjs spg :guard (and (integerp n) (spg-counts 0 spg))
+                  :guard-hints (("Goal" :use ((:instance spg-count-0 (x spg) (k (1- n)))) :in-theory (disable spg-count-0)))))
+  (if (and (<= 1 n) (<= n 32))
+      (let ((d (s-nspare0i (1- n) spg)))
+        (if (< 0 d)
+            (let* ((v (s-spare0i (+ (* 8 (1- n)) (1- d)) spg))
+                   (spg (update-s-nspare0i (1- n) (1- d) spg)))
+              (mv v spg))
+          (mv nil spg)))
+    (mv nil spg)))
+
+; the arena's words j .. e-1 nil
+(defun spg-clr (j e hpg)
+  (declare (xargs :stobjs hpg
+                  :guard (and (natp j) (natp e) (<= e (h-atag-length hpg)) (<= e (h-aref-length hpg))
+                              (<= e (h-aival-length hpg)))
+                  :measure (nfix (- (ifix e) (ifix j)))))
+  (if (or (not (integerp j)) (not (integerp e)) (<= e j)) hpg
+    (let* ((hpg (update-h-atagi j 0 hpg))
+           (hpg (update-h-arefi j 0 hpg))
+           (hpg (update-h-aivali j 0 hpg)))
+      (spg-clr (1+ j) e hpg))))
+
+; what the caller of gc_frame_give knows of a vector: its run is the pool's
+; and its words the arena's (no arena reaches 2^40 words)
+(defun spg-run-ok (v hpg)
+  (declare (xargs :stobjs hpg))
+  (let ((ref (gv-ref v)))
+    (or (not (equal (gv-tag v) 9))
+        (and (<= 0 ref) (< ref (h-vlen-length hpg)) (< ref (h-voff-length hpg))
+             (natp (h-voffi ref hpg)) (natp (h-vleni ref hpg))
+             (<= (+ (h-voffi ref hpg) (h-vleni ref hpg)) (h-atag-length hpg))
+             (<= (+ (h-voffi ref hpg) (h-vleni ref hpg)) (h-aref-length hpg))
+             (<= (+ (h-voffi ref hpg) (h-vleni ref hpg)) (h-aival-length hpg))
+             (<= (h-atag-length hpg) *hb40*)))))
+
+; gc_frame_give: a vector of 1 .. 32 slots, cleared and kept when its size
+; has fewer than 8; anything else ignored
+(defun spg-give (v spg hpg)
+  (declare (xargs :stobjs (spg hpg) :guard (and (spg-counts 0 spg) (spg-run-ok v hpg)) :verify-guards nil))
+  (if (not (equal (gv-tag v) 9)) (mv spg hpg)
+    (let* ((ref (gv-ref v)) (n (h-vleni ref hpg)))
+      (if (and (<= 1 n) (<= n 32))
+          (let ((d (s-nspare0i (1- n) spg)))
+            (if (< d 8)
+                (let* ((off (h-voffi ref hpg))
+                       (hpg (spg-clr off (+ off n) hpg))
+                       (spg (update-s-spare0i (+ (* 8 (1- n)) d) v spg))
+                       (spg (update-s-nspare0i (1- n) (1+ d) spg)))
+                  (mv spg hpg))
+              (mv spg hpg)))
+        (mv spg hpg)))))
+(verify-guards spg-give
+  :hints (("Goal" :use ((:instance spg-count-0 (x spg) (k (1- (nth (gv-ref v) (nth *h-vleni* hpg)))))
+                         (:instance hpg-vlen-elem (j (gv-ref v))) (:instance hpg-voff-elem (j (gv-ref v))))
+                  :in-theory (disable spg-count-0 hpg-vlen-elem hpg-voff-elem hpgp spg-clr))))
+
+; a collection, a new heap (forget_spares, clear_batches): none kept
+(defun spg-reset (k spg)
+  (declare (xargs :stobjs spg :guard (natp k) :measure (nfix (- 32 (nfix k)))))
+  (if (or (not (natp k)) (<= 32 k)) spg
+    (let ((spg (update-s-nspare0i k 0 spg))) (spg-reset (1+ k) spg))))
+
+; ---- the spare frames: refinement
+
+; size n's spares, the last given first: heaprt's sp spares for that size
+(defun spg-abs1 (b d a) (if (zp d) nil (cons (nth (+ b (1- d)) a) (spg-abs1 b (1- d) a))))
+(defun spg-abs (n x) (spg-abs1 (* 8 (1- n)) (nfix (nth (1- n) (car x))) (nth 1 x)))
+
+(defthm len-spg-abs1 (equal (len (spg-abs1 b d a)) (nfix d)))
+
+(defthm spg-abs1-update-outside
+  (implies (and (natp b) (natp d) (natp i) (or (< i b) (<= (+ b d) i)))
+           (equal (spg-abs1 b d (update-nth i v a)) (spg-abs1 b d a)))
+  :hints (("Goal" :induct (spg-abs1 b d a))))
+(defthm spg-abs1-update-below
+  (implies (and (natp b) (natp d) (natp i) (< i b))
+           (equal (spg-abs1 b d (update-nth i v a)) (spg-abs1 b d a))))
+(defthm spg-abs1-update-above
+  (implies (and (natp b) (natp d) (natp i) (<= (+ b d) i))
+           (equal (spg-abs1 b d (update-nth i v a)) (spg-abs1 b d a))))
+
+(defthm spg-abs1-push-is
+  (implies (and (natp b) (natp d))
+           (equal (spg-abs1 b (+ 1 d) (update-nth (+ b d) v a)) (cons v (spg-abs1 b d a))))
+  :rule-classes nil
+  :hints (("Goal" :expand ((spg-abs1 b (+ 1 d) (update-nth (+ b d) v a))))))
+(defthm spg-abs1-push
+  (implies (and (natp b) (natp d) (equal i (+ b d)))
+           (equal (spg-abs1 b (+ 1 d) (update-nth i v a)) (cons v (spg-abs1 b d a))))
+  :hints (("Goal" :use spg-abs1-push-is)))
+
+(defthm spg-abs1-pop
+  (implies (and (natp b) (posp d))
+           (equal (spg-abs1 b (+ -1 d) a) (cdr (spg-abs1 b d a)))))
+
+(defthm spg-abs1-car
+  (implies (and (natp b) (posp d))
+           (equal (car (spg-abs1 b d a)) (nth (+ b -1 d) a))))
+
+(defthm cadr-update-nth-1 (equal (car (cdr (update-nth 1 a x))) a) :hints (("Goal" :expand ((update-nth 1 a x) (update-nth 0 a (cdr x))))))
+(defthm cddr-update-nth-1 (equal (cdr (cdr (update-nth 1 a x))) (cddr x)) :hints (("Goal" :expand ((update-nth 1 a x) (update-nth 0 a (cdr x))))))
+
+; the counts are field 0's: the rest of the stobj is no matter
+(defthm spg-counts-cons
+  (implies (syntaxp (not (equal y ''nil)))
+           (equal (spg-counts i (cons a y)) (spg-counts i (list a))))
+  :hints (("Goal" :induct (spg-counts i (cons a y)) :in-theory (enable spg-counts))))
+(defthm spg-counts-update-list
+  (implies (and (spg-counts i x) (natp i) (natp k) (natp v) (<= v 8))
+           (spg-counts i (list (update-nth k v (car x)))))
+  :hints (("Goal" :induct (spg-counts i x) :in-theory (enable spg-counts))))
+(defthm spg-counts-update
+  (implies (and (spg-counts i x) (natp i) (natp k) (natp v) (<= v 8))
+           (spg-counts i (cons (update-nth k v (car x)) (cdr x))))
+  :hints (("Goal" :induct (spg-counts i x) :in-theory (enable spg-counts))))
+(defthm spg-counts-update-1
+  (equal (spg-counts i (list* (car x) a (cddr x))) (spg-counts i x))
+  :hints (("Goal" :induct (spg-counts i x) :in-theory (enable spg-counts))))
+
+(defthm spg-take-refines
+  (implies (and (spgp x) (spg-counts 0 x) (integerp n) (<= 1 n) (<= n 32))
+           (let ((r (spg-take n x)))
+             (and (equal (mv-nth 0 r) (car (spg-abs n x)))
+                  (equal (spg-abs n (mv-nth 1 r)) (cdr (spg-abs n x)))
+                  (implies (and (integerp m) (<= 1 m) (<= m 32) (not (equal m n)))
+                           (equal (spg-abs m (mv-nth 1 r)) (spg-abs m x)))
+                  (spg-counts 0 (mv-nth 1 r)))))
+  :hints (("Goal" :use ((:instance spg-count-0 (k (1- n)))) :in-theory (disable spg-count-0))))
+
+; the clearing: the words j .. e-1 nil, every other word and every other
+; field of the heap as it was
+(defthm spg-clr-fields
+  (implies (and (natp f) (not (equal f *h-atagi*)) (not (equal f *h-arefi*)) (not (equal f *h-aivali*)))
+           (equal (nth f (spg-clr j e h)) (nth f h)))
+  :hints (("Goal" :induct (spg-clr j e h))))
+
+(defthm spg-clr-atag
+  (implies (and (natp k) (natp j) (integerp e))
+           (equal (nth k (nth *h-atagi* (spg-clr j e h))) (if (and (<= j k) (< k e)) 0 (nth k (nth *h-atagi* h)))))
+  :hints (("Goal" :induct (spg-clr j e h))))
+(defthm spg-clr-aref
+  (implies (and (natp k) (natp j) (integerp e))
+           (equal (nth k (nth *h-arefi* (spg-clr j e h))) (if (and (<= j k) (< k e)) 0 (nth k (nth *h-arefi* h)))))
+  :hints (("Goal" :induct (spg-clr j e h))))
+(defthm spg-clr-aival
+  (implies (and (natp k) (natp j) (integerp e))
+           (equal (nth k (nth *h-aivali* (spg-clr j e h))) (if (and (<= j k) (< k e)) 0 (nth k (nth *h-aivali* h)))))
+  :hints (("Goal" :induct (spg-clr j e h))))
+
+(defun spg-gives (v x h)
+  (let ((n (nth (gv-ref v) (nth *h-vleni* h))))
+    (and (equal (gv-tag v) 9) (integerp n) (<= 1 n) (<= n 32) (< (len (spg-abs n x)) 8))))
+
+(defthm spg-give-none
+  (implies (and (spgp x) (spg-counts 0 x) (spg-run-ok v h) (not (spg-gives v x h)))
+           (and (equal (mv-nth 0 (spg-give v x h)) x) (equal (mv-nth 1 (spg-give v x h)) h)))
+  :hints (("Goal" :use ((:instance spg-count-0 (k (1- (nth (gv-ref v) (nth *h-vleni* h))))))
+                  :in-theory (disable spg-clr spg-abs1 spg-abs1-update-outside spg-count-0 hpg-vlen-elem hpg-voff-elem h-vlenp-nth h-voffp-nth))))
+
+(defthm spg-give-heap
+  (implies (and (spgp x) (spg-counts 0 x) (spg-run-ok v h) (spg-gives v x h))
+           (equal (mv-nth 1 (spg-give v x h))
+                  (spg-clr (nth (gv-ref v) (nth *h-voffi* h))
+                           (+ (nth (gv-ref v) (nth *h-voffi* h)) (nth (gv-ref v) (nth *h-vleni* h))) h)))
+  :hints (("Goal" :use ((:instance spg-count-0 (k (1- (nth (gv-ref v) (nth *h-vleni* h))))))
+                  :in-theory (disable spg-clr spg-abs1 spg-abs1-update-outside spg-count-0 hpg-vlen-elem hpg-voff-elem h-vlenp-nth h-voffp-nth))))
+
+(defthm spg-give-push
+  (implies (and (spgp x) (spg-counts 0 x) (spg-run-ok v h) (spg-gives v x h))
+           (equal (spg-abs (nth (gv-ref v) (nth *h-vleni* h)) (mv-nth 0 (spg-give v x h)))
+                  (cons v (spg-abs (nth (gv-ref v) (nth *h-vleni* h)) x))))
+  :hints (("Goal" :use ((:instance spg-count-0 (k (1- (nth (gv-ref v) (nth *h-vleni* h))))))
+                  :in-theory (disable spg-clr spg-abs1 spg-abs1-update-outside spg-count-0 hpg-vlen-elem hpg-voff-elem h-vlenp-nth h-voffp-nth))))
+
+(defthm spg-give-others
+  (implies (and (spgp x) (spg-counts 0 x) (spg-run-ok v h) (spg-gives v x h)
+                (integerp m) (<= 1 m) (<= m 32) (not (equal m (nth (gv-ref v) (nth *h-vleni* h)))))
+           (equal (spg-abs m (mv-nth 0 (spg-give v x h))) (spg-abs m x)))
+  :hints (("Goal" :cases ((< m (nth (gv-ref v) (nth *h-vleni* h)))) :use ((:instance spg-count-0 (k (1- (nth (gv-ref v) (nth *h-vleni* h))))))
+                  :in-theory (disable spg-clr spg-abs1 spg-abs1-update-outside spg-count-0 hpg-vlen-elem hpg-voff-elem h-vlenp-nth h-voffp-nth))))
+
+(defthm spg-give-counts
+  (implies (and (spgp x) (spg-counts 0 x) (spg-run-ok v h))
+           (spg-counts 0 (mv-nth 0 (spg-give v x h))))
+  :hints (("Goal" :use ((:instance spg-count-0 (k (1- (nth (gv-ref v) (nth *h-vleni* h))))))
+                  :in-theory (disable spg-clr spg-abs1 spg-abs1-update-outside spg-count-0 hpg-vlen-elem hpg-voff-elem h-vlenp-nth h-voffp-nth))))
+
+; gc_frame_give: a vector of n slots kept, last, on size n's spares when it
+; has fewer than SPARE_DEPTH (heaprt's sp-step :give), its run's words
+; cleared and nothing else of the heap written (spg-clr-fields,
+; spg-clr-atag, -aref, -aival); every other size's as it was; anything
+; else changes nothing
+(defthm spg-give-refines
+  (implies (and (spgp x) (spg-counts 0 x) (spg-run-ok v h))
+           (let* ((r (spg-give v x h)) (ref (gv-ref v))
+                  (n (nth ref (nth *h-vleni* h))) (off (nth ref (nth *h-voffi* h))))
+             (and (spg-counts 0 (mv-nth 0 r))
+                  (if (spg-gives v x h)
+                      (and (equal (spg-abs n (mv-nth 0 r)) (cons v (spg-abs n x)))
+                           (implies (and (integerp m) (<= 1 m) (<= m 32) (not (equal m n)))
+                                    (equal (spg-abs m (mv-nth 0 r)) (spg-abs m x)))
+                           (equal (mv-nth 1 r) (spg-clr off (+ off n) h)))
+                    (and (equal (mv-nth 0 r) x) (equal (mv-nth 1 r) h))))))
+  :hints (("Goal" :use (spg-give-none spg-give-heap spg-give-push spg-give-others spg-give-counts)
+                  :in-theory (disable spg-give spg-gives spg-abs spg-clr spg-run-ok spgp gv-tag gv-ref
+                                      spg-give-none spg-give-heap spg-give-push spg-give-others spg-give-counts))))
+
+(defthm spg-reset-count
+  (implies (natp j)
+           (equal (nth j (car (spg-reset k x)))
+                  (if (and (natp k) (<= k j) (< j 32)) 0 (nth j (car x)))))
+  :hints (("Goal" :induct (spg-reset k x))))
+
+; a collection, a new heap: every size's spares none (heaprt's :collect, :reset)
+(defthm spg-reset-refines
+  (implies (and (natp k) (integerp m) (<= (1+ k) m) (<= m 32))
+           (equal (spg-abs m (spg-reset k x)) nil)))
+(defthm spg-reset-consp
+  (implies (and (natp k) (< k 32)) (consp (spg-reset k x)))
+  :hints (("Goal" :induct (spg-reset k x))))
+(defthm spg-reset-counts-i
+  (implies (natp i) (spg-counts i (spg-reset 0 x)))
+  :hints (("Goal" :in-theory (enable spg-counts) :induct (spg-counts i (spg-reset 0 x)))))
+(defthm spg-reset-counts (spg-counts 0 (spg-reset 0 x)))
+
+
+; COST: a give clears its n slots, one turn each (heaprt's frame-give-cost)
+(defthm spg-give-cost (implies (and (natp off) (natp n)) (equal (push-turns off (+ off n)) n)))

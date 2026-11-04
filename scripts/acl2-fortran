@@ -201,18 +201,25 @@
     "heaprtg"
     {:out "src/f/gen/heaprt_gen.inc" :include true
      :fns [vsg-enter vsg-clear vsg-leave vsg-set vsg-get vsg-reset
-           glg-new glg-live glg-get glg-keep glg-set glg-at glg-init vsg-push glg-push]
+           glg-new glg-live glg-get glg-keep glg-set glg-at glg-init vsg-push glg-push
+           spg-take spg-clr spg-give spg-reset]
      ;; push_roots calls the marking (heap_gen.inc)
      :host [hpg-push]
      ;; a value to the marker: its tag and its ref (GC.f90)
      :rt {gv-tag ["gv_tag" [:val] :int] gv-ref ["gv_ref" [:val] :int]}
      ;; a thread's gc_stack, its slots 0-based: slots0(j) is vstack(j + 1);
-     ;; GC.f90's global roots, groots, the table 0-based
-     :stobjs {vsg "s" glg "gr" hpg "hs"} :stobj-types {"s" "gc_stack" "gr" "gc_globals" "hs" "heap_state"}
+     ;; GC.f90's global roots, groots, the table 0-based; the same gc_stack's
+     ;; spare frames (spg), spare0(8(n - 1) + d - 1) size n's d-th
+     :stobjs {vsg "s" spg "s" glg "gr" hpg "hs"} :stobj-types {"s" "gc_stack" "gr" "gc_globals" "hs" "heap_state"}
      :fields {s-top ["s" "vs_top"] s-hi ["s" "vs_hi"] g-gen ["gr" "gen"] g-count ["gr" "count"]}
-     :array-names {"s" ["slots0"] "gr" ["tbl"]} :prefix {"s" "s-" "gr" "g-"}
-     :value-arrays #{"slots0" "tbl"} :val-type "gc_value" :local-arrays [["s" "slots0"]]
-     :value-formals {vsg-set #{v} glg-new #{v} glg-keep #{v} glg-set #{v}} :value-fns #{vsg-get glg-get glg-at}
+     :array-names {"s" ["slots0" "nspare0" "spare0"] "gr" ["tbl"] "hs" ["vlen" "voff" "atag" "aref" "aival"]}
+     :prefix {"s" "s-" "gr" "g-" "hs" "h-"}
+     ;; a frame's run and its words in the arena, through GC.f90's accessors (heap_gen.inc's)
+     :externs {"vlen" ["hp_vlen" "-" "hp_n_vec"] "voff" ["hp_voff" "-" "hp_n_vec"]
+               "atag" ["-" "hp_set_atag" "hp_n_arena"] "aref" ["-" "hp_set_aref" "hp_n_arena"]
+               "aival" ["-" "hp_set_aival" "hp_n_arena"]}
+     :value-arrays #{"slots0" "tbl" "spare0"} :val-type "gc_value" :local-arrays [["s" "slots0"]]
+     :value-formals {vsg-set #{v} glg-new #{v} glg-keep #{v} glg-set #{v} spg-give #{v}} :value-fns #{vsg-get glg-get glg-at spg-take}
      :bool-fns #{glg-live}
      :header ["  ! GENERATED from model/heaprtg.lisp by scripts/acl2-fortran -b heaprtg. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in GC.f90's contains"
@@ -222,7 +229,9 @@
               "  ! vsg-set-refines, vsg-get-refines, vsg-reset-refines), so heaprt's frame-balance"
               "  ! and ops-keep-callers hold of this stack; and equal to heaprt's gl-new, keep-g,"
               "  ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...); push_roots'"
-              "  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines)."]}
+              "  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines);"
+              "  ! each size's spare frames are a stack of at most 8, a give clearing the frame's"
+              "  ! words and nothing else (spg-take-refines, spg-give-refines, spg-reset-refines)."]}
     "anpass"
     {:out "src/f/gen/anpass_gen.inc" :include true
      :fns [anp-nn anp-ch anp-tc anp-hfr anp-get anp-put anp-copy anp-or anp-zero anp-set anp-mark anp-local
@@ -742,11 +751,13 @@
         _ (when (not= (count comps) (count outs)) (throw (ex-info "an mv of the wrong arity" {:x x})))
         pairs (map vector outs comps)
         moves (for [[o c] pairs :when (and o (not= o c))] [o c])
-        vals (map vector (for [[o c] pairs :when (nil? o)] c) (:dests ctx))]
+        vals (map vector (for [[o c] pairs :when (nil? o)] c) (:dests ctx))
+        ;; a value result answers nil as rt_nil(), as a value function's does
+        rtype (if (value-fns self) :val :int)]
     (if (empty? moves)
-      (vec (mapcat (fn [[c d]] (let [r (expr ctx c)] (conj (:stmts r) (str d " = " (:code r))))) vals))
+      (vec (mapcat (fn [[c d]] (let [r (coerce (expr ctx c) rtype)] (conj (:stmts r) (str d " = " (:code r))))) vals))
       ;; the values read the stobjs as they were
-      (let [tmps (for [[c d] vals] (let [r (expr ctx c) tmp (fresh ctx "r" (:type r))] [r tmp d]))]
+      (let [tmps (for [[c d] vals] (let [r (coerce (expr ctx c) rtype) tmp (fresh ctx "r" (:type r))] [r tmp d]))]
         (vec (concat (mapcat (fn [[r tmp _]] (conj (:stmts r) (str tmp " = " (:code r)))) tmps)
                      (mapcat (fn [[o c]] (stmt (one-stobj ctx o) self c)) moves)
                      (for [[_ tmp d] tmps] (str d " = " tmp))))))))
