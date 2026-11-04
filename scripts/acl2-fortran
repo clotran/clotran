@@ -4,12 +4,13 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
 ;; vmg), vmicg, the compiler (src/f/gen/vmc_gen.f90), heapg, the
-;; collector (src/f/gen/heap_gen.inc), vmrt, the VM runtime's reads of
+;; collector (src/f/gen/heap_gen.inc), heaprtg, the value stack
+;; (src/f/gen/heaprt_gen.inc), vmrt, the VM runtime's reads of
 ;; clotran's values (src/f/gen/vmrt_gen.inc), anpass, the analyzer's
 ;; passes over its tree (src/f/gen/anpass_gen.inc), anlocal, its locals
 ;; (src/f/gen/anlocal_gen.inc), anform, its special forms' checks
@@ -194,6 +195,26 @@
               "  ! nothing. vmrt.lisp proves each agrees with the machine's rt-* (model/vmg.lisp,"
               "  ! vmic.lisp) on the value decoded: vrt-truthy-agrees, vrt-throwp-agrees,"
               "  ! vrt-clop-agrees, vrt-capt-agrees and the rest."]}
+    "heaprtg"
+    {:out "src/f/gen/heaprt_gen.inc" :include true
+     :fns [vsg-enter vsg-clear vsg-leave vsg-set vsg-get vsg-reset
+           glg-new glg-live glg-get glg-keep glg-set glg-at glg-init]
+     ;; a thread's gc_stack, its slots 0-based: slots0(j) is vstack(j + 1);
+     ;; GC.f90's global roots, groots, the table 0-based
+     :stobjs {vsg "s" glg "gr"} :stobj-types {"s" "gc_stack" "gr" "gc_globals"}
+     :fields {s-top ["s" "vs_top"] s-hi ["s" "vs_hi"] g-gen ["gr" "gen"] g-count ["gr" "count"]}
+     :array-names {"s" ["slots0"] "gr" ["tbl"]} :prefix {"s" "s-" "gr" "g-"}
+     :value-arrays #{"slots0" "tbl"} :val-type "gc_value" :local-arrays [["s" "slots0"]]
+     :value-formals {vsg-set #{v} glg-new #{v} glg-keep #{v} glg-set #{v}} :value-fns #{vsg-get glg-get glg-at}
+     :bool-fns #{glg-live}
+     :header ["  ! GENERATED from model/heaprtg.lisp by scripts/acl2-fortran -b heaprtg. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in GC.f90's contains"
+              "  ! part: the value stack's operations on a thread's gc_stack and the global"
+              "  ! roots', guard-verified."
+              "  ! heaprtg proves each is heaprt's (vsg-enter-refines, vsg-leave-refines,"
+              "  ! vsg-set-refines, vsg-get-refines, vsg-reset-refines), so heaprt's frame-balance"
+              "  ! and ops-keep-callers hold of this stack; and equal to heaprt's gl-new, keep-g,"
+              "  ! root-get, live and gl-init (glg-new-refines, glg-keep-refines, ...)."]}
     "anpass"
     {:out "src/f/gen/anpass_gen.inc" :include true
      :fns [anp-nn anp-ch anp-tc anp-hfr anp-get anp-put anp-copy anp-or anp-zero anp-set anp-mark anp-local
@@ -761,7 +782,7 @@
                           (let [r (expr ctx (first xs)) ef (extern-fields (symbol (subs (name op) 7)))]
                             (vec (concat (stmt inner self (second xs)) (:stmts r)
                                          [(if ef (str "call " (second ef) "(" (:code r) ")") (str (sref oa) " = " (:code r)))])))
-                          (let [ri (expr ctx (first xs)) rv (expr ctx (second xs))
+                          (let [ri (expr ctx (first xs)) rv (coerce (expr ctx (second xs)) (if (value-arrays (second oa)) :val :int))
                                 ti (fresh ctx "i" :int) tv (fresh ctx "v" (:type rv))]
                             ;; the index and value are read from the stobj before the inner update runs
                             (vec (concat (:stmts ri) [(str ti " = " (:code ri))] (:stmts rv) [(str tv " = " (:code rv))]
@@ -833,8 +854,16 @@
                                    [x {:f (str (fname x) "_") :type (formal-type self x)}])))
              :locals (atom {}) :counter (atom 0) :calls (atom #{})
              :outs (outs self) :dests rnames :tail true}
-        lines (try (if sub (stmt ctx self body) (ret-stmts ctx self body))
-                   (catch Exception e (throw (ex-info (str (ex-message e) " (in " self ")") (ex-data e)))))
+        lines0 (try (if sub (stmt ctx self body) (ret-stmts ctx self body))
+                    (catch Exception e (throw (ex-info (str (ex-message e) " (in " self ")") (ex-data e)))))
+        ;; in a loop, a pointer component the book names is read through a
+        ;; local contiguous pointer: on the component itself every element
+        ;; reloads the descriptor (vs_leave's clearing loop); outside one the
+        ;; copy only makes the procedure look bigger to the inliner
+        ptrs (for [[o a] (:local-arrays cfg)
+                   :when (and (some #(= "cycle" (str/trim %)) lines0)
+                              (some #(str/includes? % (str o "%" a "(")) lines0))] [o a])
+        lines (reduce (fn [ls [o a]] (map #(str/replace % (str o "%" a "(") (str a "_p(")) ls)) lines0 ptrs)
         looped? (some #(= "cycle" (str/trim %)) lines)
         recursive? (or (reentrant self) (some #(reaches? % self) @(:calls ctx)))
         dummies (for [x formals :when (not (stobjs x))] [(str (fname x) "_") (formal-type self x)])
@@ -850,6 +879,8 @@
          (when sub (str/join (for [r rnames] (str "    " (ftype (if (value-fns self) :val :int)) ", intent(out) :: " r "\n"))))
          (when-not sub (str "    " (ftype (fn-type self)) " :: r\n"))
          (str/join (for [[v t] (sort @(:locals ctx))] (str "    " (ftype t) " :: " v "\n")))
+         (str/join (for [[o a] ptrs] (str "    " (ftype (if (value-arrays a) :val :int)) ", pointer, contiguous :: " a "_p(:)\n")))
+         (str/join (for [[o a] ptrs] (str "    " a "_p => " o "%" a "\n")))
          (let [body-lines (if looped?
                             (concat ["do"] (map #(str "  " %) lines) [(if sub "  exit" "")] ["end do"])
                             lines)]
