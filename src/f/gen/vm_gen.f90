@@ -1,7 +1,8 @@
 ! GENERATED from model/vmg.lisp by scripts/acl2-fortran. Do not edit:
 ! change the model, prove it, and generate again (PLAN step 30).
 ! Every function here has its guards verified in ACL2: every index in
-! bounds, every integer inside 64 bits. vmg-correct proves that a
+! bounds. That does not keep integers inside 64 bits (ACL2's are
+! unbounded); each guard must bound its own arithmetic. vmg-correct proves that a
 ! program run by vmg_run answers what it means. The superinstructions
 ! and the pass that tags them come from model/vmfg.lisp: vmfg-correct
 ! proves a compiled program, fused and run by vmg_xrun, answers the same.
@@ -753,22 +754,28 @@ contains
     logical :: t_1
     logical :: t_2
     logical :: t_3
+    logical :: t_4
     if (.true.) then
       if ((.not. (req_ < 0_int64))) then
         if (.true.) then
-          t_1 = (.not. ((req_ + 1_int64) < k_))
+          if ((.not. (req_ < k_))) then
+            t_1 = (.not. (req_ < k_))
+          else
+            t_1 = (((-1_int64) + k_) == req_)
+          end if
+          t_2 = t_1
         else
-          t_1 = .false.
+          t_2 = .false.
         end if
-        t_2 = t_1
+        t_3 = t_2
       else
-        t_2 = .false.
+        t_3 = .false.
       end if
-      t_3 = t_2
+      t_4 = t_3
     else
-      t_3 = .false.
+      t_4 = .false.
     end if
-    if (t_3) then
+    if (t_4) then
       r = 1_int64
       return
     else

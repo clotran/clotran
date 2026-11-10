@@ -2,7 +2,7 @@
 ;; the books it answers to. scripts/model-ratchet --stamp writes the hashes.
 {:owed 3
  :entries
- [{:code "src/f/gen/vm_gen.f90", :model ["vmg" "vmfg"], :code-sha "521c4e6942834faab04e8e0888ee6a15d591bbf8b3a02dcab3b0a5c8e379d7cb", :model-sha "34f815484d703e85072a382771f26caaac0f0bc8a3ca94ad1de8f8610d3a61f2"}
+ [{:code "src/f/gen/vm_gen.f90", :model ["seqk" "vmg" "vmfg"], :code-sha "241be1b82f92073d96dafec4de99b67a78664dd86a47a500c510554b394a3e78", :model-sha "898d54ca90987e946dcd4c413ff68bd0f85177bfdf13776a359d657b554a51f2"}
   {:code "src/f/gen/vmc_gen.f90", :model ["vmic" "vmicg"], :code-sha "108ecc8ebc86d208c8e259ab59d7824987c54c800cdb439829d59bca8fd77ed5", :model-sha "e16b982231b00147ed6ca367ef7fe3bf9ca4bfe8b1bfbef644fa242a8076aa41"}
   {:code "src/f/gen/heap_gen.inc", :model ["heapg"], :code-sha "2cba6cb7697bd648fd731a050fad14171c9a9db02a158b268ecc19311b8c8eb5", :model-sha "0983947fdb9d1c91e26fd9f6b5472be766dcd79980c6e790431ea18509989266"}
   {:code "src/f/gen/heaprt_gen.inc", :model ["heaprtg"], :code-sha "912eb133d106e2689cf7b3551a9dbf5a66ed90beb26510c07076a40b401a464e", :model-sha "b7e665638f20936cceb5d506df3bae5ad5c3f7cd7d8ac03e600b49575a2c826f"}
@@ -47,5 +47,5 @@
   {:code "src/f/analyze.inc", :procs ["arith_kind" "apk_kid" "array_elem_kind" "recur_args_ok"], :model ["anprim" "anprim-proof"], :code-sha "b2aba3539afd2a4c955f4df1e7d76ca590bcf50fdf177f06fcf14e95a876c189", :model-sha "2ac0c02eecaac200e7eab8346a8779b40f21daba4b8ad90f16736f4547130bee"}
   {:code "src/f/Eval.f90", :procs ["clj_special"], :model ["anbuild"], :code-sha "f0185c209dd27d9d7813e4362f028fa57a40bf6127c4b164ba9e3e7ef5a9c744", :model-sha "136273743acb96b36bfd345d8d9c35d65ebb051a55ea43d07e1a287d489754cb"}
   {:code "src/c/tty_shim.c", :model ["lineedit"], :code-sha "2283d4c98310ef957bf6ca415626f312f5859013761e42d8e2bb78180b24c9d2", :model-sha "364cd32a5f8cea7b85ac4df6f1ec9b4495f734fc05340a5ee99cef981ab12837"}
-  {:code "src/f/gen/exec_gen.inc", :model ["seqk" "exec" "exec-proof" "exec-vm" "exec-cost"], :code-sha "8c03f356f4373e6b880553848c45db63c6bf4daa0500471ba24631a6c93a941f", :model-sha "7a1118b6757e16bedd14444684fb5f7e0e77db2cb398b8117609e5845211fbf1"}
-  {:code "src/f/exec.inc", :procs ["exec_core" "k_finish" "call_head" "call_dispatch" "call_keep" "call_enter" "arity_in_pass" "pick_arity" "bind_closure" "variadic_req" "ap_kind" "ap_realise" "ap_first" "ap_next" "ap_look" "ap_spread"], :model ["seqk" "exec" "exec-proof"], :code-sha "aca8d59deaa3b7cca102c2a9f322db53b657f471851a60d51d44507aa3414b13", :model-sha "bbcac3c4636e1e57dc20a63df06eb25273db257c4d5ac852c6abd3a1f71a4f87"}]}
+  {:code "src/f/gen/exec_gen.inc", :model ["seqk" "exec" "exec-proof" "exec-vm" "exec-cost"], :code-sha "d46e959b2920cd2c78acb8941bacf447174e31b0450173c8bbcae5f05628ea32", :model-sha "26134e7f295fe5ab8e273bc0b972933817f7c4a76273e27d8040bcafeb0e654f"}
+  {:code "src/f/exec.inc", :procs ["exec_core" "k_finish" "call_head" "call_dispatch" "call_keep" "call_enter" "arity_in_pass" "pick_arity" "bind_closure" "variadic_req" "ap_kind" "ap_realise" "ap_first" "ap_next" "ap_look" "ap_spread"], :model ["seqk" "exec" "exec-proof"], :code-sha "aca8d59deaa3b7cca102c2a9f322db53b657f471851a60d51d44507aa3414b13", :model-sha "ece5280e7a2b3128b8ea38399333d3b8c182495b088307230a6460a429239f47"}]}

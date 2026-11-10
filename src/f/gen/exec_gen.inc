@@ -834,22 +834,28 @@
     logical :: t_1
     logical :: t_2
     logical :: t_3
+    logical :: t_4
     if (.true.) then
       if ((.not. (req_ < 0_int64))) then
         if (.true.) then
-          t_1 = (.not. ((req_ + 1_int64) < k_))
+          if ((.not. (req_ < k_))) then
+            t_1 = (.not. (req_ < k_))
+          else
+            t_1 = (((-1_int64) + k_) == req_)
+          end if
+          t_2 = t_1
         else
-          t_1 = .false.
+          t_2 = .false.
         end if
-        t_2 = t_1
+        t_3 = t_2
       else
-        t_2 = .false.
+        t_3 = .false.
       end if
-      t_3 = t_2
+      t_4 = t_3
     else
-      t_3 = .false.
+      t_4 = .false.
     end if
-    if (t_3) then
+    if (t_4) then
       r = 1_int64
       return
     else

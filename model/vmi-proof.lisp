@@ -20,6 +20,11 @@
 (include-book "vmi")
 (include-book "vmx2-proof")
 
+; ex-aplook in the form these walks were proved over (seqk.lisp ex-aplook-is)
+(local (defthmd ex-aplook-old
+  (equal (ex-aplook req k) (if (and (integerp req) (<= 0 req) (integerp k) (<= k (+ req 1))) 1 0))
+  :hints (("Goal" :use ex-aplook-is))))
+
 ; ---- THE SHAPE the refinement needs: 20 fields, the stack and the scratch lists, no
 ; control record's first field the handler tag. A well-typed stobj has it
 ; (vmip-shape); keeping vmip itself -- every value 64-bit -- is a separate
@@ -660,7 +665,7 @@
                            (and (equal (car tw) 3)
                                 (equal (nth 1 w) (tw-fx tw))
                                 (equal (nth 2 w) (tw-cur tw)))))))
-  :hints (("Goal" :induct (tawalk req k i top tl) :in-theory (e/d (ex-apstep ex-aplook) (update-nth stk-from))
+  :hints (("Goal" :induct (tawalk req k i top tl) :in-theory (e/d (ex-apstep ex-aplook ex-aplook-old) (update-nth stk-from))
                   :expand ((ex-apwalk req (stk-from 1 k tl) (list (car tl) i (sk-topk top))) (tawalk req k i top tl)))))
 
 (defthm stk-from-zero (implies (zp k) (equal (stk-from a k l) nil)))
@@ -750,7 +755,7 @@
 (defthm tawalk-way2-req
   (implies (equal (car (tawalk req k i top tl)) 2) (natp req))
   :rule-classes :forward-chaining
-  :hints (("Goal" :induct (tawalk req k i top tl) :in-theory (enable ex-apstep ex-aplook) :expand ((:free (top) (tawalk req k i top tl))))))
+  :hints (("Goal" :induct (tawalk req k i top tl) :in-theory (enable ex-apstep ex-aplook ex-aplook-old) :expand ((:free (top) (tawalk req k i top tl))))))
 (defmacro aw () '(vmi-awalk req (+ -2 m) 0 1 vmi))
 (defthm vmi-spread-tl-is
   (implies (and (equal (nth 3 vmi) 0) (consp (nth 19 vmi)) (true-listp (nth 19 vmi)) (< 19 (len vmi)) (natp m) (<= 2 m)
@@ -895,7 +900,7 @@
 (defthm ex-apwalk-way2-req
   (implies (equal (car (ex-apwalk req fx c)) 2) (natp req))
   :rule-classes nil
-  :hints (("Goal" :induct (ex-apwalk req fx c) :in-theory (enable ex-apstep ex-aplook) :expand ((ex-apwalk req fx c)))))
+  :hints (("Goal" :induct (ex-apwalk req fx c) :in-theory (enable ex-apstep ex-aplook ex-aplook-old) :expand ((ex-apwalk req fx c)))))
 (defthm sk-spread-hand-req
   (implies (equal (car (sk-spread req fx v)) :hand) (natp req))
   :rule-classes nil
@@ -1094,7 +1099,7 @@
 (defthm take-len-b (equal (len (take n l)) (nfix n)))
 (defthm ex-apwalk-way2-len
   (implies (equal (car (ex-apwalk req fx c)) 2) (equal (len (nth 1 (ex-apwalk req fx c))) (nfix req)))
-  :hints (("Goal" :induct (ex-apwalk req fx c) :in-theory (enable ex-apstep ex-aplook) :expand ((ex-apwalk req fx c)))))
+  :hints (("Goal" :induct (ex-apwalk req fx c) :in-theory (enable ex-apstep ex-aplook ex-aplook-old) :expand ((ex-apwalk req fx c)))))
 (defthm sk-spread-hand-len
   (implies (equal (car (sk-spread req fx v)) :hand) (equal (len (cadr (sk-spread req fx v))) (1+ (nfix req))))
   :hints (("Goal" :in-theory (e/d (sk-spread) (ex-apwalk)))))

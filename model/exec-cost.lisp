@@ -21,7 +21,7 @@
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 18) (ex-kid 7) (ex-pc 14) (ex-i 9) (ex-fin 2) (ex-unw 9) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 4) (sk-step 7) (otherwise 0)))
+(defun ex-own (f) (case f (ex-act 18) (ex-kid 7) (ex-pc 14) (ex-i 9) (ex-fin 2) (ex-unw 9) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 5) (sk-step 7) (otherwise 0)))
 (defthm ex-own-bound (<= (ex-own f) 18) :rule-classes :linear)
 
 ; the arity's walk: the arities ex-arfit is asked of, the fixed pass and,

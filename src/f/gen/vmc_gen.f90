@@ -1,7 +1,8 @@
 ! GENERATED from model/vmicg.lisp by scripts/acl2-fortran. Do not edit:
 ! change the model, prove it, and generate again (PLAN step 30).
 ! Every function here has its guards verified in ACL2: every index in
-! bounds, every integer inside 64 bits. vmicg-correct proves that a
+! bounds. That does not keep integers inside 64 bits (ACL2's are
+! unbounded); each guard must bound its own arithmetic. vmicg-correct proves that a
 ! program vmicg_program compiles without an error or an overflow
 ! answers, run, what it means.
 module vmc_gen

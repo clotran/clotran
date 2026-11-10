@@ -174,10 +174,16 @@
 ; so far -- while k <= req + 1. RestFn.applyTo's RT.boundedLength reads
 ; req + 1 positions and its last next() realises the one after, so clj
 ; realises apply's seq through position req + 1 and no further. 1: read
-; it, 0: not (past it, or no variadic arity).
+; it, 0: not (past it, or no variadic arity). k <= req + 1 is tested as k <=
+; req, else k - 1 = req: the generated Fortran evaluates k - 1 only when k >
+; req >= 0, so no intermediate leaves 64 bits for 64-bit inputs (req + 1
+; overflowed at req = 2^63 - 1). ex-aplook-is gives the old form.
 (defun ex-aplook (req k)
   (declare (xargs :guard t))
-  (if (and (integerp req) (<= 0 req) (integerp k) (<= k (+ req 1))) 1 0))
+  (if (and (integerp req) (<= 0 req) (integerp k) (or (<= k req) (equal (- k 1) req))) 1 0))
+(defthm ex-aplook-is
+  (equal (ex-aplook req k) (if (and (integerp req) (<= 0 req) (integerp k) (<= k (+ req 1))) 1 0))
+  :rule-classes nil)
 
 ; APPLY'S WALK, as B_APPLY takes it, over the seq's cursor c (seqk): (way
 ; fixed extras c nr). way ex-apstep's 2 or 3: 2 the variadic arity's fixed
