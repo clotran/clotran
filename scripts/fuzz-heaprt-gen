@@ -15,9 +15,13 @@
 ;; high-water, every slot, the generation, the count and the whole table
 ;; must agree.
 ;;
+;; Pushes (push_roots' loops): every slot to the top and every claimed root,
+;; each one's tag and ref, in order, must be what vsg-push-refines and
+;; glg-push-refines say -- heaprt's live slots and gl-globals.
+;;
 ;; -x is the NEGATIVE CONTROL: the generated side's leave below the top keeps
-;; one slot too many and a set by index writes the next root, and the runs
-;; must part.
+;; one slot too many, a set by index writes the next root, and a stack's push
+;; starts at its second slot, and the runs must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -37,7 +41,7 @@
 (defn gen-op [l]
   (let [k #(- (rnd (+ l 4)) 1) v #(pick [0 (+ 1 (rnd 99)) (+ 1 (rnd 99))])
         g #(rnd 4) i #(- (rnd 14) 1)]
-    (case (pick [0 0 0 1 1 2 2 2 3 3 3 4 5 5 5 6 6 6 7 7 8 9 10 11])
+    (case (pick [0 0 0 1 1 2 2 2 3 3 3 4 5 5 5 6 6 6 7 7 8 9 10 11 12 12 13])
       0 [0 (pick [0 1 1 2 3 (rnd (+ l 3)) -1 1099511627777 9223372036854775807]) 0 0]
       1 [1 (k) 0 0]
       2 [2 (k) (v) 0]
@@ -49,7 +53,9 @@
       8 [8 (g) (i) 0]
       9 [9 (i) (v) 0]
       10 [10 (i) 0 0]
-      11 [11 0 0 0])))
+      11 [11 0 0 0]
+      12 [12 0 0 0]
+      13 [13 0 0 0])))
 
 (defn gen-case []
   (let [l (+ 1 (rnd 16))]
@@ -57,18 +63,37 @@
 
 (def cases (vec (repeatedly n gen-case)))
 
+;; the spare frames: six runs (refs 1-6) somewhere in an arena of 40 words,
+;; some longer than 32 slots or empty, and gives of a run (or of an integer),
+;; takes of a size from -1 to 34, and resets
+(defn gen-scase []
+  (let [runs (vec (for [_ (range 6)] (let [off (rnd 40)] [off (rnd (inc (min 34 (- 40 off))))])))
+        ;; sizes the runs have, so takes find something
+        sz #(pick (concat [-1 0 33 34 (rnd 35)] (map second runs)))]
+    {:runs runs
+     :ops (vec (repeatedly (+ 10 (rnd 40))
+                           #(case (pick [14 14 14 15 15 16]) 14 [14 (rnd 7) 0 0] 15 [15 (sz) 0 0] 16 [16 0 0 0])))}))
+(def scases (vec (repeatedly (max 1 (quot n 2)) gen-scase)))
+
 ;; ---- ACL2 -------------------------------------------------------------------------
 
 (def driver
   (str "(include-book \"heaprtg\")\n"
        "(set-print-case :downcase state)\n"
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
-       "(defun vv (x) (if (integerp x) x 0))\n"
+       "(defun vv (x) (if (and (consp x) (integerp (cdr x))) (cdr x) 0))\n"
+       ;; what a push hands the marker: how many, and a checksum of each (tag, ref) by its place
+       "(defun chk (vs k) (if (atom vs) 0 (+ (* k (+ (* 1000 (gv-tag (car vs))) (gv-ref (car vs)))) (chk (cdr vs) (1+ k)))))\n"
        "(defun arr (i vsg) (declare (xargs :stobjs vsg :mode :program))\n"
        "  (if (<= (s-slots0-length vsg) i) nil (cons (vv (s-slots0i i vsg)) (arr (1+ i) vsg))))\n"
        "(defun tbl (i glg) (declare (xargs :stobjs glg :mode :program))\n"
        "  (if (<= (g-tbl-length glg) i) nil (cons (vv (g-tbli i glg)) (tbl (1+ i) glg))))\n"
-       "(defun nv (b) (if (equal b 0) nil b))\n"
+       ";; (car (vsg-abs vsg)) and (gl-globals glg), read off the stobjs\n"
+       "(defun live-of (i vsg) (declare (xargs :stobjs vsg :mode :program))\n"
+       "  (if (<= (s-top vsg) i) nil (cons (s-slots0i i vsg) (live-of (1+ i) vsg))))\n"
+       "(defun roots-of (i glg) (declare (xargs :stobjs glg :mode :program))\n"
+       "  (if (<= (g-count glg) i) nil (cons (g-tbli i glg) (roots-of (1+ i) glg))))\n"
+       "(defun nv (b) (if (equal b 0) nil (cons 2 b)))\n"
        "(defun step1 (op vsg glg) (declare (xargs :stobjs (vsg glg) :mode :program))\n"
        "  (let ((c (nth 0 op)) (a (nth 1 op)) (b (nth 2 op)) (d (nth 3 op)))\n"
        "    (case c\n"
@@ -83,7 +108,10 @@
        "      (8 (mv (if (glg-live a b glg) 1 0) 0 vsg glg))\n"
        "      (9 (let ((glg (glg-set a (nv b) glg))) (mv 0 0 vsg glg)))\n"
        "      (10 (mv (vv (glg-at a glg)) 0 vsg glg))\n"
-       "      (t (let ((glg (glg-init glg))) (mv 0 0 vsg glg))))))\n"
+       "      (11 (let ((glg (glg-init glg))) (mv 0 0 vsg glg)))\n"
+       ;; the pushes vsg-push-refines and glg-push-refines say: the live slots, the claimed roots
+       "      (12 (let ((l (live-of 0 vsg))) (mv (len l) (chk l 1) vsg glg)))\n"
+       "      (t (let ((l (roots-of 0 glg))) (mv (len l) (chk l 1) vsg glg))))))\n"
        "(defun run-ops (ops vsg glg) (declare (xargs :stobjs (vsg glg) :mode :program))\n"
        "  (if (endp ops) (mv nil vsg glg)\n"
        "    (mv-let (r r2 vsg glg) (step1 (car ops) vsg glg)\n"
@@ -101,14 +129,48 @@
                     (str "(run-case " k " " (:l c) " '("
                          (str/join " " (map #(str "(" (str/join " " %) ")") (:ops c))) ") vsg glg)\n"))
                   cases))
+       ;; the spare frames, on spg and the arena words of hpg
+       "(defun sv (a) (if (equal a 0) (cons 2 7) (cons 9 a)))\n"
+       "(defun cnts (k spg) (declare (xargs :stobjs spg :mode :program)) (if (<= 32 k) nil (cons (s-nspare0i k spg) (cnts (1+ k) spg))))\n"
+       "(defun schk (k spg) (declare (xargs :stobjs spg :mode :program)) (if (<= 256 k) 0 (+ (* (1+ k) (vv (s-spare0i k spg))) (schk (1+ k) spg))))\n"
+       "(defun tags (j hpg) (declare (xargs :stobjs hpg :mode :program)) (if (<= 40 j) nil (cons (h-atagi j hpg) (tags (1+ j) hpg))))\n"
+       "(defun rchk (j hpg) (declare (xargs :stobjs hpg :mode :program)) (if (<= 40 j) 0 (+ (* (1+ j) (+ (h-arefi j hpg) (* 1000 (h-aivali j hpg)))) (rchk (1+ j) hpg))))\n"
+       "(defun sstep (op spg hpg) (declare (xargs :stobjs (spg hpg) :mode :program))\n"
+       "  (case (nth 0 op)\n"
+       "    (14 (mv-let (spg hpg) (spg-give (sv (nth 1 op)) spg hpg) (mv 0 0 spg hpg)))\n"
+       "    (15 (mv-let (v spg) (spg-take (nth 1 op) spg) (mv (vv v) (gv-tag v) spg hpg)))\n"
+       "    (t (let ((spg (spg-reset 0 spg))) (mv 0 0 spg hpg)))))\n"
+       "(defun sops (ops spg hpg) (declare (xargs :stobjs (spg hpg) :mode :program))\n"
+       "  (if (endp ops) (mv nil spg hpg)\n"
+       "    (mv-let (r r2 spg hpg) (sstep (car ops) spg hpg)\n"
+       "      (let ((line (append (list* r r2 (cnts 0 spg)) (list (schk 0 spg)) (tags 0 hpg) (list (rchk 0 hpg)))))\n"
+       "        (mv-let (rest spg hpg) (sops (cdr ops) spg hpg) (mv (cons line rest) spg hpg))))))\n"
+       "(defun sclr (k spg) (declare (xargs :stobjs spg :mode :program)) (if (<= 256 k) spg (let ((spg (update-s-spare0i k nil spg))) (sclr (1+ k) spg))))\n"
+       "(defun ainit (j hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (<= 40 j) hpg (let* ((hpg (update-h-atagi j (1+ j) hpg)) (hpg (update-h-arefi j (+ 100 j) hpg)) (hpg (update-h-aivali j (+ 200 j) hpg))) (ainit (1+ j) hpg))))\n"
+       "(defun rinit (i runs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (endp runs) hpg (let* ((hpg (update-h-voffi i (car (car runs)) hpg)) (hpg (update-h-vleni i (cadr (car runs)) hpg))) (rinit (1+ i) (cdr runs) hpg))))\n"
+       "(defun run-scase (k runs ops spg hpg) (declare (xargs :stobjs (spg hpg) :mode :program))\n"
+       "  (let* ((spg (spg-reset 0 spg)) (spg (sclr 0 spg))\n"
+       "         (hpg (resize-h-voff 7 hpg)) (hpg (resize-h-vlen 7 hpg)) (hpg (rinit 1 runs hpg))\n"
+       "         (hpg (resize-h-atag 40 hpg)) (hpg (resize-h-aref 40 hpg)) (hpg (resize-h-aival 40 hpg)) (hpg (ainit 0 hpg)))\n"
+       "    (mv-let (lines spg hpg) (sops ops spg hpg)\n"
+       "      (prog2$ (cw \"SCASE ~x0 ~x1~%\" k lines) (mv spg hpg)))))\n"
+       (str/join (map-indexed
+                  (fn [k c]
+                    (str "(run-scase " k " '(" (str/join " " (map #(str "(" (str/join " " %) ")") (:runs c))) ") '("
+                         (str/join " " (map #(str "(" (str/join " " %) ")") (:ops c))) ") spg hpg)\n"))
+                  scases))
        "(good-bye)\n"))
 
 (def acl2 (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2")))
 (def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
 (def expected
-  (into {} (for [[_ k body] (re-seq #"CASE (\d+) (\(.*\))" out)] [(parse-long k) (edn/read-string body)])))
-(when (not= (count expected) n)
-  (println (str "fuzz-heaprt-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (into {} (for [[_ k body] (re-seq #"(?<!S)CASE (\d+) (\(.*\))" out)] [(parse-long k) (edn/read-string body)])))
+(def sexpected
+  (into {} (for [[_ k body] (re-seq #"SCASE (\d+) (\(.*\))" out)] [(parse-long k) (edn/read-string body)])))
+(when (or (not= (count expected) n) (not= (count sexpected) (count scases)))
+  (println (str "fuzz-heaprt-gen: ACL2 answered " (count expected) " of " n " cases, " (count sexpected) " of " (count scases) " spare cases; its output ends:"))
   (println (subs out (max 0 (- (count out) 2000))))
   (System/exit 1))
 
@@ -132,17 +194,40 @@
                want (mapv vec (expected k))]
            {:k k :got got :want want :ok (= got want)}))))
 
+(defn scase-file [k c]
+  (let [f (str work "/scase" k ".txt")]
+    (spit f (str "-1 " (count (:ops c)) "\n" (str/join " " (flatten (:runs c))) "\n"
+                 (str/join "\n" (map #(str/join " " %) (:ops c))) "\n"))
+    f))
+
+(def sresults
+  (vec (for [[k c] (map-indexed vector scases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (scase-file k c) (when broken ["broken"]))
+               got (mapv (fn [ln] (mapv parse-long (str/split (str/trim ln) #"\s+"))) (remove str/blank? (str/split-lines (:out r))))
+               want (mapv vec (sexpected k))]
+           {:k k :s true :got got :want want :ok (= got want)}))))
+
 (def bad (remove :ok results))
+(def sbad (remove :ok sresults))
+(def ssteps (map vector (mapcat :ops scases) (mapcat :want sresults)))
 (def steps (mapcat :want results))
 (def gsteps (map #(drop (+ 4 (:l (cases %2))) %1) (mapcat :want results) (mapcat (fn [r] (repeat (count (:want r)) (:k r))) results)))
-(println (str n " stacks, seed " seed (when broken " (negative control: a leave keeps one slot too many, a set writes the next root)")))
+(println (str n " stacks, seed " seed (when broken " (negative control: a leave keeps one slot too many, a set writes the next root, a push skips a slot, a give leaves its last slot)")))
 (println (str "  " (count steps) " operations, " (count (filter #(pos? (nth % 1)) steps)) " with a frame on the stack, "
               (count (filter #(= -1 (first %)) steps)) " enters refused full, "
               (count (filter #(some pos? (drop 4 %)) steps)) " with a value in a slot or root, "
-              (count (filter #(< 8 (nth % 2)) gsteps)) " with the root table grown"))
-(println (str "generated value stack and global roots against ACL2's: " (count bad) " cases differ"))
+              (count (filter #(< 8 (nth % 2)) gsteps)) " with the root table grown, "
+              (count (filter identity (map #(and (#{12 13} (first %1)) (pos? (first %2))) (mapcat :ops cases) steps))) " pushes of a root or more"))
+(println (str "  " (count scases) " spare-frame cases, " (count ssteps) " operations, "
+              (count (filter (fn [[o w]] (and (= 14 (first o)) (some pos? (take 32 (drop 2 w))))) ssteps)) " gives with a spare on hand after, "
+              (count (filter (fn [[o w]] (and (= 15 (first o)) (= 9 (second w)))) ssteps)) " takes that found one"))
+(println (str "generated value stack and global roots against ACL2's: " (count bad) " cases differ; spare frames: " (count sbad) " cases differ"))
+(doseq [b (take 2 sbad)]
+  (println "  spare case" (:k b) (pr-str (:runs (scases (:k b)))))
+  (doseq [[i w g] (take 3 (filter (fn [[_ w g]] (not= w g)) (map vector (range) (:want b) (:got b))))]
+    (println "    op" i (pr-str (nth (:ops (scases (:k b))) i)) "ACL2" (pr-str w) "generated" (pr-str g))))
 (doseq [b (take 2 bad)]
   (println "  case" (:k b))
   (doseq [[i w g] (map vector (range) (:want b) (:got b)) :when (not= w g)]
     (println "    op" i (pr-str (nth (:ops (cases (:k b))) i)) "ACL2" (pr-str w) "generated" (pr-str g))))
-(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))
+(System/exit (if (if broken (or (empty? bad) (empty? sbad)) (or (seq bad) (seq sbad))) 1 0))
