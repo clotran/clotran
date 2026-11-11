@@ -426,7 +426,14 @@ slot's read and write), and every kind not yet in the model.
    the flag proof (ex-vm-agree-flag, ~950 s: if, do, let, loop, recur,
    calls) still go through its expansions after stable-under-
    simplificationp; reworking them into lemmas of their own, as try's,
-   case's and the collections' are, would cut that time.
+   case's and the collections' are, would cut that time. [Done since:
+   23 lemmas of their own (exec-vm's ex-old: the atom, :iter, :do,
+   :let, :rec, :call, :fin, and kinds 4, 5, 6, 11/12, 16, 17 and the
+   leaves at :m), each proved as the flag proof proved it, disabled until
+   the flag proof, which now meets every case closed and never opens
+   ex-vgood: 2.8 s, was ~950. The book as a whole is about the same,
+   ~1050 s, most of it ex-vgood-let-mid (~435 s) and ex-vgood-m-if
+   (~300 s); a case milestone 4 changes re-proves only its own lemma.]
    **Next (milestone 4, clearing joined)**: ex-vwf asks every local
    unmarked (`(not (ex-mark e))`); drop that and prove the machine and the
    VM agreement over anpass's marks. What is there: exec-proof's

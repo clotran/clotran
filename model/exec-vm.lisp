@@ -559,13 +559,18 @@
                            (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
                            (:free (env) (mx2-args nil env caps defs fuel))))))
 
-(defthm ex-vm-agree-flag
-  (ex-vgood flg e i tmp cm env fr fuel caps defs lp)
-  :rule-classes nil :otf-flg t
-  :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs lp)
-                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw ex-csbr ex-cbuild))
-          (and stable-under-simplificationp
-           '(:in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw))
+; THE OLD CASES, each a lemma of its own (ex-vind's tips for the atom,
+; :iter, :do, :let, :rec, :call, :fin and kinds 4, 5, 6, 11/12, 16, 17 and
+; the rest at :m), proved as the flag proof once proved them all -- ex-vgood
+; opened only once stable -- and disabled until the flag proof, which meets
+; them with ex-vgood closed, so its induction never expands a case
+(defmacro ex-old (name conds hyps)
+  `(progn
+     (defthm ,name
+       (implies (and ,@conds ,@hyps) (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+       :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw ex-csbr ex-cbuild))
+               (and stable-under-simplificationp
+                '(:in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw))
                   :expand ((:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
                            (:free (flg fr tmp) (ex-ev flg e i tmp fr fuel))
                            (:free (x env) (mx2 (cons :if x) env caps defs fuel))
@@ -578,6 +583,77 @@
                            (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
                            (:free (env) (mx2-args nil env caps defs fuel))
                            (:free (x base vs) (mx2-loop (list :loop nil x) base vs caps defs fuel)))))))
+     (in-theory (disable ,name))))
+(defmacro ex-r0 () '(ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel))
+(defmacro ex-k0 () '(ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))
+(defmacro ex-mflg () '(not (member-equal flg '(:iter :do :let :rec :call :coll :fin))))
+
+(ex-old ex-vgood-atom ((not (consp e))) ())
+(ex-old ex-vgood-iter-zp ((consp e) (equal flg :iter) (zp fuel))
+        ((ex-vgood :m e 0 nil (append cm (ex-lsl lp)) (append env tmp) fr fuel caps defs lp)))
+(ex-old ex-vgood-iter ((consp e) (equal flg :iter) (not (zp fuel)))
+        ((ex-vgood :m e 0 nil (append cm (ex-lsl lp)) (append env tmp) fr fuel caps defs lp)
+         (ex-vgood :iter e 0 (cdr (mx2 (ex-tr :m e 0 (append cm (ex-lsl lp))) (append env tmp) caps defs fuel)) cm env
+                   (cadr (ex-ev :m e 0 nil fr fuel)) (1- fuel) caps defs lp)))
+(ex-old ex-vgood-do-none ((consp e) (equal flg :do) (zp (ex-nk e))) ())
+(ex-old ex-vgood-do-mid ((consp e) (equal flg :do) (not (zp (ex-nk e))) (< (nfix i) (- (ex-nk e) 1)))
+        ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :do e (1+ (nfix i)) tmp cm env (cadr (ex-r0)) fuel caps defs lp)))
+(ex-old ex-vgood-do-last ((consp e) (equal flg :do) (not (zp (ex-nk e))) (not (< (nfix i) (- (ex-nk e) 1))))
+        ((ex-vgood :m (ex-kid-of e (- (ex-nk e) 1)) 0 nil cm env fr fuel caps defs lp)))
+(ex-old ex-vgood-let-mid ((consp e) (equal flg :let) (< (nfix i) (ex-i2 e)))
+        ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :let e (1+ (nfix i)) tmp (append cm (list (+ (ex-s2 e) (nfix i)))) (append env (list (val (car (ex-r0)))))
+                   (update-nth (+ (ex-s2 e) (nfix i)) (val (car (ex-r0))) (cadr (ex-r0))) fuel caps defs lp)))
+(ex-old ex-vgood-let-loop ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (equal (ex-kind e) 12))
+        ((ex-vgood :iter (ex-kid-of e (ex-i2 e)) 0
+                   (cons nil (val (mx2-args (ex-locals (cdr (cons nil (ex-slots (ex-s2 e) (ex-i2 e)))) cm) env caps defs fuel)))
+                   (ex-blank (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm) env fr fuel caps defs (cons (ex-s2 e) (ex-i2 e)))))
+(ex-old ex-vgood-let-body ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (not (equal (ex-kind e) 12)))
+        ((ex-vgood :m (ex-kid-of e (ex-i2 e)) 0 nil cm env fr fuel caps defs lp)))
+(ex-old ex-vgood-rec-mid ((consp e) (equal flg :rec) (< (nfix i) (ex-nk e)))
+        ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :rec e (1+ (nfix i)) (append tmp (list (val (car (ex-r0))))) cm env (cadr (ex-r0)) fuel caps defs lp)))
+(ex-old ex-vgood-rec-end ((consp e) (equal flg :rec) (not (< (nfix i) (ex-nk e)))) ())
+(ex-old ex-vgood-call-mid ((consp e) (equal flg :call) (< (nfix i) (ex-nk e)))
+        ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :call e (1+ (nfix i)) (append tmp (list (val (car (ex-r0))))) cm env (cadr (ex-r0)) fuel caps defs lp)))
+(ex-old ex-vgood-call-zp ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (zp fuel)) ())
+(ex-old ex-vgood-call-enter ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (not (zp fuel)))
+        ((ex-vgood :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0
+                   (cons nil (ex-fvs (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                   (ex-fcm (ex-ftm (car (ex-callee tmp))) (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                   (ex-fenv (car (ex-callee tmp)) (cdr (ex-callee tmp))) (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp)))
+                   (1- fuel) (caddr (car (ex-callee tmp))) defs
+                   (cons (ex-astart (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                         (ex-anp (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))))))
+(ex-old ex-vgood-fin ((consp e) (equal flg :fin) (< 1 (ex-nk e)))
+        ((ex-vgood :m (ex-kid-of e 1) 0 nil (append cm (list nil)) (append env (list (val (car tmp)))) fr fuel caps defs nil)))
+(ex-old ex-vgood-fin-end ((consp e) (equal flg :fin) (not (< 1 (ex-nk e)))) ())
+(ex-old ex-vgood-m-if ((consp e) (ex-mflg) (equal (ex-kind e) 4))
+        ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :m (ex-kid-of e 1) 0 nil cm env (cadr (ex-k0)) fuel caps defs lp)
+         (ex-vgood :m (ex-kid-of e 2) 0 nil cm env (cadr (ex-k0)) fuel caps defs lp)))
+(ex-old ex-vgood-m-do ((consp e) (ex-mflg) (equal (ex-kind e) 5)) ((ex-vgood :do e 0 nil cm env fr fuel caps defs lp)))
+(ex-old ex-vgood-m-let ((consp e) (ex-mflg) (or (equal (ex-kind e) 11) (equal (ex-kind e) 12)))
+        ((ex-vgood :let e 0 nil cm env fr fuel caps defs lp)))
+(ex-old ex-vgood-m-rec ((consp e) (ex-mflg) (equal (ex-kind e) 16)) ((ex-vgood :rec e 0 nil cm env fr fuel caps defs lp)))
+(ex-old ex-vgood-m-throw ((consp e) (ex-mflg) (equal (ex-kind e) 17)) ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)))
+(ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6))
+        ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :call e 1 (list (val (car (ex-k0)))) (append cm (list nil)) (append env (list (val (car (ex-k0)))))
+                   (cadr (ex-k0)) fuel caps defs lp)))
+(ex-old ex-vgood-m-leaf ((consp e) (ex-mflg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19)))) ())
+(in-theory (enable ex-vgood-atom ex-vgood-iter-zp ex-vgood-iter ex-vgood-do-none ex-vgood-do-mid ex-vgood-do-last
+                   ex-vgood-let-mid ex-vgood-let-loop ex-vgood-let-body ex-vgood-rec-mid ex-vgood-rec-end
+                   ex-vgood-call-mid ex-vgood-call-zp ex-vgood-call-enter ex-vgood-fin ex-vgood-fin-end
+                   ex-vgood-m-if ex-vgood-m-do ex-vgood-m-let ex-vgood-m-rec ex-vgood-m-throw ex-vgood-m-call ex-vgood-m-leaf))
+
+(defthm ex-vm-agree-flag
+  (ex-vgood flg e i tmp cm env fr fuel caps defs lp)
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs lp)
+                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw ex-csbr ex-cbuild))))
 
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
