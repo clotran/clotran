@@ -557,6 +557,9 @@
 ;; ...and its old truncation
 (case 1410065407 9999999999 :wrong 1410065407 :right :no)
 
+;; case* in a loop's tail: the branch the record becomes recurs (exec-PLAN 3b)
+(loop [i 0 acc []] (case i 3 acc (1 2) (recur (inc i) (conj acc :x)) (recur (inc i) (conj acc i))))
+
 ;; ...across the sign flip
 (case 2147483648 2147483648 :big -2147483648 :collided :no)
 

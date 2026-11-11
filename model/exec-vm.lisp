@@ -235,8 +235,52 @@
                            (:free (x env) (mx2 (cons :local x) env caps defs fuel))
                            (:free (x env) (mx2 (cons :throw x) env caps defs fuel))))))
 
+; A CASE. The runtime's case test throws nothing (ex-caseok), so the
+; table's walk is ex-casew's: mx2 of the walk is the taken entry's then,
+; else the default -- the branch ex-csbr names, in scope cm ++ (nil)
+(defun-sk ex-caseok () (forall (c v) (not (throwp (prim :case (list c v))))))
+(defthm ex-caseok-nothrow (implies (ex-caseok) (not (throwp (prim :case (list c v)))))
+  :hints (("Goal" :use ex-caseok-necc)))
+(in-theory (disable ex-caseok))
+(defthm ex-casew-nat (implies (equal (car (ex-casew cs v j)) 1) (natp (cdr (ex-casew cs v j))))
+  :rule-classes (:rewrite :type-prescription))
+(defthm ex-casew-lo (implies (equal (car (ex-casew cs v j)) 1) (<= (nfix j) (cdr (ex-casew cs v j))))
+  :rule-classes :linear)
+(defthm ex-casew-hi (implies (equal (car (ex-casew cs v j)) 1) (< (cdr (ex-casew cs v j)) (+ (nfix j) (len cs))))
+  :rule-classes :linear)
+(defthm ex-mx-trcs-j
+  (implies (and (ex-caseok) (equal p (len env)) (natp j))
+           (equal (mx2 (ex-trcs cs ts d p) (append env (list v)) caps defs fuel)
+                  (if (equal (car (ex-casew cs v j)) 1)
+                      (mx2 (nth (- (cdr (ex-casew cs v j)) j) ts) (append env (list v)) caps defs fuel)
+                    (mx2 d (append env (list v)) caps defs fuel))))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-cwind cs ts j)
+                  :in-theory (enable ex-trcs)
+                  :expand ((ex-casew cs v j)
+                           (:free (x env) (mx2 (cons :if x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :const x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :local x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+(in-theory (disable ex-casew))
+(defthm ex-mx-trcase
+  (implies (and (ex-caseok) (consp e) (equal (len env) (len cm)))
+           (equal (mx2 (ex-trcs (ex-c e) (ex-tr :ct e 0 (append cm (list nil))) (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil))) (len cm))
+                       (append env (list v)) caps defs fuel)
+                  (mx2 (ex-tr :m (ex-csbr e v) 0 (append cm (list nil))) (append env (list v)) caps defs fuel)))
+  :hints (("Goal" :in-theory (e/d (ex-csbr) (ex-kid-of ex-tr))
+                  :use ((:instance ex-mx-trcs-j (cs (ex-c e)) (ts (ex-tr :ct e 0 (append cm (list nil))))
+                                   (d (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil)))) (p (len cm)) (j 0))))))
+(defthm ex-vwf-csbr
+  (implies (and (ex-vwf :ct e 0 cm lp defs) (ex-vwf :m (ex-kid-of e 1) 0 cm lp defs) (consp e))
+           (ex-vwf :m (ex-csbr e v) 0 cm lp defs))
+  :hints (("Goal" :in-theory (e/d (ex-csbr) (ex-kid-of ex-vwf)))))
+(defthm ex-agree-nil1 (ex-agree (list nil) (list v) fr))
+
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
@@ -367,6 +411,11 @@
                                           fuel caps defs nil))))
                         (t (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
                                  (ex-vind :fin e 0 (list (car r) (c+ 1 (caddr r))) cm env (cadr r) fuel caps defs nil))))))
+               ((equal k 19)
+                (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                  (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+                        (ex-vind :m (ex-csbr e (val (car r))) 0 nil (append cm (list nil)) (append env (list (val (car r))))
+                                 (cadr r) fuel caps defs lp))))
                ((equal k 6)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
@@ -413,11 +462,38 @@
                   :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
                   :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))))))
 
+; THE CASE'S CASES, as the try's: its test's answer not a value, or the
+; branch the walk takes
+(defmacro ex-tcs (&rest hs)
+  `(implies (and (consp e) (equal (ex-kind e) 19) (not (member-equal flg '(:iter :do :let :rec :call :fin)))
+                 (ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil) ,@hs)
+            (ex-vgood flg e i tmp cm env fr fuel caps defs lp)))
+(defthm ex-vgood-case-val
+  (ex-tcs (valp (car (ex-tr0)))
+          (ex-vgood :m (ex-csbr e (val (car (ex-tr0)))) 0 nil (append cm (list nil)) (append env (list (val (car (ex-tr0)))))
+                    (cadr (ex-tr0)) fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))
+                           (:free (x env) (mx2 (cons :let x) env caps defs fuel))))))
+(defthm ex-vgood-case-out
+  (ex-tcs (not (valp (car (ex-tr0)))))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))
+                           (:free (x env) (mx2 (cons :let x) env caps defs fuel))))))
+(defthm ex-vgood-case
+  (ex-tcs (ex-vgood :m (ex-csbr e (val (car (ex-tr0)))) 0 nil (append cm (list nil)) (append env (list (val (car (ex-tr0)))))
+                    (cadr (ex-tr0)) fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-vgood-case-val ex-vgood-case-out ex-kid-of ex-ev)
+                  :use (ex-vgood-case-val ex-vgood-case-out))))
+(in-theory (disable ex-vgood-case-val ex-vgood-case-out))
+
 (defthm ex-vm-agree-flag
   (ex-vgood flg e i tmp cm env fr fuel caps defs lp)
   :rule-classes nil :otf-flg t
   :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs lp)
-                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw))
+                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw ex-csbr))
           (and stable-under-simplificationp
            '(:in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw))
                   :expand ((:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
@@ -436,7 +512,7 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-agree cm env fr)
                 (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -444,7 +520,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-agree cm env fr)
                 (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))

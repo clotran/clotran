@@ -1618,21 +1618,12 @@
        case (N_VMB)
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
-       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY)
+       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
           ! from its pc 4 when the task resumes
           if (tctx%yield_flag) exit
-       case (N_CASE)
-          if (tctx%kst(tctx%ksp)%pc == 0) then
-             tctx%kst(tctx%ksp)%pc = 1
-             call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-          else
-             call vs_set(vst, b + 3, val)
-             v = case_branch(vs_get(vst, b + 1), vs_get(vst, b + 3))
-             call k_tail(v, tctx)
-          end if
        case (N_VECTOR, N_MAP, N_SET)
           ! children collected into slot 4, one frame each, then built
           select case (tctx%kst(tctx%ksp)%pc)
@@ -2317,6 +2308,11 @@
     case (23)
        ! the callee is no fn: the cast's refusal, no argument run
        call refuse_not_fn(val)
+    case (24)
+       ! case*: the branch its table's probe picks (ex-csbr), the record become it
+       call vs_set(vst, b + 3, val)
+       rinfo = case_branch(nd, vs_get(vst, b + 3))
+       call k_tail(rinfo, tctx)
     case (22)
        ! the finally ran after an uncaught error: the error goes on
        tctx%has_error = .true.

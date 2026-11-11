@@ -1,6 +1,6 @@
 ; THE TREE EVALUATOR'S CORE, COUNTED (model/exec.lisp). A turn of
 ; run_loop is one ex-step: the generated decisions are a fixed number of
-; comparisons (ex-own, at most 18 on any path), and its action a push, a
+; comparisons (ex-own, at most 19 on any path), and its action a push, a
 ; tail, a finish or a slot written, each a constant number of steps but a
 ; recur's last, which writes its k slots, a closure's making, which copies
 ; its c captures, and a call's entry, which makes a frame of its callee's
@@ -14,15 +14,16 @@
 ; its head's (none, and one turn fewer, when direct-linked), its
 ; arguments' and 2k + 4, and its callee's body's (ex-call-turns). The
 ; arity a call picks is at most two walks of its callee's a arities, one
-; ex-arfit (10 comparisons) each: at most 2a (ex-arity-steps-bound).
+; ex-arfit (10 comparisons) each: at most 2a (ex-arity-steps-bound). A
+; case* its test's turns, its branch's and 2 (ex-case-turns).
 
 (in-package "ACL2")
 
 (include-book "exec-vm")
 
 ; the comparisons on each decision's longest path
-(defun ex-own (f) (case f (ex-act 18) (ex-kid 7) (ex-pc 14) (ex-i 9) (ex-fin 2) (ex-unw 9) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 5) (sk-step 7) (otherwise 0)))
-(defthm ex-own-bound (<= (ex-own f) 18) :rule-classes :linear)
+(defun ex-own (f) (case f (ex-act 19) (ex-kid 7) (ex-pc 15) (ex-i 9) (ex-fin 2) (ex-unw 9) (ex-arfit 10) (ex-entry 2) (ex-apentry 5) (ex-apstep 7) (ex-aplook 5) (sk-step 7) (otherwise 0)))
+(defthm ex-own-bound (<= (ex-own f) 19) :rule-classes :linear)
 
 ; the arity's walk: the arities ex-arfit is asked of, the fixed pass and,
 ; when it found none, the variadic one (exec.inc pick_arity)
@@ -227,3 +228,19 @@
 (defun ex-catchw-steps (cs v)
   (cond ((atom cs) 0) ((truthy (prim :isa (list (nth 0 (car cs)) v))) 1) (t (1+ (ex-catchw-steps (cdr cs) v)))))
 (defthm ex-catchw-steps-bound (<= (ex-catchw-steps cs v) (len cs)) :rule-classes :linear)
+
+; A CASE'S TURNS: its test's, its branch's and 2 more -- the test's push
+; and the record become the branch. Finding the branch is case_branch's
+; one hash probe (the runtime's); the model's walk is one test an entry
+; (ex-casew-steps)
+(defthm ex-case-turns
+  (implies (and (consp e) (equal (ex-kind e) 19) (valp (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel))
+               (+ 2 (caddr (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))
+                  (caddr (ex-ev :m (ex-csbr e (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))) 0 nil
+                                (cadr (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)) fuel)))))
+  :hints (("Goal" :expand ((ex-ev :m e 0 nil fr fuel)) :in-theory (e/d (c+) (ex-kid-of)))))
+
+(defun ex-casew-steps (cs v)
+  (cond ((atom cs) 0) ((truthy (prim :case (list (nth 0 (car cs)) v))) 1) (t (1+ (ex-casew-steps (cdr cs) v)))))
+(defthm ex-casew-steps-bound (<= (ex-casew-steps cs v) (len cs)) :rule-classes :linear)

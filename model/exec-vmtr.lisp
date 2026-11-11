@@ -14,10 +14,10 @@
 (defthm ex-rstart-natp2 (natp (ex-rstart e)) :rule-classes :type-prescription)
 (defthm ex-rn-natp2 (natp (ex-rn e)) :rule-classes :type-prescription)
 
-(defun ex-vrank (flg) (case flg ((:do :let :rec :call :cs :fin) 0) (otherwise 1)))
+(defun ex-vrank (flg) (case flg ((:do :let :rec :call :cs :ct :fin) 0) (otherwise 1)))
 (defun ex-vleft (flg e i)
   (case flg (:let (nfix (- (ex-i2 e) (nfix i)))) ((:do :rec :call) (nfix (- (ex-nk e) (nfix i))))
-    (:cs (nfix (- (len (ex-c e)) (nfix i)))) (otherwise 0)))
+    ((:cs :ct) (nfix (- (len (ex-c e)) (nfix i)))) (otherwise 0)))
 
 (defun ex-pos (s cm) (cond ((atom cm) 0) ((equal s (car cm)) 0) (t (1+ (ex-pos s (cdr cm))))))
 
@@ -58,6 +58,14 @@
 (defun ex-trtry (b hs f cs fin p)
   (let ((x (list :try b (ex-trh cs hs p)))) (if fin (ex-trfin x f p) x)))
 
+; A CASE (exec-PLAN 3b): (:let X W), X its test, W the table's walk at the
+; test's value's position p -- (:if (:prim :case (:const t) (:local p)) Tj ..D),
+; entry j's then Tj and the default D in scope cm ++ (nil), in the case's tail
+(defun ex-trcs (ct ts d p)
+  (if (atom ct)
+      d
+    (list :if (list :prim :case (list :const (nth 0 (car ct))) (list :local p)) (car ts) (ex-trcs (cdr ct) (cdr ts) d p))))
+
 (defun ex-tr (flg e i cm)
   (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
                   :well-founded-relation o<
@@ -82,6 +90,7 @@
                  (cons (ex-tr :m (ex-cbody e i) 0 (append cm (list (ex-cslot e i)))) (ex-tr :cs e (1+ i) cm))
                nil))
         (:fin (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil))))
+        (:ct (if (< i (len (ex-c e))) (cons (ex-tr :m (ex-cthen e i) 0 cm) (ex-tr :ct e (1+ i) cm)) nil))
         (otherwise
          (cond ((or (equal k 1) (equal k 3)) (list :const (ex-c e)))
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
@@ -95,6 +104,9 @@
                ((equal k 17) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm)))
                ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 cm) (ex-tr :fin e 0 cm)
                                        (ex-c e) (< 1 nk) (len cm)))
+               ((equal k 19) (list :let (ex-tr :m (ex-kid-of e 0) 0 cm)
+                                   (ex-trcs (ex-c e) (ex-tr :ct e 0 (append cm (list nil))) (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil)))
+                                            (len cm))))
                (t '(:const nil))))))))
 
 ; THE VALUES (milestone 2b): every closure-shaped value one whose template
@@ -244,6 +256,10 @@
                               (ex-vwf :cs e (1+ i) cm lp defs))
                        t)))
            (:fin (or (not (< 1 nk)) (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) nil defs)))
+           (:ct (and (equal k 19)
+                     (if (< i (len (ex-c e)))
+                         (and (ex-vwf :m (ex-cthen e i) 0 cm lp defs) (ex-vwf :ct e (1+ i) cm lp defs))
+                       t)))
            (otherwise
             (cond ((or (equal k 1) (equal k 3)) (ex-xvs defs (list (ex-c e))))
                   ((equal k 2) (and (member-equal (ex-i2 e) cm) (not (ex-mark e))))
@@ -263,6 +279,9 @@
                   ((equal k 17) (and (equal nk 1) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)))
                   ((equal k 18) (and (or (equal nk 1) (equal nk 2)) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
                                      (ex-vwf :cs e 0 cm nil defs) (ex-vwf :fin e 0 cm nil defs)))
+                  ((equal k 19) (and (equal nk 2) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
+                                     (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) lp defs)
+                                     (ex-vwf :ct e 0 (append cm (list nil)) lp defs)))
                   (t nil)))))))
 
 ; A FN'S TEMPLATE (name arities caps nslots self), each arity (nf variadic
@@ -332,7 +351,7 @@
                      (and (equal k 11) (not (member-equal (+ (ex-s2 e) i) cm)) (ex-lfwf :m (ex-kid-of e i) 0 cm)
                           (ex-lfwf :let e (1+ i) (append cm (list (+ (ex-s2 e) i)))))
                    (and (equal k 11) (ex-lfwf :m (ex-kid-of e n2) 0 cm))))
-           ((:rec :call :cs :fin) nil)
+           ((:rec :call :cs :ct :fin) nil)
            (otherwise
             (cond ((member-equal k (quote (1 3 14))) t)
                   ((equal k 2) (and (member-equal (ex-i2 e) cm) (not (ex-mark e))))
@@ -452,11 +471,19 @@
            (x2wf (ex-trtry b hs f cs fin p) p k)))
 (in-theory (disable ex-trtry))
 
+; a case's walk: its thens and default each in the case's tail
+(defun ex-x2wfk (es n k) (if (atom es) t (and (x2wf (car es) n k) (ex-x2wfk (cdr es) n k))))
+(defthm ex-trcs-xwf
+  (implies (and (natp p) (ex-x2wfk ts (1+ p) k) (x2wf d (1+ p) k)) (x2wf (ex-trcs ct ts d p) (1+ p) k))
+  :hints (("Goal" :induct (ex-trcs ct ts d p))))
+(in-theory (disable ex-trcs))
+
 (defun ex-xgood (flg e i cm lp defs)
   (implies (ex-vwf flg e i cm lp defs)
            (case flg
              ((:rec :call) (x2wf-args (ex-tr flg e i cm) (len cm)))
              (:cs (x2wf-args (ex-tr flg e i cm) (1+ (len cm))))
+             (:ct (ex-x2wfk (ex-tr flg e i cm) (len cm) (ex-k lp)))
              (:fin (or (not (< 1 (ex-nk e))) (x2wf (ex-tr flg e i cm) (1+ (len cm)) nil)))
              (otherwise (x2wf (ex-tr flg e i cm) (len cm) (ex-k lp))))))
 
@@ -495,6 +522,26 @@
            (and (not (member-equal (ex-cslot e k) cm))
                 (ex-vwf :m (ex-cbody e k) 0 (append cm (list (ex-cslot e k))) nil defs)))
   :hints (("Goal" :use ((:instance ex-vwf-cs-nth (i 0) (lp nil))))))
+
+; a case's entry k: its then's translation and its well-formedness
+(defthm ex-tr-ct-nth
+  (implies (and (consp e) (natp i) (natp k) (< (+ i k) (len (ex-c e))))
+           (equal (nth k (ex-tr :ct e i cm)) (ex-tr :m (ex-cthen e (+ i k)) 0 cm)))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-csind2 k i) :expand ((ex-tr :ct e i cm)))))
+(defthm ex-tr-ct-nth0
+  (implies (and (consp e) (natp k) (< k (len (ex-c e))))
+           (equal (nth k (ex-tr :ct e 0 cm)) (ex-tr :m (ex-cthen e k) 0 cm)))
+  :hints (("Goal" :use ((:instance ex-tr-ct-nth (i 0))))))
+(defthm ex-vwf-ct-nth
+  (implies (and (consp e) (natp i) (natp k) (< (+ i k) (len (ex-c e))) (ex-vwf :ct e i cm lp defs))
+           (ex-vwf :m (ex-cthen e (+ i k)) 0 cm lp defs))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-csind2 k i) :expand ((ex-vwf :ct e i cm lp defs)))))
+(defthm ex-vwf-ct-nth0
+  (implies (and (ex-vwf :ct e 0 cm lp defs) (consp e) (natp k) (< k (len (ex-c e))))
+           (ex-vwf :m (ex-cthen e k) 0 cm lp defs))
+  :hints (("Goal" :use ((:instance ex-vwf-ct-nth (i 0))))))
 
 ; ---- THE THEOREM ----------------------------------------------------------------------------------
 ;

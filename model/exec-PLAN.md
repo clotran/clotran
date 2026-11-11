@@ -367,8 +367,34 @@ slot's read and write), and every kind not yet in the model.
    ex-tr-xwf (ex-trtry-xwf). exec-vmrun: (try (throw 7) (catch C x x)
    (finally 3)) caught, uncaught, with and without the finally -- the tree,
    mx2 and the VM alike. Model only (the machine's try is 3a's).
-   **Next (3b)**: N_CASE (case_branch, its table read as data), then the
-   collections (ex-xvs over them).
+   **3b, fourth part** *(done)*: case*. N_CASE (19) is a core kind of
+   ex-act: pc 0 its test pushed (action 3), pc 1 action 24 -- the record
+   becomes the branch (k_tail, its restart kept), ex-csbr: the then of the
+   table entry the walk takes, else the default (children test and
+   default, nk 2; slot 2 the table read as data, each entry (test then)).
+   Which entry takes the value is the runtime's, vmx2's prim :case of the
+   entry's test and the value (ex-casew walks them in order) --
+   case_branch's hash probe and Util.equiv, named as host; the macro's tests
+   are distinct, so the walk's first is the probe's only one. ex-wf: the
+   thens and default in the case's tail (a recur in a branch is its
+   loop's). ex-ev as an if's: the test's turns, the branch's and 2.
+   Proved: ex-machine-correct over it (ex-good-case, from ex-good-case-out
+   and -br), ex-case-turns and ex-casew-steps-bound (exec-cost; ex-own's
+   counts now 19 for ex-act, 15 for ex-pc); the translation `(:let X W)`,
+   W the walk `(:if (:prim :case (:const t) (:local p)) Tj ..D)` at the
+   test's position p, the thens and default in scope cm ++ (nil) and in
+   the case's tail (ex-trcs, x2wf by ex-trcs-xwf); ex-mx-trcase (mx2 of the
+   walk is the branch ex-csbr names); the case's two cases lemmas of their
+   own (ex-vgood-case, from -val and -out) the flag proof meets closed;
+   ex-vm-agree, ex-recur-stays and ex-vm-runs over it under a fourth
+   runtime hypothesis, ex-caseok (prim :case throws nothing). exec-vmrun:
+   (case x 1 10 2 20 30) taken and defaulted, the tree, mx2 and the VM
+   alike. Fortran: N_CASE moved into exec_core (action 24 calls
+   case_branch and k_tails into its answer); exec_gen.inc regenerated;
+   fuzz-exec-gen draws kind 19 more often. Oracle: a case* in a loop's
+   tail recurring from two of its branches.
+   **Next (3b)**: the collections, N_VECTOR/MAP/SET (ex-xvs over them, a
+   closure inside a vector still a call's possible head).
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,

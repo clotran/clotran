@@ -163,6 +163,14 @@
             r = 18_int64
             return
           end if
+        case (19_int64)
+          if ((pc_ == 0_int64)) then
+            r = 3_int64
+            return
+          else
+            r = 24_int64
+            return
+          end if
         case (18_int64)
           if ((pc_ == 0_int64)) then
             r = 3_int64
@@ -402,6 +410,9 @@
       r = 1_int64
       return
     case (17_int64)
+      r = 1_int64
+      return
+    case (19_int64)
       r = 1_int64
       return
     case (18_int64)

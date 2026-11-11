@@ -17,7 +17,7 @@
 ; the program's defs every template's the tree can call (ex-defs-ok), its
 ; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
-  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok)
+  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -34,12 +34,14 @@
 ; 1), 3 slots, the self slot 2; a node (kind i2 kids c s2 mark rstart rn)
 ; the checks' runtime: vmx2's prim-impl, and a call's IFn test (ex-ifn,
 ; prim :ifn) that a closure and apply pass -- what is callable here; and
-; instance? (prim :isa) of the class :any, which every value is
+; instance? (prim :isa) of the class :any, which every value is; and
+; case*'s test (prim :case), equality
 (defun ex-prim-impl (op vals)
   (declare (xargs :guard t))
   (case op
     (:ifn (and (consp vals) (or (equal (car vals) :apply) (and (consp (car vals)) (eq (car (car vals)) :clo)))))
     (:isa (and (consp vals) (equal (car vals) :any)))
+    (:case (and (consp vals) (consp (cdr vals)) (equal (car vals) (cadr vals))))
     (otherwise (prim-impl op vals))))
 (local (defattach prim ex-prim-impl))
 (defconst *ex-tm*
@@ -155,3 +157,19 @@
        (equal (vcs2-run-program (ex-tr :m (ex-tryg :none t) 0 nil) *ex-defs* 1000) '(:thrown . 7))
        (equal (car (ex-ev :m (ex-tryg :any nil) 0 nil (make-list 1) 10)) '(:val . 7))
        (equal (vcs2-run-program (ex-tr :m (ex-tryg :any nil) 0 nil) *ex-defs* 1000) '(:val . 7)))))
+
+; case* (exec-PLAN 3b): (case x 1 10 2 20 30) -- 2 takes the second entry,
+; 20; 5 none, the default 30 -- the tree, mx2 (the table's walk over prim
+; :case) and the VM alike, the checks' case test value equality
+(defun ex-caseg (x)
+  (list 19 0 (list (list 1 0 nil x 0 nil 0 0) '(1 0 nil 30 0 nil 0 0))
+        '((1 (1 0 nil 10 0 nil 0 0)) (2 (1 0 nil 20 0 nil 0 0))) 0 nil 0 0))
+(assert-event (ex-vwf :m (ex-caseg 2) 0 nil nil *ex-defs*))
+(assert-event ; ex-example-case
+ (with-guard-checking :none
+  (and (equal (car (ex-ev :m (ex-caseg 2) 0 nil nil 10)) '(:val . 20))
+       (equal (mx2 (ex-tr :m (ex-caseg 2) 0 nil) nil nil *ex-defs* 10) '(:val . 20))
+       (equal (vcs2-run-program (ex-tr :m (ex-caseg 2) 0 nil) *ex-defs* 1000) '(:val . 20))
+       (equal (car (ex-ev :m (ex-caseg 5) 0 nil nil 10)) '(:val . 30))
+       (equal (mx2 (ex-tr :m (ex-caseg 5) 0 nil) nil nil *ex-defs* 10) '(:val . 30))
+       (equal (vcs2-run-program (ex-tr :m (ex-caseg 5) 0 nil) *ex-defs* 1000) '(:val . 30)))))

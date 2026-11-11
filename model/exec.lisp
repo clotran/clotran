@@ -29,6 +29,9 @@
 ;                frame of its own, the caller's kept in the record (or,
 ;                as ex-entry decides, throw the arity error)
 ;             17 the body answered: the caller's frame back, finish
+;             24 become the branch case_branch picks (k_tail): the
+;                then of the entry the table's walk takes, else the
+;                default (a case*'s pc 1, its test's value in flight)
 ;             23 the callee is no fn (tv 0 at a call's pc 1, the IFn test,
 ;                ex-ifn): throw :not-fn, before any argument runs
 ;                                              0 not a core kind
@@ -61,7 +64,8 @@
 ; ---- THE DECISIONS (generated) ---------------------------------------------------------------
 ;
 ; kinds as Eval.f90 numbers them: N_CONST 1, N_LOCAL 2, N_VAR 3, N_IF 4,
-; N_DO 5, N_CALL 6, N_LET 11, N_LOOP 12, N_FN 14, N_RECUR 16; tv 1 when the
+; N_DO 5, N_CALL 6, N_LET 11, N_LOOP 12, N_FN 14, N_RECUR 16, N_THROW 17,
+; N_TRY 18, N_CASE 19 (pc 0 its test pushed, 1 the branch); tv 1 when the
 ; value in flight is truthy. A call's record: pc 0 its head, 1 the callee
 ; kept, 2 and 3 its arguments (i the next), 4 the entry, 5 the body done.
 
@@ -85,6 +89,7 @@
         ((equal k 3) 11)
         ((equal k 14) 12)
         ((equal k 17) (if (equal pc 0) 3 18))
+        ((equal k 19) (if (equal pc 0) 3 24))
         ((equal k 18) (cond ((equal pc 0) 3)
                             ((or (equal pc 1) (equal pc 3)) (if (and (integerp nk) (< 1 nk)) 20 19))
                             ((equal pc 2) 21)
@@ -111,6 +116,7 @@
   (declare (xargs :guard t) (ignore n2 tv))
   (cond ((equal k 4) 1)
         ((equal k 17) 1)
+        ((equal k 19) 1)
         ((equal k 18) (cond ((equal pc 0) 1) ((or (equal pc 1) (equal pc 3)) 2) ((equal pc 4) 5) (t pc)))
         ((or (equal k 11) (equal k 12)) (if (equal pc 1) 0 1))
         ((equal k 16) (if (equal pc 1) 2 1))
@@ -337,6 +343,24 @@
 (defun ex-cbody (e j) (nth 2 (nth j (ex-c e))))
 (defun ex-cslot (e j) (nfix (nth 1 (nth j (ex-c e)))))
 
+;; CASE (case*, exec-PLAN 3b). An N_CASE's children its test and its
+; default (nk 2); slot 2 its table, read as data: each entry (test then),
+; then the branch's node (analyze.inc anb_casenode). Which entry takes the
+; test's value is the runtime's -- case_branch's hash probe (shift, mask,
+; the int or hashCode key, a merged bucket's skip-check) and Util.equiv,
+; vmx2's prim (op :case) of the entry's test and the value, whatever it
+; answers -- walked in order: (1 . j) entry j took it, (0) none did. The
+; macro's tests are distinct, so at most one entry takes a value and the
+; walk's first is the probe's only one.
+(defun ex-casew (ct v j)
+  (cond ((atom ct) (list 0))
+        ((truthy (prim :case (list (nth 0 (car ct)) v))) (cons 1 (nfix j)))
+        (t (ex-casew (cdr ct) v (1+ (nfix j))))))
+(defun ex-cthen (e j) (nth 1 (nth j (ex-c e))))
+; the branch: the taken entry's then, else the default
+(defun ex-csbr (e v)
+  (let ((w (ex-casew (ex-c e) v 0))) (if (equal (car w) 1) (ex-cthen e (cdr w)) (ex-kid-of e 1))))
+
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;
 ; a state (records val frame); a record (node pc i restart rnode tmp), tmp
@@ -416,6 +440,7 @@
           (20 (list (cons (ex-rec (ex-kid-of e j) 0 0 nil nil nil) (cons (ex-rec e pc2 i2 fl rs (list val)) (cdr ks))) val fr))
           (21 (ex-finish (car tmp) ks fr))
           (23 (list (cons (ex-throwr :not-fn) ks) nil fr))
+          (24 (list (cons (ex-rec (ex-csbr e val) 0 0 fl rs nil) (cdr ks)) val fr))
           (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
           (otherwise s)))))))
 
@@ -467,8 +492,8 @@
     (otherwise 0)))
 
 ; ex-wf's measure: its catches' walk too
-(defun ex-wrank (flg) (if (eq flg :cs) 0 (ex-rank flg)))
-(defun ex-wleft (flg e i) (if (eq flg :cs) (nfix (- (len (ex-c e)) (nfix i))) (ex-left flg e i)))
+(defun ex-wrank (flg) (if (member-eq flg '(:cs :ct)) 0 (ex-rank flg)))
+(defun ex-wleft (flg e i) (if (member-eq flg '(:cs :ct)) (nfix (- (len (ex-c e)) (nfix i))) (ex-left flg e i)))
 
 (defthm ex-nth-count (<= (acl2-count (nth j l)) (acl2-count l)) :rule-classes :linear)
 (defthm ex-nth-count-strict (implies (consp l) (< (acl2-count (nth j l)) (acl2-count l))) :rule-classes :linear)
@@ -479,7 +504,13 @@
   :hints (("Goal" :in-theory (disable ex-nth-count ex-nth-count-strict)
                   :use ((:instance ex-nth-count (l (nth j (nth 3 e))) (j 2)) (:instance ex-nth-count (l (nth 3 e)))
                         (:instance ex-nth-count-strict (j 3) (l e))))))
-(in-theory (disable ex-cbody))
+(defthm ex-cthen-count (implies (consp e) (< (acl2-count (ex-cthen e j)) (acl2-count e))) :rule-classes :linear
+  :hints (("Goal" :in-theory (disable ex-nth-count ex-nth-count-strict)
+                  :use ((:instance ex-nth-count (l (nth j (nth 3 e))) (j 1)) (:instance ex-nth-count (l (nth 3 e)))
+                        (:instance ex-nth-count-strict (j 3) (l e))))))
+(defthm ex-csbr-count (implies (consp e) (< (acl2-count (ex-csbr e v)) (acl2-count e))) :rule-classes :linear
+  :hints (("Goal" :in-theory (disable ex-kid-of ex-cthen))))
+(in-theory (disable ex-cbody ex-cthen ex-csbr))
 
 ; WELL FORMED, as the machine theorem assumes and a call asks of the body
 ; it enters: every node a modelled kind; an if 2 or 3 children; a let or
@@ -510,6 +541,9 @@
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :call e (1+ i) tl)))
                         (t t)))
            (:fin nil)
+           (:ct (cond ((not (equal k 19)) nil)
+                      ((< i (len (ex-c e))) (and (ex-wf :m (ex-cthen e i) 0 tl) (ex-wf :ct e (1+ i) tl)))
+                      (t t)))
            (:cs (cond ((not (equal k 18)) nil)
                       ((< i (len (ex-c e))) (and (ex-wf :m (ex-cbody e i) 0 nil) (ex-wf :cs e (1+ i) tl)))
                       (t t)))
@@ -526,6 +560,8 @@
                   ((equal k 17) (and (equal nk 1) (ex-wf :m (ex-kid-of e 0) 0 nil)))
                   ((equal k 18) (and (or (equal nk 1) (equal nk 2)) (ex-wf :m (ex-kid-of e 0) 0 nil)
                                      (or (equal nk 1) (ex-wf :m (ex-kid-of e 1) 0 nil)) (ex-wf :cs e 0 nil)))
+                  ((equal k 19) (and (equal nk 2) (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
+                                     (ex-wf :ct e 0 tl)))
                   (t nil)))))))
 
 ; a call enters f with n arguments, in the meaning: a closure with that
@@ -648,4 +684,10 @@
                              (ex-ev :fin e 0 (list (car rh) (c+ 1 (c+ (caddr r) (c+ 1 (caddr rh))))) (cadr rh) fuel)
                            (list (list :out) fr 0))))
                       (t (ex-ev :fin e 0 (list (car r) (c+ 1 (caddr r))) (cadr r) fuel)))))
+             ((equal k 19)
+              (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                (if (not (valp (car r)))
+                    (ex-nv r fr)
+                  (let ((r2 (ex-ev :m (ex-csbr e (val (car r))) 0 nil (cadr r) fuel)))
+                    (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
              (t (list (list :out) fr 0)))))))
