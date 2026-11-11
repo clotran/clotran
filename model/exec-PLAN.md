@@ -345,6 +345,10 @@ slot's read and write), and every kind not yet in the model.
    exec-vmrun's examples run mx2 and the VM under the checks' attachment
    (prim :ifn is constrained in the logic). Model only: the Fortran already
    runs the head first (3b's first part).
+   exec-vm.lisp is three books now, each under 800 lines, no statement
+   changed: exec-vmtr (the translation, the good values, ex-vwf, the scope,
+   ex-tr-xwf), exec-vmcall (fns and calls) and exec-vm (the throw's
+   hypotheses and the theorem).
    **Next (3b)**: a try `(:try B H)`, H the catch walk `(:if (:prim :isa
    (:const c) (:local p)) Hj ...(:throw (:local p)))`, clause j's body in
    scope cm ++ (slot j), a finally F as vmx2's comment says -- `(:let (:try
