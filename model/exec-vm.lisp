@@ -1,6 +1,6 @@
 ; THE TREE EVALUATOR'S MEANING IS THE VM'S (model/exec.lisp against
 ; model/vmx2.lisp): for the core -- constants, locals, Vars, if, do, let*,
-; loop*, recur, fns of any arities and calls -- what ex-ev answers is what
+; loop*, recur, fns of any arities, calls, throw and try -- what ex-ev answers is what
 ; vmx2's mx2 answers of the tree's translation, and vmx2-proof proves the
 ; VM runs mx2 (vcs2-correct), so the VM run of the translation answers the
 ; tree's value (ex-vm-runs, in exec-vmrun).
@@ -52,10 +52,19 @@
 ; list holds the tree's recur marker (ex-xvs-no-mk) and apply's spread of
 ; good values is never refused for one. A call of a closure no arity fits
 ; throws :arity in both (ex-ev's :thrown, mx2's). The runtime's part
-; (prim, unconstrained) is two hypotheses: its cast to IFn throws nothing
+; (prim, unconstrained) is three hypotheses: its cast to IFn throws nothing
 ; (ex-ifnok), and a call of apply the tree refuses -- fewer than two
 ; arguments, a closure's with no seq -- it refuses with the tree's :arity
-; and :not-seq (ex-apok).
+; and :not-seq (ex-apok); and its instance? throws nothing (ex-isaok).
+;
+; THROW AND TRY. A throw is mx2's (:throw x). A try is (:try B H), H the
+; catch walk over prim :isa at the thrown value's position (ex-trh), clause
+; j's body in scope cm ++ (slot j), so the clause mx2 runs is ex-catchw's
+; and its slot holds the thrown value; a finally F is vmx2's desugaring,
+; (:let (:try X (:if F (:throw p) (:throw p))) (:if F p p)) (ex-trfin), F
+; in scope cm ++ (nil). ex-mx-trtry says what mx2 makes of it (ex-mxtry),
+; so the flag proof's try case is that lemma's, and ex-vpost's :fin place
+; is the try's end, as ex-ev's.
 ;
 ; THE THEOREM (ex-vm-agree): a well-formed core tree in no loop's tail
 ; whose scope agrees answers, when ex-ev gives a value or a throw, that
@@ -164,16 +173,80 @@
                                   (ex-mxcl ex-mxcall ex-hclo ex-self sk-spread x2-sp x2-spreads ex-apsp ex-arity
                                    ex-xvs-nth1 ex-apway-spreads ex-defs-ok-assoc ex-defs-ok ex-arswf ex-clauses ex-lzok)))))
 
+; A TRY. The runtime's instance? throws nothing (ex-isaok), so the catch
+; walk's tests are ex-catchw's: mx2 of the walk is the first matching
+; clause's body with the thrown value at p, or the throw again
+(defun-sk ex-isaok () (forall (c v) (not (throwp (prim :isa (list c v))))))
+(defthm ex-isaok-nothrow (implies (ex-isaok) (not (throwp (prim :isa (list c v)))))
+  :hints (("Goal" :use ex-isaok-necc)))
+(in-theory (disable ex-isaok))
+(defthm ex-catchw-nat (implies (equal (car (ex-catchw cs v j)) 1) (natp (cdr (ex-catchw cs v j))))
+  :rule-classes (:rewrite :type-prescription))
+(defthm ex-catchw-lo (implies (equal (car (ex-catchw cs v j)) 1) (<= (nfix j) (cdr (ex-catchw cs v j))))
+  :rule-classes :linear)
+(defthm ex-catchw-hi (implies (equal (car (ex-catchw cs v j)) 1) (< (cdr (ex-catchw cs v j)) (+ (nfix j) (len cs))))
+  :rule-classes :linear)
+(in-theory (disable ex-catchw))
+(defthm ex-nth-diff (implies (and (natp a) (natp b) (< b a)) (equal (nth (- a b) l) (nth (- a (1+ b)) (cdr l))))
+  :hints (("Goal" :expand ((nth (- a b) l)))))
+(defthm ex-thrown-cons (implies (thrownp r) (equal (cons :thrown (cdr r)) r)))
+(defthm ex-val-cons (implies (valp r) (equal (cons :val (cdr r)) r)))
+(defun ex-cwind (cs hs j) (if (atom cs) (list hs j) (ex-cwind (cdr cs) (cdr hs) (1+ (nfix j)))))
+(defthm ex-mx-trh-j
+  (implies (and (ex-isaok) (equal p (len env)) (natp j))
+           (equal (mx2 (ex-trh cs hs p) (append env (list v)) caps defs fuel)
+                  (if (equal (car (ex-catchw cs v j)) 1)
+                      (mx2 (nth (- (cdr (ex-catchw cs v j)) j) hs) (append env (list v)) caps defs fuel)
+                    (cons :thrown v))))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-cwind cs hs j)
+                  :expand ((ex-trh cs hs p) (ex-catchw cs v j)
+                           (:free (x env) (mx2 (cons :if x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :const x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :local x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :throw x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+(defthm ex-mx-trh
+  (implies (and (ex-isaok) (equal p (len env)))
+           (equal (mx2 (ex-trh cs hs p) (append env (list v)) caps defs fuel)
+                  (if (equal (car (ex-catchw cs v 0)) 1)
+                      (mx2 (nth (cdr (ex-catchw cs v 0)) hs) (append env (list v)) caps defs fuel)
+                    (cons :thrown v))))
+  :hints (("Goal" :use ((:instance ex-mx-trh-j (j 0))))))
+; the try as mx2 runs it: the body; a throw the walk's clause, else the
+; throw; the finally after either, its throw the try's
+(defun ex-mxtry (b hs f cs fin env caps defs fuel)
+  (let* ((rb (mx2 b env caps defs fuel))
+         (rx (if (and (thrownp rb) (equal (car (ex-catchw cs (cdr rb) 0)) 1))
+                 (mx2 (nth (cdr (ex-catchw cs (cdr rb) 0)) hs) (append env (list (cdr rb))) caps defs fuel)
+               rb)))
+    (if (and fin (or (valp rx) (thrownp rx)))
+        (let ((mf (mx2 f (append env (list (cdr rx))) caps defs fuel))) (if (valp mf) rx mf))
+      rx)))
+(defthm ex-mx-trtry
+  (implies (and (ex-isaok) (equal p (len env)))
+           (equal (mx2 (ex-trtry b hs f cs fin p) env caps defs fuel) (ex-mxtry b hs f cs fin env caps defs fuel)))
+  :hints (("Goal" :in-theory (e/d (ex-trtry ex-trfin) (ex-trh))
+                  :expand ((:free (x env) (mx2 (cons :if x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :let x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :try x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :local x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :throw x) env caps defs fuel))))))
+
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
                 (ex-nomem (ex-lsl lp) cm) (equal (len env) (len cm)) (ex-xvs defs (append env tmp)))
-         (and (member-equal flg '(:m :do :let :rec :call)) (ex-vwf flg e i cm lp defs) (ex-agree cm env fr)
+         (and (member-equal flg '(:m :do :let :rec :call :fin)) (ex-vwf flg e i cm lp defs) (ex-agree cm env fr)
               (ex-xvs defs env)
               (or (not (equal flg :rec)) (and (true-listp tmp) (equal (len tmp) (nfix i)) (ex-xvs defs tmp)))
-              (or (not (equal flg :call)) (and (consp tmp) (true-listp tmp) (ex-xvs defs tmp)))))))
+              (or (not (equal flg :call)) (and (consp tmp) (true-listp tmp) (ex-xvs defs tmp)))
+              (or (not (equal flg :fin))
+                  (and (or (valp (car tmp)) (thrownp (car tmp))) (ex-xvs defs (list (val (car tmp))))))))))
 
 (defun ex-vpost (flg e i tmp cm env lp caps defs fuel r)
   (let ((res (car r)) (fr2 (cadr r)) (ls (ex-lsl lp)))
@@ -194,6 +267,11 @@
                     (implies (thrownp res)
                              (and (equal (if (valp m) (ex-mxcall (car tmp) (append (cdr tmp) (val m)) defs fuel) m) res)
                                   (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))))
+      (:fin (let ((mf (mx2 (ex-tr :fin e 0 cm) (append env (list (val (car tmp)))) caps defs fuel)))
+              (and (not (equal (car res) :recur))
+                   (implies (or (valp res) (thrownp res))
+                            (and (equal (if (< 1 (ex-nk e)) (if (valp mf) (car tmp) mf) (car tmp)) res)
+                                 (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))))
       (otherwise
        (let ((m (mx2 (ex-tr flg e i cm) env caps defs fuel)))
          (and (implies (or (valp res) (thrownp res))
@@ -259,7 +337,9 @@
                           (ex-vind :iter (ex-fbody f (len args)) 0 (cons nil (ex-fvs f args)) (ex-fcm (ex-ftm f) ar)
                                    (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
                                    (cons (ex-astart ar) (ex-anp ar)))))))
-        (:fin nil)
+        (:fin (if (< 1 nk)
+                  (ex-vind :m (ex-kid-of e 1) 0 nil (append cm (list nil)) (append env (list (val (car tmp)))) fr fuel caps defs nil)
+                nil))
         (otherwise
          (cond ((equal k 4)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
@@ -269,6 +349,24 @@
                ((equal k 5) (ex-vind :do e 0 nil cm env fr fuel caps defs lp))
                ((or (equal k 11) (equal k 12)) (ex-vind :let e 0 nil cm env fr fuel caps defs lp))
                ((equal k 16) (ex-vind :rec e 0 nil cm env fr fuel caps defs lp))
+               ((equal k 17) (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil))
+               ((equal k 18)
+                (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                  (cond ((valp (car r))
+                         (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+                               (ex-vind :fin e 0 (list (car r) (c+ 1 (caddr r))) cm env (cadr r) fuel caps defs nil)))
+                        ((not (ex-thp (car r))) (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil))
+                        ((equal (car (ex-catchw (ex-c e) (val (car r)) 0)) 1)
+                         (let* ((j (cdr (ex-catchw (ex-c e) (val (car r)) 0)))
+                                (fr1 (update-nth (ex-cslot e j) (val (car r)) (cadr r)))
+                                (rh (ex-ev :m (ex-cbody e j) 0 nil fr1 fuel)))
+                           (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+                                 (ex-vind :m (ex-cbody e j) 0 nil (append cm (list (ex-cslot e j)))
+                                          (append env (list (val (car r)))) fr1 fuel caps defs nil)
+                                 (ex-vind :fin e 0 (list (car rh) (c+ 1 (c+ (caddr r) (c+ 1 (caddr rh))))) cm env (cadr rh)
+                                          fuel caps defs nil))))
+                        (t (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+                                 (ex-vind :fin e 0 (list (car r) (c+ 1 (caddr r))) cm env (cadr r) fuel caps defs nil))))))
                ((equal k 6)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
@@ -276,11 +374,52 @@
                                  (cadr r) fuel caps defs lp))))
                (t nil)))))))
 
+; THE TRY'S CASES, each a lemma of its own (ex-vind's four tips for kind
+; 18): the flag proof meets them with ex-vgood still closed, so its
+; expansions never see a try
+(defthm ex-agree-1 (implies (natp s) (equal (ex-agree (list s) (list v) fr) (equal v (nth s fr)))))
+(defmacro ex-tr0 () '(ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))
+(defmacro ex-tj () '(cdr (ex-catchw (ex-c e) (val (car (ex-tr0))) 0)))
+(defmacro ex-tf1 () '(update-nth (ex-cslot e (ex-tj)) (val (car (ex-tr0))) (cadr (ex-tr0))))
+(defmacro ex-th () '(ex-ev :m (ex-cbody e (ex-tj)) 0 nil (ex-tf1) fuel))
+(defmacro ex-ttry (&rest hs)
+  `(implies (and (consp e) (equal (ex-kind e) 18) (not (member-equal flg '(:iter :do :let :rec :call :fin)))
+                 (ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil) ,@hs)
+            (ex-vgood flg e i tmp cm env fr fuel caps defs lp)))
+(defthm ex-vgood-try-val
+  (ex-ttry (valp (car (ex-tr0)))
+           (ex-vgood :fin e 0 (list (car (ex-tr0)) (c+ 1 (caddr (ex-tr0)))) cm env (cadr (ex-tr0)) fuel caps defs nil))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))))))
+(defthm ex-vgood-try-out
+  (ex-ttry (not (valp (car (ex-tr0)))) (not (ex-thp (car (ex-tr0)))))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))))))
+(defthm ex-vgood-try-catch
+  (ex-ttry (not (valp (car (ex-tr0)))) (ex-thp (car (ex-tr0))) (equal (car (ex-catchw (ex-c e) (val (car (ex-tr0))) 0)) 1)
+           (ex-vgood :m (ex-cbody e (ex-tj)) 0 nil (append cm (list (ex-cslot e (ex-tj))))
+                     (append env (list (val (car (ex-tr0))))) (ex-tf1) fuel caps defs nil)
+           (ex-vgood :fin e 0 (list (car (ex-th)) (c+ 1 (c+ (caddr (ex-tr0)) (c+ 1 (caddr (ex-th)))))) cm env (cadr (ex-th))
+                     fuel caps defs nil))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))))))
+(defthm ex-vgood-try-uncaught
+  (ex-ttry (not (valp (car (ex-tr0)))) (ex-thp (car (ex-tr0))) (not (equal (car (ex-catchw (ex-c e) (val (car (ex-tr0))) 0)) 1))
+           (ex-vgood :fin e 0 (list (car (ex-tr0)) (c+ 1 (caddr (ex-tr0)))) cm env (cadr (ex-tr0)) fuel caps defs nil))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))))))
+
 (defthm ex-vm-agree-flag
   (ex-vgood flg e i tmp cm env fr fuel caps defs lp)
   :rule-classes nil :otf-flg t
   :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs lp)
-                  :in-theory (disable ex-kid-of ex-xvs)
+                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw))
+          (and stable-under-simplificationp
+           '(:in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw))
                   :expand ((:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
                            (:free (flg fr tmp) (ex-ev flg e i tmp fr fuel))
                            (:free (x env) (mx2 (cons :if x) env caps defs fuel))
@@ -289,14 +428,15 @@
                            (:free (x env) (mx2 (cons :local x) env caps defs fuel))
                            (:free (x env) (mx2 (cons :loop x) env caps defs fuel))
                            (:free (x env) (mx2 (cons :recur x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :throw x) env caps defs fuel))
                            (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
                            (:free (env) (mx2-args nil env caps defs fuel))
-                           (:free (x base vs) (mx2-loop (list :loop nil x) base vs caps defs fuel))))))
+                           (:free (x base vs) (mx2-loop (list :loop nil x) base vs caps defs fuel)))))))
 
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-agree cm env fr)
                 (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -304,7 +444,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-agree cm env fr)
                 (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))

@@ -349,12 +349,26 @@ slot's read and write), and every kind not yet in the model.
    changed: exec-vmtr (the translation, the good values, ex-vwf, the scope,
    ex-tr-xwf), exec-vmcall (fns and calls) and exec-vm (the throw's
    hypotheses and the theorem).
-   **Next (3b)**: a try `(:try B H)`, H the catch walk `(:if (:prim :isa
-   (:const c) (:local p)) Hj ...(:throw (:local p)))`, clause j's body in
-   scope cm ++ (slot j), a finally F as vmx2's comment says -- `(:let (:try
-   X (:if F' (:throw t) (:throw t))) (:if F'' r r))` -- under the hypothesis
-   that prim :isa never throws (ex-vwf now refuses kinds 17 and 18); then
-   N_CASE and the collections.
+   **3b, third part** *(done)*: throw and try in the VM. ex-tr: a throw
+   `(:throw x)`; a try `(:try B H)` (ex-trtry), H the catch walk (ex-trh)
+   `(:if (:prim :isa (:const c) (:local p)) Hj ..(:throw (:local p)))`, p the
+   thrown value's position, clause j's body in scope cm ++ (slot j) (ex-tr's
+   :cs place, the bodies a list as :rec's are); a finally F vmx2's
+   desugaring (ex-trfin) `(:let (:try X (:if F (:throw p) (:throw p))) (:if F
+   p p))`, F in scope cm ++ (nil) both times (ex-tr's :fin place). ex-vwf
+   takes kinds 17 and 18: a catch's slot outside the scope, its body
+   well formed in scope cm ++ (slot). Proved: ex-mx-trh (mx2 of the walk is
+   ex-catchw's clause, or the throw again) and ex-mx-trtry (mx2 of the try is
+   ex-mxtry), so the flag proof's try case is those lemmas', not its
+   expansions; ex-vind/ex-vpost's :fin place is the try's end (the finally
+   in the frame the body or catch left, its throw the try's); ex-vm-agree,
+   ex-recur-stays and exec-vmrun's ex-vm-runs over throw and try, under a
+   third hypothesis on the runtime, ex-isaok (prim :isa throws nothing);
+   ex-tr-xwf (ex-trtry-xwf). exec-vmrun: (try (throw 7) (catch C x x)
+   (finally 3)) caught, uncaught, with and without the finally -- the tree,
+   mx2 and the VM alike. Model only (the machine's try is 3a's).
+   **Next (3b)**: N_CASE (case_branch, its table read as data), then the
+   collections (ex-xvs over them).
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,

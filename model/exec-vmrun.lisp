@@ -17,7 +17,7 @@
 ; the program's defs every template's the tree can call (ex-defs-ok), its
 ; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
-  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok)
+  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -33,12 +33,14 @@
 ; nslots self): one arity (1 nil 0 body), the capture pair (outer 0 inner
 ; 1), 3 slots, the self slot 2; a node (kind i2 kids c s2 mark rstart rn)
 ; the checks' runtime: vmx2's prim-impl, and a call's IFn test (ex-ifn,
-; prim :ifn) that a closure and apply pass -- what is callable here
+; prim :ifn) that a closure and apply pass -- what is callable here; and
+; instance? (prim :isa) of the class :any, which every value is
 (defun ex-prim-impl (op vals)
   (declare (xargs :guard t))
-  (if (eq op :ifn)
-      (and (consp vals) (or (equal (car vals) :apply) (and (consp (car vals)) (eq (car (car vals)) :clo))))
-    (prim-impl op vals)))
+  (case op
+    (:ifn (and (consp vals) (or (equal (car vals) :apply) (and (consp (car vals)) (eq (car (car vals)) :clo)))))
+    (:isa (and (consp vals) (equal (car vals) :any)))
+    (otherwise (prim-impl op vals))))
 (local (defattach prim ex-prim-impl))
 (defconst *ex-tm*
   '(f ((1 nil 0 (4 0 ((2 0 nil nil 0 nil 0 0)
@@ -133,3 +135,23 @@
        (equal (vcs2-run-program (ex-tr :m (ex-applyt *ex-tmh* '(:lazy . 0)) 0 nil) *ex-defsh* 1000) '(:val :cons 0 :lazy . 1))
        (equal (mx2 (ex-tr :m (ex-applyt *ex-tma* '(:lazy . 0)) 0 nil) nil nil *ex-defsh* 10) '(:val . 0))
        (equal (vcs2-run-program (ex-tr :m (ex-applyt *ex-tma* '(:lazy . 0)) 0 nil) *ex-defsh* 1000) '(:val . 0)))))
+
+; try (exec-PLAN 3b): (try (throw 7) (catch C x x) (finally 3)) -- of the
+; class :any the catch takes the throw, 7; of :none it throws 7 on, the
+; finally run either way; without the finally the same -- the tree, mx2
+; (:try over the catch walk, the finally desugared) and the VM alike
+(defun ex-tryg (cls fin)
+  (list 18 0 (append (list (list 17 0 (list (list 1 0 nil 7 0 nil 0 0)) nil 0 nil 0 0))
+                     (if fin (list (list 1 0 nil 3 0 nil 0 0)) nil))
+        (list (list cls 0 '(2 0 nil nil 0 nil 0 0))) 0 nil 0 0))
+(assert-event (and (ex-vwf :m (ex-tryg :any t) 0 nil nil *ex-defs*) (ex-vwf :m (ex-tryg :none nil) 0 nil nil *ex-defs*)))
+(assert-event ; ex-example-try
+ (with-guard-checking :none
+  (and (equal (car (ex-ev :m (ex-tryg :any t) 0 nil (make-list 1) 10)) '(:val . 7))
+       (equal (mx2 (ex-tr :m (ex-tryg :any t) 0 nil) nil nil *ex-defs* 10) '(:val . 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-tryg :any t) 0 nil) *ex-defs* 1000) '(:val . 7))
+       (equal (car (ex-ev :m (ex-tryg :none t) 0 nil (make-list 1) 10)) '(:thrown . 7))
+       (equal (mx2 (ex-tr :m (ex-tryg :none t) 0 nil) nil nil *ex-defs* 10) '(:thrown . 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-tryg :none t) 0 nil) *ex-defs* 1000) '(:thrown . 7))
+       (equal (car (ex-ev :m (ex-tryg :any nil) 0 nil (make-list 1) 10)) '(:val . 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-tryg :any nil) 0 nil) *ex-defs* 1000) '(:val . 7)))))
