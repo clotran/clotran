@@ -739,9 +739,24 @@
                  (for [[v tmp _] rs] (str (fname v) "_ = " tmp))
                  ["cycle"]))))
 
-;; a call answering stobjs; dests take its other results
+;; code that reads nothing a stobj update can change: locals and constants,
+;; no component (%) and no call but the runtime's constants
+(defn stable? [code]
+  (not (re-find #"%|\w\(" (str/replace code #"\b(rt_nil|rt_t|rt_keyword)\(" ""))))
+
+;; [lines code]: r evaluated now, so that stobj updates after the lines do not
+;; change what it reads -- into a temporary unless its code is stable?
+(defn settle [ctx r]
+  (if (stable? (:code r)) [(:stmts r) (:code r)]
+    (let [t (fresh ctx "v" (:type r))] [(conj (:stmts r) (str t " = " (:code r))) t])))
+
+;; a call answering stobjs; dests take its other results. ACL2 evaluates
+;; the value arguments on the stobjs as they were, before any stobj
+;; argument's update (Lemmis's gen-st; ACL2's translate refuses a stobj
+;; argument that is not the variable itself, so none arrives yet)
 (defn call-stmt [ctx self f xs dests]
-  (let [{:keys [sts rs]} (call-args ctx f xs)]
+  (let [{:keys [sts rs]} (call-args ctx f xs)
+        rs (if (some (fn [[v a]] (not= v a)) sts) (map #(let [[ls c] (settle ctx %)] {:stmts ls :code c}) rs) rs)]
     (vec (concat (mapcat :stmts rs)
                  (mapcat (fn [[v a]] (when (not= v a) (stmt (one-stobj ctx v) self a))) sts)
                  [(str "call " (fname f) "(" (str/join ", " (concat (map (comp stobjs first) sts) (map :code rs) dests)) ")")]))))
@@ -804,9 +819,11 @@
         (= op 'cons) (tuple ctx self x)
         (updaters op) (let [oa (updaters op) inner (assoc ctx :tail false)]
                         (if (fields (symbol (subs (name op) 7)))
-                          (let [r (expr ctx (first xs)) ef (extern-fields (symbol (subs (name op) 7)))]
-                            (vec (concat (stmt inner self (second xs)) (:stmts r)
-                                         [(if ef (str "call " (second ef) "(" (:code r) ")") (str (sref oa) " = " (:code r)))])))
+                          ;; the value is read from the stobj before the inner update runs (Lemmis's gen-st)
+                          (let [r (expr ctx (first xs)) ef (extern-fields (symbol (subs (name op) 7)))
+                                [ls code] (if (symbol? (second xs)) [(:stmts r) (:code r)] (settle ctx r))]
+                            (vec (concat ls (stmt inner self (second xs))
+                                         [(if ef (str "call " (second ef) "(" code ")") (str (sref oa) " = " code))])))
                           (let [ri (expr ctx (first xs)) rv (coerce (expr ctx (second xs)) (if (value-arrays (second oa)) :val :int))
                                 ti (fresh ctx "i" :int) tv (fresh ctx "v" (:type rv))]
                             ;; the index and value are read from the stobj before the inner update runs
@@ -838,19 +855,23 @@
           (doseq [[v a] acts :when (mv-of? a)]
             (let [k (second (second a)) f (get-in @(:env ctx) [(nth a 2) :fn])]
               (when-not (= v (nth (outs f) k)) (throw (ex-info "an mv's stobj out of place" {:x x})))))
-          (doseq [[v f r] vals] (swap! (:env ctx) assoc v {:f f :type (:type r)}))
-          (let [mv-lines
+          ;; the mv call's arguments and the stobjs' updates read the outer
+          ;; bindings; only the body sees the new ones (Lemmis's gen-st)
+          (let [saved @(:env ctx)
+                mv-lines
                 (when mv-call
                   (let [[f & fxs] mv-call
                         tmps (vec (for [[k o] (map-indexed vector (outs f)) :when (nil? o)]
                                     [k (fresh ctx "mv" (if (value-fns f) :val :int))]))
                         lines (call-stmt (assoc ctx :tail false) self f fxs (map second tmps))]
                     (swap! (:env ctx) assoc 'mv {:fn f :mv (into {} (for [[k t] tmps] [k {:f t :type (if (value-fns f) :val :int)}]))})
-                    lines))]
+                    lines))
+                act-lines (vec (mapcat (fn [[v a]] (when-not (mv-of? a) (stmt (one-stobj ctx v) self a))) acts))
+                _ (doseq [[v f r] vals] (swap! (:env ctx) assoc v {:f f :type (:type r)}))
+                body-lines (stmt ctx self body)]
+            (reset! (:env ctx) saved)
             (vec (concat (mapcat (fn [[_ f r]] (conj (:stmts r) (str f " = " (:code r)))) vals)
-                         mv-lines
-                         (mapcat (fn [[v a]] (when-not (mv-of? a) (stmt (one-stobj ctx v) self a))) acts)
-                         (stmt ctx self body)))))
+                         mv-lines act-lines body-lines))))
         (defs op) (do (when-not (= (outs op) (:outs ctx))
                         (throw (ex-info (str "a call answering " (pr-str (outs op)) " where " (pr-str (:outs ctx)) " is wanted") {:x x})))
                       (call-stmt ctx self op xs (:dests ctx)))
