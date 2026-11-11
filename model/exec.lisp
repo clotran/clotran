@@ -29,6 +29,8 @@
 ;                frame of its own, the caller's kept in the record (or,
 ;                as ex-entry decides, throw the arity error)
 ;             17 the body answered: the caller's frame back, finish
+;             23 the callee is no fn (tv 0 at a call's pc 1, the IFn test,
+;                ex-ifn): throw :not-fn, before any argument runs
 ;                                              0 not a core kind
 ;   ex-kid   which child a push or a tail takes
 ;   ex-pc    the record's pc after it, ex-i its i
@@ -89,7 +91,7 @@
                             ((equal pc 4) 22)
                             (t 0)))
         ((equal k 6) (cond ((equal pc 0) 13)
-                           ((equal pc 1) 14)
+                           ((equal pc 1) (if (equal tv 1) 14 23))
                            ((equal pc 2) (if (and (integerp i) (integerp nk) (< i nk)) 3 15))
                            ((equal pc 3) 9)
                            ((equal pc 4) 16)
@@ -232,6 +234,10 @@
 ; ArityException). Any other callee -- a builtin, a Var's fn -- is the
 ; host's apply, not modelled here.
 
+; THE IFn TEST a call asks of its callee before its arguments run (clj's
+; cast to IFn; exec.inc's is_ifn): vmx2's prim :ifn, whatever it answers.
+(defun ex-ifn (h) (truthy (prim :ifn (list h))))
+(in-theory (disable ex-ifn))
 (defun ex-linked (h) (and (consp h) (equal (ex-kind h) 3) (equal (ex-i2 h) 1)))
 
 (defun ex-caps (capv fr)
@@ -373,7 +379,8 @@
      ((equal (ex-kind (nth 0 (car ks))) :thrown) (ex-unwind ks val fr))
      (t
       (let* ((r (car ks)) (e (nth 0 r)) (pc (nth 1 r)) (i (nth 2 r)) (fl (nth 3 r)) (rs (nth 4 r)) (tmp (nth 5 r))
-             (k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (tv (if (truthy val) 1 0))
+             (k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e))
+             (tv (if (and (equal k 6) (equal pc 1)) (if (ex-ifn val) 1 0) (if (truthy val) 1 0)))
              (j (ex-kid k pc i nk n2 tv)) (pc2 (ex-pc k pc i nk n2 tv)) (i2 (ex-i k pc i nk n2 tv)))
         (case (ex-act k pc i nk n2 tv)
           (1 (ex-finish (ex-c e) ks fr))
@@ -408,6 +415,7 @@
           (19 (ex-finish val ks fr))
           (20 (list (cons (ex-rec (ex-kid-of e j) 0 0 nil nil nil) (cons (ex-rec e pc2 i2 fl rs (list val)) (cdr ks))) val fr))
           (21 (ex-finish (car tmp) ks fr))
+          (23 (list (cons (ex-throwr :not-fn) ks) nil fr))
           (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
           (otherwise s)))))))
 
@@ -616,13 +624,15 @@
              ((equal k 14) (list (cons :val (ex-mkclo (ex-c e) fr)) fr 1))
              ((equal k 6)
               (if (ex-linked (ex-kid-of e 0))
-                  (let ((r2 (ex-ev :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel)))
-                    (list (car r2) (cadr r2) (c+ 1 (c+ 1 (caddr r2)))))
+                  (if (not (ex-ifn (ex-c (ex-kid-of e 0))))
+                      (list (cons :thrown :not-fn) fr (c+ 1 (c+ 1 1)))
+                    (let ((r2 (ex-ev :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel)))
+                      (list (car r2) (cadr r2) (c+ 1 (c+ 1 (caddr r2))))))
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
-                  (if (not (valp (car r)))
-                      (ex-nv r fr)
-                    (let ((r2 (ex-ev :call e 1 (list (val (car r))) (cadr r) fuel)))
-                      (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2))))))))))
+                  (cond ((not (valp (car r))) (ex-nv r fr))
+                        ((not (ex-ifn (val (car r)))) (list (cons :thrown :not-fn) (cadr r) (c+ 1 (c+ (caddr r) (c+ 1 1)))))
+                        (t (let ((r2 (ex-ev :call e 1 (list (val (car r))) (cadr r) fuel)))
+                      (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))))
              ((equal k 17)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                 (if (valp (car r)) (list (cons :thrown (val (car r))) (cadr r) (c+ 1 (c+ (caddr r) 2))) (ex-nv r fr))))

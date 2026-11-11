@@ -334,6 +334,12 @@
              end if
           end if
        end if
+       block
+         type(gc_value) :: sv
+         sv = gc_slot(nd, 4)
+         site = 0
+         if (sv%tag == GCT_INT) site = int(sv%ival, kind=4)
+       end block
        if (gc_kind(v) == OBJ_AST .and. gc_i1(v) == N_VAR .and. gc_i2(v) == 1 .and. (n == 1 .or. n == 2)) then
           ! A DIRECT-LINKED HEAD OF ONE OR TWO ARGUMENTS: F_CALLW answers a
           ! core wrapper's in-place cases (flat_seq_op, flat_int_op) and
@@ -350,11 +356,15 @@
           call fb_emit(fb, F_CALLW, d, j1, a, n, f, fb_const(fb, gc_int(-1_gc_ip)), site)
        else if (gc_kind(v) == OBJ_AST .and. gc_i1(v) == N_VAR .and. gc_i2(v) == 1) then
           call fb_emit(fb, F_DLVAR, f, fb_const(fb, v), 0, 0, 0)
+          call fb_emit(fb, F_IFN, f, site, 0, 0, 0)
           do i = 0, n - 1
              call fc(fb, gcv_nth(kids, i + 1), a + i)
           end do
        else
           call fc(fb, v, f)
+          ! the head's IFn test before its arguments run (exec.inc's tv
+          ! at a call's pc 1, model/exec.lisp ex-ifn)
+          call fb_emit(fb, F_IFN, f, site, 0, 0, 0)
           do i = 0, n - 1
              call fc(fb, gcv_nth(kids, i + 1), a + i)
           end do
@@ -1161,6 +1171,13 @@
           call vs_set(vst, b + 6, gc_nil())
           if (tctx%has_error) exit
           vst%vstack(rb + w(2) + 1) = v
+       case (F_IFN)
+          ! w: F_IFN f site -- a call's head cast to IFn, no argument run yet
+          if (.not. is_ifn(vst%vstack(rb + w(2) + 1))) then
+             if (w(3) /= 0) tctx%pending_site = w(3)
+             call refuse_not_fn(vst%vstack(rb + w(2) + 1))
+             exit
+          end if
        case (F_THROW)
           ! w: F_THROW t site
           v = vst%vstack(rb + w(2) + 1)

@@ -2664,24 +2664,24 @@ clotran-plot's tick labels; the oracle has the tie cases.
 **Removal**: none intended: the stored value is what the program holds.
 
 
-## 84. A call of a non-fn runs its arguments before it refuses the fn
+## 84. apply refuses a non-seq before a non-fn
 
-clj casts a call's fn to IFn before it evaluates the arguments --
-`(f (g))` with f a string and g a number is the cast of f's
-ClassCastException, (g) never run -- and core.clj's apply, `(. f (applyTo
-(seq args)))` with f hinted `^IFn`, casts its hinted target before
-`(seq args)`: `(apply 1 2)` is the ClassCastException ("class
-clotran.host.int8 cannot be cast to class clotran.host.i_fn", in clj's
-names), though 2 is no seq either. clotran refuses a non-fn only when it calls it, after the
-arguments, and its `.` reads no target hint: `(f (g))` is (g)'s refusal,
-`(apply 1 2)` RT.seq's IllegalArgumentException. Alone each refuses as
-clj does: `(apply 1 [2])` and `(let [f 1.5] (f))` are the cast's
-ClassCastException (since 2026-11-01: not_a_function raised
-RuntimeException "not a function: 1" before), a call of nil a
+clj casts a call's fn to IFn before it evaluates the arguments, and
+core.clj's apply, `(. f (applyTo (seq args)))` with f hinted `^IFn`,
+casts its hinted target before `(seq args)`: `(apply 1 2)` is the
+ClassCastException ("class clotran.host.int8 cannot be cast to class
+clotran.host.i_fn", in clj's names), though 2 is no seq either.
+clotran's `.` reads no target hint, so `(apply 1 2)` is RT.seq's
+IllegalArgumentException. Alone each refuses as clj does: `(apply 1 [2])`
+and `(let [f 1.5] (f))` are the cast's ClassCastException, a call of nil a
 NullPointerException, `(apply inc 2)` and `(apply nil 2)` the
 IllegalArgumentException (null passes a cast); the oracle has each.
 
-**Removal**: the callee checked when it is kept, before its arguments
-(call_dispatch, the call's pc 1), with an IFn test over every kind that
-invokes; and `.` honouring a target's interface hint with the cast clj
+A call itself casts as clj does since 2026-11-10: `(f (g))` with f a
+string is f's ClassCastException, (g) never run -- the tree's IFn test at
+a call's pc 1 (exec.inc is_ifn, model/exec.lisp ex-ifn, action 23) and
+flat's F_IFN, before the arguments; nil and an unbound fn pass the cast
+and refuse at the invoke, after them, as clj's do.
+
+**Removal**: `.` honouring a target's interface hint with the cast clj
 emits (the dot's turn, model/exec-PLAN.md milestone 5).

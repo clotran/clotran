@@ -2207,7 +2207,12 @@
     if (k == N_TRY) nk = merge(2, 1, gc_kind(gcv_nth(kids, 1)) == OBJ_AST)
     n2 = gc_i2(nd)
     tv = 0
-    if (truthy(val)) tv = 1
+    if (k == N_CALL .and. pc == 1) then
+       ! the IFn test (ex-ifn), before the arguments run: clj's cast
+       if (is_ifn(val)) tv = 1
+    else if (truthy(val)) then
+       tv = 1
+    end if
     j = ex_kid(k, pc, i, nk, n2, tv)
     select case (ex_act(k, pc, i, nk, n2, tv))
     case (1)
@@ -2309,6 +2314,9 @@
     case (21)
        val = vs_get(vst, b + 3)
        call k_finish(val, tctx)
+    case (23)
+       ! the callee is no fn: the cast's refusal, no argument run
+       call refuse_not_fn(val)
     case (22)
        ! the finally ran after an uncaught error: the error goes on
        tctx%has_error = .true.

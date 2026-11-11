@@ -2214,6 +2214,16 @@
    (m #(apply 1 [2])) (m #(apply "s" [1])) (m #(apply nil 2)) (m #(apply (fn [x & r] x) 1 2 3 4 5 6))
    (m #(let [f (identity 1.5)] (f))) (m #(let [f (identity "s")] (f 1))) (m #(apply :k {:k 1} 2 3 4 5 6 #{}))
    (class (m #(let [f (identity nil)] (f 1)))) (class (m #(apply nil [1])))])
+;; a call casts its callee to IFn before its arguments run: (f (g)), f a
+;; string, is f's ClassCastException, no argument run; nil passes the cast,
+;; its NullPointerException after the arguments (exec.inc is_ifn, model
+;; ex-ifn)
+(let [log (atom []) f (identity "s") g (identity 2) h (identity nil)]
+  [(try (f (g)) (catch clotran.host.throwable e (class e)))
+   (try (f (swap! log conj :arg)) (catch clotran.host.throwable e (class e)))
+   (try (h (swap! log conj :nil-arg)) (catch clotran.host.throwable e (class e)))
+   (try ((identity {:a 1}) (swap! log conj :map-arg)) (catch clotran.host.throwable e (class e)))
+   @log])
 (expect-diff "DEVIATIONS 84: (apply 1 2) refuses the seq first, clj the fn")
 (try (apply 1 2) (catch clotran.host.throwable e (class e)))
 ;; and the spread call is the call: the arity of the spread count, a

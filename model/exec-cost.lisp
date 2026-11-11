@@ -198,6 +198,19 @@
            (<= (caddr (ex-ev :m e 0 nil fr fuel)) (+ 3 (caddr (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
   :hints (("Goal" :expand ((ex-ev :m e 0 nil fr fuel)) :in-theory (e/d (c+) (ex-kid-of)))))
 
+; a call whose callee fails the IFn test (ex-ifn) throws :not-fn, no
+; argument run, at most 3 turns beyond its head's: the head's push, the
+; test and the throw's pop
+(defthm ex-not-fn-turns
+  (let ((h (ex-kid-of e 0)))
+    (implies (and (consp e) (equal (ex-kind e) 6)
+                  (or (ex-linked h) (valp (car (ex-ev :m h 0 nil fr fuel))))
+                  (not (ex-ifn (if (ex-linked h) (ex-c h) (val (car (ex-ev :m h 0 nil fr fuel)))))))
+             (and (equal (car (ex-ev :m e 0 nil fr fuel)) '(:thrown . :not-fn))
+                  (<= (caddr (ex-ev :m e 0 nil fr fuel))
+                      (+ 3 (if (ex-linked h) 0 (caddr (ex-ev :m h 0 nil fr fuel))))))))
+  :hints (("Goal" :expand ((ex-ev :m e 0 nil fr fuel)) :in-theory (e/d (c+) (ex-kid-of)))))
+
 (defun ex-try-parts (e fr fuel)
   (let* ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)) (w (ex-catchw (ex-c e) (val (car r)) 0)))
     (if (and (ex-thp (car r)) (equal (car w) 1))

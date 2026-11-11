@@ -216,10 +216,11 @@
 (defmacro ex-other (flg) `(not (member-equal ,flg '(:iter :do :let :rec :call :cs :fin))))
 (defmacro ex-r (kid fr fuel) `(ex-ev :m ,kid 0 nil ,fr ,fuel))
 
-(defmacro ex-case (name hyps &key (flg 'flg) (off 'nil) (ex 'nil))
+(defmacro ex-case (name hyps &key (flg 'flg) (off 'nil) (ex 'nil) (cases 'nil))
   `(defthm ,name
      (implies (and ,@hyps) (ex-good ,flg e i tmp fr fuel fl rs ks v0 tl))
      :hints (("Goal" :expand ((:free (fr fuel tmp) (ex-ev ,flg e i tmp fr fuel)) (:free (tl) (ex-wf ,flg e i tl)) ,@ex)
+                     ,@(and cases `(:cases ,cases))
                      :in-theory (disable ex-ev ex-wf c+ ex-run ex-kid-of ,@off)))))
 
 (ex-case ex-good-atom ((not (consp e))))
@@ -291,12 +292,14 @@
   :hints (("Goal" :expand ((ex-wf :m h 0 tl)))))
 (ex-case ex-good-m-call-linked
   ((ex-other flg) (consp e) (equal (ex-kind e) 6) (ex-linked (ex-kid-of e 0))
-   (ex-good :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel fl rs ks (ex-c (ex-kid-of e 0)) tl)))
+   (ex-good :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel fl rs ks (ex-c (ex-kid-of e 0)) tl))
+  :cases ((ex-ifn (ex-c (ex-kid-of e 0)))))
 (ex-case ex-good-m-call
   ((ex-other flg) (consp e) (equal (ex-kind e) 6) (not (ex-linked (ex-kid-of e 0)))
    (ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)
    (ex-good :call e 1 (list (val (car (ex-r (ex-kid-of e 0) fr fuel)))) (cadr (ex-r (ex-kid-of e 0) fr fuel)) fuel fl rs ks
-            (val (car (ex-r (ex-kid-of e 0) fr fuel))) tl)))
+            (val (car (ex-r (ex-kid-of e 0) fr fuel))) tl))
+  :cases ((ex-ifn (val (car (ex-r (ex-kid-of e 0) fr fuel))))))
 (ex-case ex-good-call-mid
   ((consp e) (< (nfix i) (ex-nk e))
    (ex-good :m (ex-kid-of e (nfix i)) 0 nil fr fuel nil nil (cons (ex-rec e 3 (nfix i) fl rs tmp) ks) v0 nil)

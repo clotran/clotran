@@ -207,8 +207,13 @@
             r = 13_int64
             return
           case (1_int64)
-            r = 14_int64
-            return
+            if ((tv_ == 1_int64)) then
+              r = 14_int64
+              return
+            else
+              r = 23_int64
+              return
+            end if
           case (2_int64)
             if (.true.) then
               if (.true.) then

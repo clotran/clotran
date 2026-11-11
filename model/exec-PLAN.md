@@ -315,6 +315,17 @@ slot's read and write), and every kind not yet in the model.
    k_unwind (its catch walk over catch_matches); exec_core runs N_THROW and
    N_TRY; fuzz-exec-gen draws kinds 17 and 18 and ex-unw (-x reverses the
    catch's match). exec-vm is unchanged but for `:fin` refused by ex-vwf.
+   **3b, first part** *(done)*: the tree's IFn test. A call's pc 1 asks
+   ex-ifn -- vmx2's `prim :ifn` of the callee, whatever it answers -- (tv
+   1 a fn; else ex-act's action 23 throws :not-fn over the call's record,
+   no argument run); ex-ev the same, a linked head's or a run head's value
+   (3 turns beyond the head's, ex-not-fn-turns); ex-machine-correct, exec-vm
+   and exec-cost stand (exec-vm over values: mx2's :applyv answers a value
+   only where the tree does). Fortran: exec_core's tv at a call's pc 1 is
+   the host's is_ifn (Eval.f90: what apply invokes, nil and an unbound
+   fn's value too, as clj's cast passes them), action 23 refuse_not_fn;
+   flat's F_IFN after the head. Oracle: `(f (g))`, f a string; DEVIATIONS
+   84 now only apply's `.` target hint.
    **Next (3b)**: the VM's agreement on a throw. The plan: ex-vpost's
    thrown clause (m = res, the scope agreeing, the value good) at every
    place; a call translated head first, `(:let H (:if (:prim :ifn (:local

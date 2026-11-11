@@ -29,6 +29,14 @@
 ; tree, mx2 and the VM all answer 10. The template (name arities caps
 ; nslots self): one arity (1 nil 0 body), the capture pair (outer 0 inner
 ; 1), 3 slots, the self slot 2; a node (kind i2 kids c s2 mark rstart rn)
+; the checks' runtime: vmx2's prim-impl, and a call's IFn test (ex-ifn,
+; prim :ifn) that a closure and apply pass -- what is callable here
+(defun ex-prim-impl (op vals)
+  (declare (xargs :guard t))
+  (if (eq op :ifn)
+      (and (consp vals) (or (equal (car vals) :apply) (and (consp (car vals)) (eq (car (car vals)) :clo))))
+    (prim-impl op vals)))
+(local (defattach prim ex-prim-impl))
 (defconst *ex-tm*
   '(f ((1 nil 0 (4 0 ((2 0 nil nil 0 nil 0 0)
                       (16 0 ((1 0 nil nil 0 nil 0 0)) nil 0 nil 0 1)
@@ -52,6 +60,8 @@
 (assert-event (ex-defs-ok *ex-defs* *ex-defs*))
 (assert-event (ex-vwf :m *ex-prog* 0 nil nil *ex-defs*))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m *ex-prog* 0 nil (make-list 1) 10)) '(:val . 10))))
+; a call of what is no fn throws :not-fn before its arguments run
+(assert-event (with-guard-checking :none (equal (car (ex-ev :m '(6 0 ((1 0 nil 3 0 nil 0 0) (17 0 ((1 0 nil 7 0 nil 0 0)) nil 0 nil 0 0)) nil 0 nil 0 0) 0 nil nil 10)) '(:thrown . :not-fn))))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m (ex-callg (quote (5))) 0 nil nil 10)) '(:val . 5))))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m (ex-callg (quote (5 6 7))) 0 nil nil 10)) '(:val 6 7))))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m (ex-callg (quote (5))) 0 nil nil 10)) '(:val . 5))))
