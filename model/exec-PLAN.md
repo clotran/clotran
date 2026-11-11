@@ -393,8 +393,52 @@ slot's read and write), and every kind not yet in the model.
    case_branch and k_tails into its answer); exec_gen.inc regenerated;
    fuzz-exec-gen draws kind 19 more often. Oracle: a case* in a loop's
    tail recurring from two of its branches.
-   **Next (3b)**: the collections, N_VECTOR/MAP/SET (ex-xvs over them, a
-   closure inside a vector still a call's possible head).
+   **3b, fifth part** *(done)*: the collections. N_VECTOR 7, N_MAP 8, N_SET
+   9 are core kinds of ex-act: pc 0 action 25 opens the record (no values
+   yet, pc 2), pc 2 pushes element i (action 3, pc 3) or, past the last,
+   action 27 builds the collection and finishes with it, pc 3 action 26
+   keeps the element's value (pc 2, i + 1) -- exec.inc's slot 4. A vector
+   is seqk's (:vec . elems), as B_APPLY reads one; a map's and a set's
+   build the runtime's, vmx2's prim :map / :set of the values, a value or a
+   throw (ex-cbuild). ex-ev's place :coll (as :rec's: each element, then the
+   build -- 1 turn, 2 for its throw, (:out) should the runtime's answer be
+   the recur marker). Proved: ex-machine-correct over them (ex-good-m-coll,
+   -coll-mid, -coll-end); exec-cost ex-coll-turns (2n + 2 beyond the
+   elements'; ex-own's counts 21 for ex-act, 16 ex-pc, 12 ex-i); the
+   translation (:prim op elements..), op :vector, :map or :set (ex-cop),
+   x2wf as any :prim; the collection's cases lemmas of their own
+   (ex-vgood-m-coll, -coll-mid, -coll-end), met by the flag proof closed;
+   ex-vm-agree, ex-recur-stays and ex-vm-runs over them under a fifth
+   runtime hypothesis, ex-collok: the runtime's vector of the values is
+   seqk's (:vec . vals), its map or set of good values good (or a good
+   throw). ex-xvs needs nothing new for a vector -- it reads a list's
+   elements, so a closure inside a vector of good values is good, a call's
+   possible head (ex-xvs-vec). exec-vmrun: (apply g 5 [6 7]) with the
+   vector a literal, and #{1 2} -- the tree, mx2 and the VM alike.
+   Fortran: N_VECTOR/MAP/SET moved into exec_core (actions 25 to 27, the
+   builds vec_to_set/vec_to_map the host's); exec_gen.inc regenerated;
+   fuzz-exec-gen draws kinds 7, 8, 9. Found: a set or map literal whose
+   keys are equal at run time, `(let [a 1 b 1] #{a b})`, answers #{1} in
+   clotran where clj throws IllegalArgumentException "Duplicate key: 1"
+   (vec_to_set, vec_to_map) -- not fixed here, the model allows the
+   runtime's throw. **Milestone 3b done.** Left from it: the old cases of
+   the flag proof (ex-vm-agree-flag, ~950 s: if, do, let, loop, recur,
+   calls) still go through its expansions after stable-under-
+   simplificationp; reworking them into lemmas of their own, as try's,
+   case's and the collections' are, would cut that time.
+   **Next (milestone 4, clearing joined)**: ex-vwf asks every local
+   unmarked (`(not (ex-mark e))`); drop that and prove the machine and the
+   VM agreement over anpass's marks. What is there: exec-proof's
+   ex-machine-correct already runs a marked read (action 2 clears the
+   slot); anpass-sound proves a marked read's slot is never read again
+   (tr-sound). What is needed: the scope relation ex-agree weakened to the
+   positions a name still reaches -- a slot cleared by a marked read is
+   blanked in cm, as a loop's lets' positions are (ex-blank) -- with
+   anpass-sound's statement brought to exec.lisp's tree (the node shapes
+   anpass reads against ex-kind/ex-mark), so ex-vwf takes a tree anpass
+   passed rather than an unmarked one; then ex-vm-agree, ex-recur-stays,
+   ex-vm-runs as now. Do it as try's and case's were: the marked read's
+   case a lemma of its own, the flag proof meeting it closed.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,

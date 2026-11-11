@@ -1618,36 +1618,13 @@
        case (N_VMB)
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
-       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE)
+       case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE, &
+            N_VECTOR, N_MAP, N_SET)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
           ! from its pc 4 when the task resumes
           if (tctx%yield_flag) exit
-       case (N_VECTOR, N_MAP, N_SET)
-          ! children collected into slot 4, one frame each, then built
-          select case (tctx%kst(tctx%ksp)%pc)
-          case (0)
-             call vs_set(vst, b + 4, gcv_build(gcv_count(kids), [vs_get(vst, b + 1)]))
-             tctx%kst(tctx%ksp)%i = 0
-             tctx%kst(tctx%ksp)%pc = 2
-          case (2)
-             if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
-                tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-             else
-                select case (kind)
-                case (N_VECTOR); val = vs_get(vst, b + 4)
-                case (N_SET);    val = vec_to_set(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
-                case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
-                end select
-                call k_finish(val, tctx)
-             end if
-          case (3)
-             call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%i, val, [vs_get(vst, b + 1)]))
-             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
-             tctx%kst(tctx%ksp)%pc = 2
-          end select
        case (N_LAZY)
           v = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
           call vs_set(vst, b + 3, v)
@@ -2193,7 +2170,8 @@
     pc = tctx%kst(tctx%ksp)%pc
     i = tctx%kst(tctx%ksp)%i
     nk = 0
-    if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL .or. k == N_THROW) nk = gcv_count(kids)
+    if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL .or. k == N_THROW &
+         .or. k == N_VECTOR .or. k == N_MAP .or. k == N_SET) nk = gcv_count(kids)
     ! a try's children: its body, and its finally when it has one
     if (k == N_TRY) nk = merge(2, 1, gc_kind(gcv_nth(kids, 1)) == OBJ_AST)
     n2 = gc_i2(nd)
@@ -2308,6 +2286,23 @@
     case (23)
        ! the callee is no fn: the cast's refusal, no argument run
        call refuse_not_fn(val)
+    case (25)
+       ! a collection's record: its elements' values collected into slot 4
+       call vs_set(vst, b + 4, gcv_build(int(nk), [vs_get(vst, b + 1)]))
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (26)
+       call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), int(i), val, [vs_get(vst, b + 1)]))
+       tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
+       tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
+    case (27)
+       ! the collection built of them (a map's and a set's the host's)
+       select case (k)
+       case (N_VECTOR); val = vs_get(vst, b + 4)
+       case (N_SET);    val = vec_to_set(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
+       case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
+       end select
+       call k_finish(val, tctx)
     case (24)
        ! case*: the branch its table's probe picks (ex-csbr), the record become it
        call vs_set(vst, b + 3, val)

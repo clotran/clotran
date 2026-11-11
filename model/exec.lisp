@@ -32,6 +32,9 @@
 ;             24 become the branch case_branch picks (k_tail): the
 ;                then of the entry the table's walk takes, else the
 ;                default (a case*'s pc 1, its test's value in flight)
+;             25 a collection's record opened (its values none yet)
+;             26 an element's value kept   27 the collection built from
+;                them and finished with (or the build's throw thrown)
 ;             23 the callee is no fn (tv 0 at a call's pc 1, the IFn test,
 ;                ex-ifn): throw :not-fn, before any argument runs
 ;                                              0 not a core kind
@@ -102,6 +105,8 @@
                            ((equal pc 4) 16)
                            ((equal pc 5) 17)
                            (t 0)))
+        ((or (equal k 7) (equal k 8) (equal k 9))
+         (cond ((equal pc 0) 25) ((equal pc 3) 26) ((and (integerp i) (integerp nk) (< i nk)) 3) (t 27)))
         (t 0)))
 
 (defun ex-kid (k pc i nk n2 tv)
@@ -126,6 +131,8 @@
                            ((equal pc 3) 2)
                            ((equal pc 4) 5)
                            (t pc)))
+        ((or (equal k 7) (equal k 8) (equal k 9))
+         (cond ((or (equal pc 0) (equal pc 3)) 2) ((and (integerp i) (integerp nk) (< i nk)) 3) (t pc)))
         (t 0)))
 
 (defun ex-i (k pc i nk n2 tv)
@@ -135,6 +142,7 @@
           ((or (equal k 11) (equal k 12)) (if (equal pc 1) i1 i))
           ((equal k 16) (cond ((equal pc 0) 0) ((equal pc 2) i1) (t i)))
           ((equal k 6) (cond ((equal pc 1) 1) ((equal pc 3) i1) (t i)))
+          ((or (equal k 7) (equal k 8) (equal k 9)) (cond ((equal pc 0) 0) ((equal pc 3) i1) (t i)))
           (t i))))
 
 (defun ex-fin (rf mk)
@@ -361,6 +369,18 @@
 (defun ex-csbr (e v)
   (let ((w (ex-casew (ex-c e) v 0))) (if (equal (car w) 1) (ex-cthen e (cdr w)) (ex-kid-of e 1))))
 
+;; COLLECTIONS (N_VECTOR 7, N_MAP 8, N_SET 9, exec-PLAN 3b): children their
+; elements (a map's keys and values in turn), each value kept in the
+; record (exec.inc's slot 4), then the collection built of them. A vector
+; is seqk's (:vec . elems), as B_APPLY reads one; a map's and a set's build
+; is the runtime's (vec_to_map, vec_to_set), vmx2's prim (op :map or :set)
+; of the values, whatever it answers -- a value, or a throw (clj's
+; duplicate key)
+(defun ex-cbuild (k vals)
+  (if (equal k 7)
+      (cons :val (cons :vec vals))
+    (let ((a (prim (if (equal k 8) :map :set) vals))) (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))))
+
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;
 ; a state (records val frame); a record (node pc i restart rnode tmp), tmp
@@ -441,6 +461,10 @@
           (21 (ex-finish (car tmp) ks fr))
           (23 (list (cons (ex-throwr :not-fn) ks) nil fr))
           (24 (list (cons (ex-rec (ex-csbr e val) 0 0 fl rs nil) (cdr ks)) val fr))
+          (25 (list (cons (ex-rec e pc2 i2 fl rs nil) (cdr ks)) val fr))
+          (26 (list (cons (ex-rec e pc2 i2 fl rs (append tmp (list val))) (cdr ks)) val fr))
+          (27 (let ((b (ex-cbuild k tmp)))
+                (if (valp b) (ex-finish (cdr b) ks fr) (list (cons (ex-throwr (cdr b)) ks) nil fr))))
           (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
           (otherwise s)))))))
 
@@ -483,12 +507,12 @@
 (defmacro ex-nv (r fr)
   `(if (ex-thp (car ,r)) (list (car ,r) (cadr ,r) (c+ 1 (c+ (caddr ,r) 1))) (list (list :out) ,fr 0)))
 
-(defun ex-rank (flg) (case flg (:iter 2) ((:do :let :rec :call :fin) 0) (otherwise 1)))
+(defun ex-rank (flg) (case flg (:iter 2) ((:do :let :rec :call :coll :fin) 0) (otherwise 1)))
 
 (defun ex-left (flg e i)
   (case flg
     (:let (nfix (- (ex-i2 e) (nfix i))))
-    ((:do :rec :call) (nfix (- (ex-nk e) (nfix i))))
+    ((:do :rec :call :coll) (nfix (- (ex-nk e) (nfix i))))
     (otherwise 0)))
 
 ; ex-wf's measure: its catches' walk too
@@ -541,6 +565,9 @@
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :call e (1+ i) tl)))
                         (t t)))
            (:fin nil)
+           (:coll (cond ((not (member k '(7 8 9))) nil)
+                        ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :coll e (1+ i) tl)))
+                        (t t)))
            (:ct (cond ((not (equal k 19)) nil)
                       ((< i (len (ex-c e))) (and (ex-wf :m (ex-cthen e i) 0 tl) (ex-wf :ct e (1+ i) tl)))
                       (t t)))
@@ -562,6 +589,7 @@
                                      (or (equal nk 1) (ex-wf :m (ex-kid-of e 1) 0 nil)) (ex-wf :cs e 0 nil)))
                   ((equal k 19) (and (equal nk 2) (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
                                      (ex-wf :ct e 0 tl)))
+                  ((member k '(7 8 9)) (ex-wf :coll e 0 tl))
                   (t nil)))))))
 
 ; a call enters f with n arguments, in the meaning: a closure with that
@@ -623,6 +651,17 @@
                            ((ex-thp (car rf)) (list (car rf) (cadr rf) (c+ (cadr tmp) (c+ 1 (c+ (caddr rf) 1)))))
                            (t (list (list :out) fr 0)))))
                   (t (list (car tmp) fr (c+ (cadr tmp) 1)))))
+      (:coll (cond ((not (consp e)) (list (list :out) fr 0))
+                   ((< i nk)
+                    (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                      (if (not (valp (car r)))
+                          (ex-nv r fr)
+                        (let ((r2 (ex-ev :coll e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
+                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
+                   (t (let ((b (ex-cbuild k tmp)))
+                        (cond ((equal (cdr b) *ex-mk*) (list (list :out) fr 0))
+                              ((valp b) (list b fr 1))
+                              (t (list b fr 2)))))))
       (:call (cond ((not (consp e)) (list (list :out) fr 0))
                    ((< i nk)
                     (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
@@ -684,6 +723,7 @@
                              (ex-ev :fin e 0 (list (car rh) (c+ 1 (c+ (caddr r) (c+ 1 (caddr rh))))) (cadr rh) fuel)
                            (list (list :out) fr 0))))
                       (t (ex-ev :fin e 0 (list (car r) (c+ 1 (caddr r))) (cadr r) fuel)))))
+             ((member k '(7 8 9)) (let ((r (ex-ev :coll e 0 nil fr fuel))) (list (car r) (cadr r) (c+ 1 (caddr r)))))
              ((equal k 19)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                 (if (not (valp (car r)))

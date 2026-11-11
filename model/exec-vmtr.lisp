@@ -14,9 +14,9 @@
 (defthm ex-rstart-natp2 (natp (ex-rstart e)) :rule-classes :type-prescription)
 (defthm ex-rn-natp2 (natp (ex-rn e)) :rule-classes :type-prescription)
 
-(defun ex-vrank (flg) (case flg ((:do :let :rec :call :cs :ct :fin) 0) (otherwise 1)))
+(defun ex-vrank (flg) (case flg ((:do :let :rec :call :coll :cs :ct :fin) 0) (otherwise 1)))
 (defun ex-vleft (flg e i)
-  (case flg (:let (nfix (- (ex-i2 e) (nfix i)))) ((:do :rec :call) (nfix (- (ex-nk e) (nfix i))))
+  (case flg (:let (nfix (- (ex-i2 e) (nfix i)))) ((:do :rec :call :coll) (nfix (- (ex-nk e) (nfix i))))
     ((:cs :ct) (nfix (- (len (ex-c e)) (nfix i)))) (otherwise 0)))
 
 (defun ex-pos (s cm) (cond ((atom cm) 0) ((equal s (car cm)) 0) (t (1+ (ex-pos s (cdr cm))))))
@@ -66,6 +66,10 @@
       d
     (list :if (list :prim :case (list :const (nth 0 (car ct))) (list :local p)) (car ts) (ex-trcs (cdr ct) (cdr ts) d p))))
 
+; A COLLECTION: the runtime's build of its elements' values, (:prim op
+; args..) -- a vector :vector, a map :map, a set :set
+(defun ex-cop (k) (case k (7 :vector) (8 :map) (otherwise :set)))
+
 (defun ex-tr (flg e i cm)
   (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
                   :well-founded-relation o<
@@ -86,6 +90,7 @@
                     (t (ex-tr :m (ex-kid-of e n2) 0 cm))))
         (:rec (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :rec e (1+ i) cm)) nil))
         (:call (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :call e (1+ i) cm)) nil))
+        (:coll (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :coll e (1+ i) cm)) nil))
         (:cs (if (< i (len (ex-c e)))
                  (cons (ex-tr :m (ex-cbody e i) 0 (append cm (list (ex-cslot e i)))) (ex-tr :cs e (1+ i) cm))
                nil))
@@ -104,6 +109,7 @@
                ((equal k 17) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm)))
                ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 cm) (ex-tr :fin e 0 cm)
                                        (ex-c e) (< 1 nk) (len cm)))
+               ((member k '(7 8 9)) (list* :prim (ex-cop k) (ex-tr :coll e 0 cm)))
                ((equal k 19) (list :let (ex-tr :m (ex-kid-of e 0) 0 cm)
                                    (ex-trcs (ex-c e) (ex-tr :ct e 0 (append cm (list nil))) (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil)))
                                             (len cm))))
@@ -256,6 +262,10 @@
                               (ex-vwf :cs e (1+ i) cm lp defs))
                        t)))
            (:fin (or (not (< 1 nk)) (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) nil defs)))
+           (:coll (and (member k '(7 8 9))
+                       (if (< i nk)
+                           (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :coll e (1+ i) cm lp defs))
+                         t)))
            (:ct (and (equal k 19)
                      (if (< i (len (ex-c e)))
                          (and (ex-vwf :m (ex-cthen e i) 0 cm lp defs) (ex-vwf :ct e (1+ i) cm lp defs))
@@ -279,6 +289,7 @@
                   ((equal k 17) (and (equal nk 1) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)))
                   ((equal k 18) (and (or (equal nk 1) (equal nk 2)) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
                                      (ex-vwf :cs e 0 cm nil defs) (ex-vwf :fin e 0 cm nil defs)))
+                  ((member k '(7 8 9)) (ex-vwf :coll e 0 cm nil defs))
                   ((equal k 19) (and (equal nk 2) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
                                      (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) lp defs)
                                      (ex-vwf :ct e 0 (append cm (list nil)) lp defs)))
@@ -351,7 +362,7 @@
                      (and (equal k 11) (not (member-equal (+ (ex-s2 e) i) cm)) (ex-lfwf :m (ex-kid-of e i) 0 cm)
                           (ex-lfwf :let e (1+ i) (append cm (list (+ (ex-s2 e) i)))))
                    (and (equal k 11) (ex-lfwf :m (ex-kid-of e n2) 0 cm))))
-           ((:rec :call :cs :ct :fin) nil)
+           ((:rec :call :coll :cs :ct :fin) nil)
            (otherwise
             (cond ((member-equal k (quote (1 3 14))) t)
                   ((equal k 2) (and (member-equal (ex-i2 e) cm) (not (ex-mark e))))
@@ -481,7 +492,7 @@
 (defun ex-xgood (flg e i cm lp defs)
   (implies (ex-vwf flg e i cm lp defs)
            (case flg
-             ((:rec :call) (x2wf-args (ex-tr flg e i cm) (len cm)))
+             ((:rec :call :coll) (x2wf-args (ex-tr flg e i cm) (len cm)))
              (:cs (x2wf-args (ex-tr flg e i cm) (1+ (len cm))))
              (:ct (ex-x2wfk (ex-tr flg e i cm) (len cm) (ex-k lp)))
              (:fin (or (not (< 1 (ex-nk e))) (x2wf (ex-tr flg e i cm) (1+ (len cm)) nil)))

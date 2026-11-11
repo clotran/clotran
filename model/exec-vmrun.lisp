@@ -17,7 +17,7 @@
 ; the program's defs every template's the tree can call (ex-defs-ok), its
 ; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
-  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok)
+  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -35,12 +35,18 @@
 ; the checks' runtime: vmx2's prim-impl, and a call's IFn test (ex-ifn,
 ; prim :ifn) that a closure and apply pass -- what is callable here; and
 ; instance? (prim :isa) of the class :any, which every value is; and
-; case*'s test (prim :case), equality
+; case*'s test (prim :case), equality; a collection the values tagged
+; (prim :vector seqk's vector); a collection the values tagged
+; (prim :vector seqk's vector)
 (defun ex-prim-impl (op vals)
   (declare (xargs :guard t))
   (case op
     (:ifn (and (consp vals) (or (equal (car vals) :apply) (and (consp (car vals)) (eq (car (car vals)) :clo)))))
     (:isa (and (consp vals) (equal (car vals) :any)))
+    (:vector (cons :vec vals))
+    ((:map :set) (cons op vals))
+    (:vector (cons :vec vals))
+    ((:map :set) (cons op vals))
     (:case (and (consp vals) (consp (cdr vals)) (equal (car vals) (cadr vals))))
     (otherwise (prim-impl op vals))))
 (local (defattach prim ex-prim-impl))
@@ -173,3 +179,39 @@
        (equal (car (ex-ev :m (ex-caseg 5) 0 nil nil 10)) '(:val . 30))
        (equal (mx2 (ex-tr :m (ex-caseg 5) 0 nil) nil nil *ex-defs* 10) '(:val . 30))
        (equal (vcs2-run-program (ex-tr :m (ex-caseg 5) 0 nil) *ex-defs* 1000) '(:val . 30)))))
+
+; collections (exec-PLAN 3b): (apply g 5 [6 7]) with the vector a literal
+; -- its elements run, the vector seqk's (:vec 6 7) -- and #{1 2}, the
+; runtime's set: the tree, mx2 (:prim :vector, :set) and the VM alike
+(defun ex-applyv (vs)
+  (list 6 0 (list (list 1 0 nil :apply 0 nil 0 0) (list 14 0 nil *ex-tmv* 0 nil 0 0) '(1 0 nil 5 0 nil 0 0)
+                  (list 7 0 (ex-consts vs) nil 0 nil 0 0))
+        nil 0 nil 0 0))
+(defconst *ex-set* (list 9 0 (ex-consts '(1 2)) nil 0 nil 0 0))
+(assert-event (and (ex-vwf :m (ex-applyv '(6 7)) 0 nil nil *ex-defs*) (ex-vwf :m *ex-set* 0 nil nil *ex-defs*)))
+(assert-event ; ex-example-coll
+ (with-guard-checking :none
+  (and (equal (car (ex-ev :m (ex-applyv '(6 7)) 0 nil nil 10)) '(:val :vec 6 7))
+       (equal (mx2 (ex-tr :m (ex-applyv '(6 7)) 0 nil) nil nil *ex-defs* 10) '(:val :vec 6 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-applyv '(6 7)) 0 nil) *ex-defs* 1000) '(:val :vec 6 7))
+       (equal (car (ex-ev :m *ex-set* 0 nil nil 10)) '(:val :set 1 2))
+       (equal (mx2 (ex-tr :m *ex-set* 0 nil) nil nil *ex-defs* 10) '(:val :set 1 2))
+       (equal (vcs2-run-program (ex-tr :m *ex-set* 0 nil) *ex-defs* 1000) '(:val :set 1 2)))))
+
+; collections (exec-PLAN 3b): (apply g 5 [6 7]) with the vector a literal
+; -- its elements run, the vector seqk's (:vec 6 7) -- and #{1 2}, the
+; runtime's set: the tree, mx2 (:prim :vector, :set) and the VM alike
+(defun ex-applyv (vs)
+  (list 6 0 (list (list 1 0 nil :apply 0 nil 0 0) (list 14 0 nil *ex-tmv* 0 nil 0 0) '(1 0 nil 5 0 nil 0 0)
+                  (list 7 0 (ex-consts vs) nil 0 nil 0 0))
+        nil 0 nil 0 0))
+(defconst *ex-set* (list 9 0 (ex-consts '(1 2)) nil 0 nil 0 0))
+(assert-event (and (ex-vwf :m (ex-applyv '(6 7)) 0 nil nil *ex-defs*) (ex-vwf :m *ex-set* 0 nil nil *ex-defs*)))
+(assert-event ; ex-example-coll
+ (with-guard-checking :none
+  (and (equal (car (ex-ev :m (ex-applyv '(6 7)) 0 nil nil 10)) '(:val :vec 6 7))
+       (equal (mx2 (ex-tr :m (ex-applyv '(6 7)) 0 nil) nil nil *ex-defs* 10) '(:val :vec 6 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-applyv '(6 7)) 0 nil) *ex-defs* 1000) '(:val :vec 6 7))
+       (equal (car (ex-ev :m *ex-set* 0 nil nil 10)) '(:val :set 1 2))
+       (equal (mx2 (ex-tr :m *ex-set* 0 nil) nil nil *ex-defs* 10) '(:val :set 1 2))
+       (equal (vcs2-run-program (ex-tr :m *ex-set* 0 nil) *ex-defs* 1000) '(:val :set 1 2)))))

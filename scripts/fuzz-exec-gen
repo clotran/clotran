@@ -5,8 +5,8 @@
 ;;
 ;;   scripts/fuzz-exec-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
 ;;
-;; Random cases: a record's node kind (the core's thirteen -- throw, try and
-;; case* among them -- and others), its
+;; Random cases: a record's node kind (the core's sixteen -- throw, try,
+;; case* and the collections among them -- and others), its
 ;; pc and i, the node's count of children and its operand, whether the
 ;; value in flight is truthy, and k_finish's restart flag and marker; and a
 ;; call's callee: one to four arities, fixed and variadic, of 0 to 4 fixed
@@ -42,7 +42,7 @@
 
 (defn gen-case []
   (let [nk (pick [0 1 2 2 3 3 4 5 9])]
-    {:k (pick [1 2 3 4 4 4 5 5 5 6 6 6 6 6 11 11 11 12 12 12 14 16 16 16 17 17 18 18 18 18 19 19 19 0 -1])
+    {:k (pick [1 2 3 4 4 4 5 5 5 6 6 6 6 6 11 11 11 12 12 12 14 16 16 16 17 17 18 18 18 18 19 19 19 7 7 8 8 9 9 0 -1])
      :pc (pick [0 0 1 1 2 2 3 4 5 -1])
      :i (pick [0 0 1 2 3 4 8 -1 (dec nk) nk])
      :nk nk :n2 (pick [0 1 2 3 4 -1 (dec nk)])

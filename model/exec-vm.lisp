@@ -279,16 +279,42 @@
   :hints (("Goal" :in-theory (e/d (ex-csbr) (ex-kid-of ex-vwf)))))
 (defthm ex-agree-nil1 (ex-agree (list nil) (list v) fr))
 
+; A COLLECTION. The runtime's vector of the values is seqk's (:vec .
+; vals) (prim :vector), and its map or set of good values good, or a good
+; throw (ex-collok): so a closure inside a collection is still a good value,
+; a call's possible head. A vector of good values is good with no help
+; (ex-xvs reads its elements).
+(defun-sk ex-collok (defs)
+  (forall vals (and (equal (prim :vector vals) (cons :vec vals))
+                    (implies (ex-xvs defs vals)
+                             (and (ex-xvs defs (list (cdr (ex-cbuild 8 vals)))) (ex-xvs defs (list (cdr (ex-cbuild 9 vals)))))))))
+(defthm ex-collok-vector (implies (ex-collok defs) (equal (prim :vector vals) (cons :vec vals)))
+  :hints (("Goal" :use ex-collok-necc :in-theory (disable ex-cbuild))))
+(defthm ex-xvs-vec (implies (ex-xvs defs vals) (ex-xvs defs (list (cons :vec vals))))
+  :hints (("Goal" :expand ((ex-xvs defs (list (cons :vec vals))) (ex-xvs defs (cons :vec vals))))))
+(defthm ex-collok-good
+  (implies (and (ex-collok defs) (ex-xvs defs vals) (member-equal k '(7 8 9))) (ex-xvs defs (list (cdr (ex-cbuild k vals)))))
+  :hints (("Goal" :use ex-collok-necc :in-theory (disable ex-cbuild))
+          (and stable-under-simplificationp '(:in-theory (enable ex-cbuild)))))
+; ... and as mx2 answers it, the build opened
+(defthm ex-collok-prim
+  (implies (and (ex-collok defs) (ex-xvs defs vals) (member-equal op '(:map :set)))
+           (and (implies (not (throwp (prim op vals))) (ex-xvs defs (list (prim op vals))))
+                (implies (throwp (prim op vals)) (ex-xvs defs (list (cdr (prim op vals)))))))
+  :hints (("Goal" :use ((:instance ex-collok-good (k 8)) (:instance ex-collok-good (k 9))))))
+(in-theory (disable ex-collok))
+
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
                 (ex-nomem (ex-lsl lp) cm) (equal (len env) (len cm)) (ex-xvs defs (append env tmp)))
-         (and (member-equal flg '(:m :do :let :rec :call :fin)) (ex-vwf flg e i cm lp defs) (ex-agree cm env fr)
+         (and (member-equal flg '(:m :do :let :rec :call :coll :fin)) (ex-vwf flg e i cm lp defs) (ex-agree cm env fr)
               (ex-xvs defs env)
               (or (not (equal flg :rec)) (and (true-listp tmp) (equal (len tmp) (nfix i)) (ex-xvs defs tmp)))
               (or (not (equal flg :call)) (and (consp tmp) (true-listp tmp) (ex-xvs defs tmp)))
+              (or (not (equal flg :coll)) (and (true-listp tmp) (ex-xvs defs tmp)))
               (or (not (equal flg :fin))
                   (and (or (valp (car tmp)) (thrownp (car tmp))) (ex-xvs defs (list (val (car tmp))))))))))
 
@@ -310,6 +336,11 @@
                                   (ex-agree cm env fr2) (ex-xvs defs (list (val res)))))
                     (implies (thrownp res)
                              (and (equal (if (valp m) (ex-mxcall (car tmp) (append (cdr tmp) (val m)) defs fuel) m) res)
+                                  (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))))
+      (:coll (let ((m (mx2-args (ex-tr :coll e i cm) env caps defs fuel)))
+               (and (not (equal (car res) :recur))
+                    (implies (or (valp res) (thrownp res))
+                             (and (equal (if (valp m) (ex-cbuild (ex-kind e) (append tmp (val m))) m) res)
                                   (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))))
       (:fin (let ((mf (mx2 (ex-tr :fin e 0 cm) (append env (list (val (car tmp)))) caps defs fuel)))
               (and (not (equal (car res) :recur))
@@ -381,6 +412,11 @@
                           (ex-vind :iter (ex-fbody f (len args)) 0 (cons nil (ex-fvs f args)) (ex-fcm (ex-ftm f) ar)
                                    (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
                                    (cons (ex-astart ar) (ex-anp ar)))))))
+        (:coll (if (< i nk)
+                   (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                     (list (ex-vind :m (ex-kid-of e i) 0 nil cm env fr fuel caps defs nil)
+                           (ex-vind :coll e (1+ i) (append tmp (list (val (car r)))) cm env (cadr r) fuel caps defs lp)))
+                 nil))
         (:fin (if (< 1 nk)
                   (ex-vind :m (ex-kid-of e 1) 0 nil (append cm (list nil)) (append env (list (val (car tmp)))) fr fuel caps defs nil)
                 nil))
@@ -411,6 +447,7 @@
                                           fuel caps defs nil))))
                         (t (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
                                  (ex-vind :fin e 0 (list (car r) (c+ 1 (caddr r))) cm env (cadr r) fuel caps defs nil))))))
+               ((member k '(7 8 9)) (ex-vind :coll e 0 nil cm env fr fuel caps defs nil))
                ((equal k 19)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
@@ -489,11 +526,44 @@
                   :use (ex-vgood-case-val ex-vgood-case-out))))
 (in-theory (disable ex-vgood-case-val ex-vgood-case-out))
 
+; THE COLLECTION'S CASES: the node's record opened, each element, the build
+(defthm ex-vgood-m-coll
+  (implies (and (consp e) (member-equal (ex-kind e) '(7 8 9)) (not (member-equal flg '(:iter :do :let :rec :call :coll :fin)))
+                (ex-vgood :coll e 0 nil cm env fr fuel caps defs nil))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+(defthm ex-vgood-coll-mid
+  (implies (and (equal flg :coll) (consp e) (< (nfix i) (ex-nk e))
+                (ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
+                (ex-vgood :coll e (+ 1 (nfix i)) (append tmp (list (val (car (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel))))) cm env
+                          (cadr (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel)) fuel caps defs lp))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+(defthm ex-vgood-coll-end
+  (implies (and (equal flg :coll) (consp e) (not (< (nfix i) (ex-nk e))))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr))
+                  :expand ((:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+
 (defthm ex-vm-agree-flag
   (ex-vgood flg e i tmp cm env fr fuel caps defs lp)
   :rule-classes nil :otf-flg t
   :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs lp)
-                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw ex-csbr))
+                  :in-theory (disable ex-vgood ex-kid-of ex-xvs ex-catchw ex-csbr ex-cbuild))
           (and stable-under-simplificationp
            '(:in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw))
                   :expand ((:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
@@ -512,7 +582,7 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -520,7 +590,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
