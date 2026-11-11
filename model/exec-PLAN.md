@@ -421,7 +421,8 @@ slot's read and write), and every kind not yet in the model.
    keys are equal at run time, `(let [a 1 b 1] #{a b})`, answers #{1} in
    clotran where clj throws IllegalArgumentException "Duplicate key: 1"
    (vec_to_set, vec_to_map) -- not fixed here, the model allows the
-   runtime's throw. **Milestone 3b done.** Left from it: the old cases of
+   runtime's throw. [Fixed since: both throw it, naming the later key
+   (exec.inc dup_key); oracle cases added.] **Milestone 3b done.** Left from it: the old cases of
    the flag proof (ex-vm-agree-flag, ~950 s: if, do, let, loop, recur,
    calls) still go through its expansions after stable-under-
    simplificationp; reworking them into lemmas of their own, as try's,

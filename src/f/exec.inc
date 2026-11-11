@@ -1982,7 +1982,24 @@
     s = s(1:p - 1)
   end subroutine bare_message
 
-  ! Alternating keys and values, as a map literal's children come.
+  ! A literal's key equal to one before it, at run time: clj's
+  ! createWithCheck (PersistentArrayMap, PersistentHashMap,
+  ! PersistentHashSet) throws IllegalArgumentException "Duplicate key: "
+  ! and the later key's toString (nil's "null")
+  subroutine dup_key(k, roots)
+    type(gc_value), intent(in) :: k
+    type(gc_value), intent(in) :: roots(:)
+    character(len=:), allocatable :: t
+    if (k%tag == GCT_NIL) then
+       t = "null"
+    else
+       call gcp_str(k, .false., s=t)
+    end if
+    call fail_as("clotran.host.illegal_argument_exception", "Duplicate key: " // t, roots)
+  end subroutine dup_key
+
+  ! Alternating keys and values, as a map literal's children come; a key
+  ! twice throws (dup_key), and the answer is then nil
   function vec_to_map(vals, roots) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: vals
@@ -1994,9 +2011,15 @@
     call vs_set(vst, base + 1, vals)
     mp = gca_empty([roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, mp)
+    out = gc_nil()
     do i = 0, gcv_count(vals) - 1, 2
        mp = gca_assoc(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), gcv_nth(vs_get(vst, base + 1), i + 1), &
             [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       if (gca_count(mp) /= i / 2 + 1) then
+          call dup_key(gcv_nth(vs_get(vst, base + 1), i), [roots, vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
+          return
+       end if
        call vs_set(vst, base + 2, mp)
     end do
     out = vs_get(vst, base + 2)
@@ -2014,9 +2037,15 @@
     call vs_set(vst, base + 1, vals)
     mp = gca_hash_empty([roots, vs_get(vst, base + 1)])
     call vs_set(vst, base + 2, mp)
+    out = gc_nil()
     do i = 0, gcv_count(vals) - 1
        mp = gca_assoc(vs_get(vst, base + 2), gcv_nth(vs_get(vst, base + 1), i), gcv_nth(vs_get(vst, base + 1), i), &
             [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       if (gca_count(mp) /= i + 1) then
+          call dup_key(gcv_nth(vs_get(vst, base + 1), i), [roots, vs_get(vst, base + 1)])
+          call vs_leave(vst, base)
+          return
+       end if
        call vs_set(vst, base + 2, mp)
     end do
     out = gc_obj(OBJ_SET, [vs_get(vst, base + 2)], [roots, vs_get(vst, base + 2)])

@@ -3528,3 +3528,16 @@ x10
 ;; a call's arity (model/exec.lisp ex-arity): the fixed arity of the count wins, else the variadic one, its rest nil for no extras; none fits: ArityException
 [((fn [& r] r)) ((fn [a & r] r) 1) ((fn [a & r] r) 1 2 3) ((fn ([a] [:one a]) ([a & r] [:more a r])) 1) ((fn ([a] [:one a]) ([a & r] [:more a r])) 1 2)]
 [(try ((fn ([x] x) ([x y & r] r))) (catch clotran.host.arity_exception e :arity)) ((fn ([x] x) ([x y & r] r)) 1 2 3 4) ((fn [x & r] (if r (recur (first r) (next r)) x)) 1 2 3)]
+
+;; a set or map literal whose keys are equal only at run time:
+;; createWithCheck's IllegalArgumentException, naming the later key
+(let [a 1 b 1] (try #{a b} (catch clotran.host.illegal_argument_exception e (.getMessage e))))
+(let [a 1 b 1] (try {a 2 b 3} (catch clotran.host.illegal_argument_exception e (.getMessage e))))
+(let [a 1 b 1] (try {a 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 b 2} (catch clotran.host.illegal_argument_exception e (.getMessage e))))
+(let [a nil] (try {a 1 nil 2} (catch clotran.host.illegal_argument_exception e (.getMessage e))))
+(let [a [1] b (list 1)] (try #{a b} (catch clotran.host.illegal_argument_exception e (.getMessage e))))
+(let [a ##NaN b ##NaN] (count #{a b}))
+(let [a 1 b 1.0] #{a b})
+(defn odup [a b] [#{a b} {a :x b :y}])
+(odup 1 2)
+(try (odup 3 3) (catch clotran.host.illegal_argument_exception e (.getMessage e)))
