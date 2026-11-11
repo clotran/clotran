@@ -3,7 +3,8 @@
 ; translation (ex-vm-agree) and the translation x2wf (ex-tr-xwf);
 ; vmx2-proof proves the VM's run of an x2wf program answers mx2's value
 ; (vcs2-correct). Together: the VM run of the translation answers the
-; tree's value. A book of its own so exec-cost need not carry vmx2-proof's
+; tree's value, or its throw (a call's head translated first, as the
+; tree runs it). A book of its own so exec-cost need not carry vmx2-proof's
 ; arithmetic.
 
 (in-package "ACL2")
@@ -11,11 +12,13 @@
 (include-book "exec-vm")
 (include-book "vmx2-proof")
 
-; THE VM RUN OF A WELL-FORMED TREE'S TRANSLATION ANSWERS THE TREE'S VALUE,
+; THE VM RUN OF A WELL-FORMED TREE'S TRANSLATION ANSWERS THE TREE'S VALUE OR THROW,
+; the runtime's cast to IFn throwing nothing and its apply refusing what the tree's does,
 ; the program's defs every template's the tree can call (ex-defs-ok), its
 ; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
-  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (valp (car (ex-ev :m e 0 nil fr fuel))) (natp k))
+  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok)
+                (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :in-theory (disable vcs2-run-program s2clk ex-ev ex-tr ex-vwf mx2 ex-defs-ok)
@@ -70,17 +73,15 @@
 ; mx2's lookup is assoc-equal, the VM's too: a template is its own def's
 ; name. vmx2's guards are not verified, so the runs on these defs are the
 ; logic's, evaluated by the prover
-(defthm ex-example-mx (equal (mx2 (ex-tr :m *ex-prog* 0 nil) nil nil *ex-defs* 10) '(:val . 10)) :rule-classes nil)
-(defthm ex-example-vm (equal (vcs2-run-program (ex-tr :m *ex-prog* 0 nil) *ex-defs* 1000) '(:val . 10)) :rule-classes nil)
-(defthm ex-example-rest
-  (and (equal (mx2 (ex-tr :m (ex-callg (quote (5 6 7))) 0 nil) nil nil *ex-defs* 10) '(:val 6 7))
-       (equal (vcs2-run-program (ex-tr :m (ex-callg (quote (5 6 7))) 0 nil) *ex-defs* 1000) '(:val 6 7)))
-  :rule-classes nil)
+(assert-event (with-guard-checking :none (equal (mx2 (ex-tr :m *ex-prog* 0 nil) nil nil *ex-defs* 10) '(:val . 10)))) ; ex-example-mx
+(assert-event (with-guard-checking :none (equal (vcs2-run-program (ex-tr :m *ex-prog* 0 nil) *ex-defs* 1000) '(:val . 10)))) ; ex-example-vm
+(assert-event ; ex-example-rest
+ (with-guard-checking :none (and (equal (mx2 (ex-tr :m (ex-callg (quote (5 6 7))) 0 nil) nil nil *ex-defs* 10) '(:val 6 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-callg (quote (5 6 7))) 0 nil) *ex-defs* 1000) '(:val 6 7)))))
 ; the arity error: the tree, mx2 and the VM all throw :arity
-(defthm ex-example-arity
-  (and (equal (mx2 (ex-tr :m (ex-callg nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
-       (equal (vcs2-run-program (ex-tr :m (ex-callg nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))
-  :rule-classes nil)
+(assert-event ; ex-example-arity
+ (with-guard-checking :none (and (equal (mx2 (ex-tr :m (ex-callg nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
+       (equal (vcs2-run-program (ex-tr :m (ex-callg nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))))
 ; apply (2c-iii): (apply g 5 '(6 7)) spreads to (g 5 6 7), the rest (6 7);
 ; (apply g nil) to (g), the arity error -- the tree, mx2 (:applyv) and the
 ; VM alike
@@ -90,22 +91,20 @@
 (assert-event (ex-vwf :m (ex-applyg '(5) '(6 7)) 0 nil nil *ex-defs*))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m (ex-applyg '(5) '(6 7)) 0 nil nil 10)) '(:val 6 7))))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m (ex-applyg nil nil) 0 nil nil 10)) '(:thrown . :arity))))
-(defthm ex-example-apply
-  (and (equal (mx2 (ex-tr :m (ex-applyg '(5) '(6 7)) 0 nil) nil nil *ex-defs* 10) '(:val 6 7))
+(assert-event ; ex-example-apply
+ (with-guard-checking :none (and (equal (mx2 (ex-tr :m (ex-applyg '(5) '(6 7)) 0 nil) nil nil *ex-defs* 10) '(:val 6 7))
        (equal (vcs2-run-program (ex-tr :m (ex-applyg '(5) '(6 7)) 0 nil) *ex-defs* 1000) '(:val 6 7))
        (equal (mx2 (ex-tr :m (ex-applyg nil nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
-       (equal (vcs2-run-program (ex-tr :m (ex-applyg nil nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))
-  :rule-classes nil)
+       (equal (vcs2-run-program (ex-tr :m (ex-applyg nil nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))))
 ; over a vector (2c-iv): (apply g 5 [6 7]) hands g the vector -- the
 ; translation the same call, :applyv's spread seqk's (x2-vals) -- the rest
 ; the vector's view from 0, the vector [6 7] (2c-vi: nothing read past
 ; req + 1), in the tree, mx2 and the VM alike
 (assert-event (ex-vwf :m (ex-applyg '(5) '(:vec 6 7)) 0 nil nil *ex-defs*))
 (assert-event (with-guard-checking :none (equal (car (ex-ev :m (ex-applyg '(5) '(:vec 6 7)) 0 nil nil 10)) '(:val :vec 6 7))))
-(defthm ex-example-apply-vector
-  (and (equal (mx2 (ex-tr :m (ex-applyg '(5) '(:vec 6 7)) 0 nil) nil nil *ex-defs* 10) '(:val :vec 6 7))
-       (equal (vcs2-run-program (ex-tr :m (ex-applyg '(5) '(:vec 6 7)) 0 nil) *ex-defs* 1000) '(:val :vec 6 7)))
-  :rule-classes nil)
+(assert-event ; ex-example-apply-vector
+ (with-guard-checking :none (and (equal (mx2 (ex-tr :m (ex-applyg '(5) '(:vec 6 7)) 0 nil) nil nil *ex-defs* 10) '(:val :vec 6 7))
+       (equal (vcs2-run-program (ex-tr :m (ex-applyg '(5) '(:vec 6 7)) 0 nil) *ex-defs* 1000) '(:val :vec 6 7)))))
 
 ; a variadic fn handed apply's seq reads it only through req + 1 (2c-vi,
 ; RestFn.applyTo): clj's (apply (fn [& xs] (first xs)) (range)) is 0 -- here

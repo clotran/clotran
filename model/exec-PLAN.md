@@ -326,21 +326,31 @@ slot's read and write), and every kind not yet in the model.
    fn's value too, as clj's cast passes them), action 23 refuse_not_fn;
    flat's F_IFN after the head. Oracle: `(f (g))`, f a string; DEVIATIONS
    84 now only apply's `.` target hint.
-   **Next (3b)**: the VM's agreement on a throw. The plan: ex-vpost's
-   thrown clause (m = res, the scope agreeing, the value good) at every
-   place; a call translated head first, `(:let H (:if (:prim :ifn (:local
-   p)) (:applyv (:local p) args..) (:throw (:const :not-fn))))`, its
-   arguments in scope cm ++ (nil) (ex-vwf's :call place taking that scope)
-   -- with the tree's pc 1 asking the same `prim :ifn` of the callee (tv at
-   a call's pc 1: 1 a fn, else action 23 throws :not-fn, or prim's own
-   throw), which is DEVIATIONS 84's fix (Fortran: call_dispatch's IFn test
-   before the arguments; oracle case `(f (g))`, f a string); apply's
-   refusals (ex-apway 2, 3) agreeing with mx2's prim :invoke under a
-   defun-sk hypothesis as ex-lzok is; a try `(:try B H)`, H the catch walk
-   `(:if (:prim :isa (:const c) (:local p)) Hj ...(:throw (:local p)))`,
-   clause j's body in scope cm ++ (slot j), a finally F as vmx2's comment
-   says -- `(:let (:try X (:if F' (:throw t) (:throw t))) (:if F'' r r))` --
-   under the hypothesis that prim :isa never throws.
+   **3b, second part** *(done)*: the VM's agreement on a throw, apply's
+   refusals with it. exec-vm's translation runs a call head first, as the
+   tree does (ex-trcall): `(:let H (:if (:prim :ifn (:local p)) (:applyv
+   (:local p) args..) (:throw (:const :not-fn))))`, p the head's new
+   position, the arguments in scope cm ++ (nil) (ex-vwf's :call place takes
+   that scope). ex-vpost's thrown clause at every place: mx2 answers the
+   tree's throw, the scope agreeing at the frame the throw leaves and the
+   thrown value good (a call's: an argument's throw, or its dispatch's --
+   the body's, the arity error (ex-mxcall-arerr), apply's refusals).
+   ex-vm-agree is over a value or a throw; ex-vm-runs too (vcs2-correct
+   covers throws), under two hypotheses on the runtime, defun-sk as ex-lzok
+   is: ex-ifnok (prim :ifn throws nothing) and ex-apok (a call of apply
+   ex-apway refuses, 2 or 3, the runtime's prim :invoke refuses with the
+   tree's :arity or :not-seq). No good value is the symbol :recur-marker
+   (ex-xvs), so no good list holds the tree's recur marker (ex-xvs-no-mk)
+   and apply's refusal 3 is never a spread vmx2 makes (ex-ap3-nospread).
+   exec-vmrun's examples run mx2 and the VM under the checks' attachment
+   (prim :ifn is constrained in the logic). Model only: the Fortran already
+   runs the head first (3b's first part).
+   **Next (3b)**: a try `(:try B H)`, H the catch walk `(:if (:prim :isa
+   (:const c) (:local p)) Hj ...(:throw (:local p)))`, clause j's body in
+   scope cm ++ (slot j), a finally F as vmx2's comment says -- `(:let (:try
+   X (:if F' (:throw t) (:throw t))) (:if F'' r r))` -- under the hypothesis
+   that prim :isa never throws (ex-vwf now refuses kinds 17 and 18); then
+   N_CASE and the collections.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,

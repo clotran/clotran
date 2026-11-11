@@ -29,10 +29,14 @@
 ; FNS AND CALLS. A Var is (:const its value) (the namespace is the host's;
 ; the machine reads the value from the node). A fn is (:mkclo template
 ; locals of its outer slots): the tree's closure and mx2's are one value. A
-; call is (:applyv head args) -- :callv's call, or apply's spread when the
-; head's value is apply, as the tree's ex-callee spreads it (apply is a
-; value; only the head's value tells): mx2 runs the arguments before the head, the
-; tree after, which the scope's agreement after each makes no matter. mx2's
+; call is head first, as the tree runs it (exec-PLAN 3b, ex-trcall): (:let
+; head (:if (:prim :ifn (:local p)) (:applyv (:local p) args) (:throw
+; (:const :not-fn)))), p the head's new position, the arguments in scope
+; cm ++ (nil) -- :callv's call, or apply's spread when the head's value is
+; apply, as the tree's ex-callee spreads it (apply is a value; only the
+; head's value tells), after the runtime's cast to IFn the tree's pc 1
+; asks (ex-ifn) -- so a throw in the head, the cast or an argument is the
+; same throw in both. mx2's
 ; defs are keyed by the template itself (vcs2-correct asks only x2defs-ok,
 ; and both look a name up by equal), the def a clause for each arity, (nf
 ; body) or (nf body :rest): lets of the captures and of the closure remade,
@@ -44,14 +48,19 @@
 ; from the capture and self slots. Every closure-shaped value has its
 ; template in the defs, and no value is the symbol :clo, so a rest list is
 ; never closure-shaped (ex-xvs), threaded through the scope, results and
-; recur values. A call of a closure no arity fits throws :arity in both
-; (ex-ev's :thrown, mx2's); the theorem is over values -- a throw's
-; agreement needs the head run first (mx2 runs the arguments first: a
-; throw in each could answer differently), milestone 3's with try.
+; recur values; no value is the symbol :recur-marker either, so no good
+; list holds the tree's recur marker (ex-xvs-no-mk) and apply's spread of
+; good values is never refused for one. A call of a closure no arity fits
+; throws :arity in both (ex-ev's :thrown, mx2's). The runtime's part
+; (prim, unconstrained) is two hypotheses: its cast to IFn throws nothing
+; (ex-ifnok), and a call of apply the tree refuses -- fewer than two
+; arguments, a closure's with no seq -- it refuses with the tree's :arity
+; and :not-seq (ex-apok).
 ;
 ; THE THEOREM (ex-vm-agree): a well-formed core tree in no loop's tail
-; whose scope agrees answers, when ex-ev gives a value, that same value
-; from mx2 of its translation, the scope still agreeing after; and it
+; whose scope agrees answers, when ex-ev gives a value or a throw, that
+; same answer from mx2 of its translation, the scope still agreeing after
+; (a throw's frame the one the tree's unwinding sees); and it
 ; never answers a recur (ex-recur-stays) -- a recur's values reach only
 ; its loop's slots, which mx2's recur gives its loop's positions. The
 ; translation of a well-formed tree is x2wf (ex-tr-xwf), so with
@@ -91,6 +100,12 @@
 (defun ex-outers (capv) (if (or (atom capv) (atom (cdr capv))) nil (cons (car capv) (ex-outers (cddr capv)))))
 (defun ex-inners (capv) (if (or (atom capv) (atom (cdr capv))) nil (cons (cadr capv) (ex-inners (cddr capv)))))
 
+; a call, head first as the tree runs it: the head's value bound at
+; position p, its cast to IFn asked of the runtime (prim :ifn, as the tree's
+; ex-ifn), then :applyv of it on the arguments, or :not-fn thrown
+(defun ex-trcall (h args p)
+  (list :let h (list :if (list :prim :ifn (list :local p)) (list* :applyv (list :local p) args) '(:throw (:const :not-fn)))))
+
 (defun ex-tr (flg e i cm)
   (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
                   :well-founded-relation o<
@@ -114,7 +129,7 @@
         (otherwise
          (cond ((or (equal k 1) (equal k 3)) (list :const (ex-c e)))
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
-               ((equal k 6) (list* :applyv (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :call e 1 cm)))
+               ((equal k 6) (ex-trcall (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :call e 1 (append cm (list nil))) (len cm)))
                ((equal k 2) (list :local (ex-pos (ex-i2 e) cm)))
                ((equal k 4) (list :if (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :m (ex-kid-of e 1) 0 cm)
                                   (if (< 2 nk) (ex-tr :m (ex-kid-of e 2) 0 cm) '(:const nil))))
@@ -126,6 +141,7 @@
 ; THE VALUES (milestone 2b): every closure-shaped value one whose template
 ; is in defs (so mx2's :callv finds its def), its captures as many as the
 ; template's pairs and good themselves; any other value is good but the
+; symbol :recur-marker (the tree's recur marker's) and
 ; symbol :clo itself, so a variadic call's rest list of good values is
 ; never closure-shaped (the model's list is the machine's seq, and :clo is
 ; no value a program holds); and a list's elements good too, so apply's
@@ -135,7 +151,7 @@
   (if (atom l)
       t
     (and (let ((v (car l)))
-           (and (not (equal v :clo))
+           (and (not (equal v :clo)) (not (equal v :recur-marker))
                 (if (clop v)
                     (and (equal v (clo (cadr v) (caddr v))) (consp (assoc-equal (cadr v) defs))
                          (true-listp (caddr v)) (equal (len (caddr v)) (len (ex-inners (nth 2 (cadr v)))))
@@ -188,7 +204,7 @@
 ; top with the arguments past req consed on, one good value -- never the
 ; symbol :clo, as the walk hands over a seq that has another element, or
 ; arguments past req
-(defthm ex-xvs-list1 (implies (and (ex-xvs defs x) (not (equal x :clo))) (ex-xvs defs (list x)))
+(defthm ex-xvs-list1 (implies (and (ex-xvs defs x) (not (equal x :clo)) (not (equal x :recur-marker))) (ex-xvs defs (list x)))
   :hints (("Goal" :expand ((ex-xvs defs (list x)) (ex-xvs defs x)))))
 (defthm ex-xvs-nthcdr-l (implies (ex-xvs defs l) (ex-xvs defs (nthcdr n l)))
   :hints (("Goal" :induct (nthcdr n l) :expand ((ex-xvs defs l)))))
@@ -196,12 +212,12 @@
   :hints (("Goal" :induct (sk-topv v) :expand ((ex-xvs defs v) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-sk-cval-good (implies (ex-xvs defs (car c)) (ex-xvs defs (sk-cval c)))
   :hints (("Goal" :in-theory (enable sk-cval) :expand ((ex-xvs defs (car c)) (:free (b) (ex-xvs defs (cons :vec b)))))))
-(defthm ex-sk-cval-noclo (implies (sk-more (sk-d c)) (and (consp (sk-cval c)) (not (equal (sk-cval c) :clo))))
+(defthm ex-sk-cval-noclo (implies (sk-more (sk-d c)) (and (consp (sk-cval c)) (not (equal (sk-cval c) :clo)) (not (equal (sk-cval c) :recur-marker))))
   :hints (("Goal" :in-theory (enable sk-cval sk-d sk-kind sk-step sk-topv))))
 (defthm ex-xvs-consv (implies (and (ex-xvs defs xs) (ex-xvs defs s)) (ex-xvs defs (sk-consv xs s)))
   :hints (("Goal" :induct (sk-consv xs s) :expand ((ex-xvs defs xs) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-consv-consp (implies (consp xs) (consp (sk-consv xs s))))
-(defthm ex-consv-noclo (implies (consp xs) (not (equal (sk-consv xs s) :clo))))
+(defthm ex-consv-noclo (implies (consp xs) (and (not (equal (sk-consv xs s) :clo)) (not (equal (sk-consv xs s) :recur-marker)))))
 (defthm ex-consv-id (implies (atom xs) (equal (sk-consv xs s) s)))
 (defthm ex-nthcdr-consp (implies (and (natp n) (< n (len l))) (consp (nthcdr n l))))
 (defthm ex-apwalk-good
@@ -269,7 +285,7 @@
                   ((equal k 14) (and (consp (assoc-equal (ex-c e) defs))
                                      (nat-listp (ex-outers (nth 2 (ex-c e))))
                                      (subsetp-equal (ex-outers (nth 2 (ex-c e))) cm)))
-                  ((equal k 6) (and (< 0 nk) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 cm lp defs)))
+                  ((equal k 6) (and (< 0 nk) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 (append cm (list nil)) lp defs)))
                   ((equal k 4) (and (or (equal nk 2) (equal nk 3))
                                     (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :m (ex-kid-of e 1) 0 cm lp defs)
                                     (or (equal nk 2) (ex-vwf :m (ex-kid-of e 2) 0 cm lp defs))))
@@ -1021,8 +1037,102 @@
 (in-theory (disable ex-anf ex-avar ex-anp ex-astart ex-abody ex-fself ex-fbcm ex-fcm ex-fbtr ex-def ex-tmwf ex-arwf
                     ex-car ex-fenv ex-fvs ex-callable ex-enters ex-bind ex-mxcall ex-mxcall0 ex-ehyp ex-fbody ex-arerr ex-bargs ex-mxcl ex-mxcls))
 
+
+; ---- A THROW (exec-PLAN 3b) -------------------------------------------------------------------
+;
+; The runtime's answers the agreement on a throw asks of it: its cast to
+; IFn throws nothing (ex-ifnok: clj's cast either passes or is the tree's
+; :not-fn), and a call of apply the tree refuses -- fewer than two
+; arguments (ex-apway 2), a closure's with no seq (3) -- it refuses too,
+; with the tree's :arity and :not-seq (ex-apok), as clj's apply throws.
+(defun-sk ex-ifnok () (forall h (not (throwp (prim :ifn (list h))))))
+(defun ex-aperr (tmp) (if (equal (ex-apway tmp) 2) :arity :not-seq))
+(defun-sk ex-apok ()
+  (forall tmp (implies (or (equal (ex-apway tmp) 2) (equal (ex-apway tmp) 3))
+                       (equal (prim :invoke tmp) (cons :throw (ex-aperr tmp))))))
+(in-theory (disable ex-ifnok ex-apok))
+
+(defthm ex-nth-len-append (equal (nth (len a) (append a (list v))) v) :hints (("Goal" :induct (len a))))
+; a call's translation, head first: the head, then the cast, then :applyv
+(defthm ex-mx-trcall
+  (implies (and (ex-ifnok) (equal p (len env)))
+           (equal (mx2 (ex-trcall h args p) env caps defs fuel)
+                  (let ((rh (mx2 h env caps defs fuel)))
+                    (cond ((not (valp rh)) rh)
+                          ((not (ex-ifn (val rh))) '(:thrown . :not-fn))
+                          (t (let ((rs (mx2-args args (append env (list (val rh))) caps defs fuel)))
+                               (if (valp rs) (ex-mxcall (val rh) (val rs) defs fuel) rs)))))))
+  :hints (("Goal" :in-theory (e/d (ex-ifn ex-trcall) (ex-mxcall))
+                  :use ((:instance ex-ifnok-necc (h (val (mx2 h env caps defs fuel)))))
+                  :expand ((:free (x env) (mx2 (cons :let x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :if x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :throw x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :const x) env caps defs fuel))
+                           (:free (x env) (mx2 (cons :local x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+(in-theory (disable ex-trcall))
+
+; a good list holds no recur marker (no good value ends in :recur-marker)
+(defthm ex-xvs-no-mk (implies (ex-xvs defs l) (no-mk l))
+  :hints (("Goal" :induct (ex-xvs defs l) :in-theory (enable clop) :expand ((ex-xvs defs l) (ex-xvs defs (car l))))))
+
+; apply's refusals: fewer than two arguments, never spread
+(defthm ex-apway-apply (implies (or (equal (ex-apway tmp) 2) (equal (ex-apway tmp) 3)) (equal (car tmp) :apply))
+  :rule-classes :forward-chaining :hints (("Goal" :in-theory (enable ex-apway ex-apentry))))
+(defthm ex-mxcall-ap2
+  (implies (and (equal (ex-apway tmp) 2) (ex-apok))
+           (equal (ex-mxcall (car tmp) (cdr tmp) defs fuel) '(:thrown . :arity)))
+  :hints (("Goal" :use ((:instance ex-apok-necc))
+                  :in-theory (e/d (ex-mxcall ex-mxcl x2-fn x2-vals x2-spreads ex-apway ex-apentry ex-aperr clop) (ex-apok-necc)))))
+; a closure's and no seq: a good spread holds no marker, so its kind is not
+; :ok or :hand, or its last value is a closure -- vmx2 does not spread
+(defthm ex-ap3-nospread
+  (implies (and (equal (ex-apway tmp) 3) (ex-defs-ok defs defs) (ex-lzok defs) (ex-xvs defs tmp))
+           (not (x2-spreads :applyv (car tmp) (cdr tmp) defs)))
+  :hints (("Goal" :do-not-induct t
+                  :use ((:instance ex-x2-req-good (g (cadr tmp)))
+                        (:instance ex-sk-spread-good (req (ex-varnf (nth 1 (cadr (cadr tmp))))) (fx (butlast (cddr tmp) 1))
+                                   (v (car (last (cdr tmp)))))
+                        (:instance ex-xvs-no-mk (l (cadr (ex-apsp tmp))))
+                        (:instance ex-xvs-noclo (v (car (last (cdr tmp)))))
+                        (:instance ex-xvs-last (l (cdr tmp)))
+                        (:instance ex-xvs-nth1 (l tmp) (j 1))
+                        (:instance ex-xvs-cdr (l tmp)) (:instance ex-xvs-cdr (l (cdr tmp)))
+                        (:instance ex-xvs-butlast (l (cddr tmp)) (n 1)))
+                  :in-theory (e/d (x2-sp ex-apsp x2-spreads ex-apway ex-apentry ex-seqp ex-clo-shape clop)
+                                  (ex-lzok ex-xvs sk-spread ex-sk-spread-good ex-xvs-noclo ex-xvs-last ex-xvs-cdr ex-xvs-butlast
+                                   ex-x2-req-good ex-xvs-no-mk ex-xvs-nth1 last butlast ex-varnf x2-req no-mk)))))
+(defthm ex-mxcall-ap3
+  (implies (and (equal (ex-apway tmp) 3) (ex-apok) (ex-defs-ok defs defs) (ex-lzok defs) (ex-xvs defs tmp) (consp tmp))
+           (equal (ex-mxcall (car tmp) (cdr tmp) defs fuel) '(:thrown . :not-seq)))
+  :hints (("Goal" :use ((:instance ex-apok-necc) (:instance ex-ap3-nospread) (:instance ex-apway-apply))
+                  :in-theory (e/d (ex-mxcall ex-mxcl x2-fn x2-vals ex-aperr clop)
+                                  (ex-apok-necc ex-ap3-nospread ex-apway-apply x2-spreads ex-apway ex-defs-ok ex-lzok ex-xvs)))))
+; the arity error: a closure with no arity of the count, in the VM no
+; clause of it either -- its own, or a hand-over's variadic one as fixed
+(defthm ex-mxcl-noarity
+  (implies (and (ex-arswf tm ars defs) (not (consp (ex-arity ars (len args)))) (clop f))
+           (equal (ex-mxcl f args (ex-clauses tm ars) defs fuel) '(:thrown . :arity)))
+  :hints (("Goal" :use ((:instance ex-arswf-arity (n (len args))) (:instance ex-arwf-nat (ar (ex-arity ars (len args)))))
+                  :in-theory (e/d (ex-mxcl) (ex-clauses ex-arswf ex-arity ex-arswf-arity ex-arwf-nat ex-arwf)))))
+(defthm ex-mxcall-arerr
+  (implies (and (ex-arerr (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) (ex-defs-ok defs defs) (ex-lzok defs)
+                (consp tmp) (ex-xvs defs tmp))
+           (equal (ex-mxcall (car tmp) (cdr tmp) defs fuel) '(:thrown . :arity)))
+  :hints (("Goal" :cases ((equal (ex-apway tmp) 1)) :do-not-induct t
+                  :use ((:instance ex-xvs-nth1 (l tmp) (j 0)) (:instance ex-xvs-nth1 (l tmp) (j 1))
+                        (:instance ex-defs-ok-assoc (ds defs) (tm (cadr (car tmp))))
+                        (:instance ex-defs-ok-assoc (ds defs) (tm (cadr (cadr tmp))))
+                        (:instance ex-apway-spreads))
+                  :expand ((ex-xvs defs (list (car tmp))) (ex-xvs defs (list (cadr tmp))))
+                  :in-theory (e/d (ex-callee ex-arerr ex-def ex-tmwf clo-f ex-mxcall-noapply ex-mxcall-spread ex-clo-shape clop)
+                                  (ex-mxcl ex-mxcall ex-hclo ex-self sk-spread x2-sp x2-spreads ex-apsp ex-arity
+                                   ex-xvs-nth1 ex-apway-spreads ex-defs-ok-assoc ex-defs-ok ex-arswf ex-clauses ex-lzok)))))
+
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
@@ -1035,20 +1145,25 @@
 (defun ex-vpost (flg e i tmp cm env lp caps defs fuel r)
   (let ((res (car r)) (fr2 (cadr r)) (ls (ex-lsl lp)))
     (case flg
-      (:iter (implies (valp res)
+      (:iter (implies (or (valp res) (thrownp res))
                       (and (equal (mx2-loop (list :loop nil (ex-tr :m e 0 (append cm ls))) env tmp caps defs fuel) res)
                            (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))
-      (:rec (implies (equal (car res) :recur)
-                     (let ((m (mx2-args (ex-tr :rec e i cm) env caps defs fuel)))
-                       (and (valp m) (ex-agree (cdr ls) (append tmp (val m)) fr2)
-                            (ex-agree (ex-blank ls cm) env fr2) (ex-xvs defs (append tmp (val m)))))))
-      (:call (implies (valp res)
-                      (let ((m (mx2-args (ex-tr :call e i cm) env caps defs fuel)))
-                        (and (valp m) (equal (ex-mxcall (car tmp) (append (cdr tmp) (val m)) defs fuel) res)
-                             (ex-agree cm env fr2) (ex-xvs defs (list (val res)))))))
+      (:rec (let ((m (mx2-args (ex-tr :rec e i cm) env caps defs fuel)))
+              (and (implies (equal (car res) :recur)
+                            (and (valp m) (ex-agree (cdr ls) (append tmp (val m)) fr2)
+                                 (ex-agree (ex-blank ls cm) env fr2) (ex-xvs defs (append tmp (val m)))))
+                   (implies (thrownp res)
+                            (and (equal m res) (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))))
+      (:call (let ((m (mx2-args (ex-tr :call e i cm) env caps defs fuel)))
+               (and (implies (valp res)
+                             (and (valp m) (equal (ex-mxcall (car tmp) (append (cdr tmp) (val m)) defs fuel) res)
+                                  (ex-agree cm env fr2) (ex-xvs defs (list (val res)))))
+                    (implies (thrownp res)
+                             (and (equal (if (valp m) (ex-mxcall (car tmp) (append (cdr tmp) (val m)) defs fuel) m) res)
+                                  (ex-agree cm env fr2) (ex-xvs defs (list (val res))))))))
       (otherwise
        (let ((m (mx2 (ex-tr flg e i cm) env caps defs fuel)))
-         (and (implies (valp res)
+         (and (implies (or (valp res) (thrownp res))
                        (and (equal m res) (ex-xvs defs (list (val res)))
                             (if (and (equal flg :let) (equal (ex-kind e) 12))
                                 (ex-agree (ex-blank (ex-lsl (cons (ex-s2 e) (ex-i2 e))) cm) env fr2)
@@ -1124,12 +1239,13 @@
                ((equal k 6)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
-                        (ex-vind :call e 1 (list (val (car r))) cm env (cadr r) fuel caps defs lp))))
+                        (ex-vind :call e 1 (list (val (car r))) (append cm (list nil)) (append env (list (val (car r))))
+                                 (cadr r) fuel caps defs lp))))
                (t nil)))))))
 
 (defthm ex-vm-agree-flag
   (ex-vgood flg e i tmp cm env fr fuel caps defs lp)
-  :rule-classes nil
+  :rule-classes nil :otf-flg t
   :hints (("Goal" :induct (ex-vind flg e i tmp cm env fr fuel caps defs lp)
                   :in-theory (disable ex-kid-of ex-xvs)
                   :expand ((:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
@@ -1147,15 +1263,16 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-agree cm env fr) (ex-xvs defs env)
-                (valp (car (ex-ev :m e 0 nil fr fuel))))
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-agree cm env fr)
+                (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
 
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-agree cm env fr) (ex-xvs defs env))
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-agree cm env fr)
+                (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
 
