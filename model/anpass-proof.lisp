@@ -135,9 +135,9 @@
 ; ---- THE ARRAY AS READ ------------------------------------------------------------------------
 
 ; the region of n words at b, as anp-get reads them
-(defun reg (anps b n)
+(defun anp-reg (anps b n)
   (declare (xargs :stobjs anps :verify-guards nil))
-  (if (zp n) nil (cons (anp-get b anps) (reg anps (+ 1 b) (- n 1)))))
+  (if (zp n) nil (cons (anp-get b anps) (anp-reg anps (+ 1 b) (- n 1)))))
 
 ; the marks so far
 (defun-nx mks (anps)
@@ -225,28 +225,28 @@
 
 ; ---- REGIONS ------------------------------------------------------------------------------------
 
-(defthm len-reg (equal (len (reg anps b n)) (nfix n)))
+(defthm len-reg (equal (len (anp-reg anps b n)) (nfix n)))
 
 (defun nth-reg-ind (s b n) (if (or (zp s) (zp n)) (list b n) (nth-reg-ind (- s 1) (+ 1 b) (- n 1))))
 
 (defthm nth-reg
   (implies (and (natp s) (< s (nfix n)) (natp b))
-           (equal (nth s (reg anps b n)) (anp-get (+ b s) anps)))
-  :hints (("Goal" :induct (nth-reg-ind s b n) :expand ((reg anps b n)))))
+           (equal (nth s (anp-reg anps b n)) (anp-get (+ b s) anps)))
+  :hints (("Goal" :induct (nth-reg-ind s b n) :expand ((anp-reg anps b n)))))
 
 (defthm reg-put
   (implies (natp b)
-           (equal (reg (anp-put i v anps) b n)
+           (equal (anp-reg (anp-put i v anps) b n)
                   (if (and (integerp i) (<= 0 i) (< i (anp-lv-length anps)) (<= b i) (< i (+ b (nfix n))))
-                      (update-nth (- i b) v (reg anps b n))
-                    (reg anps b n))))
-  :hints (("Goal" :induct (reg anps b n) :in-theory (enable update-nth))))
+                      (update-nth (- i b) v (anp-reg anps b n))
+                    (anp-reg anps b n))))
+  :hints (("Goal" :induct (anp-reg anps b n) :in-theory (enable update-nth))))
 
 ; a region no write reaches is as it was
 (defmacro reg-frame (name call cond)
   `(defthm ,name
-     (implies (and (natp c) (natp b) (natp n) (natp to) ,cond) (equal (reg ,call c n2) (reg anps c n2)))
-     :hints (("Goal" :induct (reg anps c n2)))))
+     (implies (and (natp c) (natp b) (natp n) (natp to) ,cond) (equal (anp-reg ,call c n2) (anp-reg anps c n2)))
+     :hints (("Goal" :induct (anp-reg anps c n2)))))
 
 (reg-frame reg-copy-frame (anp-copy k n from to anps) (or (<= (+ c (nfix n2)) (+ to (nfix k))) (<= (+ to (nfix n)) c)))
 (reg-frame reg-or-frame (anp-or k n from to anps) (or (<= (+ c (nfix n2)) (+ to (nfix k))) (<= (+ to (nfix n)) c)))
@@ -260,43 +260,43 @@
 (defthm reg-copy-k
   (implies (and (natp k) (natp n) (<= k n) (natp from) (natp to) (or (<= (+ from n) to) (<= (+ to n) from))
                 (equal (anp-err (anp-copy k n from to anps)) 0))
-           (equal (reg (anp-copy k n from to anps) (+ to k) (- n k)) (reg anps (+ from k) (- n k))))
+           (equal (anp-reg (anp-copy k n from to anps) (+ to k) (- n k)) (anp-reg anps (+ from k) (- n k))))
   :hints (("Goal" :induct (anp-copy k n from to anps))))
 
 (defthm reg-copy
   (implies (and (natp n) (natp from) (natp to) (or (<= (+ from n) to) (<= (+ to n) from))
                 (equal (anp-err (anp-copy 0 n from to anps)) 0))
-           (equal (reg (anp-copy 0 n from to anps) to n) (reg anps from n)))
+           (equal (anp-reg (anp-copy 0 n from to anps) to n) (anp-reg anps from n)))
   :hints (("Goal" :use (:instance reg-copy-k (k 0)))))
 
 (defthm reg-or-k
   (implies (and (natp k) (natp n) (<= k n) (natp from) (natp to) (or (<= (+ from n) to) (<= (+ to n) from))
                 (equal (anp-err (anp-or k n from to anps)) 0))
-           (equal (reg (anp-or k n from to anps) (+ to k) (- n k))
-                  (sp-or (reg anps (+ from k) (- n k)) (reg anps (+ to k) (- n k)))))
+           (equal (anp-reg (anp-or k n from to anps) (+ to k) (- n k))
+                  (sp-or (anp-reg anps (+ from k) (- n k)) (anp-reg anps (+ to k) (- n k)))))
   :hints (("Goal" :induct (anp-or k n from to anps))))
 
 (defthm reg-or
   (implies (and (natp n) (natp from) (natp to) (or (<= (+ from n) to) (<= (+ to n) from))
                 (equal (anp-err (anp-or 0 n from to anps)) 0))
-           (equal (reg (anp-or 0 n from to anps) to n) (sp-or (reg anps from n) (reg anps to n))))
+           (equal (anp-reg (anp-or 0 n from to anps) to n) (sp-or (anp-reg anps from n) (anp-reg anps to n))))
   :hints (("Goal" :use (:instance reg-or-k (k 0)))))
 
 (defthm reg-set
   (implies (and (natp b) (natp n) (equal (anp-err (anp-set s b n anps)) 0))
-           (equal (reg (anp-set s b n anps) b n) (sp-set s (reg anps b n) n))))
+           (equal (anp-reg (anp-set s b n anps) b n) (sp-set s (anp-reg anps b n) n))))
 
 (defthm reg-caps
   (implies (and (natp b) (natp n) (equal (anp-err (anp-caps x i k b n anps)) 0))
-           (equal (reg (anp-caps x i k b n anps) b n) (sp-caps x i k (reg anps b n) n))))
+           (equal (anp-reg (anp-caps x i k b n anps) b n) (sp-caps x i k (anp-reg anps b n) n))))
 
 (defthm reg-fncaps
   (implies (and (natp b) (natp n) (equal (anp-err (anp-fncaps x i k b n anps)) 0))
-           (equal (reg (anp-fncaps x i k b n anps) b n) (sp-fncaps x i k (reg anps b n) n))))
+           (equal (anp-reg (anp-fncaps x i k b n anps) b n) (sp-fncaps x i k (anp-reg anps b n) n))))
 
 (defthm reg-rd
   (implies (and (natp b) (natp n) (equal (anp-err (anp-rd fl x j m b n anps)) 0))
-           (equal (reg (anp-rd fl x j m b n anps) b n) (sp-rd fl x j m (reg anps b n) n))))
+           (equal (anp-reg (anp-rd fl x j m b n anps) b n) (sp-rd fl x j m (anp-reg anps b n) n))))
 
 (defthm update-err-fields
   (and (equal (anp-lv-length (update-anp-err v anps)) (anp-lv-length anps))
@@ -314,8 +314,8 @@
 
 (in-theory (disable update-anp-err update-anp-nmk))
 
-(defthm reg-update-err (equal (reg (update-anp-err v anps) b n) (reg anps b n)))
-(defthm reg-update-nmk (equal (reg (update-anp-nmk v anps) b n) (reg anps b n)))
+(defthm reg-update-err (equal (anp-reg (update-anp-err v anps) b n) (anp-reg anps b n)))
+(defthm reg-update-nmk (equal (anp-reg (update-anp-nmk v anps) b n) (anp-reg anps b n)))
 
 ; ---- THE LIVENESS PASS ----------------------------------------------------------------------------
 
@@ -337,8 +337,8 @@
 (defthm reg-live-frame
   (implies (and (natp c) (natp b) (natp top) (natp n) (<= (+ b n) top) (<= (+ c (nfix n2)) top)
                 (or (equal fl 2) (<= (+ c (nfix n2)) b) (<= (+ b n) c)))
-           (equal (reg (anp-live fl x j m b top n anps) c n2) (reg anps c n2)))
-  :hints (("Goal" :induct (reg anps c n2))))
+           (equal (anp-reg (anp-live fl x j m b top n anps) c n2) (anp-reg anps c n2)))
+  :hints (("Goal" :induct (anp-reg anps c n2))))
 
 (defthm anp-append-assoc (equal (append (append a b) c) (append a (append b c))))
 
@@ -347,22 +347,22 @@
 (defthm anp-live-spec
   (implies (and (natp b) (natp top) (natp n) (<= (+ b n) top)
                 (equal (anp-err (anp-live fl x j m b top n anps)) 0))
-           (and (equal (reg (anp-live fl x j m b top n anps) (if (equal fl 2) top b) n)
-                       (sp-out fl x j m (if (equal fl 2) (reg anps top n) nil) (reg anps b n) n))
+           (and (equal (anp-reg (anp-live fl x j m b top n anps) (if (equal fl 2) top b) n)
+                       (sp-out fl x j m (if (equal fl 2) (anp-reg anps top n) nil) (anp-reg anps b n) n))
                 (equal (mks (anp-live fl x j m b top n anps))
-                       (append (mks anps) (sp-mk fl x j m (reg anps b n) n)))))
+                       (append (mks anps) (sp-mk fl x j m (anp-reg anps b n) n)))))
   :hints (("Goal" :induct (anp-live fl x j m b top n anps))))
 
 (defun zeros (n) (if (zp n) nil (cons 0 (zeros (- n 1)))))
 
 (defthm reg-zero-k
   (implies (and (natp k) (natp n) (<= k n) (equal (anp-err (anp-zero k n anps)) 0))
-           (equal (reg (anp-zero k n anps) k (- n k)) (zeros (- n k))))
+           (equal (anp-reg (anp-zero k n anps) k (- n k)) (zeros (- n k))))
   :hints (("Goal" :induct (anp-zero k n anps))))
 
 (defthm reg-zero
   (implies (and (natp n) (equal (anp-err (anp-zero 0 n anps)) 0))
-           (equal (reg (anp-zero 0 n anps) 0 n) (zeros n)))
+           (equal (anp-reg (anp-zero 0 n anps) 0 n) (zeros n)))
   :hints (("Goal" :use (:instance reg-zero-k (k 0)))))
 
 ; apply_clears' marks: the body's from the empty live set, none when it recurs to its fn

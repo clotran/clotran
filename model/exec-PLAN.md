@@ -458,21 +458,44 @@ slot's read and write), and every kind not yet in the model.
    stand, statements unchanged. Not admitted: a loop whose later init
    clears an earlier init's slot (the copy the loop translation makes
    would read it; anpass marks that only when the body never reads it).
-   **Next (milestone 4, second part)**: tr-sound brought to exec.lisp's
-   tree -- that a tree anpass passed (its marks anp-clears-spec's, the
-   tail check passed) meets ex-vwf's clearing conditions: no read of a
-   slot blanked by an earlier part's ex-clr, a loop body's clears inside
-   it, a fn body's as above. anpass reads its tree through ast-kind,
-   ast-kid, ast-alt, ast-i2, ast-s3 (anpass.lisp); exec.lisp's is
-   ex-kind, ex-kids, ex-c, ex-i2, ex-mark. The way in: a map from
-   exec.lisp's node to anpass's (the analyzer's one tree read two ways),
-   then ok-ann over tr's runs gives each condition -- an ex-clr slot is a
-   marked read's, ok-ann says no later read of it in any run, and the
-   places ex-vwf blanks are the reads that follow in some run.
+   **Milestone 4, second part** *(in part)*: exec-clr.lisp states ex-vwf's
+   clearing conditions on exec.lisp's tree as ex-cwf -- B the slots the
+   parts before a place may have cleared, threaded as ex-vwf blanks its
+   scope, no local nor fn's outer slot read of B, a loop body clearing
+   nothing at all -- and proves them of marks that are anpass's liveness
+   decision: ex-mkok, each marked read's slot not live after it, ex-lv the
+   live set before a place as anpass's sp-out computes it (a branch's sets
+   or-ed, a catch's from the finally's, a loop body's with every slot it
+   reads live after it). ex-lv-mono, ex-lv-rds (a slot read is live before),
+   ex-mkok-clr (a slot cleared is dead after), so ex-cwf-mkok: no later part
+   reads what an earlier one cleared; ex-loop-noclr: a loop body clears
+   nothing. The direct liveness argument, not ok-ann over tr's runs: no
+   oracle to build. exec-clrmap.lisp is the map: ex-ast reads exec.lisp's
+   node as anpass reads its own (kind, i2, children, a fn's outer slots its
+   caps, a try's catch bodies or a case's thens its alternatives, a recur's
+   rfn the node's slot 8, which exec.inc does not read), ex-shp the shapes
+   both take, and ex-rds-ast: exec-clr's reads are anpass's rds of it.
+   (anpass-proof's reg is anp-reg now: it clashed with vm-call's.)
+   **Next (milestone 4, the rest)**: (a) ex-lv-ast, ex-lv is sp-out of
+   ex-ast's node, so ex-mkok is anp-clears-spec's marks -- tried as one
+   induction over ex-lv (the piece of a place: :m sp-out 0 of the node, :do
+   :rec :call :coll sp-out 1 from i, a loop's :let sp-out 1 from i to n2 onto
+   the body's sp-out from its sp-rd, :cs :ct sp-out 2 from i with A, :fin
+   kid 1's) and it ran past 400 s;
+   it wants a lemma per kind, the :m node's sp-out opened once per kind,
+   sp-out's definition disabled (sp-out-seq-front, sp-out-2-open, -done the
+   only openers). (b) ex-arwf's fn-body condition: ex-vwf with the fn's lp
+   and no recur to the fn (anp-hfr of ex-ast's body nil) gives ex-vwf with
+   lp nil, through the tail check (anp-tc at tt 1 passed: a recur in the
+   fn's tail has rfn nonzero, so has_fn_recur sees it); when anp-hfr holds
+   anp-clears marks nothing, ex-clr is nil and ex-nomem holds. (c) the
+   composition with ex-vm-agree: ex-vwf with no blanking plus ex-cwf gives
+   ex-vwf, under the one case not admitted (a loop's later init clearing an
+   earlier init's slot) as a hypothesis.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
    First part done (the **Milestone 4, first part** paragraph above);
-   the second, the bridge from tr-sound, is the Next there.
+   the second in part (exec-clr, exec-clrmap); its rest the Next there.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
