@@ -2664,7 +2664,7 @@ clotran-plot's tick labels; the oracle has the tie cases.
 **Removal**: none intended: the stored value is what the program holds.
 
 
-## 84. apply refuses a non-seq before a non-fn
+## 84. RESOLVED -- apply refuses a non-seq before a non-fn
 
 clj casts a call's fn to IFn before it evaluates the arguments, and
 core.clj's apply, `(. f (applyTo (seq args)))` with f hinted `^IFn`,
@@ -2683,5 +2683,29 @@ a call's pc 1 (exec.inc is_ifn, model/exec.lisp ex-ifn, action 23) and
 flat's F_IFN, before the arguments; nil and an unbound fn pass the cast
 and refuse at the invoke, after them, as clj's do.
 
-**Removal**: `.` honouring a target's interface hint with the cast clj
-emits (the dot's turn, model/exec-PLAN.md milestone 5).
+**Resolved** 2026-11-12: `.` honours its target's hint. A member the host
+table has, on a target hinted -- on the target as written, or on the
+local it names (a binding's symbol :tag, kept beside its array hint) --
+with IFn, has its target wrapped in
+`(clotran-class-cast target C)` (analyze.inc dot_target_hint,
+cast_dot_target; Eval.f90 B_CLASSCAST): clj's checkcast, before the
+arguments run, nil passing. `(apply 1 2)` is the ClassCastException, as
+clj's; the oracle has it beside the others. Other hints cast nothing yet:
+DEVIATIONS 85.
+
+## 85. A `.` casts its target only to an IFn hint
+
+clj casts a `.`'s target to its hinted class, before the arguments run,
+whenever it finds the member there (InstanceMethodExpr's checkCast).
+clotran casts only an IFn hint (84): its instance? (Eval.f90 is_instance)
+does not know every interface a value implements -- a lazy seq is no
+IObj to it, and core's `(. ^IObj x (withMeta m))` then refused what clj
+runs. So `(.withMeta ^clotran.host.i_obj 5 {})` is a missing-member
+error here where clj's is the cast's ClassCastException, and an argument
+of such a `.` runs before that error. clotran also asks only that the
+member is a host one, not that the hinted class has it.
+
+**Removal**: is_instance answering every host interface as clj's class
+hierarchy does; then dot_hint_class drops its IFn test (and asks the host
+table for the member on that class).
+

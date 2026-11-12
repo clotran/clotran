@@ -1619,7 +1619,7 @@
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE, &
-            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG, N_LETFN)
+            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG, N_LETFN, N_DOT)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
@@ -1642,72 +1642,6 @@
           v = gc_slot(vs_get(vst, b + 1), 3)
           if (v%tag == GCT_NIL .or. .not. flat_enabled()) v = gc_slot(vs_get(vst, b + 1), 2)
           call k_tail(v, tctx)
-       case (N_DOT)
-          call note_site(vs_get(vst, b + 1))   ! the host call's place, for an error's report
-          ! (. target member args...): the target, then the arguments,
-          ! into this frame -- slot 3 and slot 4 -- and then the dispatch,
-          ! which is re-executable as it stands: a block in it yields
-          ! (tasks.inc) and resumes by dispatching again, reading no
-          ! local a clearing pass may since have dropped. aux is where
-          ! the arguments start among the children: 1 after an evaluated
-          ! target, 0 when the target is a class.
-          select case (tctx%kst(tctx%ksp)%pc)
-          case (0)
-             if (tag_of(gc_slot(nd, 3)) == GCT_SYM) then
-                call vs_set(vst, b + 3, gc_slot(nd, 3))
-                tctx%kst(tctx%ksp)%aux = 0
-                tctx%kst(tctx%ksp)%i = 0
-                tctx%kst(tctx%ksp)%pc = 2
-             else
-                tctx%kst(tctx%ksp)%pc = 1
-                call k_push(gcv_nth(kids, 0), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-             end if
-          case (1)
-             call vs_set(vst, b + 3, val)
-             tctx%kst(tctx%ksp)%aux = 1
-             tctx%kst(tctx%ksp)%i = 1
-             tctx%kst(tctx%ksp)%pc = 2
-          case (2)
-             if (tctx%kst(tctx%ksp)%i == tctx%kst(tctx%ksp)%aux) &
-                  call vs_set(vst, b + 4, gcv_build(gcv_count(kids) - tctx%kst(tctx%ksp)%aux, [vs_get(vst, b + 1)]))
-             if (tctx%kst(tctx%ksp)%i < gcv_count(kids)) then
-                tctx%kst(tctx%ksp)%pc = 3
-                call k_push(gcv_nth(kids, tctx%kst(tctx%ksp)%i), vs_get(vst, b + 2), 0, gc_nil(), tctx)
-             else
-                tctx%kst(tctx%ksp)%pc = 4
-             end if
-          case (3)
-             call vs_set(vst, b + 4, gcv_put(vs_get(vst, b + 4), tctx%kst(tctx%ksp)%i - tctx%kst(tctx%ksp)%aux, val, [vs_get(vst, b + 1)]))
-             tctx%kst(tctx%ksp)%i = tctx%kst(tctx%ksp)%i + 1
-             tctx%kst(tctx%ksp)%pc = 2
-          case (4)
-             call vs_set(vst, vbase + 1, gc_nil())   ! see N_CALL's case (4)
-             ! the argument vector is handed over, as N_CALL's is:
-             ! dot_dispatch roots it first thing, and this frame kept
-             ! (. f (applyTo s)) -- core's apply -- holding the head of s
-             ! for the whole call, every cell of (apply + (take n (range)))
-             ! a fn the method calls back was called from here
-             val = gc_slot(nd, 4)
-             tctx%pending_site = 0
-             if (val%tag == GCT_INT) tctx%pending_site = int(val%ival, kind=4)
-             v = vs_get(vst, b + 4)
-             call vs_set(vst, b + 4, gc_nil())
-             val = dot_dispatch(nd, vs_get(vst, b + 3), v, tctx%kst(tctx%ksp)%aux)
-             ! parked: the vector goes back for the re-dispatch
-             if (tctx%yield_flag) then
-                call vs_set(vst, b + 4, v)
-                exit
-             end if
-             if (tctx%has_error) cycle
-             if (is_call_request(val)) then
-                v = gc_slot(nd, 4)
-                site = 0
-                if (v%tag == GCT_INT) site = int(v%ival, kind=4)
-                call enter_call(val, site)
-             else
-                call k_finish(val, tctx)
-             end if
-          end select
        case default
           val = exec_other(nd, vs_get(vst, b + 2))
           if (.not. tctx%has_error) call k_finish(val, tctx)
@@ -2150,7 +2084,7 @@
     nk = 0
     if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL .or. k == N_THROW &
          .or. k == N_VECTOR .or. k == N_MAP .or. k == N_SET .or. k == N_NEW .or. k == N_NEWTYPE &
-         .or. k == N_SETBANG) nk = gcv_count(kids)
+         .or. k == N_SETBANG .or. k == N_DOT) nk = gcv_count(kids)
     ! the host's actions' children (core_kid): a def's init and evaluated
     ! metadata, a deftype's methods' fns
     if (k == N_DEF) nk = gcv_count(kids) + merge(1, 0, gc_kind(gc_slot(nd, 3)) == OBJ_AST)
@@ -2307,6 +2241,36 @@
        case (N_SETBANG)
           val = setbang_finish(vs_get(vst, b + 1), vs_get(vst, b + 4))
           if (tctx%has_error) return
+       case (N_DOT)
+          ! (. target member args...): its children's values -- the target
+          ! when evaluated, then the arguments -- handed to the host's
+          ! dispatch (dot_finish), re-executable as it stands: a block in it
+          ! yields (tasks.inc) and resumes by dispatching again, reading no
+          ! local a clearing pass may since have dropped. The vector is
+          ! handed over, as a call's is: this frame kept (. f (applyTo s))
+          ! -- core's apply -- holding the head of s for the whole call
+          call note_site(nd)   ! the host call's place, for an error's report
+          call vs_set(vst, vbase + 1, gc_nil())
+          fv = gc_slot(nd, 4)
+          tctx%pending_site = 0
+          if (fv%tag == GCT_INT) tctx%pending_site = int(fv%ival, kind=4)
+          fv = vs_get(vst, b + 4)
+          call vs_set(vst, b + 4, gc_nil())
+          val = dot_finish(nd, fv)
+          ! parked: the vector goes back for the re-dispatch
+          if (tctx%yield_flag) then
+             call vs_set(vst, b + 4, fv)
+             return
+          end if
+          if (tctx%has_error) return
+          ! a deftype's or reify's method: entered in the loop (enter_call)
+          if (is_call_request(val)) then
+             fv = gc_slot(nd, 4)
+             q = 0
+             if (fv%tag == GCT_INT) q = int(fv%ival)
+             call enter_call(val, q)
+             return
+          end if
        case (N_VECTOR); val = vs_get(vst, b + 4)
        case (N_SET);    val = vec_to_set(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
        case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
@@ -2779,6 +2743,34 @@
   ! on anything but a deftype instance is called directly; everything
   ! else is handed to eval_dot. Nothing here reads a local, so a block
   ! inside can yield (tasks.inc) and resume by dispatching again.
+  ! A `.`'s children's values vals (exec_core's action 27): the target's
+  ! first when it is evaluated (slot 3 not the class's symbol). A native
+  ! member on what is no deftype instance nor Var takes vals as they are
+  ! (dot_dispatch's fast path, the target its first argument); anything
+  ! else is dot_dispatch's, the target apart.
+  recursive function dot_finish(nd, vals) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: nd, vals
+    type(gc_value) :: out, t
+    integer :: base
+    vst => gc_my_stack()
+    if (tag_of(gc_slot(nd, 3)) == GCT_SYM) then
+       out = dot_dispatch(nd, gc_slot(nd, 3), vals, 0)
+       return
+    end if
+    t = strip_meta(gcv_nth(vals, 0))
+    if (gc_kind(gc_slot(nd, 3)) == OBJ_BUILTIN .and. t%tag /= GCT_NIL .and. &
+         gc_kind(t) /= OBJ_INST .and. .not. gcn_is_var(t)) then
+       out = apply(gc_slot(nd, 3), vals)
+       return
+    end if
+    base = vs_enter(vst, 2)
+    call vs_set(vst, base + 1, vals)
+    call vs_set(vst, base + 2, gcv_subvec_from(vs_get(vst, base + 1), 1, [nd, vs_get(vst, base + 1)]))
+    out = dot_dispatch(nd, gcv_nth(vs_get(vst, base + 1), 0), vs_get(vst, base + 2), 1)
+    call vs_leave(vst, base)
+  end function dot_finish
+
   recursive function dot_dispatch(nd, tv, argv, from) result(out)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: nd, tv, argv

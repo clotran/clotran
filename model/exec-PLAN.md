@@ -684,14 +684,64 @@ slot's read and write), and every kind not yet in the model.
    they fire where the count is the literal 0. exec-vmtr split for size:
    the good values (ex-xvs, a group's captures, ex-outers/ex-inners) are
    exec-xvs.lisp.
-   Then dot (DEVIATIONS 84's cast: the analyzer to record the target's
-   hint, the cast an action before the arguments as a call's 23).
+   *(dot done)*: N_DOT 21 is a collection as the host's actions are: its
+   children (its target when evaluated, then its arguments) kept, then
+   the host's dispatch, vmx2's prim of op (:host 21 C) -- ex-collok's
+   named hypothesis now over 21 too (the member's work, a deftype method
+   entered in the loop, a yield re-dispatching: the runtime's). The cast
+   is no new action: the analyzer wraps a hinted target in a call,
+   (clotran-class-cast target C) (analyze.inc anb_dot_kind keeps the hint
+   it finds in the scope for anb_dotnode; Eval.f90 B_CLASSCAST), so it
+   runs before the arguments as an ordinary child -- clj's checkcast.
+   Only an IFn hint casts (DEVIATIONS 85: is_instance does not know a lazy
+   seq is an IObj); DEVIATIONS 84 closed. Proved: ex-machine-correct,
+   ex-vm-agree (ex-vgood-m-host), ex-anp-runs (the clearing books read
+   its children in turn, ex-shp and ex-spo-seq), exec-cost ex-host-turns,
+   all over 21. Fortran: exec_core runs N_DOT (core kinds; action 27 calls
+   dot_finish -- the native fast path takes the values vector as it is,
+   else dot_dispatch with the target apart -- the vector handed over and
+   given back for a yield's re-dispatch, a method's call request entered
+   with enter_call); run_loop's own N_DOT case gone; exec_gen.inc
+   regenerated; fuzz-exec-gen draws 21. Oracle: apply's cast before its
+   seq ((apply 1 2) and its kin), a hint on the local and on the target
+   as written with the argument never run, nil passing; a `.` in a loop's
+   body, a static member, a throwing argument.
+   **Next** (planned, not built):
+   - N_LAZY: a leaf, as N_FN is -- the closure of its template over the
+     frame (ex-mkclo, action 12's) wrapped by the host in a lazy seq,
+     vmx2's prim (:host 15 C) of that closure: a new action (or 12 then a
+     one-element collection's 27), ex-collok over 15 asking the wrap of a
+     good closure good; ex-tr (:prim (:host 15 C) (:mkclo ..)); the
+     clearing books read it as a fn (its captures, ex-outers). Its value
+     (OBJ_LAZY) is a seq the runtime realises: ex-lzok already makes
+     every realisation's answer good.
+   - N_TOP: a top-level form's record -- a frame of its own (new_frame of
+     gc_i2 slots) and then k_tail to its body (the flat form when there
+     is one: flat's, outside the model). In the machine an entry like a
+     call's 16 with no arguments and no restart: (ex-rec body ..) in a
+     frame of n nils, the caller's frame kept (17's return); in the VM,
+     the body under an mx2 let-block of n nil constants, so ex-vm-agree's
+     case is the body's at scope (slots 0..n-1). Its own lemma as letfn's.
+   - break_frames: no turn -- a read of the record stack (each record's
+     node, frame, fn and position). A function of ex-turn's state,
+     ex-frames ks fr, with a theorem that a break reads and changes
+     nothing (the state after it is the state before), and that each
+     frame it reports is a record's: the debugger's view, not a kind.
+   - ex-anp-runs' (ex-defs-ok defs defs): an induction over ex-defs-ok's
+     templates, each arity's body: ex-arwf from the body's ex-vwf0 (the
+     same route ex-anp-runs takes for the top tree -- ex-vwf-cwf,
+     ex-cwf-mkok over anpass's marks of the body, which anpass runs per
+     fn body with the fn's scope) and ex-mkok from (zeros n) with
+     exec-clrfn's ex-arwf-body for the fn-recur case. The analyzer side
+     must say each template in defs was built by anbuild and passed
+     through anpass (an anbuild-props fact over the templates the tree
+     holds); the loop-init case stays the named hypothesis.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
    *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
    exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
    left, named in its paragraph above.
-5. **The rest**: def *(done)*, letfn *(done)*, deftype *(done)*, new *(done)*, set! *(done)*, dot,
+5. **The rest**: def *(done)*, letfn *(done)*, deftype *(done)*, new *(done)*, set! *(done)*, dot *(done)*,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
 

@@ -283,6 +283,9 @@ module Eval
   ! (proc_shim.c), for a protocol counted in bytes over stdio -- the
   ! language server, clotran lsp (PLAN step 36)
   integer, parameter :: B_STDINREADB = 469, B_STDOUTWRITEB = 470
+  ! (clotran-class-cast x C): the checkcast clj emits on a `.`'s hinted
+  ! target (analyze.inc dot_host, DEVIATIONS 84)
+  integer, parameter :: B_CLASSCAST = 477
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -746,6 +749,11 @@ module Eval
      ! the name a fn* being analysed is given, until anb_an dispatches it
      ! (analyze.inc anb_run, anb_drive, anb_host)
      character(len=:), allocatable :: anb_hint
+     ! a `.`'s target hint as anb_dot_kind found it in the scope, for
+     ! anb_dotnode after the target and arguments are analysed (analysis
+     ! nests, so a stack): the class's text, or ""
+     character(len=160) :: dot_hints(32) = ''
+     integer :: dot_hint_n = 0
   end type eval_ctx
   ! the VM program's functions: each one's first instruction and name, for a
   ! trace (vm.inc vm_fn_at)
@@ -12893,6 +12901,32 @@ contains
                nm = dlt_1
             end block
             out = gc_str(nm(index(nm, ".", back=.true.) + 1:), [vs_get(vst, base + 1)])
+         end if
+       end block
+    case (B_CLASSCAST)
+       ! (clotran-class-cast x C), C a class: the checkcast clj emits on a
+       ! `.`'s target hinted with C when it finds the member there, before
+       ! the arguments run. nil passes, as an instance of C does; anything
+       ! else is the cast's ClassCastException, naming both classes.
+       a = strip_meta(gcv_nth(args, 0))
+       block
+         character(len=:), allocatable :: have
+         type(gc_value) :: cv
+         logical :: ok
+         cv = gcv_nth(args, 1)
+         ! IFn is is_ifn's, the call's own cast: a deftype with invoke too
+         if (gc_ref_is(cv%ref, "clotran.host.i_fn")) then
+            ok = a%tag == GCT_NIL .or. is_ifn(a)
+         else
+            ok = a%tag == GCT_NIL .or. is_instance(cv, a)
+         end if
+         if (ok) then
+            out = gcv_nth(args, 0)
+         else
+            call class_name_of(a, s=have)
+            call gc_ref_text(cv%ref, s=dlt_1)
+            call raise_class("clotran.host.class_cast_exception", "class " // have // " cannot be cast to class " // dlt_1, &
+                 [vs_get(vst, base + 1)])
          end if
        end block
     case (B_ARRAYCAST)

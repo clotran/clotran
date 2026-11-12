@@ -598,6 +598,7 @@
     type(gc_value) :: m
     character(len=:), allocatable :: h
     integer :: base
+    logical :: cls
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
     vst => gc_my_stack()
@@ -605,6 +606,10 @@
        call array_hint_of(raw, h=dlt_1)
        h = dlt_1
     end block
+    ! any other symbol tag is the local's class hint (a `.`'s cast,
+    ! dot_target_hint), kept as a string where an array hint is a keyword
+    cls = len(h) == 0
+    if (cls) call tag_sym_text(raw, h)
     if (len(h) == 0) return
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, sc)
@@ -612,11 +617,105 @@
     m = gc_slot(vs_get(vst, base + 1), 5)
     if (.not. gca_is(m)) m = gca_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 3, m)
+    if (cls) then
+       m = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 2), gc_str(h, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)]), &
+            [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    else
     m = gca_assoc(vs_get(vst, base + 3), vs_get(vst, base + 2), gc_key(h, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)]), &
          [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    end if
     call gc_set_slot(vs_get(vst, base + 1), 5, m)
     call vs_leave(vst, base)
   end subroutine bind_array_hint
+
+  ! The text of a binding form's or expression's symbol :tag, or "".
+  subroutine tag_sym_text(raw, h)
+    type(gc_value), intent(in) :: raw
+    character(len=:), allocatable, intent(out) :: h
+    type(gc_value) :: md, tg
+    h = ""
+    if (gc_kind(raw) /= OBJ_META) return
+    md = gc_slot(raw, 2)
+    if (.not. gca_is(md)) return
+    tg = strip_meta(gca_get(md, gc_key("tag", [raw, md])))
+    if (tg%tag == GCT_SYM) call gc_ref_text(tg%ref, s=h)
+  end subroutine tag_sym_text
+
+  ! The class a `.`'s target is hinted with -- a :tag on the target as
+  ! written, else on the local it names (bind_array_hint) -- as a class
+  ! value, when it names a class clotran knows; else nil. clj casts the
+  ! target to it before the arguments run (InstanceMethodExpr's
+  ! checkCast) when it finds the member there: dot_host asks this only
+  ! of a member the host table has (DEVIATIONS 84).
+  function dot_target_hint(raw, sc, roots) result(c)
+    type(gc_value), intent(in) :: raw, sc
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: c, sym, h
+    character(len=:), allocatable :: t, canonical
+    c = gc_nil()
+    call tag_sym_text(raw, t)
+    if (len(t) == 0) then
+       sym = strip_meta(raw)
+       if (sym%tag /= GCT_SYM) return
+       h = local_hint(sc, sym, GCT_STR)
+       if (h%tag /= GCT_STR) return
+       call gc_ref_text(h%ref, s=t)
+    end if
+    c = dot_hint_class(t, roots)
+  end function dot_target_hint
+
+  ! The class value a `.`'s target hint t names, when clotran knows it
+  ! and it is no primitive's; else nil
+  function dot_hint_class(t, roots) result(c)
+    character(len=*), intent(in) :: t
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: c
+    character(len=:), allocatable :: canonical
+    c = gc_nil()
+    if (len(t) == 0) return
+    ! a primitive's tag is no class to cast to
+    select case (t)
+    case ("long", "double", "int", "float", "short", "byte", "char", "boolean", "void")
+       return
+    end select
+    call canon_class(t, c=canonical)
+    ! only IFn, for now: is_instance does not know every interface a
+    ! value implements (a lazy seq's IObj), and a cast it got wrong would
+    ! refuse what clj runs (DEVIATIONS 85)
+    if (canonical /= "clotran.host.i_fn") return
+    c = gc_class(canonical, roots)
+  end function dot_hint_class
+
+  ! (. target member args...)'s children with the target cast: kids[0]
+  ! become (clotran-class-cast kids[0] C), as cast_array_arg casts aget's
+  ! array
+  function cast_dot_target(kids, c, roots) result(out)
+    type(gc_stack), pointer :: vst
+    type(gc_value), intent(in) :: kids, c
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, cnode, cargs
+    integer :: base
+    vst => gc_my_stack()
+    base = vs_enter(vst, 4)
+    call vs_set(vst, base + 1, kids)
+    call vs_set(vst, base + 2, c)
+    cargs = gcv_empty([roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
+    call vs_set(vst, base + 3, cargs)
+    cnode = const_node(native(B_CLASSCAST, "clotran-class-cast", [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)]), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    cargs = gcv_conj(vs_get(vst, base + 3), cnode, [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3), cnode])
+    call vs_set(vst, base + 3, cargs)
+    cargs = gcv_conj(vs_get(vst, base + 3), gcv_nth(vs_get(vst, base + 1), 0), &
+         [roots, vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 3, cargs)
+    cnode = const_node(vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+    cargs = gcv_conj(vs_get(vst, base + 3), cnode, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3), cnode])
+    call vs_set(vst, base + 3, cargs)
+    cnode = mk_node(N_CALL, vs_get(vst, base + 3), gc_nil(), gc_nil(), 0, [roots, vs_get(vst, base + 1), vs_get(vst, base + 3)])
+    call vs_set(vst, base + 4, cnode)
+    out = gcv_put(vs_get(vst, base + 1), 0, vs_get(vst, base + 4), [roots, vs_get(vst, base + 1), vs_get(vst, base + 4)])
+    call vs_leave(vst, base)
+  end function cast_dot_target
 
   ! ---- primitive kinds, as Compiler.maybePrimitiveType answers them --
   !
@@ -1262,6 +1361,15 @@
   ! so a rebinding with no hint hides an outer one that had it.
   function local_array_hint(sc0, sym) result(h)
     type(gc_value), intent(in) :: sc0, sym
+    type(gc_value) :: h
+    h = local_hint(sc0, sym, GCT_KEY)
+  end function local_array_hint
+
+  ! The hint of tag tg (GCT_KEY an array's, GCT_STR a class's) the local
+  ! sym names here carries, or nil
+  function local_hint(sc0, sym, tg) result(h)
+    type(gc_value), intent(in) :: sc0, sym
+    integer, intent(in) :: tg
     type(gc_value) :: h, sc, m
     h = gc_nil()
     sc = sc0
@@ -1269,7 +1377,7 @@
        if (bound_here(sc, sym) >= 0) then
           m = gc_slot(sc, 5)
           if (gca_is(m)) h = gca_get(m, sym)
-          if (h%tag /= GCT_KEY) h = gc_nil()
+          if (h%tag /= tg) h = gc_nil()
           return
        end if
        if (gc_kind(gc_slot(sc, 2)) == OBJ_AST) then
@@ -1279,7 +1387,7 @@
           sc = gc_slot(gc_slot(sc, 3), 2)
        end if
     end do
-  end function local_array_hint
+  end function local_hint
 
   ! The hint an aget, aset or alength call's array argument carries -- on
   ! the expression itself, or on the local it names -- as a keyword, or
@@ -2721,6 +2829,15 @@
        fnv = gc_nil()
     end if
     call vs_set(vst, base + 8, fnv)
+    ! a member the host table has, on a target hinted with a class clotran
+    ! knows: clj's checkcast before the arguments (DEVIATIONS 84)
+    if (fnv%tag /= GCT_NIL) then
+       tn = dot_target_hint(vs_get(vst, base + 4), vs_get(vst, base + 2), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       if (tn%tag /= GCT_NIL) then
+          kids = cast_dot_target(vs_get(vst, base + 7), tn, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 8)])
+          call vs_set(vst, base + 7, kids)
+       end if
+    end if
     nd = mk_node(N_DOT, vs_get(vst, base + 7), vs_get(vst, base + 5), vs_get(vst, base + 8), &
          merge(1, 0, is_call), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_leave(vst, base)
@@ -3576,12 +3693,24 @@
   integer(int64) function anb_dot_kind(x, b) result(k)
     type(gc_value), intent(in) :: x
     integer(int64), intent(in) :: b
-    type(gc_value) :: target
+    type(gc_value) :: target, h
     character(len=:), allocatable :: t, canonical
     k = 0
     target = frf_nth(x, 1_int64)
-    if (target%tag /= GCT_SYM) return
-    if (lookup_local(scope_of(b), target) >= 0) return
+    ! an instance member's target hint, kept for anb_dotnode: a :tag on
+    ! the target as written, or on the local it names
+    if (target%tag /= GCT_SYM) then
+       call tag_sym_text(target, t)
+       call push_dot_hint(t)
+       return
+    end if
+    if (lookup_local(scope_of(b), target) >= 0) then
+       h = local_hint(scope_of(b), target, GCT_STR)
+       t = ""
+       if (h%tag == GCT_STR) call gc_ref_text(h%ref, s=t)
+       call push_dot_hint(t)
+       return
+    end if
     call gc_ref_text(target%ref, s=t)
     if (gc_kind(find_type(t)) /= OBJ_TYPE .and. is_host_class(target)) then
        k = 2
@@ -3593,7 +3722,29 @@
           k = 3
        end if
     end if
+    if (k == 0) call push_dot_hint("")
   end function anb_dot_kind
+
+  subroutine push_dot_hint(t)
+    character(len=*), intent(in) :: t
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    ! ponytail: a stack of 32 nested `.`s; deeper, the hints are dropped
+    ! (no cast, the old behaviour) rather than misattributed
+    if (tctx%dot_hint_n >= size(tctx%dot_hints)) tctx%dot_hint_n = 0
+    tctx%dot_hint_n = tctx%dot_hint_n + 1
+    tctx%dot_hints(tctx%dot_hint_n) = t
+  end subroutine push_dot_hint
+
+  subroutine pop_dot_hint(t)
+    character(len=:), allocatable, intent(out) :: t
+    type(eval_ctx), pointer :: tctx
+    tctx => ctx_self()
+    t = ""
+    if (tctx%dot_hint_n < 1) return
+    t = trim(tctx%dot_hints(tctx%dot_hint_n))
+    tctx%dot_hint_n = tctx%dot_hint_n - 1
+  end subroutine pop_dot_hint
 
   ! the member of (. target member args...) or (. target (member args...)):
   ! its name as HostExpr.Parser reads it, sym.name only (a member reached
@@ -3658,10 +3809,22 @@
        s3 = target
        if (canonical /= t) s3 = gc_sym(canonical, [vs_get(vst, base + 1), vs_get(vst, base + 2)])
     else
+       call pop_dot_hint(t)
        s3 = instance_member(mname, vs_get(vst, base + 1))
        if (ctx_self_has_error()) then
           call gce_clear_error()
           s3 = gc_nil()
+       end if
+       ! a member the host table has, on a target hinted with a class
+       ! clotran knows: clj's checkcast before the arguments (DEVIATIONS 84)
+       if (s3%tag /= GCT_NIL) then
+          call vs_set(vst, base + 3, s3)
+          target = dot_hint_class(t, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
+          if (target%tag /= GCT_NIL) then
+             kids = cast_dot_target(vs_get(vst, base + 1), target, [vs_get(vst, base + 2), vs_get(vst, base + 3)])
+             call vs_set(vst, base + 1, kids)
+          end if
+          s3 = vs_get(vst, base + 3)
        end if
     end if
     call vs_set(vst, base + 3, s3)

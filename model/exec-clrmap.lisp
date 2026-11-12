@@ -74,7 +74,7 @@
                     ((equal k 16) (ex-shp :rec e 0))
                     ((equal k 17) (and (equal nk 1) (ex-shp :m (ex-kid-of e 0) 0)))
                     ((equal k 18) (and (<= nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :cs e 0) (ex-shp :fin e 0)))
-                    ((member k '(7 8 9 22 23 10 20 24)) (ex-shp :coll e 0))
+                    ((member k '(7 8 9 22 23 10 20 24 21)) (ex-shp :coll e 0))
                     ((equal k 19) (and (equal nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :m (ex-kid-of e 1) 0) (ex-shp :ct e 0)))
                     ((equal k 6) (ex-shp :call e 0))
                     (t nil))))))))

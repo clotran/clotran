@@ -234,7 +234,13 @@
   (declare (xargs :stobjs anb :guard (member n '(1 2))) (ignore x))
   (anb-node 24 (if (equal n 2) 2 0) n anb))
 ; (. target member args*): of kind k (0 an instance's, 1 a class's), the
-; target then the arguments
+; target then the arguments. An instance's member the host table has, its
+; target hinted IFn (a :tag on it, or on the local it names, which
+; anb-dot-kind finds in the scope and the host keeps for here, a stack per
+; thread as analysis nests -- push_dot_hint, pop_dot_hint): the target
+; child wrapped in a call of the cast, (clotran-class-cast target C), a
+; node of the same count -- clj's checkcast before the arguments
+; (DEVIATIONS 84, 85)
 (defun anb-dotnode (x k n anb)
   (declare (xargs :stobjs anb :guard (and (signed-byte-p 64 k) (signed-byte-p 64 n))) (ignore x k))
   (anb-node 21 0 n anb))
@@ -344,7 +350,8 @@
 ; raised. anb-set-kind: 0 a var or a static field (the value only), 1 a
 ; host field (its object, then the value), 2 a deftype's mutable field
 ; (anb-host2 1), else refused (a local, an immutable field, an unresolved
-; symbol); anb-dot-kind: 0 an instance member, 1 a class's (the target
+; symbol); anb-dot-kind: 0 an instance member (its target's hint kept
+; for anb-dotnode), 1 a class's (the target
 ; kept as its name), 2 a host class's (anb-host2 2), else refused (a class
 ; nothing knows); anb-new-kind: 2 a lazy seq's (anb-host2 3), else a new;
 ; anb-recur-open: the recur's target found (RecurExpr: a loop or fn, the

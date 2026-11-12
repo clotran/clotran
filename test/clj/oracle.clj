@@ -2262,8 +2262,24 @@
    (try (h (swap! log conj :nil-arg)) (catch clotran.host.throwable e (class e)))
    (try ((identity {:a 1}) (swap! log conj :map-arg)) (catch clotran.host.throwable e (class e)))
    @log])
-(expect-diff "DEVIATIONS 84: (apply 1 2) refuses the seq first, clj the fn")
-(try (apply 1 2) (catch clotran.host.throwable e (class e)))
+;; a `.` on a hinted target casts it before its arguments run (clj's
+;; checkCast, analyze.inc dot_target_hint): apply's (. f (applyTo ..)), f
+;; ^IFn, refuses a non-fn before the seq; nil passes the cast; a hint on
+;; the target as written or on the local, the argument never run
+(let [m (fn [f] (try (f) (catch clotran.host.throwable e [(class e) (first (clojure.string/split (ex-message e) #" \("))])))
+      log (atom [])]
+  [(m #(apply 1 2)) (m #(apply "s" 2)) (m #(apply nil 2)) (m #(apply {:a 1} 2)) (m #(apply 1 2 3 4))
+   (m #(let [^clotran.host.i_fn g (identity 3)] (. g (applyTo (do (swap! log conj :arg) nil)))))
+   (m #(let [g (identity 3)] (. ^clotran.host.i_fn g (applyTo (do (swap! log conj :arg2) nil)))))
+   (m #(let [^clotran.host.i_fn g (identity inc)] (. g (applyTo (list 1)))))
+   @log])
+;; a `.` in a loop's body over its locals, a throwing argument, a static
+;; member and a class target's
+(loop [i 0 acc []]
+  (if (< i 3)
+    (recur (inc i) (conj acc (.toString (str i)) (. clotran.host.numbers (add i 1))
+                         (try (.substring "abc" (if (= i 1) (throw (ex-info "x" {})) i)) (catch clotran.host.throwable e (class e)))))
+    acc))
 ;; and the spread call is the call: the arity of the spread count, a
 ;; variadic one's rest the elements past its fixed ones (nil for none)
 (let [f (fn ([] :zero) ([a] [:one a]) ([a b c & r] [:var a b c r]))]
