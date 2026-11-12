@@ -20,6 +20,14 @@
 ;                ex-vwf0 and the marks' liveness. The fn templates in defs
 ;                are taken well formed as ex-vm-runs takes them (ex-defs-ok;
 ;                exec-clrfn's ex-arwf-body gives a body's fn-recur condition).
+;   ex-anmk-hfr  a body whose marked reads (ex-mks) are among apply_clears'
+;                over the fn's frame clears nothing when it recurs to its
+;                fn: anpass-proof's anp-clears-spec, those marks none
+;   ex-anp-runs-defs  ex-anp-runs with the templates as the analyzer leaves
+;                them (ex-defs-ok0: each arity's body ex-vwf0 in the fn's
+;                scope, of anpass's shapes, the tail check passed, its marks
+;                ex-mkok's and apply_clears', over a live set and a pass of
+;                its own) in place of ex-defs-ok
 
 (in-package "ACL2")
 
@@ -248,3 +256,109 @@
   :hints (("Goal" :in-theory (disable vcs2-run-program s2clk ex-ev ex-tr ex-vwf ex-vwf0 ex-cwf ex-mkok mx2 ex-defs-ok ex-anp-runs)
            :expand ((ex-tr :m e 0 nil) (ex-ev :m e 0 nil fr fuel))
            :use ((:instance ex-anp-runs (e (ex-c e)) (fr (make-list (ex-i2 e) :initial-element nil)))))))
+
+; ---- THE MARKS APPLY_CLEARS MADE ------------------------------------------------------------------
+;
+; the marked reads of a tree, as anpass's nodes: ex-clr's walk, each
+; marked local read its node (ex-ast) where ex-clr has its slot
+(defun ex-mks (flg e i)
+  (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
+                  :well-founded-relation o<
+                  :hints (("Goal" :in-theory (disable ex-kid-of)))))
+  (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
+    (if (not (consp e))
+        nil
+      (case flg
+        (:do (cond ((zp nk) nil)
+                   ((< i (- nk 1)) (append (ex-mks :m (ex-kid-of e i) 0) (ex-mks :do e (1+ i))))
+                   (t (ex-mks :m (ex-kid-of e (- nk 1)) 0))))
+        (:let (if (< i n2) (append (ex-mks :m (ex-kid-of e i) 0) (ex-mks :let e (1+ i))) (ex-mks :m (ex-kid-of e n2) 0)))
+        ((:rec :call :coll) (if (< i nk) (append (ex-mks :m (ex-kid-of e i) 0) (ex-mks flg e (1+ i))) nil))
+        (:cs (if (< i (len (ex-c e))) (append (ex-mks :m (ex-cbody e i) 0) (ex-mks :cs e (1+ i))) nil))
+        (:ct (if (< i (len (ex-c e))) (append (ex-mks :m (ex-cthen e i) 0) (ex-mks :ct e (1+ i))) nil))
+        (:fin (ex-mks :m (ex-kid-of e 1) 0))
+        (otherwise
+         (cond ((equal k 2) (if (ex-mark e) (list (ex-ast e)) nil))
+               ((equal k 4) (append (ex-mks :m (ex-kid-of e 0) 0) (ex-mks :m (ex-kid-of e 1) 0) (ex-mks :m (ex-kid-of e 2) 0)))
+               ((equal k 5) (ex-mks :do e 0))
+               ((member k '(11 12 13)) (ex-mks :let e 0))
+               ((equal k 16) (ex-mks :rec e 0))
+               ((equal k 17) (ex-mks :m (ex-kid-of e 0) 0))
+               ((equal k 18) (append (ex-mks :m (ex-kid-of e 0) 0) (ex-mks :cs e 0) (ex-mks :fin e 0)))
+               ((member k '(7 8 9 22 23 10 20 24 21)) (ex-mks :coll e 0))
+               ((equal k 19) (append (ex-mks :m (ex-kid-of e 0) 0) (ex-mks :m (ex-kid-of e 1) 0) (ex-mks :ct e 0)))
+               ((equal k 6) (append (ex-mks :m (ex-kid-of e 0) 0) (ex-mks :call e 1)))
+               (t nil)))))))
+; a tree with no marked read clears nothing
+(defthm ex-consp-app (equal (consp (append a b)) (or (consp a) (consp b))))
+(defthm ex-mks-clr (equal (consp (ex-clr flg e i)) (consp (ex-mks flg e i)))
+  :hints (("Goal" :induct (ex-mks flg e i) :in-theory (e/d ((:definition ex-clr) (:definition ex-mks)) (ex-kid-of ex-astf ex-ast-open))
+           :expand ((:free (flg) (ex-clr flg e i)) (:free (flg) (ex-mks flg e i))))))
+; the marks apply_clears made of a body (anp-clears-spec): none when it
+; recurs to its fn, so a body whose marked reads are among them clears nothing
+(defun-nx ex-anmk (b n anps)
+  (and (natp n) (equal (anp-err (anp-clears (ex-ast b) n anps)) 0)
+       (subsetp-equal (ex-mks :m b 0) (mks (anp-clears (ex-ast b) n anps)))))
+(defthm ex-anmk-hfr
+  (implies (and (ex-anmk b n anps) (anp-hfr 0 (ex-ast b) 0 0)) (atom (ex-clr :m b 0)))
+  :hints (("Goal" :in-theory (disable ex-clr ex-mks anp-clears anp-hfr ex-mks-clr ex-astf ex-ast-open)
+           :use ((:instance ex-mks-clr (flg :m) (e b) (i 0)) (:instance anp-clears-spec (x (ex-ast b)))))))
+(in-theory (disable ex-anmk))
+
+; ---- THE TEMPLATES' BODIES -----------------------------------------------------------------------
+;
+; ex-defs-ok asks each arity's body well formed after clearing (ex-arwf).
+; ex-arwf0 asks it as the analyzer leaves it: well formed before clearing
+; (ex-vwf0) in the fn's scope, of anpass's shapes, its marks anpass's
+; liveness decision (ex-mkok) and among apply_clears' over the fn's frame
+; (ex-anmk), the tail check passed at the fn's tail. A body that recurs to
+; its fn then clears nothing (ex-anmk-hfr), as ex-arwf-body wants.
+(defun ex-arwf0 (tm ar defs L n anps)
+  (and (natp (nth 0 ar)) (natp (nth 2 ar))
+       (not (intersectp-equal (ex-inners (nth 2 tm)) (ex-fparams ar)))
+       (or (not (natp (nth 4 tm))) (not (member-equal (nth 4 tm) (ex-fparams ar))))
+       (ex-vwf0 :m (ex-abody ar) 0 (ex-fcmb tm ar) (ex-flp ar) defs)
+       (ex-mkok :m (ex-abody ar) 0 L n) (equal (len L) n)
+       (ex-shp :m (ex-abody ar) 0)
+       (equal (anp-tc 0 (ex-ast (ex-abody ar)) 0 0 1) 0)
+       (ex-anmk (ex-abody ar) n anps)))
+(defthm ex-bl-same (ex-bl nil cm cm))
+(defthm ex-arwf0-arwf
+  (implies (ex-arwf0 tm ar defs L n anps) (ex-arwf tm ar defs))
+  :hints (("Goal" :in-theory (disable ex-vwf ex-vwf0 ex-cwf ex-mkok ex-clr ex-vwf-cwf ex-cwf-mkok ex-arwf-body ex-fcmb ex-fcm ex-flp
+                                      ex-anmk-hfr anp-hfr)
+           :expand ((ex-arwf tm ar defs))
+           :use ((:instance ex-vwf-cwf (flg :m) (e (ex-abody ar)) (i 0) (cm (ex-fcmb tm ar)) (cm2 (ex-fcmb tm ar)) (B nil) (lp (ex-flp ar)))
+                 (:instance ex-cwf-mkok (flg :m) (e (ex-abody ar)) (i 0) (B nil))
+                 (:instance ex-anmk-hfr (b (ex-abody ar)))
+                 ex-arwf-body))))
+(in-theory (disable ex-arwf0))
+; each arity over a live set and a pass of its own
+(defun-sk ex-arwf0s (tm ar defs) (exists (L n anps) (ex-arwf0 tm ar defs L n anps)))
+(defun ex-arswf0 (tm ars defs) (if (atom ars) t (and (ex-arwf0s tm (car ars) defs) (ex-arswf0 tm (cdr ars) defs))))
+(defthm ex-arswf0-arswf (implies (ex-arswf0 tm ars defs) (ex-arswf tm ars defs))
+  :hints (("Goal" :induct (ex-arswf0 tm ars defs))
+          ("Subgoal *1/2" :use ((:instance ex-arwf0-arwf (ar (car ars)) (L (mv-nth 0 (ex-arwf0s-witness tm (car ars) defs)))
+                                           (n (mv-nth 1 (ex-arwf0s-witness tm (car ars) defs)))
+                                           (anps (mv-nth 2 (ex-arwf0s-witness tm (car ars) defs))))))))
+; every def a template's, each arity's body as the analyzer leaves it
+(defun ex-defs-ok0 (ds defs)
+  (if (atom ds)
+      (null ds)
+    (and (consp (car ds)) (equal (cdar ds) (ex-def (caar ds)))
+         (nat-listp (ex-inners (nth 2 (caar ds)))) (no-duplicatesp-equal (ex-inners (nth 2 (caar ds))))
+         (or (not (natp (nth 4 (caar ds)))) (not (member-equal (nth 4 (caar ds)) (ex-inners (nth 2 (caar ds))))))
+         (ex-arswf0 (caar ds) (nth 1 (caar ds)) defs) (ex-defs-ok0 (cdr ds) defs))))
+(defthm ex-defs-ok0-ok (implies (ex-defs-ok0 ds defs) (ex-defs-ok ds defs))
+  :hints (("Goal" :induct (ex-defs-ok0 ds defs) :in-theory (e/d (ex-tmwf) (ex-def ex-arswf)))))
+
+; END TO END, the templates' bodies too: a tree and its templates as the
+; analyzer leaves them run on the VM as on the tree
+(defthm ex-anp-runs-defs
+  (implies (and (ex-vwf0 :m e 0 nil nil defs) (ex-mkok :m e 0 L n) (equal (len L) n)
+                (ex-defs-ok0 defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
+                (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
+           (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
+                  (car (ex-ev :m e 0 nil fr fuel))))
+  :hints (("Goal" :in-theory (disable vcs2-run-program s2clk ex-ev ex-tr ex-vwf0 ex-mkok ex-defs-ok ex-defs-ok0 ex-anp-runs)
+           :use (ex-anp-runs (:instance ex-defs-ok0-ok (ds defs))))))

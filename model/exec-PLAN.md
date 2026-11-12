@@ -737,7 +737,24 @@ slot's read and write), and every kind not yet in the model.
    frame it reported); break_frames among exec.inc's ratchet procs.
    Fortran: exec_core runs N_LAZY and N_TOP (actions 29, 30); run_loop's
    own cases gone; exec_gen.inc regenerated; fuzz-exec-gen draws 15, 26.
-   **Next** (planned, not built):
+   *(the templates' bodies done)*: exec-clrvm's ex-anp-runs-defs is
+     ex-anp-runs with ex-defs-ok0 for ex-defs-ok: each arity's body
+     (ex-arwf0) ex-vwf0 in the fn's scope, of ex-shp's shapes, the tail
+     check passed at the fn's tail, its marks ex-mkok's over a live set of
+     its own and among apply_clears' over the fn's frame (ex-anmk: ex-mks,
+     the tree's marked reads as anpass's nodes, a subset of anp-clears'
+     mks with no error). ex-anmk-hfr derives "a body recurring to its fn
+     clears nothing" from anp-clears-spec (its marks none when anp-hfr
+     holds; ex-mks-clr: no marked read, nothing cleared); ex-arwf0-arwf
+     from ex-vwf-cwf, ex-cwf-mkok and ex-arwf-body; a defun-sk over each
+     arity's (L n anps) lifts it to ex-defs-ok0-ok. Left, named: ex-defs-ok0
+     itself, the analyzer-side fact -- that every template in defs is
+     what anbuild built and anpass marked -- stated on exec.lisp's tree,
+     not derived from anbuild's run (no theorem yet takes anbuild's output
+     to ex-vwf0 and ex-shp, nor anp-clears' marks in order to ex-mkok:
+     ex-mks is a subset by node, which gives the hfr case only); and the
+     loop-init case.
+   **Was next** (as planned, for the record):
    - ex-anp-runs' (ex-defs-ok defs defs): an induction over ex-defs-ok's
      templates, each arity's body: ex-arwf from the body's ex-vwf0 (the
      same route ex-anp-runs takes for the top tree -- ex-vwf-cwf,
@@ -750,11 +767,11 @@ slot's read and write), and every kind not yet in the model.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
    *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
-   exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
+   exec-clrfn, exec-clrvm; the templates' bodies (ex-anp-runs-defs, ex-defs-ok0 named) and the loop-init case
    left, named in its paragraph above.
 5. **The rest**: def *(done)*, letfn *(done)*, deftype *(done)*, new *(done)*, set! *(done)*, dot *(done)*,
    N_LAZY *(done)*, N_TOP *(done)*, the debugger's frames (`break_frames`) *(done)*. The row is
-   Generated but for the actions, named; the templates' bodies left (above).
+   Generated but for the actions, named; the templates' bodies done but for ex-defs-ok0 (above).
 
 N_FLAT (flat.inc, To be retired) and N_VMB (the VM itself) are not this
 row's.
