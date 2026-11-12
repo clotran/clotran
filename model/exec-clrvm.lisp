@@ -84,7 +84,7 @@
                   ((equal k 11) (and (equal nk (1+ n2)) (ex-vwf0 :let e 0 cm lp defs)))
                   ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
                                      (ex-vwf0 :let e 0 cm lp defs)))
-                  ((equal k 13) (and (equal nk (1+ n2)) (< 0 n2) (ex-lffns e 0) (ex-lfok e 0 cm defs)
+                  ((equal k 13) (and (equal nk (1+ n2)) (ex-lffns e 0) (ex-lfok e 0 cm defs)
                                      (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
                                      (ex-vwf0 :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) lp defs)))
                   ((equal k 16) (and (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))

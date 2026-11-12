@@ -673,6 +673,17 @@ slot's read and write), and every kind not yet in the model.
    ex-vgood-m-letfn the body's agreement cut to the outer scope). So
    ex-vm-agree and ex-anp-runs cover deftype and letfn; left: an empty
    letfn (n = 0), which ex-vwf refuses.
+   *(the empty letfn done)*: ex-vwf and ex-vwf0 admit n = 0 -- it runs as
+   its body, the seal a no-op, its translation the body's. exec-vmlf's
+   ex-lf-facts-0 (the frame, scope cm ++ nil, and the body's run and
+   translation the letfn's) and ex-lfenv, the body's env (env itself for
+   n = 0: mx2 reads it as cm ++ nil agrees with it -- ex-agree-app-nil --
+   so no lemma over mx2's env is needed); exec-vm's ex-vgood-m-letfn over
+   it (ex-agree-lfenv cuts the scope back); exec-clrlv's ex-shp-let-body
+   and exec-clrfn's ex-ntm-letfn stated at any n equal to the count, so
+   they fire where the count is the literal 0. exec-vmtr split for size:
+   the good values (ex-xvs, a group's captures, ex-outers/ex-inners) are
+   exec-xvs.lisp.
    Then dot (DEVIATIONS 84's cast: the analyzer to record the target's
    hint, the cast an action before the arguments as a call's 23).
 4. **Clearing joined**: the machine theorem over anpass's marks, from

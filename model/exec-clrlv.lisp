@@ -133,7 +133,7 @@
 
 ; a let's body, past its inits, is in ex-shp's shapes
 (defthm ex-shp-let-body
-  (implies (and (consp e) (ex-shp :let e j) (natp j) (<= j (ex-i2 e))) (ex-shp :m (ex-kid-of e (ex-i2 e)) 0))
+  (implies (and (consp e) (ex-shp :let e j) (natp j) (<= j (ex-i2 e)) (equal n (ex-i2 e))) (ex-shp :m (ex-kid-of e n) 0))
   :hints (("Goal" :induct (ex-lfoall e j) :in-theory (disable ex-kid-of) :expand ((ex-shp :let e j)))))
 
 (defthm ex-spo1-letfn

@@ -223,7 +223,7 @@
 (defthm ex-lf-parts
   (implies (and (consp e) (equal (ex-kind e) 13))
            (and (equal (ex-vwf :m e i cm lp defs)
-                       (and (equal (ex-nk e) (1+ (ex-i2 e))) (< 0 (ex-i2 e)) (ex-lffns e 0) (ex-lfok e 0 cm defs)
+                       (and (equal (ex-nk e) (1+ (ex-i2 e))) (ex-lffns e 0) (ex-lfok e 0 cm defs)
                             (ex-nomem (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm)
                             (ex-vwf :m (ex-lfb) 0 (ex-lfcm) lp defs)))
                 (equal (ex-tr :m e i cm) (ex-trlf e 0 cm (ex-tr :m (ex-lfb) 0 (ex-lfcm))))
@@ -231,17 +231,36 @@
                 (equal (ex-ev :m e i tmp fr fuel) (ex-ev :let e 0 nil fr fuel))))
   :hints (("Goal" :in-theory (disable ex-kid-of ex-lffns ex-lfok ex-trlf ex-clr ex-tr ex-vwf ex-ev)
                   :expand ((ex-vwf :m e i cm lp defs) (ex-tr :m e i cm) (ex-clr :m e i) (ex-ev :m e i tmp fr fuel)))))
-(defthm ex-lf-facts
-  (implies (and (consp e) (equal (ex-kind e) 13) (ex-vwf :m e i cm lp defs) (ex-agree cm env fr) (ex-xvs defs env))
+; THE BODY'S ENV: the lets' values after the letfn's own; an empty letfn's
+; body sees env itself (its scope cm ++ nil agrees with it all the same)
+(defun ex-lfenv (e env fr) (if (zp (ex-i2 e)) env (append env (ex-lfsvs))))
+(defthm ex-agree-app-nil (implies (ex-agree cm env fr) (ex-agree (append cm nil) env fr)))
+(defthm ex-lf-facts-0
+  (implies (and (consp e) (equal (ex-kind e) 13) (equal (ex-i2 e) 0) (ex-vwf :m e i cm lp defs) (ex-agree cm env fr))
            (and (equal (car (ex-ev :m e i tmp fr fuel)) (car (ex-ev :m (ex-lfb) 0 nil (ex-lffr) fuel)))
                 (equal (cadr (ex-ev :m e i tmp fr fuel)) (cadr (ex-ev :m (ex-lfb) 0 nil (ex-lffr) fuel)))
-                (equal (mx2 (ex-tr :m e i cm) env caps d2 fuel) (mx2 (ex-tr :m (ex-lfb) 0 (ex-lfcm)) (append env (ex-lfsvs)) caps d2 fuel))
-                (ex-agree (ex-lfcm) (append env (ex-lfsvs)) (ex-lffr))
-                (ex-xvs defs (append env (ex-lfsvs)))
+                (equal (mx2 (ex-tr :m e i cm) env caps d2 fuel) (mx2 (ex-tr :m (ex-lfb) 0 (ex-lfcm)) env caps d2 fuel))
+                (ex-agree (ex-lfcm) env (ex-lffr))
                 (ex-vwf :m (ex-lfb) 0 (ex-lfcm) lp defs)
                 (equal (ex-clr :m e i) (ex-clr :m (ex-lfb) 0))))
   :rule-classes nil
   :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-seal ex-lfr ex-lfsv ex-lfg ex-write ex-trlf ex-slots) (ex-kid-of ex-lffns ex-lfok ex-clr ex-tr ex-vwf ex-ev ex-agree ex-ev-lf))
+                  :use ((:instance ex-ev-lf (j 0)) (:instance ex-clr-lf (j 0)) ex-lf-parts))))
+(defthm ex-lf-facts
+  (implies (and (consp e) (equal (ex-kind e) 13) (ex-vwf :m e i cm lp defs) (ex-agree cm env fr) (ex-xvs defs env))
+           (and (equal (car (ex-ev :m e i tmp fr fuel)) (car (ex-ev :m (ex-lfb) 0 nil (ex-lffr) fuel)))
+                (equal (cadr (ex-ev :m e i tmp fr fuel)) (cadr (ex-ev :m (ex-lfb) 0 nil (ex-lffr) fuel)))
+                (equal (mx2 (ex-tr :m e i cm) env caps d2 fuel) (mx2 (ex-tr :m (ex-lfb) 0 (ex-lfcm)) (ex-lfenv e env fr) caps d2 fuel))
+                (ex-agree (ex-lfcm) (ex-lfenv e env fr) (ex-lffr))
+                (ex-xvs defs (ex-lfenv e env fr))
+                (ex-vwf :m (ex-lfb) 0 (ex-lfcm) lp defs)
+                (equal (ex-clr :m e i) (ex-clr :m (ex-lfb) 0))))
+  :rule-classes nil
+  :hints (("Goal" :do-not-induct t :cases ((equal (ex-i2 e) 0)))
+          ("Subgoal 1" :in-theory (disable ex-kid-of ex-clr ex-tr ex-vwf ex-ev ex-agree ex-xvs ex-lfsv ex-lfg ex-lfr ex-write ex-seal)
+                       :use ex-lf-facts-0)
+          ("Subgoal 2" :do-not-induct t
                   :in-theory (disable ex-kid-of ex-lffns ex-lfok ex-trlf ex-clr ex-tr ex-vwf ex-ev ex-lfsv ex-lfg ex-lfr ex-seal
                                       ex-write ex-lfvok ex-agree ex-xvs ex-ev-lf ex-trlf-mx ex-lfvok-ok ex-lfsv-good ex-lfg-gents
                                       ex-agree-write-blank ex-agree-lfr ex-agree-take)
@@ -255,7 +274,7 @@
                         (:instance ex-agree-written (fr (ex-lfr e 0 fr)) (s (ex-s2 e)) (n (ex-i2 e)) (vs (ex-lfsvs))))
                   :expand ((ex-lfg e 0 fr nil)))))
 
-(in-theory (disable ex-lf-parts ex-trlf ex-lfargs ex-lfcaps ex-lfshape ex-lfok ex-lffns ex-lfsv ex-lfg ex-lfr ex-lfall ex-gcv))
+(in-theory (disable ex-lfenv ex-lf-parts ex-trlf ex-lfargs ex-lfcaps ex-lfshape ex-lfok ex-lffns ex-lfsv ex-lfg ex-lfr ex-lfall ex-gcv))
 (set-irrelevant-formals-ok t)
 ; THE DEFS ARE THE VM'S: every clause's body x2wf at its locals (vmx2's x2defs-ok)
 (defthm ex-xwf-capts (x2wf-args (ex-capts j m) n))

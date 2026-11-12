@@ -475,7 +475,7 @@
                ((equal k 5) (ex-vind :do e 0 nil cm env fr fuel caps defs lp))
                ((or (equal k 11) (equal k 12)) (ex-vind :let e 0 nil cm env fr fuel caps defs lp))
                ((equal k 16) (ex-vind :rec e 0 nil cm env fr fuel caps defs lp))
-               ((equal k 13) (ex-vind :m (ex-kid-of e n2) 0 nil (append cm (ex-slots (ex-s2 e) n2)) (append env (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)))
+               ((equal k 13) (ex-vind :m (ex-kid-of e n2) 0 nil (append cm (ex-slots (ex-s2 e) n2)) (ex-lfenv e env fr)
                                       (ex-write (ex-s2 e) (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)) (ex-lfr e 0 fr)) fuel caps defs lp))
                ((equal k 17) (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil))
                ((equal k 18)
@@ -610,9 +610,19 @@
                            (:free (env) (mx2-args nil env caps defs fuel))))))
 ; LETFN (milestone 5): the body's case, in the scope its lets make and the
 ; sealed frame (exec-vmlf's ex-lf-facts)
+(defthm ex-agree-app-atom
+  (implies (atom b) (equal (ex-agree (append a b) env fr) (ex-agree a env fr)))
+  :hints (("Goal" :induct (ex-agree a env fr))))
+; the body's scope cut back to the letfn's: its env, the empty letfn's as
+; the others' (exec-vmlf's ex-lfenv)
+(defthm ex-agree-lfenv
+  (implies (and (equal (len a) (len env)) (equal (len b) (ex-i2 e)))
+           (equal (ex-agree (append a b) (ex-lfenv e env fr) fr2)
+                  (and (ex-agree a env fr2) (or (zp (ex-i2 e)) (ex-agree b (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)) fr2)))))
+  :hints (("Goal" :in-theory (e/d (ex-lfenv) (ex-agree ex-lfsv ex-lfg)) :cases ((zp (ex-i2 e))))))
 (defthm ex-vgood-m-letfn
   (implies (and (consp e) (not (member-equal flg '(:iter :do :let :rec :call :coll :fin))) (equal (ex-kind e) 13)
-                (ex-vgood :m (ex-kid-of e (ex-i2 e)) 0 nil (append cm (ex-slots (ex-s2 e) (ex-i2 e))) (append env (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)))
+                (ex-vgood :m (ex-kid-of e (ex-i2 e)) 0 nil (append cm (ex-slots (ex-s2 e) (ex-i2 e))) (ex-lfenv e env fr)
                           (ex-write (ex-s2 e) (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)) (ex-lfr e 0 fr)) fuel caps defs lp))
            (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
   :hints (("Goal" :do-not-induct t

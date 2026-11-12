@@ -78,8 +78,8 @@
 
 ; a letfn's body is in its tail, its fns in none
 (defthm ex-ntm-letfn
-  (implies (and (ex-nodep e) (equal (ex-kind e) 13) (ex-ntm e) (equal (ex-nk e) (1+ (ex-i2 e))))
-           (ex-ntm (ex-kid-of e (ex-i2 e))))
+  (implies (and (ex-nodep e) (equal (ex-kind e) 13) (ex-ntm e) (equal (ex-nk e) (1+ (ex-i2 e))) (equal n (ex-i2 e)))
+           (ex-ntm (ex-kid-of e n)))
   :hints (("Goal" :in-theory (enable ex-ntm anp-nn) :expand ((anp-tc 0 (ex-ast e) 0 0 1) (anp-hfr 0 (ex-ast e) 0 0))
            :use ((:instance hfr-kid (x (ex-ast e)) (i (ex-i2 e)))))))
 
