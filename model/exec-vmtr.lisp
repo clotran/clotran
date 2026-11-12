@@ -70,6 +70,39 @@
 ; args..) -- a vector :vector, a map :map, a set :set
 (defun ex-cop (k) (case k (7 :vector) (8 :map) (otherwise :set)))
 
+; THE SLOTS A NODE MAY CLEAR (milestone 4): its marked reads', every one a
+; run of it may make -- a branch's, a catch's -- but none of a fn's body,
+; which clears its own frame. A place a run reaches after a part ran sees
+; the scope with those slots blanked (ex-blank): no name reaches them.
+(defun ex-clr (flg e i)
+  (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
+                  :well-founded-relation o<
+                  :hints (("Goal" :in-theory (disable ex-kid-of)))))
+  (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
+    (if (not (consp e))
+        nil
+      (case flg
+        (:do (cond ((zp nk) nil)
+                   ((< i (- nk 1)) (append (ex-clr :m (ex-kid-of e i) 0) (ex-clr :do e (1+ i))))
+                   (t (ex-clr :m (ex-kid-of e (- nk 1)) 0))))
+        (:let (if (< i n2) (append (ex-clr :m (ex-kid-of e i) 0) (ex-clr :let e (1+ i))) (ex-clr :m (ex-kid-of e n2) 0)))
+        ((:rec :call :coll) (if (< i nk) (append (ex-clr :m (ex-kid-of e i) 0) (ex-clr flg e (1+ i))) nil))
+        (:cs (if (< i (len (ex-c e))) (append (ex-clr :m (ex-cbody e i) 0) (ex-clr :cs e (1+ i))) nil))
+        (:ct (if (< i (len (ex-c e))) (append (ex-clr :m (ex-cthen e i) 0) (ex-clr :ct e (1+ i))) nil))
+        (:fin (ex-clr :m (ex-kid-of e 1) 0))
+        (otherwise
+         (cond ((equal k 2) (if (ex-mark e) (list n2) nil))
+               ((equal k 4) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :m (ex-kid-of e 1) 0) (ex-clr :m (ex-kid-of e 2) 0)))
+               ((equal k 5) (ex-clr :do e 0))
+               ((or (equal k 11) (equal k 12)) (ex-clr :let e 0))
+               ((equal k 16) (ex-clr :rec e 0))
+               ((equal k 17) (ex-clr :m (ex-kid-of e 0) 0))
+               ((equal k 18) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0) (ex-clr :fin e 0)))
+               ((member k '(7 8 9)) (ex-clr :coll e 0))
+               ((equal k 19) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :m (ex-kid-of e 1) 0) (ex-clr :ct e 0)))
+               ((equal k 6) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :call e 1)))
+               (t nil)))))))
+
 (defun ex-tr (flg e i cm)
   (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
                   :well-founded-relation o<
@@ -79,18 +112,18 @@
         '(:const nil)
       (case flg
         (:do (cond ((zp nk) '(:const nil))
-                   ((< i (- nk 1)) (let ((r (ex-tr :do e (1+ i) cm))) (list :if (ex-tr :m (ex-kid-of e i) 0 cm) r r)))
+                   ((< i (- nk 1)) (let ((r (ex-tr :do e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm)))) (list :if (ex-tr :m (ex-kid-of e i) 0 cm) r r)))
                    (t (ex-tr :m (ex-kid-of e (- nk 1)) 0 cm))))
         (:let (cond ((< i n2)
-                     (list :let (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :let e (1+ i) (append cm (list (+ (ex-s2 e) i))))))
+                     (list :let (ex-tr :m (ex-kid-of e i) 0 cm)
+                           (ex-tr :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i))))))
                     ((equal k 12)
                      (let ((ls (cons nil (ex-slots (ex-s2 e) n2))))
                        (list :loop (cons '(:const nil) (ex-locals (cdr ls) cm))
                              (ex-tr :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls)))))
                     (t (ex-tr :m (ex-kid-of e n2) 0 cm))))
-        (:rec (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :rec e (1+ i) cm)) nil))
-        (:call (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :call e (1+ i) cm)) nil))
-        (:coll (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :coll e (1+ i) cm)) nil))
+        ((:rec :call :coll)
+         (if (< i nk) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr flg e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm))) nil))
         (:cs (if (< i (len (ex-c e)))
                  (cons (ex-tr :m (ex-cbody e i) 0 (append cm (list (ex-cslot e i)))) (ex-tr :cs e (1+ i) cm))
                nil))
@@ -99,19 +132,23 @@
         (otherwise
          (cond ((or (equal k 1) (equal k 3)) (list :const (ex-c e)))
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
-               ((equal k 6) (ex-trcall (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :call e 1 (append cm (list nil))) (len cm)))
+               ((equal k 6) (ex-trcall (ex-tr :m (ex-kid-of e 0) 0 cm)
+                                    (ex-tr :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil))) (len cm)))
                ((equal k 2) (list :local (ex-pos (ex-i2 e) cm)))
-               ((equal k 4) (list :if (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :m (ex-kid-of e 1) 0 cm)
-                                  (if (< 2 nk) (ex-tr :m (ex-kid-of e 2) 0 cm) '(:const nil))))
+               ((equal k 4) (let ((cm1 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm)))
+                              (list :if (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :m (ex-kid-of e 1) 0 cm1)
+                                    (if (< 2 nk) (ex-tr :m (ex-kid-of e 2) 0 cm1) '(:const nil)))))
                ((equal k 5) (ex-tr :do e 0 cm))
                ((or (equal k 11) (equal k 12)) (ex-tr :let e 0 cm))
                ((equal k 16) (list* :recur '(:const nil) (ex-tr :rec e 0 cm)))
                ((equal k 17) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm)))
-               ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 cm) (ex-tr :fin e 0 cm)
+               ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
+                                       (ex-tr :fin e 0 (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm))
                                        (ex-c e) (< 1 nk) (len cm)))
                ((member k '(7 8 9)) (list* :prim (ex-cop k) (ex-tr :coll e 0 cm)))
                ((equal k 19) (list :let (ex-tr :m (ex-kid-of e 0) 0 cm)
-                                   (ex-trcs (ex-c e) (ex-tr :ct e 0 (append cm (list nil))) (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil)))
+                                   (ex-trcs (ex-c e) (ex-tr :ct e 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)))
+                                            (ex-tr :m (ex-kid-of e 1) 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)))
                                             (len cm))))
                (t '(:const nil))))))))
 
@@ -220,8 +257,9 @@
   :hints (("Goal" :in-theory (enable ex-callee))))
 (in-theory (disable ex-callee ex-apway ex-lzok))
 
-; well-formed: the core, every local in scope and unmarked (no clearing:
-; that is anpass-sound's, joined in milestone 4), every let's and loop's
+; well-formed: the core, every local in scope -- a marked one's slot
+; blanked after its read for every place a run reaches later (ex-clr),
+; a loop's body clearing nothing of the scope outside it -- every let's and loop's
 ; slot new to the scope, a recur only in the tail of a loop lp -- (s . n),
 ; its first slot and count of bindings, nil outside every loop's tail --
 ; writing that loop's slots with as many values; a constant's and a Var's
@@ -234,26 +272,26 @@
     (and (consp e)
          (case flg
            (:do (cond ((zp nk) t)
-                      ((< i (- nk 1)) (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :do e (1+ i) cm lp defs)))
+                      ((< i (- nk 1)) (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :do e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) lp defs)))
                       (t (ex-vwf :m (ex-kid-of e (- nk 1)) 0 cm lp defs))))
            (:let (cond ((< i n2)
-                        (and (or (equal k 11) (equal k 12)) (not (member-equal (+ (ex-s2 e) i) cm))
+                        (and (or (equal k 11) (equal k 12)) (not (member-equal (+ (ex-s2 e) i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm)))
                              (ex-vwf :m (ex-kid-of e i) 0 cm nil defs)
-                             (ex-vwf :let e (1+ i) (append cm (list (+ (ex-s2 e) i))) lp defs)))
+                             (ex-vwf :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i))) lp defs)))
                        ((equal k 11) (ex-vwf :m (ex-kid-of e n2) 0 cm lp defs))
                        ((equal k 12)
                         (let ((ls (cons nil (ex-slots (ex-s2 e) n2))))
-                          (and (subsetp-equal (cdr ls) cm)
+                          (and (subsetp-equal (cdr ls) cm) (ex-nomem (ex-clr :m (ex-kid-of e n2) 0) (ex-blank ls cm))
                                (ex-vwf :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls) (cons (ex-s2 e) n2) defs))))
                        (t nil)))
            (:rec (and (equal k 16) (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))
                       (equal nk (cdr lp))
                       (if (< i nk)
-                          (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :rec e (1+ i) cm lp defs))
+                          (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :rec e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) lp defs))
                         (equal i nk))))
            (:call (and (equal k 6)
                        (if (< i nk)
-                           (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :call e (1+ i) cm lp defs))
+                           (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :call e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) lp defs))
                          t)))
            (:cs (and (equal k 18)
                      (if (< i (len (ex-c e)))
@@ -264,7 +302,7 @@
            (:fin (or (not (< 1 nk)) (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) nil defs)))
            (:coll (and (member k '(7 8 9))
                        (if (< i nk)
-                           (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :coll e (1+ i) cm lp defs))
+                           (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :coll e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) lp defs))
                          t)))
            (:ct (and (equal k 19)
                      (if (< i (len (ex-c e)))
@@ -272,14 +310,14 @@
                        t)))
            (otherwise
             (cond ((or (equal k 1) (equal k 3)) (ex-xvs defs (list (ex-c e))))
-                  ((equal k 2) (and (member-equal (ex-i2 e) cm) (not (ex-mark e))))
+                  ((equal k 2) (member-equal (ex-i2 e) cm))
                   ((equal k 14) (and (consp (assoc-equal (ex-c e) defs))
                                      (nat-listp (ex-outers (nth 2 (ex-c e))))
                                      (subsetp-equal (ex-outers (nth 2 (ex-c e))) cm)))
-                  ((equal k 6) (and (< 0 nk) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 (append cm (list nil)) lp defs)))
+                  ((equal k 6) (and (< 0 nk) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)))
                   ((equal k 4) (and (or (equal nk 2) (equal nk 3))
-                                    (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :m (ex-kid-of e 1) 0 cm lp defs)
-                                    (or (equal nk 2) (ex-vwf :m (ex-kid-of e 2) 0 cm lp defs))))
+                                    (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) lp defs)
+                                    (or (equal nk 2) (ex-vwf :m (ex-kid-of e 2) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) lp defs))))
                   ((equal k 5) (ex-vwf :do e 0 cm lp defs))
                   ((equal k 11) (and (equal nk (1+ n2)) (ex-vwf :let e 0 cm lp defs)))
                   ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
@@ -288,11 +326,12 @@
                                      (equal nk (cdr lp)) (ex-vwf :rec e 0 cm lp defs)))
                   ((equal k 17) (and (equal nk 1) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)))
                   ((equal k 18) (and (or (equal nk 1) (equal nk 2)) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
-                                     (ex-vwf :cs e 0 cm nil defs) (ex-vwf :fin e 0 cm nil defs)))
+                                     (ex-vwf :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) nil defs)
+                                     (ex-vwf :fin e 0 (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm) nil defs)))
                   ((member k '(7 8 9)) (ex-vwf :coll e 0 cm nil defs))
                   ((equal k 19) (and (equal nk 2) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
-                                     (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) lp defs)
-                                     (ex-vwf :ct e 0 (append cm (list nil)) lp defs)))
+                                     (ex-vwf :m (ex-kid-of e 1) 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)
+                                     (ex-vwf :ct e 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)))
                   (t nil)))))))
 
 ; A FN'S TEMPLATE (name arities caps nslots self), each arity (nf variadic
@@ -333,7 +372,9 @@
   (and (natp (nth 0 ar)) (natp (nth 2 ar))
        (not (intersectp-equal (ex-inners (nth 2 tm)) (ex-fparams ar)))
        (or (not (natp (nth 4 tm))) (not (member-equal (nth 4 tm) (ex-fparams ar))))
-       (ex-vwf :m (ex-abody ar) 0 (ex-fcmb tm ar) (ex-flp ar) defs)))
+       (ex-vwf :m (ex-abody ar) 0 (ex-fcmb tm ar) (ex-flp ar) defs)
+       ; a body that clears a capture or the self slot runs once: no recur to the fn
+       (or (ex-nomem (ex-clr :m (ex-abody ar) 0) (ex-fcm tm ar)) (ex-vwf :m (ex-abody ar) 0 (ex-fcmb tm ar) nil defs))))
 (defun ex-arswf (tm ars defs) (if (atom ars) t (and (ex-arwf tm (car ars) defs) (ex-arswf tm (cdr ars) defs))))
 (defun ex-tmwf (tm defs)
   (and (nat-listp (ex-inners (nth 2 tm))) (no-duplicatesp-equal (ex-inners (nth 2 tm)))
@@ -409,6 +450,30 @@
 (defthm ex-agree-blank (implies (ex-agree cm env fr) (ex-agree (ex-blank ls cm) env fr)))
 (defthm ex-blank-id (implies (ex-nomem ls cm) (equal (ex-blank ls cm) cm)))
 (defthm ex-nomem-blank (ex-nomem ls (ex-blank ls cm)))
+; CLEARING (milestone 4): blanking twice is blanking by both, and a scope
+; that agrees blanked by a agrees blanked by more
+(defthm ex-member-app (iff (member-equal x (append a b)) (or (member-equal x a) (member-equal x b))))
+(defthm ex-sub-mem (implies (and (member-equal x a) (subsetp-equal a b)) (member-equal x b)))
+(defthm ex-blank-blank (equal (ex-blank b (ex-blank a cm)) (ex-blank (append a b) cm)))
+(defthm ex-nomem-append (equal (ex-nomem (append a b) cm) (and (ex-nomem a cm) (ex-nomem b cm))))
+(defthm ex-blank-nil (equal (ex-blank nil cm) cm))
+(defthm ex-blank-app-nomem (implies (ex-nomem b cm) (equal (ex-blank (append a b) cm) (ex-blank a cm))))
+(defthm ex-blank-sub (implies (subsetp-equal a b) (equal (ex-blank b (ex-blank a cm)) (ex-blank b cm))) :rule-classes nil
+  :hints (("Goal" :in-theory (disable ex-blank-blank))))
+(defthm ex-agree-blank-mono
+  (implies (and (ex-agree (ex-blank a cm) env fr) (subsetp-equal a b)) (ex-agree (ex-blank b cm) env fr))
+  :hints (("Goal" :in-theory (disable ex-blank-blank ex-agree-blank) :use (ex-blank-sub (:instance ex-agree-blank (ls b) (cm (ex-blank a cm)))))))
+(defthm ex-member-blank (implies (and (member-equal s (ex-blank a cm)) s) (member-equal s cm)))
+(defthm ex-blank-nomem (implies (and (member-equal s ls) s) (not (member-equal s (ex-blank ls cm)))))
+; a marked read clears its slot: the scope blanked of it agrees after
+(defthm ex-agree-clear
+  (implies (and (ex-agree cm env fr) (natp s)) (ex-agree (ex-blank (list s) cm) env (update-nth s v fr)))
+  :hints (("Goal" :in-theory (disable ex-agree-write ex-blank-blank) :use ((:instance ex-agree-write (cm (ex-blank (list s) cm)))))))
+(defthm ex-sub-app1 (implies (subsetp-equal a b) (subsetp-equal a (append b c))))
+(defthm ex-sub-app2 (implies (subsetp-equal a c) (subsetp-equal a (append b c))))
+(defthm ex-sub-cons (implies (subsetp-equal a b) (subsetp-equal a (cons x b))))
+(defthm ex-sub-refl (subsetp-equal a a))
+(defthm ex-sub-app (equal (subsetp-equal (append a b) c) (and (subsetp-equal a c) (subsetp-equal b c))))
 (defthm ex-nat-listp-slots (nat-listp (ex-slots s n)))
 (defthm ex-len-slots (equal (len (ex-slots s n)) (nfix n)))
 (defthm ex-len-locals (equal (len (ex-locals ls cm)) (len ls)))
@@ -466,12 +531,14 @@
 
 ; ---- THE TRANSLATION IS WELL FORMED -------------------------------------------------------
 
-(defun ex-rind (e i) (declare (xargs :measure (nfix (- (ex-nk e) (nfix i))))) (if (< (nfix i) (ex-nk e)) (ex-rind e (1+ (nfix i))) i))
+(defun ex-rindc (e i cm)
+  (declare (xargs :measure (nfix (- (ex-nk e) (nfix i)))))
+  (if (< (nfix i) (ex-nk e)) (ex-rindc e (1+ (nfix i)) (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm)) (list i cm)))
 (defthm ex-tr-rec-true-listp (true-listp (ex-tr :rec e i cm))
-  :hints (("Goal" :induct (ex-rind e i) :in-theory (disable ex-kid-of) :expand ((ex-tr :rec e i cm)))))
+  :hints (("Goal" :induct (ex-rindc e i cm) :in-theory (disable ex-kid-of) :expand ((ex-tr :rec e i cm)))))
 (defthm ex-tr-rec-len
   (implies (and (consp e) (<= (nfix i) (ex-nk e))) (equal (len (ex-tr :rec e i cm)) (- (ex-nk e) (nfix i))))
-  :hints (("Goal" :induct (ex-rind e i) :in-theory (disable ex-kid-of) :expand ((ex-tr :rec e i cm)))))
+  :hints (("Goal" :induct (ex-rindc e i cm) :in-theory (disable ex-kid-of) :expand ((ex-tr :rec e i cm)))))
 
 ; a try's parts: the catch walk and the finally
 (defthm ex-trh-xwf

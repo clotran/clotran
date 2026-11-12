@@ -78,6 +78,14 @@
            (<= (caddr (ex-ev flg e i tmp fr fuel))
                (if (eq flg :m) (- (* 3 (ex-sz :m e 0)) 2) (+ 1 (* 3 (ex-sz :kids e i)))))))
 
+; the loop-free core reads no local marked: it clears nothing
+(defthm ex-nth-past (implies (and (natp j) (<= (len l) j)) (equal (nth j l) nil)))
+(defthm ex-kid-past (implies (and (natp j) (<= (ex-nk e) j)) (equal (ex-kid-of e j) nil))
+  :hints (("Goal" :in-theory (enable ex-nk ex-kids))))
+(defthm ex-clr-nil (equal (ex-clr flg nil i) nil) :hints (("Goal" :expand ((ex-clr flg nil i)))))
+(defthm ex-lfwf-clr
+  (implies (ex-lfwf flg e i cm) (equal (ex-clr flg e i) nil))
+  :hints (("Goal" :induct (ex-lfwf flg e i cm) :in-theory (disable ex-kid-of) :expand ((:free (flg) (ex-clr flg e i)) (ex-lfwf flg e i cm)))))
 (defthm ex-turns-bound-flag
   (ex-cgood flg e i tmp fr fuel cm)
   :rule-classes nil

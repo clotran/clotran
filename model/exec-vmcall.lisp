@@ -366,6 +366,14 @@
                    (append (ex-fcm (ex-ftm f) (ex-car f args)) (cons nil (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args)))))
                    (cons (ex-astart (ex-car f args)) (ex-anp (ex-car f args))) defs))
   :hints (("Goal" :use ex-ehyp-facts :in-theory (e/d (ex-arwf) (ex-ehyp ex-car ex-fcm ex-astart ex-anp ex-abody)))))
+(defthm ex-enter-iterok
+  (implies (ex-ehyp f args defs)
+           (or (ex-nomem (ex-clr :m (ex-abody (ex-car f args)) 0) (ex-fcm (ex-ftm f) (ex-car f args)))
+               (ex-vwf :m (ex-abody (ex-car f args)) 0
+                       (append (ex-fcm (ex-ftm f) (ex-car f args)) (cons nil (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args)))))
+                       nil defs)))
+  :rule-classes nil
+  :hints (("Goal" :use ex-ehyp-facts :in-theory (e/d (ex-arwf) (ex-ehyp ex-car ex-fcm ex-astart ex-anp ex-abody)))))
 (defthm ex-enter-agree-cm
   (implies (ex-ehyp f args defs) (ex-agree (ex-fcm (ex-ftm f) (ex-car f args)) (ex-fenv f args) (ex-bind f args)))
   :hints (("Goal" :in-theory (e/d (ex-fcm) (ex-ehyp ex-fenv ex-bind ex-fbcm ex-car)))))
@@ -477,6 +485,13 @@
            (ex-vwf :m (ex-abody (ex-cr)) 0 (append (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (cons nil (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr)))))
                    (cons (ex-astart (ex-cr)) (ex-anp (ex-cr))) defs))
   :hints (("Goal" :by (:instance ex-enter-vwf (f (car tmp)) (args (cdr tmp))))))
+(defthm ex-call-iterok
+  (implies (ex-chyp)
+           (or (ex-nomem (ex-clr :m (ex-abody (ex-cr)) 0) (ex-fcm (ex-ftm (car tmp)) (ex-cr)))
+               (ex-vwf :m (ex-abody (ex-cr)) 0 (append (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (cons nil (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr)))))
+                       nil defs)))
+  :rule-classes nil
+  :hints (("Goal" :use ((:instance ex-enter-iterok (f (car tmp)) (args (cdr tmp)))))))
 (defthm ex-call-agree-cm
   (implies (ex-chyp) (ex-agree (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (ex-fenv (car tmp) (cdr tmp)) (ex-bind (car tmp) (cdr tmp))))
   :hints (("Goal" :by (:instance ex-enter-agree-cm (f (car tmp)) (args (cdr tmp))))))

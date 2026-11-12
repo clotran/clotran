@@ -21,8 +21,10 @@ translation, slots mapped to `mx2`'s positions (exec-vm, `ex-vm-agree`),
 and the VM run of the translation answers the tree's value (`ex-vm-runs`,
 with vmx2-proof's `vcs2-correct`).
 So the slot a local reads holds its binding's value, and the tree
-evaluator and the VM agree. Locals clearing is anpass-sound's
-(no cleared slot is read again); joining the two is milestone 4.
+evaluator and the VM agree. Marked reads clear their slots in
+both (milestone 4's first part: ex-vwf blanks a cleared slot for what
+runs after); that anpass's marks meet ex-vwf (tr-sound, no cleared slot
+read again) is milestone 4's second part.
 
 What is generated: the decisions of each turn, as integers (`ex-act`,
 `ex-kid`, `ex-pc`, `ex-i`, `ex-fin`), as anprim's are; `exec_core` in
@@ -434,21 +436,43 @@ slot's read and write), and every kind not yet in the model.
    ex-vgood: 2.8 s, was ~950. The book as a whole is about the same,
    ~1050 s, most of it ex-vgood-let-mid (~435 s) and ex-vgood-m-if
    (~300 s); a case milestone 4 changes re-proves only its own lemma.]
-   **Next (milestone 4, clearing joined)**: ex-vwf asks every local
-   unmarked (`(not (ex-mark e))`); drop that and prove the machine and the
-   VM agreement over anpass's marks. What is there: exec-proof's
-   ex-machine-correct already runs a marked read (action 2 clears the
-   slot); anpass-sound proves a marked read's slot is never read again
-   (tr-sound). What is needed: the scope relation ex-agree weakened to the
-   positions a name still reaches -- a slot cleared by a marked read is
-   blanked in cm, as a loop's lets' positions are (ex-blank) -- with
-   anpass-sound's statement brought to exec.lisp's tree (the node shapes
-   anpass reads against ex-kind/ex-mark), so ex-vwf takes a tree anpass
-   passed rather than an unmarked one; then ex-vm-agree, ex-recur-stays,
-   ex-vm-runs as now. Do it as try's and case's were: the marked read's
-   case a lemma of its own, the flag proof meeting it closed.
+   **Milestone 4, first part** *(done)*: the VM agreement over marked
+   reads. ex-vwf no longer asks a local unmarked. ex-clr is the slots a
+   node's marked reads may clear (every run's: both branches, every catch,
+   none of a fn body's, which clears its own frame). The scope a place
+   sees is cm blanked of what the parts before it may have cleared, in
+   ex-tr and ex-vwf alike (a do's, let's, recur's, call's and
+   collection's later parts, an if's branches, a case's branches, a try's
+   catches and finally), so a read of a cleared slot is not well formed;
+   ex-vpost's agreement after a node is cm blanked of its ex-clr (ex-agree
+   is unchanged: a nil entry is a position no name reaches, as a loop's
+   lets' are). A loop's body clears nothing of the scope outside it
+   (ex-vwf's ex-nomem); a fn's body clears nothing of its captures or self
+   slot, or has no recur to the fn (ex-arwf, as anpass leaves a body that
+   recurs to its fn unmarked), so the :iter place's hypothesis is one or
+   the other and ex-vind adds the body with no loop target. The marked
+   read is a lemma of its own (ex-vgood-m-mark: ex-agree-clear, the slot
+   written nil, blanked); the if's case is four (ex-vgood-if-out, -then,
+   -else, -nil; the one lemma took 2100 s with the blanked scopes).
+   ex-vm-agree, ex-recur-stays, ex-tr-xwf and exec-vmrun's ex-vm-runs
+   stand, statements unchanged. Not admitted: a loop whose later init
+   clears an earlier init's slot (the copy the loop translation makes
+   would read it; anpass marks that only when the body never reads it).
+   **Next (milestone 4, second part)**: tr-sound brought to exec.lisp's
+   tree -- that a tree anpass passed (its marks anp-clears-spec's, the
+   tail check passed) meets ex-vwf's clearing conditions: no read of a
+   slot blanked by an earlier part's ex-clr, a loop body's clears inside
+   it, a fn body's as above. anpass reads its tree through ast-kind,
+   ast-kid, ast-alt, ast-i2, ast-s3 (anpass.lisp); exec.lisp's is
+   ex-kind, ex-kids, ex-c, ex-i2, ex-mark. The way in: a map from
+   exec.lisp's node to anpass's (the analyzer's one tree read two ways),
+   then ok-ann over tr's runs gives each condition -- an ex-clr slot is a
+   marked read's, ok-ann says no later read of it in any run, and the
+   places ex-vwf blanks are the reads that follow in some run.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
+   First part done (the **Milestone 4, first part** paragraph above);
+   the second, the bridge from tr-sound, is the Next there.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
