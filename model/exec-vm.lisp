@@ -325,14 +325,14 @@
 ; (ex-xvs reads its elements).
 (defun-sk ex-collok (defs)
   (forall (vals e) (and (equal (prim :vector vals) (cons :vec vals))
-                        (implies (and (ex-xvs defs vals) (member-equal (ex-kind e) '(8 9 22 23)))
+                        (implies (and (ex-xvs defs vals) (member-equal (ex-kind e) '(8 9 22 23 10 20 24)))
                                  (ex-xvs defs (list (cdr (ex-cbuild e vals))))))))
 (defthm ex-collok-vector (implies (ex-collok defs) (equal (prim :vector vals) (cons :vec vals)))
   :hints (("Goal" :use ((:instance ex-collok-necc (e nil))) :in-theory (disable ex-cbuild))))
 (defthm ex-xvs-vec (implies (ex-xvs defs vals) (ex-xvs defs (list (cons :vec vals))))
   :hints (("Goal" :expand ((ex-xvs defs (list (cons :vec vals))) (ex-xvs defs (cons :vec vals))))))
 (defthm ex-collok-good
-  (implies (and (ex-collok defs) (ex-xvs defs vals) (member-equal (ex-kind e) '(7 8 9 22 23))) (ex-xvs defs (list (cdr (ex-cbuild e vals)))))
+  (implies (and (ex-collok defs) (ex-xvs defs vals) (member-equal (ex-kind e) '(7 8 9 22 23 10 20 24))) (ex-xvs defs (list (cdr (ex-cbuild e vals)))))
   :hints (("Goal" :use ex-collok-necc :in-theory (disable ex-cbuild))
           (and stable-under-simplificationp '(:in-theory (enable ex-cbuild)))))
 ; ... and as mx2 answers it, the build opened: a map's, a set's, a new's
@@ -342,9 +342,9 @@
                 (implies (throwp (prim op vals)) (ex-xvs defs (list (cdr (prim op vals)))))))
   :hints (("Goal" :use ((:instance ex-collok-good (e '(8))) (:instance ex-collok-good (e '(9)))))))
 (defthm ex-collok-new
-  (implies (and (ex-collok defs) (ex-xvs defs vals) (member-equal k '(22 23)))
-           (and (implies (not (throwp (prim (list :new k c) vals))) (ex-xvs defs (list (prim (list :new k c) vals))))
-                (implies (throwp (prim (list :new k c) vals)) (ex-xvs defs (list (cdr (prim (list :new k c) vals)))))))
+  (implies (and (ex-collok defs) (ex-xvs defs vals) (member-equal k '(22 23 10 20 24)))
+           (and (implies (not (throwp (prim (list :host k c) vals))) (ex-xvs defs (list (prim (list :host k c) vals))))
+                (implies (throwp (prim (list :host k c) vals)) (ex-xvs defs (list (cdr (prim (list :host k c) vals)))))))
   :hints (("Goal" :use ((:instance ex-collok-necc (e (list k nil nil c))))
                   :in-theory (e/d (ex-cbuild ex-cop ex-kind ex-c) (ex-collok ex-collok-good ex-collok-necc ex-xvs)))))
 (in-theory (disable ex-collok))
@@ -493,7 +493,7 @@
                                           fuel caps defs nil))))
                         (t (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
                                  (ex-vind :fin e 0 (list (car r) (c+ 1 (caddr r))) (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm) env (cadr r) fuel caps defs nil))))))
-               ((member k '(7 8 9 22 23)) (ex-vind :coll e 0 nil cm env fr fuel caps defs nil))
+               ((member k '(7 8 9 22 23 10 20 24)) (ex-vind :coll e 0 nil cm env fr fuel caps defs nil))
                ((equal k 19)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
@@ -583,9 +583,21 @@
                            (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
                            (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
                            (:free (env) (mx2-args nil env caps defs fuel))))))
-; NEW (milestone 5): its arguments a collection's elements, the build (prim (:new k C))
+; NEW (milestone 5): its arguments a collection's elements, the build (prim (:host k C))
 (defthm ex-vgood-m-new
   (implies (and (consp e) (member-equal (ex-kind e) '(22 23)) (not (member-equal flg '(:iter :do :let :rec :call :coll :fin)))
+                (ex-vgood :coll e 0 nil cm env fr fuel caps defs nil))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-agree ex-vwf ex-ev ex-tr ex-clr))
+                  :expand ((:free (flg) (ex-clr flg e i)) (:free (flg) (ex-ev flg e i tmp fr fuel)) (:free (flg) (ex-tr flg e i cm)) (:free (flg) (ex-vwf flg e i cm lp defs))
+                           (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (env) (mx2-args nil env caps defs fuel))))))
+; THE HOST'S ACTIONS (milestone 5: def, deftype, set!): their children a
+; collection's elements, the action (prim (:host k C)) -- ex-collok's hypothesis
+(defthm ex-vgood-m-host
+  (implies (and (consp e) (member-equal (ex-kind e) '(10 20 24)) (not (member-equal flg '(:iter :do :let :rec :call :coll :fin)))
                 (ex-vgood :coll e 0 nil cm env fr fuel caps defs nil))
            (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
   :hints (("Goal" :do-not-induct t
@@ -713,12 +725,12 @@
         ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
          (ex-vgood :call e 1 (list (val (car (ex-k0)))) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append env (list (val (car (ex-k0)))))
                    (cadr (ex-k0)) fuel caps defs lp)))
-(ex-old ex-vgood-leaf-plain ((consp e) (ex-mflg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19 22 23)))
+(ex-old ex-vgood-leaf-plain ((consp e) (ex-mflg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19 22 23 10 20 24)))
                          (not (and (equal (ex-kind e) 2) (ex-mark e)))) ())
 ; a marked read (milestone 4): its slot cleared, blanked in the scope after
 (ex-old ex-vgood-m-mark ((consp e) (ex-mflg) (equal (ex-kind e) 2) (ex-mark e)) ())
 (defthm ex-vgood-m-leaf
-  (implies (and (consp e) (ex-mflg) (not (member-equal (ex-kind e) (quote (4 5 6 7 8 9 11 12 16 17 18 19 22 23)))))
+  (implies (and (consp e) (ex-mflg) (not (member-equal (ex-kind e) (quote (4 5 6 7 8 9 11 12 16 17 18 19 22 23 10 20 24)))))
            (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
   :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-kid-of) :use (ex-vgood-leaf-plain ex-vgood-m-mark))))
 (in-theory (disable ex-vgood-m-leaf))

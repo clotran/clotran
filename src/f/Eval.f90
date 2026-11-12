@@ -3691,7 +3691,7 @@ contains
 
   ! The field named by sym (`.-f`, `.f` or `f`) of a deftype instance,
   ! written: the instance's field vector replaced by one with the value
-  ! (a mutable field's set!, exec_setbang). An unknown name writes nothing.
+  ! (a mutable field's set!, setbang_finish). An unknown name writes nothing.
   subroutine inst_field_set(inst, sym, val)
     type(gc_stack), pointer :: vst
     type(gc_value), intent(in) :: inst, sym, val

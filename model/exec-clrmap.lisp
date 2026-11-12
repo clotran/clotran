@@ -73,7 +73,7 @@
                     ((equal k 16) (ex-shp :rec e 0))
                     ((equal k 17) (and (equal nk 1) (ex-shp :m (ex-kid-of e 0) 0)))
                     ((equal k 18) (and (<= nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :cs e 0) (ex-shp :fin e 0)))
-                    ((member k '(7 8 9 22 23)) (ex-shp :coll e 0))
+                    ((member k '(7 8 9 22 23 10 24)) (ex-shp :coll e 0))
                     ((equal k 19) (and (equal nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :m (ex-kid-of e 1) 0) (ex-shp :ct e 0)))
                     ((equal k 6) (ex-shp :call e 0))
                     (t nil))))))))
@@ -123,6 +123,12 @@
            (equal (ast-alt (ex-ast e) j)
                   (cond ((equal (ex-kind e) 18) (ex-ast (ex-cbody e j))) ((equal (ex-kind e) 19) (ex-ast (ex-cthen e j))) (t nil))))
   :hints (("Goal" :in-theory (enable ast-alt ast-nalts ast-p anp-nth anp-sat ex-cbody ex-cthen))))
+
+; no s3: a def's metadata is among exec.lisp's children (its last), so
+; anpass's walk of a def -- s3, then the kids -- is its kids in turn
+(defthm ex-ast-s3 (implies (consp e) (equal (ast-s3 (ex-ast e)) nil))
+  :hints (("Goal" :in-theory (enable ast-s3 ast-p anp-nth))))
+(defthm ex-rds-nil (equal (rds 0 nil j m) nil) :hints (("Goal" :expand ((rds 0 nil j m)) :in-theory (enable ast-kind ast-p))))
 
 (defthm ex-true-outers (true-listp (ex-outers x)))
 (defthm ex-nthcdr-past (implies (and (true-listp l) (natp i) (<= (len l) i)) (equal (nthcdr i l) nil)))

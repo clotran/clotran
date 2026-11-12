@@ -541,13 +541,71 @@ slot's read and write), and every kind not yet in the model.
    exec_core's action 27 calls new_cached (note_site first); exec_other
    no longer has it; exec_gen.inc regenerated; fuzz-exec-gen draws 22, 23.
    Oracle: a deftype constructed in a loop's body, and a throwing argument.
-   Next: letfn.
+   *(def, set!, deftype done)*: N_DEF 10, N_DEFTYPE 20, N_SETBANG 24 are
+   collections too: their children (a def's init when it has one, then its
+   metadata when evaluated, as DefExpr runs them and anpass's liveness
+   reads them; a deftype's methods' fns; a set!'s target when a field's,
+   then its value) kept as elements, then the host's action, vmx2's prim
+   of op (:host k C) -- ex-cop's op renamed from :new, which a new shares.
+   What the action does to the namespace, the type registry or a field is
+   the runtime's, ex-collok's named hypothesis (its kinds now 8 9 22 23 10
+   20 24), not a theorem. Proved: ex-machine-correct and ex-vm-agree over
+   them (ex-vgood-m-host, their own case), the clearing books (exec-clr,
+   -clrvm over all three; exec-clrmap's ex-shp and exec-clrlv's ex-spo-seq
+   over def and set! -- anpass reads a def's metadata from s3 after its
+   kids, nil in ex-ast's node -- but not deftype, whose methods anpass
+   reads as alternatives: ex-anp-runs does not yet cover a tree with a
+   deftype, ex-ast wants its kids as alts); exec-cost ex-host-turns.
+   Fortran: exec_core runs the three (core_kid gives a def's metadata
+   node and a deftype's method fns as children; action 27 calls
+   def_finish, deftype_finish, setbang_finish -- exec_def, exec_deftype,
+   exec_setbang made to take their children's values); exec_other no
+   longer has them; exec_gen.inc regenerated; fuzz-exec-gen draws 10, 20,
+   24. Oracle: a def's init then metadata, in a loop's body, a throwing
+   init binding nothing; set! of a binding and of a mutable field, a
+   throwing value writing nothing; reify's methods over a loop's locals.
+   **Next: letfn** -- designed, not built (the coordinator's decision: the
+   group's captures an indirection, as an environment of recursive
+   bindings, never left to the host). The smallest form found:
+   - VALUE. A group closure is (:clo tm caps) as any; a capture whose outer
+     slot is one of its own group's (start .. start+n-1) holds (:grp G j),
+     G the group, a list of (tm_k caps_k) for k < n whose own group
+     captures are (:grp nil j) -- nil standing for the G around it, so the
+     value is finite. RESOLVED when read: (:grp G j) is (:clo tm_j caps_j)
+     with each (:grp nil m) in caps_j made (:grp G m) -- the closure in
+     slot start+j, the same value the frame holds. Any other capture reads
+     as itself.
+   - ex-act: letfn as a let's inits (actions 3, 6 into slots start+i, the
+     fns' closures made as N_FN's, action 12) and then one new action
+     before the body, 28 "the group sealed": each slot's closure's group
+     captures rewritten to (:grp G j), G read from the n slots. ex-bind
+     (a call's entry) resolves each capture as it binds it (ex-bind-caps).
+   - vmx2: mx2's (:capt j) answers (x2-res (nth j caps)), x2-res the
+     resolution above (the identity on any value not (:grp ..)-shaped, which
+     ex-xvs then asks of a good value as it asks of :clo); and a form
+     (:mkgrp n start (tm_0 e..) .. ) whose value is the n closures sealed,
+     bound by the translation as a let's n inits. The machine x2 the same
+     at its capture read and a group instruction. This touches the VM's
+     base book: vmx2-proof, vmx2-cost, vmx2-time and vmi (which includes
+     vmx2) re-proved, the jit books after them; budget it as its own lane.
+   - Fortran: exec_core's action 28 is refresh_captures' pass over the
+     group's slots, as now -- the in-place cycle is the indirection's
+     unfolding: reading capture j of a group closure in place answers the
+     object in slot start+j, as x2-res answers the value there. letfn's
+     two exec calls (inits, body) become the record's children.
+   No observable disagreement found between the two: clj refuses a
+   non-fn init (LetFnExpr casts it to ObjExpr), so every slot of the group
+   holds a closure, and every refreshed capture of a non-group slot reads
+   the value it was made with (the inits make closures and nothing else);
+   mutual recursion and (identical? g (f)) agree with clj (oracle).
+   Then dot (DEVIATIONS 84's cast: the analyzer to record the target's
+   hint, the cast an action before the arguments as a call's 23).
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
    *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
    exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
    left, named in its paragraph above.
-5. **The rest**: def, letfn (`exec_letfn`), deftype, new *(done)*, set!, dot,
+5. **The rest**: def *(done)*, letfn (`exec_letfn`), deftype *(done)*, new *(done)*, set! *(done)*, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
 

@@ -33,7 +33,7 @@
 ; ---- THE NODE, ONE KIND AT A TIME ----------------------------------------------------------------
 
 (defthm ex-spo-seq
-  (implies (and (ex-nodep e) (member (ex-kind e) '(1 3 5 6 7 8 9 11 16 17 22 23)))
+  (implies (and (ex-nodep e) (member (ex-kind e) '(1 3 5 6 7 8 9 11 16 17 22 23 10 24)))
            (equal (sp-out 0 (ex-ast e) j m A L n) (sp-out 1 (ex-ast e) 0 (ex-nk e) nil L n)))
   :hints (("Goal" :expand ((sp-out 0 (ex-ast e) j m A L n)))))
 
@@ -142,7 +142,7 @@
                ((equal k 18) (let ((L1 (ex-lv :fin e 0 nil L n)))
                                (list (ex-lvind :fin e 0 nil L n) (ex-lvind :cs e 0 L1 L1 n)
                                      (ex-lvind :m (ex-kid-of e 0) 0 nil (ex-lv :cs e 0 L1 L1 n) n))))
-               ((member k '(7 8 9 22 23)) (ex-lvind :coll e 0 nil L n))
+               ((member k '(7 8 9 22 23 10 20 24)) (ex-lvind :coll e 0 nil L n))
                ((equal k 19) (list (ex-lvind :ct e 0 L L n) (ex-lvind :m (ex-kid-of e 1) 0 nil L n)
                                    (ex-lvind :m (ex-kid-of e 0) 0 nil (sp-or (ex-lv :ct e 0 L L n) (ex-lv :m (ex-kid-of e 1) 0 nil L n)) n)))
                ((equal k 6) (ex-lvind :call e 0 nil L n))

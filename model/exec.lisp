@@ -71,7 +71,8 @@
 ;
 ; kinds as Eval.f90 numbers them: N_CONST 1, N_LOCAL 2, N_VAR 3, N_IF 4,
 ; N_DO 5, N_CALL 6, N_LET 11, N_LOOP 12, N_FN 14, N_RECUR 16, N_THROW 17,
-; N_TRY 18, N_CASE 19, N_NEW 22, N_NEWTYPE 23 (pc 0 its test pushed, 1 the branch); tv 1 when the
+; N_TRY 18, N_CASE 19, N_NEW 22, N_NEWTYPE 23, and the host's actions N_DEF 10,
+; N_DEFTYPE 20, N_SETBANG 24 as collections (pc 0 its test pushed, 1 the branch); tv 1 when the
 ; value in flight is truthy. A call's record: pc 0 its head, 1 the callee
 ; kept, 2 and 3 its arguments (i the next), 4 the entry, 5 the body done.
 
@@ -108,7 +109,7 @@
                            ((equal pc 4) 16)
                            ((equal pc 5) 17)
                            (t 0)))
-        ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23))
+        ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23) (equal k 10) (equal k 20) (equal k 24))
          (cond ((equal pc 0) 25) ((equal pc 3) 26) ((and (integerp i) (integerp nk) (< i nk)) 3) (t 27)))
         (t 0)))
 
@@ -134,7 +135,7 @@
                            ((equal pc 3) 2)
                            ((equal pc 4) 5)
                            (t pc)))
-        ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23))
+        ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23) (equal k 10) (equal k 20) (equal k 24))
          (cond ((or (equal pc 0) (equal pc 3)) 2) ((and (integerp i) (integerp nk) (< i nk)) 3) (t pc)))
         (t 0)))
 
@@ -145,7 +146,7 @@
           ((or (equal k 11) (equal k 12)) (if (equal pc 1) i1 i))
           ((equal k 16) (cond ((equal pc 0) 0) ((equal pc 2) i1) (t i)))
           ((equal k 6) (cond ((equal pc 1) 1) ((equal pc 3) i1) (t i)))
-          ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23)) (cond ((equal pc 0) 0) ((equal pc 3) i1) (t i)))
+          ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23) (equal k 10) (equal k 20) (equal k 24)) (cond ((equal pc 0) 0) ((equal pc 3) i1) (t i)))
           (t i))))
 
 (defun ex-fin (rf mk)
@@ -383,8 +384,20 @@
 ; NEW (N_NEW 22, N_NEWTYPE 23, milestone 5): its arguments as a
 ; collection's elements, then the construction -- exec.inc's new_cached,
 ; eval_new or the deftype's constructor, the runtime's -- vmx2's prim of
-; op (:new k C), C the class (the node's slot 2), a value or a throw
-(defun ex-cop (e) (case (ex-kind e) (7 :vector) (8 :map) (9 :set) (otherwise (list :new (ex-kind e) (ex-c e)))))
+; op (:host k C), C the class (the node's slot 2), a value or a throw
+;
+; THE HOST'S ACTIONS (N_DEF 10, N_DEFTYPE 20, N_SETBANG 24, milestone 5):
+; the same -- the node's children run in turn as a collection's elements,
+; then the host's action on their values (exec.inc's def_finish: the
+; Var's root and metadata; deftype_finish: the type of its methods'
+; closures; setbang_finish: the Var's binding or the field), vmx2's prim
+; of op (:host k C), C the node's operand. A def's children are its init
+; (when it has one) and then its metadata (when evaluated), as clj's
+; DefExpr runs them; a deftype's its methods' fns; a set!'s its target
+; (when a field's) and its value. What the action does to the namespace,
+; the type registry or the field is the runtime's: a named hypothesis
+; (exec-vm's ex-collok), not a theorem.
+(defun ex-cop (e) (case (ex-kind e) (7 :vector) (8 :map) (9 :set) (otherwise (list :host (ex-kind e) (ex-c e)))))
 (defun ex-cbuild (e vals)
   (if (equal (ex-kind e) 7)
       (cons :val (cons :vec vals))
@@ -574,7 +587,7 @@
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :call e (1+ i) tl)))
                         (t t)))
            (:fin nil)
-           (:coll (cond ((not (member k '(7 8 9 22 23))) nil)
+           (:coll (cond ((not (member k '(7 8 9 22 23 10 20 24))) nil)
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :coll e (1+ i) tl)))
                         (t t)))
            (:ct (cond ((not (equal k 19)) nil)
@@ -598,7 +611,7 @@
                                      (or (equal nk 1) (ex-wf :m (ex-kid-of e 1) 0 nil)) (ex-wf :cs e 0 nil)))
                   ((equal k 19) (and (equal nk 2) (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
                                      (ex-wf :ct e 0 tl)))
-                  ((member k '(7 8 9 22 23)) (ex-wf :coll e 0 tl))
+                  ((member k '(7 8 9 22 23 10 20 24)) (ex-wf :coll e 0 tl))
                   (t nil)))))))
 
 ; a call enters f with n arguments, in the meaning: a closure with that
@@ -732,7 +745,7 @@
                              (ex-ev :fin e 0 (list (car rh) (c+ 1 (c+ (caddr r) (c+ 1 (caddr rh))))) (cadr rh) fuel)
                            (list (list :out) fr 0))))
                       (t (ex-ev :fin e 0 (list (car r) (c+ 1 (caddr r))) (cadr r) fuel)))))
-             ((member k '(7 8 9 22 23)) (let ((r (ex-ev :coll e 0 nil fr fuel))) (list (car r) (cadr r) (c+ 1 (caddr r)))))
+             ((member k '(7 8 9 22 23 10 20 24)) (let ((r (ex-ev :coll e 0 nil fr fuel))) (list (car r) (cadr r) (c+ 1 (caddr r)))))
              ((equal k 19)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                 (if (not (valp (car r)))

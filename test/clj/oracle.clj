@@ -1637,6 +1637,21 @@
 ;; argument constructs nothing
 (do (deftype TN [a b]) [(loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (.-b (TN. i (* i i))))) acc)) (try (TN. 1 (throw (ex-info "arg" {}))) (catch clotran.host.throwable e (ex-message e)))])
 
+;; def, set! and deftype as the host's actions in the tree evaluator's loop
+;; (exec-PLAN milestone 5): the init and then the evaluated metadata run
+;; before the root is bound, a def in a loop's body, a throwing init binds
+;; nothing; set! of a Var's binding and of a mutable field after its value
+;; runs, a throwing value writes nothing; a deftype's and a reify's methods
+;; close over the locals of the body they are made in
+(do (def hx0 :old) (let [a 2] (def ^{:m (* a 3)} hx1 (+ a 1))) [hx1 (:m (meta #'hx1)) (loop [i 0] (if (< i 3) (do (def hx2 i) (recur (inc i))) hx2)) (try (def hx0 (throw (ex-info "init" {}))) (catch clotran.host.throwable e (ex-message e))) hx0])
+(do (def ^:dynamic *hs* 0) (deftype HS [^:unsynchronized-mutable n] clotran.host.i_deref (deref [_] n) clotran.host.i_fn (invoke [_ v] (set! n v) n)) [(binding [*hs* 1] (set! *hs* (inc *hs*)) *hs*) (let [h (HS. 1)] [(h 5) @h (try (h (throw (ex-info "val" {}))) (catch clotran.host.throwable e (ex-message e))) @h])])
+(let [k 7 r (loop [i 0 acc []] (if (< i 2) (recur (inc i) (conj acc @(reify clotran.host.i_deref (deref [_] (+ k i))))) acc))] r)
+
+;; letfn: each fn of the group sees the others (exec-PLAN milestone 5, its
+;; Next: the captures an indirection in the model, the in-place cycle in the
+;; Fortran) -- mutual recursion, and a group fn returned is the same fn
+(letfn [(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))] [(ev? 10) (od? 7) (letfn [(f [] g) (g [] f)] [(identical? g (f)) (identical? f (g)) (identical? f ((g)))])])
+
 ;; sequence, eduction, iterator-seq, volatile! and the buffering
 ;; transducers: the RT pieces ClojureScript writes in Clojure, written
 ;; in Clojure here too (clotran.rt), reached as clj members

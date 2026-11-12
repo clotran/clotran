@@ -1619,7 +1619,7 @@
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE, &
-            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE)
+            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
@@ -1880,14 +1880,8 @@
     kind = gc_i1(nd)
     kids = gc_slot(nd, 1)
     select case (kind)
-    case (N_DEF)
-       out = exec_def(nd, frame)
     case (N_LETFN)
        out = exec_letfn(nd, frame)
-    case (N_DEFTYPE)
-       out = exec_deftype(nd, frame)
-    case (N_SETBANG)
-       out = exec_setbang(nd, frame)
     case (N_LATEVAR)
        v = resolve_var(gc_slot(nd, 2), gc_nil())
        if (.not. gcn_is_var(v)) then
@@ -2047,12 +2041,15 @@
 
   ! def: the Var was interned at analysis; here it gets its value, its
   ! evaluated metadata, and -- if the value is a closure with no name
-  ! yet -- the qualified name an arity error will report.
-  recursive function exec_def(nd, frame) result(out)
+  ! yet -- the qualified name an arity error will report. Its children
+  ! (core_kid: the init when it has one, then the metadata when it is a
+  ! node) have run as a collection's elements (exec_core), their values
+  ! vals: the host's action (model/exec.lisp ex-cop, op (:host 10 C)).
+  recursive function def_finish(nd, vals) result(out)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, var, v, md, fnv, nmsym
+    type(gc_value), intent(in) :: nd, vals
+    type(gc_value) :: out, var, md, fnv, nmsym
     character(len=:), allocatable :: qual
     integer :: base, flags
 
@@ -2063,17 +2060,12 @@
     out = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, nd)
-    call vs_set(vst, base + 2, frame)
+    call vs_set(vst, base + 2, vals)
     var = gc_slot(nd, 2)
     call vs_set(vst, base + 3, var)
     flags = gc_i2(nd)
     if (iand(flags, 1) /= 0) then
-       v = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 0), vs_get(vst, base + 2))
-       if (tctx%has_error) then
-          call vs_leave(vst, base)
-          return
-       end if
-       call vs_set(vst, base + 4, v)
+       call vs_set(vst, base + 4, gcv_nth(vs_get(vst, base + 2), 0))
        ! the ROOT; a binding in force keeps showing its own value, as
        ! DefExpr's bindRoot does
        call gc_set_slot(vs_get(vst, base + 3), 1, vs_get(vst, base + 4))
@@ -2081,12 +2073,8 @@
     end if
     md = gc_slot(vs_get(vst, base + 1), 3)
     if (gc_kind(md) == OBJ_AST) then
-       md = exec(md, vs_get(vst, base + 2))
-       if (tctx%has_error) then
-          call vs_leave(vst, base)
-          return
-       end if
-       call vs_set(vst, base + 5, md)
+       ! the metadata's value, the last child's
+       call vs_set(vst, base + 5, gcv_nth(vs_get(vst, base + 2), gcv_count(vs_get(vst, base + 2)) - 1))
        call gc_set_slot(vs_get(vst, base + 3), 2, vs_get(vst, base + 5))
     end if
     ! The Var's metadata as DefExpr leaves it: what the form carried,
@@ -2132,7 +2120,7 @@
     if (iand(flags, 2) /= 0) call var_set_macro(vs_get(vst, base + 3))
     out = vs_get(vst, base + 3)
     call vs_leave(vst, base)
-  end function exec_def
+  end function def_finish
 
 
   ! letfn*: every closure is made, stored, and then has its captures
@@ -2193,8 +2181,12 @@
     i = tctx%kst(tctx%ksp)%i
     nk = 0
     if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL .or. k == N_THROW &
-         .or. k == N_VECTOR .or. k == N_MAP .or. k == N_SET .or. k == N_NEW .or. k == N_NEWTYPE) &
-         nk = gcv_count(kids)
+         .or. k == N_VECTOR .or. k == N_MAP .or. k == N_SET .or. k == N_NEW .or. k == N_NEWTYPE &
+         .or. k == N_SETBANG) nk = gcv_count(kids)
+    ! the host's actions' children (core_kid): a def's init and evaluated
+    ! metadata, a deftype's methods' fns
+    if (k == N_DEF) nk = gcv_count(kids) + merge(1, 0, gc_kind(gc_slot(nd, 3)) == OBJ_AST)
+    if (k == N_DEFTYPE) nk = gcv_count(gcv_nth(gc_slot(nd, 2), 4))
     ! a try's children: its body, and its finally when it has one
     if (k == N_TRY) nk = merge(2, 1, gc_kind(gcv_nth(kids, 1)) == OBJ_AST)
     n2 = gc_i2(nd)
@@ -2220,7 +2212,7 @@
        if (k == N_TRY) tctx%kst(tctx%ksp)%ftop = tctx%fstack_top
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
        tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
-       call k_push(gcv_nth(kids, int(j)), vs_get(vst, b + 2), 0, gc_nil(), tctx)
+       call k_push(core_kid(nd, kids, int(j)), vs_get(vst, b + 2), 0, gc_nil(), tctx)
     case (4)
        call k_tail(gcv_nth(kids, int(j)), tctx)
     case (5)
@@ -2326,6 +2318,16 @@
           call note_site(nd)   ! the construction's place, for an error's report
           val = new_cached(vs_get(vst, b + 1), vs_get(vst, b + 4))
           if (tctx%has_error) return
+       ! the host's actions on their children's values (ex-cop's (:host k C))
+       case (N_DEF)
+          val = def_finish(vs_get(vst, b + 1), vs_get(vst, b + 4))
+          if (tctx%has_error) return
+       case (N_DEFTYPE)
+          val = deftype_finish(vs_get(vst, b + 1), vs_get(vst, b + 4))
+          if (tctx%has_error) return
+       case (N_SETBANG)
+          val = setbang_finish(vs_get(vst, b + 1), vs_get(vst, b + 4))
+          if (tctx%has_error) return
        case (N_VECTOR); val = vs_get(vst, b + 4)
        case (N_SET);    val = vec_to_set(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
        case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
@@ -2344,6 +2346,27 @@
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
     end select
   end subroutine exec_core
+
+  ! A core kind's child j: its j-th but for the host's actions -- a def's
+  ! metadata node after its init (slot 3), a deftype's methods' fns (its
+  ! spec's fifth) -- as model/exec.lisp's ex-kid-of reads the node
+  function core_kid(nd, kids, j) result(c)
+    type(gc_value), intent(in) :: nd, kids
+    integer, intent(in) :: j
+    type(gc_value) :: c
+    select case (gc_i1(nd))
+    case (N_DEF)
+       if (j < gcv_count(kids)) then
+          c = gcv_nth(kids, j)
+       else
+          c = gc_slot(nd, 3)
+       end if
+    case (N_DEFTYPE)
+       c = gcv_nth(gcv_nth(gc_slot(nd, 2), 4), j)
+    case default
+       c = gcv_nth(kids, j)
+    end select
+  end function core_kid
 
   ! ---- a call's actions (exec_core's 13, 14, 9, 16), hand-written: the
   ! host's reads and its other callees. The model (exec.lisp) keeps the
@@ -2711,12 +2734,15 @@
 
   ! deftype*/reify*/proxy: the type from its spec, each method a closure
   ! over the current frame. i2 = 0 registers the type and answers it;
-  ! 1 answers a fresh instance and registers nothing.
-  recursive function exec_deftype(nd, frame) result(out)
+  ! 1 answers a fresh instance and registers nothing. The methods' fns
+  ! (core_kid: the spec's fourth) have run as a collection's elements
+  ! (exec_core), their closures vals: the host's action (model/exec.lisp
+  ! ex-cop, op (:host 20 C)).
+  recursive function deftype_finish(nd, vals) result(out)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, spec, methods, names, fns, fnv, ty
+    type(gc_value), intent(in) :: nd, vals
+    type(gc_value) :: out, spec, methods, names, fns, ty
     integer :: base, i, n
 
     tctx => ctx_self()
@@ -2724,7 +2750,7 @@
     out = gc_nil()
     base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, nd)
-    call vs_set(vst, base + 2, frame)
+    call vs_set(vst, base + 2, vals)
     spec = gc_slot(nd, 2)
     call vs_set(vst, base + 3, spec)
     methods = gca_empty([vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 3)])
@@ -2733,12 +2759,7 @@
     fns = gcv_nth(spec, 4)
     n = gcv_count(names)
     do i = 0, n - 1
-       fnv = exec(gcv_nth(gcv_nth(vs_get(vst, base + 3), 4), i), vs_get(vst, base + 2))
-       if (tctx%has_error) then
-          call vs_leave(vst, base)
-          return
-       end if
-       call vs_set(vst, base + 5, fnv)
+       call vs_set(vst, base + 5, gcv_nth(vs_get(vst, base + 2), i))
        methods = gca_assoc(vs_get(vst, base + 4), gcv_nth(gcv_nth(vs_get(vst, base + 3), 3), i), vs_get(vst, base + 5), &
             [vs_get(vst, base + 3), vs_get(vst, base + 4), vs_get(vst, base + 5)])
        call vs_set(vst, base + 4, methods)
@@ -2772,7 +2793,7 @@
        out = vs_get(vst, base + 4)
     end if
     call vs_leave(vst, base)
-  end function exec_deftype
+  end function deftype_finish
 
   ! The dispatch of a `.` node, its target and arguments already
   ! evaluated by the loop (run_loop, N_DOT): a native instance member
@@ -2826,66 +2847,52 @@
   end function dot_dispatch
 
 
-  recursive function exec_setbang(nd, frame) result(out)
+  ! set!: its children (the target when a field's, then the value) have
+  ! run as a collection's elements (exec_core), their values vals; the
+  ! write is the host's action (model/exec.lisp ex-cop, op (:host 24 C)).
+  recursive function setbang_finish(nd, vals) result(out)
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, tgt, val
+    type(gc_value), intent(in) :: nd, vals
+    type(gc_value) :: out
     integer :: base
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
     base = vs_enter(vst, 4)
     call vs_set(vst, base + 1, nd)
-    call vs_set(vst, base + 2, frame)
+    call vs_set(vst, base + 2, vals)
     select case (gc_i2(nd))
     case (0)
-       val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. tctx%has_error) then
-          ! Var.set: this thread's binding, or clj's refusal (DEVIATIONS 10)
-          call vs_set(vst, base + 3, val)
-          call var_set_checked(gc_slot(vs_get(vst, base + 1), 2), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
-          if (.not. tctx%has_error) out = vs_get(vst, base + 3)
-       end if
+       ! Var.set: this thread's binding, or clj's refusal (DEVIATIONS 10)
+       call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 2), 0))
+       call var_set_checked(gc_slot(vs_get(vst, base + 1), 2), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 3)])
+       if (.not. tctx%has_error) out = vs_get(vst, base + 3)
     case (2)
        ! (set! (.__methodImplCache f) cache) -- the one host field with
        ! storage, in the closure slot a fn does not otherwise use.
-       tgt = strip_meta(exec(gcv_nth(gc_slot(nd, 1), 0), frame))
-       if (.not. tctx%has_error) then
-          call vs_set(vst, base + 3, tgt)
-          val = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 1), vs_get(vst, base + 2))
-          if (.not. tctx%has_error) then
-             if (gc_kind(vs_get(vst, base + 3)) == OBJ_CLOSURE) call gc_set_slot(vs_get(vst, base + 3), 5, val)
-             out = val
-          end if
-       end if
+       call vs_set(vst, base + 3, strip_meta(gcv_nth(vs_get(vst, base + 2), 0)))
+       call vs_set(vst, base + 4, gcv_nth(vs_get(vst, base + 2), 1))
+       if (gc_kind(vs_get(vst, base + 3)) == OBJ_CLOSURE) call gc_set_slot(vs_get(vst, base + 3), 5, vs_get(vst, base + 4))
+       out = vs_get(vst, base + 4)
     case (3)
        ! Class/field: written when the static is a box (RT/checkSpecAsserts),
        ! else the value, discarded; the symbol is in slot 3
-       val = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. tctx%has_error) then
-          call vs_set(vst, base + 3, val)
-          call static_box_set(gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 3))
-          out = vs_get(vst, base + 3)
-       end if
+       call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 2), 0))
+       call static_box_set(gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 3))
+       out = vs_get(vst, base + 3)
     case default
        ! a deftype instance's field (a mutable one, through this) is
        ! written in place; any other host field: the write is discarded,
        ! the value returned
-       tgt = exec(gcv_nth(gc_slot(nd, 1), 0), frame)
-       if (.not. tctx%has_error) then
-          call vs_set(vst, base + 3, strip_meta(tgt))
-          val = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), 1), vs_get(vst, base + 2))
-          if (.not. tctx%has_error) then
-             call vs_set(vst, base + 4, val)
-             if (gc_kind(vs_get(vst, base + 3)) == OBJ_INST) &
-                  call inst_field_set(vs_get(vst, base + 3), gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 4))
-             out = vs_get(vst, base + 4)
-          end if
-       end if
+       call vs_set(vst, base + 3, strip_meta(gcv_nth(vs_get(vst, base + 2), 0)))
+       call vs_set(vst, base + 4, gcv_nth(vs_get(vst, base + 2), 1))
+       if (gc_kind(vs_get(vst, base + 3)) == OBJ_INST) &
+            call inst_field_set(vs_get(vst, base + 3), gc_slot(vs_get(vst, base + 1), 3), vs_get(vst, base + 4))
+       out = vs_get(vst, base + 4)
     end select
     call vs_leave(vst, base)
-  end function exec_setbang
+  end function setbang_finish
 
   ! (new user.Name f1 f2) with the arguments already evaluated: the
   ! tail of construct_type, including defrecord's short constructors.

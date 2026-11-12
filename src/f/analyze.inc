@@ -5173,7 +5173,7 @@
   ! N_SETBANG of the top n (anb-setnode): i2 0 a Var in slot 2, children
   ! [value]; 3 a static, slot 3 Class/field, children [value, a
   ! placeholder] (written when it is a box, RT/checkSpecAsserts --
-  ! exec_setbang -- else the value discarded); 1 a field, 2 the one with
+  ! setbang_finish -- else the value discarded); 1 a field, 2 the one with
   ! storage, a fn's __methodImplCache, slot 3 the field, children [obj, value]
   subroutine anb_setnode(bs, x, n)
     type(gc_stack), pointer :: vst
