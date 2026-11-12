@@ -137,7 +137,7 @@
          (cond ((equal k 2) (if (ex-mark e) (list n2) nil))
                ((equal k 4) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :m (ex-kid-of e 1) 0) (ex-clr :m (ex-kid-of e 2) 0)))
                ((equal k 5) (ex-clr :do e 0))
-               ((or (equal k 11) (equal k 12)) (ex-clr :let e 0))
+               ((member k '(11 12 13)) (ex-clr :let e 0))
                ((equal k 16) (ex-clr :rec e 0))
                ((equal k 17) (ex-clr :m (ex-kid-of e 0) 0))
                ((equal k 18) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0) (ex-clr :fin e 0)))
@@ -145,6 +145,10 @@
                ((equal k 19) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :m (ex-kid-of e 1) 0) (ex-clr :ct e 0)))
                ((equal k 6) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :call e 1)))
                (t nil)))))))
+
+; a letfn's fns clear nothing: it clears what its body does
+(defthm ex-clr-lf (implies (and (consp e) (ex-lffns e j) (natp j) (<= j (ex-i2 e))) (equal (ex-clr :let e j) (ex-clr :m (ex-kid-of e (ex-i2 e)) 0)))
+  :hints (("Goal" :induct (ex-lffns e j) :in-theory (disable ex-kid-of) :expand ((ex-clr :let e j) (ex-lffns e j) (ex-clr :m (ex-kid-of e j) 0)))))
 
 (defun ex-tr (flg e i cm)
   (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
@@ -452,7 +456,7 @@
                   ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
                                      (ex-vwf :let e 0 cm lp defs)))
                   ((equal k 13) (and (equal nk (1+ n2)) (< 0 n2) (ex-lffns e 0) (ex-lfok e 0 cm defs)
-                                     (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm) (ex-nomem (ex-clr :m (ex-kid-of e n2) 0) cm)
+                                     (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
                                      (ex-vwf :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) lp defs)))
                   ((equal k 16) (and (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))
                                      (equal nk (cdr lp)) (ex-vwf :rec e 0 cm lp defs)))

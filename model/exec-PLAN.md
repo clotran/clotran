@@ -653,6 +653,26 @@ slot's read and write), and every kind not yet in the model.
    an empty letfn (n = 0), and a letfn whose body clears an outer local
    (ex-vwf refuses both); ex-anp-runs still takes no letfn (ex-vwf0 and
    the clearing books' ex-shp do not admit 13).
+   *(deftype and letfn in ex-anp-runs done)*: exec-clrmap's ex-ast reads a
+   deftype's children as its alternatives too, as anpass reads its methods
+   (ex-ast-reads, ex-ast-alt over 20; rds 3 is rds 1 over it, ex-rds-
+   deftype), ex-shp admits 20 as a collection; exec-clrlv's ex-spo-deftype
+   (sp-out 3 is sp-out 1 over it). A letfn: exec-clr walks kind 13 as a let
+   (ex-rds, ex-lv, ex-mkok, ex-cwf: its fns, then its body); ex-shp admits
+   it with fns for inits (ex-lffns); anpass's second read of the fns'
+   captures after the body (sp-fncaps) sets what their sp-out set already
+   (ex-spo1-letfn, ex-fncaps-letfn: both ex-setl of ex-lfoall, the sets
+   commuting and idempotent), so ex-spo-letfn: its sp-out is a let's, and
+   ex-lv-ast covers it; exec-clrfn's ex-ntm-letfn (its body in its tail);
+   exec-clrvm's ex-vwf0 admits 13 as ex-vwf does, ex-vwf-cwf over it
+   (ex-cwf-lf-body, ex-cwf-lf-fns). A letfn body may clear an outer local:
+   ex-clr of 13 is its let walk (its fns clear nothing, ex-clr-lf: the
+   body's), the places after it see those slots blanked as after a let,
+   and ex-vwf no longer asks its body to clear nothing outside it
+   (exec-vmlf's ex-lf-parts and ex-lf-facts over it, exec-vm's
+   ex-vgood-m-letfn the body's agreement cut to the outer scope). So
+   ex-vm-agree and ex-anp-runs cover deftype and letfn; left: an empty
+   letfn (n = 0), which ex-vwf refuses.
    Then dot (DEVIATIONS 84's cast: the analyzer to record the target's
    hint, the cast an action before the arguments as a call's 23).
 4. **Clearing joined**: the machine theorem over anpass's marks, from

@@ -224,10 +224,10 @@
   (implies (and (consp e) (equal (ex-kind e) 13))
            (and (equal (ex-vwf :m e i cm lp defs)
                        (and (equal (ex-nk e) (1+ (ex-i2 e))) (< 0 (ex-i2 e)) (ex-lffns e 0) (ex-lfok e 0 cm defs)
-                            (ex-nomem (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm) (ex-nomem (ex-clr :m (ex-lfb) 0) cm)
+                            (ex-nomem (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm)
                             (ex-vwf :m (ex-lfb) 0 (ex-lfcm) lp defs)))
                 (equal (ex-tr :m e i cm) (ex-trlf e 0 cm (ex-tr :m (ex-lfb) 0 (ex-lfcm))))
-                (equal (ex-clr :m e i) nil)
+                (equal (ex-clr :m e i) (ex-clr :let e 0))
                 (equal (ex-ev :m e i tmp fr fuel) (ex-ev :let e 0 nil fr fuel))))
   :hints (("Goal" :in-theory (disable ex-kid-of ex-lffns ex-lfok ex-trlf ex-clr ex-tr ex-vwf ex-ev)
                   :expand ((ex-vwf :m e i cm lp defs) (ex-tr :m e i cm) (ex-clr :m e i) (ex-ev :m e i tmp fr fuel)))))
@@ -239,8 +239,7 @@
                 (ex-agree (ex-lfcm) (append env (ex-lfsvs)) (ex-lffr))
                 (ex-xvs defs (append env (ex-lfsvs)))
                 (ex-vwf :m (ex-lfb) 0 (ex-lfcm) lp defs)
-                (ex-nomem (ex-clr :m (ex-lfb) 0) cm)
-                (equal (ex-clr :m e i) nil)))
+                (equal (ex-clr :m e i) (ex-clr :m (ex-lfb) 0))))
   :rule-classes nil
   :hints (("Goal" :do-not-induct t
                   :in-theory (disable ex-kid-of ex-lffns ex-lfok ex-trlf ex-clr ex-tr ex-vwf ex-ev ex-lfsv ex-lfg ex-lfr ex-seal
