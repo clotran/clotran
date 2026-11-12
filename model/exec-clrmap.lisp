@@ -30,7 +30,7 @@
              nil
            (let ((k (nth 0 x)))
              (list :ast nil k (nfix (nth 1 x)) (ex-astf 1 (nth 2 x)) nil
-                   (if (equal k 14) (ex-outers (nth 2 (nth 3 x))) nil)
+                   (if (member k '(14 15)) (ex-outers (nth 2 (nth 3 x))) nil)
                    (cond ((equal k 18) (ex-astf 2 (nth 3 x))) ((equal k 19) (ex-astf 3 (nth 3 x))) ((equal k 20) (ex-astf 1 (nth 2 x))) (t nil))
                    (if (nth 8 x) 1 0)))))
         ((atom x) nil)
@@ -66,7 +66,7 @@
              (:fin (ex-shp :m (ex-kid-of e 1) 0))
              (otherwise
               (cond ((member k '(1 2 3)) (equal nk 0))
-                    ((equal k 14) (and (equal nk 0) (ex-slp (ex-outers (nth 2 (ex-c e)))) (< (len (ex-outers (nth 2 (ex-c e)))) *ex40*)))
+                    ((member k '(14 15)) (and (equal nk 0) (ex-slp (ex-outers (nth 2 (ex-c e)))) (< (len (ex-outers (nth 2 (ex-c e)))) *ex40*)))
                     ((equal k 4) (and (<= nk 3) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :m (ex-kid-of e 1) 0) (ex-shp :m (ex-kid-of e 2) 0)))
                     ((equal k 5) (ex-shp :do e 0))
                     ((or (equal k 11) (equal k 12)) (and (equal nk (1+ n2)) (ex-shp :let e 0)))
@@ -95,7 +95,7 @@
   (implies (consp e)
            (equal (ex-astf 0 e)
                   (list :ast nil (ex-kind e) (ex-i2 e) (ex-astf 1 (ex-kids e)) nil
-                        (if (equal (ex-kind e) 14) (ex-outers (nth 2 (ex-c e))) nil)
+                        (if (member-equal (ex-kind e) '(14 15)) (ex-outers (nth 2 (ex-c e))) nil)
                         (cond ((equal (ex-kind e) 18) (ex-astf 2 (ex-c e))) ((equal (ex-kind e) 19) (ex-astf 3 (ex-c e)))
                               ((equal (ex-kind e) 20) (ex-astf 1 (ex-kids e))) (t nil))
                         (if (nth 8 e) 1 0))))
@@ -111,7 +111,7 @@
                 (equal (ast-i2 (ex-ast e)) (ex-i2 e))
                 (equal (ast-nkids (ex-ast e)) (ex-nk e))
                 (equal (ast-nalts (ex-ast e)) (cond ((or (equal (ex-kind e) 18) (equal (ex-kind e) 19)) (len (ex-c e))) ((equal (ex-kind e) 20) (ex-nk e)) (t 0)))
-                (equal (ast-ncaps (ex-ast e)) (if (equal (ex-kind e) 14) (anp-sat (len (ex-outers (nth 2 (ex-c e))))) 0))))
+                (equal (ast-ncaps (ex-ast e)) (if (member-equal (ex-kind e) '(14 15)) (anp-sat (len (ex-outers (nth 2 (ex-c e))))) 0))))
   :hints (("Goal" :in-theory (enable ast-kind ast-i2 ast-nkids ast-nalts ast-ncaps ast-p anp-nth anp-sat anp-fix ex-nk))))
 
 (defthm ex-nth-past (implies (and (natp j) (<= (len l) j)) (equal (nth j l) nil)))
@@ -141,13 +141,13 @@
 (defthm ex-anp-nth (implies (natp j) (equal (anp-nth j l) (nth j l))) :hints (("Goal" :in-theory (enable anp-nth))))
 
 (defthm ex-ast-cap
-  (implies (and (ex-nodep e) (equal (ex-kind e) 14) (ex-slp (ex-outers (nth 2 (ex-c e)))) (natp j)
+  (implies (and (ex-nodep e) (member-equal (ex-kind e) '(14 15)) (ex-slp (ex-outers (nth 2 (ex-c e)))) (natp j)
                 (< j (len (ex-outers (nth 2 (ex-c e))))) (< (len (ex-outers (nth 2 (ex-c e)))) *ex40*))
            (equal (ast-cap (ex-ast e) j) (nth j (ex-outers (nth 2 (ex-c e))))))
   :hints (("Goal" :in-theory (enable ast-cap ast-ncaps ast-p anp-sat anp-fix))))
 
 (defthm ex-cap-list
-  (implies (and (ex-nodep e) (equal (ex-kind e) 14) (< (len (ex-outers (nth 2 (ex-c e)))) *ex40*)
+  (implies (and (ex-nodep e) (member-equal (ex-kind e) '(14 15)) (< (len (ex-outers (nth 2 (ex-c e)))) *ex40*)
                 (ex-slp (ex-outers (nth 2 (ex-c e)))) (natp i))
            (equal (cap-list (ex-ast e) i (len (ex-outers (nth 2 (ex-c e))))) (nthcdr i (ex-outers (nth 2 (ex-c e))))))
   :hints (("Goal" :induct (cap-list (ex-ast e) i (len (ex-outers (nth 2 (ex-c e))))) :in-theory (disable ex-ast-open))

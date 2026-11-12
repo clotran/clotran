@@ -9,7 +9,7 @@
 
 (in-package "ACL2")
 
-(include-book "exec-vm")
+(include-book "exec-vmok")
 (include-book "vmx2-proof")
 
 ; THE VM RUN OF A WELL-FORMED TREE'S TRANSLATION ANSWERS THE TREE'S VALUE OR THROW,

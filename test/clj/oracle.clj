@@ -2280,6 +2280,18 @@
     (recur (inc i) (conj acc (.toString (str i)) (. clotran.host.numbers (add i 1))
                          (try (.substring "abc" (if (= i 1) (throw (ex-info "x" {})) i)) (catch clotran.host.throwable e (class e)))))
     acc))
+;; a lazy seq (N_LAZY) is its fn's closure over the frame, wrapped pending:
+;; made in a loop's body over its locals and realised after the loop moved
+;; on, its body run only then; a throw in it only when realised
+(let [log (atom [])
+      ss (loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (lazy-seq (swap! log conj i) (list i (* i i))))) acc))]
+  [@log (mapv vec ss) @log
+   (let [t (lazy-seq (throw (ex-info "lz" {})))] [(realized? t) (try (first t) (catch clotran.host.throwable e (ex-message e))) (realized? t)])
+   (let [x 5 s (lazy-seq (cons x (lazy-seq nil)))] [(vec s) (vec s)])])
+;; a top-level form (N_TOP) runs in a frame of its own: its locals, a
+;; throw from it caught at the top, and a lazy seq escaping it over them
+(let [a 1 b 2 c 3 d 4 e 5 f 6 g 7 h 8] [(+ a b c d e f g h) (vec (lazy-seq [a h]))])
+(try (let [a 1] (throw (ex-info "t" {:a a}))) (catch clotran.host.exception e (ex-data e)))
 ;; and the spread call is the call: the arity of the spread count, a
 ;; variadic one's rest the elements past its fixed ones (nil for none)
 (let [f (fn ([] :zero) ([a] [:one a]) ([a b c & r] [:var a b c r]))]

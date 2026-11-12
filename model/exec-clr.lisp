@@ -64,7 +64,7 @@
         (:fin (ex-rds :m (ex-kid-of e 1) 0))
         (otherwise
          (cond ((equal k 2) (list n2))
-               ((equal k 14) (ex-outers (nth 2 (ex-c e))))
+               ((member k '(14 15)) (ex-outers (nth 2 (ex-c e))))
                ((equal k 4) (append (ex-rds :m (ex-kid-of e 0) 0) (ex-rds :m (ex-kid-of e 1) 0) (ex-rds :m (ex-kid-of e 2) 0)))
                ((equal k 5) (ex-rds :do e 0))
                ((member k '(11 12 13)) (ex-rds :let e 0))
@@ -98,7 +98,7 @@
         (:fin (ex-lv :m (ex-kid-of e 1) 0 nil L n))
         (otherwise
          (cond ((equal k 2) (sp-set n2 L n))
-               ((equal k 14) (ex-setl (ex-outers (nth 2 (ex-c e))) L n))
+               ((member k '(14 15)) (ex-setl (ex-outers (nth 2 (ex-c e))) L n))
                ((equal k 4) (ex-lv :m (ex-kid-of e 0) 0 nil
                                    (sp-or (ex-lv :m (ex-kid-of e 1) 0 nil L n) (ex-lv :m (ex-kid-of e 2) 0 nil L n)) n))
                ((equal k 5) (ex-lv :do e 0 nil L n))
@@ -170,7 +170,7 @@
         (:fin (ex-cwf :m (ex-kid-of e 1) 0 B))
         (otherwise
          (cond ((equal k 2) (not (member-equal n2 B)))
-               ((equal k 14) (not (intersectp-equal B (ex-outers (nth 2 (ex-c e))))))
+               ((member k '(14 15)) (not (intersectp-equal B (ex-outers (nth 2 (ex-c e))))))
                ((equal k 4) (and (ex-cwf :m (ex-kid-of e 0) 0 B)
                                  (ex-cwf :m (ex-kid-of e 1) 0 (append (ex-clr :m (ex-kid-of e 0) 0) B))
                                  (ex-cwf :m (ex-kid-of e 2) 0 (append (ex-clr :m (ex-kid-of e 0) 0) B))))

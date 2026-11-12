@@ -210,6 +210,7 @@
                       (ex-ind :m f 0 nil (cadr rh) fuel nil nil (cons (ex-rec e 2 0 fl rs (list (val (car rh)))) ks) (val (car rh)) nil)
                       (ex-ind :m f 0 nil (cadr rh) fuel nil nil (cons (ex-rec e 4 0 fl rs (list (val (car rh)))) ks) nil nil))))
              ((member k '(7 8 9 22 23 10 20 24 21)) (ex-ind :coll e 0 nil fr fuel fl rs ks v0 tl))
+             ((equal k 26) (ex-ind :m (ex-c e) 0 nil (make-list n2 :initial-element nil) fuel nil nil (cons (ex-rec e 1 0 fl rs fr) ks) v0 nil))
              ((equal k 19)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                 (list (ex-ind :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)
@@ -243,7 +244,13 @@
 
 (ex-case ex-good-atom ((not (consp e))))
 
-(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 13 16 17 18 19 22 23 10 20 24 21)))))
+(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 13 16 17 18 19 22 23 10 20 24 21 26)))))
+
+; a top-level form (N_TOP 26): its body in a frame of nils, the frame below
+; back when it answers (17) or a throw leaves it (k_unwind's 5)
+(ex-case ex-good-m-top
+  ((ex-other flg) (consp e) (equal (ex-kind e) 26)
+   (ex-good :m (ex-c e) 0 nil (make-list (ex-i2 e) :initial-element nil) fuel nil nil (cons (ex-rec e 1 0 fl rs fr) ks) v0 nil)))
 
 ; an if, a case for each way its test goes
 (defmacro ex-if-test () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
@@ -621,3 +628,42 @@
   (implies (and (consp v) (not (member (car v) '(:lazy :cons))))
            (equal (nth 4 (ex-apwalk req fx (sk-cur v))) 0))
   :hints (("Goal" :in-theory (enable sk-cur) :use ((:instance ex-apwalk-noreal (c (list v 0 t)))))))
+
+; ---- THE DEBUGGER'S VIEW (exec.inc break_frames, milestone 5) -------------------------------------
+;
+; A break takes no turn: it reads the record stack. ex-frames is what it
+; reads, top first: each record's node, pc and i, and the frame it runs in
+; -- the frame in flight down to the first record that keeps the frame
+; below it (a call's record at pc 5, a top-level form's at 1: the records
+; k_unwind's 5 restores from, ex-unw), whose kept frame is then its own
+; and the next records'. (exec.inc's records each hold their frame, and the
+; closure whose body it is and a node's position besides, the host's;
+; break_frames reports a record of a closure's body as a fn's frame.)
+(defun ex-frames (ks fr)
+  (if (atom ks)
+      nil
+    (let* ((r (car ks)) (e (nth 0 r)) (fr1 (if (equal (ex-unw (ex-kind e) (nth 1 r) 0 0) 5) (nth 5 r) fr)))
+      (cons (list e (nth 1 r) (nth 2 r) fr1) (ex-frames (cdr ks) fr1)))))
+(defun ex-break (s) (list (ex-frames (car s) (caddr s)) s))
+
+(defun ex-frames-ind (j ks fr)
+  (if (or (zp j) (atom ks)) fr
+    (ex-frames-ind (1- j) (cdr ks) (if (equal (ex-unw (ex-kind (nth 0 (car ks))) (nth 1 (car ks)) 0 0) 5) (nth 5 (car ks)) fr))))
+(defthm ex-frames-len (equal (len (ex-frames ks fr)) (len ks)))
+(defthm ex-frames-node
+  (implies (< (nfix j) (len ks)) (equal (car (nth j (ex-frames ks fr))) (car (nth j ks))))
+  :hints (("Goal" :induct (ex-frames-ind j ks fr) :in-theory (disable ex-unw))))
+
+; A BREAK CHANGES NOTHING: the state after it is the state before, and it
+; reports a frame per record, each that record's node
+(defthm ex-break-reads
+  (and (equal (cadr (ex-break s)) s)
+       (equal (len (car (ex-break s))) (len (car s)))
+       (implies (< (nfix j) (len (car s))) (equal (car (nth j (car (ex-break s)))) (car (nth j (car s)))))))
+
+; ... and the frame it reports for a record is the one the machine runs it
+; in once the records above are gone: a pop restores the reported frame
+; (17's and k_unwind's 5 at an entry, the frame in flight elsewhere)
+(defthm ex-frames-pop
+  (implies (consp ks) (equal (ex-frames (cdr ks) (nth 3 (car (ex-frames ks fr)))) (cdr (ex-frames ks fr)))))
+(in-theory (disable ex-frames ex-break))

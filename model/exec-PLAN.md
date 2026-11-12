@@ -706,27 +706,38 @@ slot's read and write), and every kind not yet in the model.
    seq ((apply 1 2) and its kin), a hint on the local and on the target
    as written with the argument never run, nil passing; a `.` in a loop's
    body, a static member, a throwing argument.
+   *(N_LAZY, N_TOP, break_frames done)*: exec.lisp split for size (the
+   tree's readers, the catch and case walks and the collections' builds
+   are exec-tree.lisp; exec-vm's cases and theorem exec-vmok.lisp).
+   N_LAZY 15 is a leaf, action 29: the closure of its template over the
+   frame (12's) wrapped by the host, vmx2's prim (:host 15 C) of it, as
+   27's build (ex-cbuild of the one closure: a value, or a throw over the
+   record); ex-collok over 15 asks the wrap of a good closure good; ex-tr
+   (:prim (:host 15 C) (:mkclo ..)); the clearing books read it as a fn
+   (anpass's *n-lazy* is *n-fn*'s: ex-astf's captures, ex-rds, ex-lv,
+   ex-cwf, ex-shp, ex-spo-fn, ex-vwf0 over (14 15)). N_TOP 26 is an entry:
+   action 30 pushes its body (slot 2) with no restart in a frame of i2
+   nils, the frame below kept in the record, and at pc 1 action 17 gives
+   it back (k_unwind's 5 for a throw, ex-unw); its body in the VM is the
+   body's translation in the scope blanked (ex-blank cm cm: no outer name
+   reaches it, so no let-block is needed -- the body's lets bind its own
+   slots), ex-vwf's case asking no loop target. exec.inc's record holds
+   its own frame, so there action 30 is the old N_TOP case, k_tail to the
+   body (or the flat form, flat's): the model's pc 1 return is that
+   record's pop. Proved: ex-machine-correct (ex-good-m-top; the leaf case
+   takes 15), ex-vm-agree (ex-vgood-m-lazy, ex-vgood-m-top, ex-vind's
+   kind-26 tip), exec-clrvm's ex-top-runs (ex-anp-runs of the body in a
+   frame of nils, anpass marking the body in its own frame), exec-cost's
+   ex-lazy-turns (at most 2) and ex-top-turns (the body's and 2). The
+   debugger: exec-proof's ex-frames, a read of the records (each
+   record's node, pc, i and the frame it runs in -- the frame in flight
+   down to the first record keeping the frame below, a call's at pc 5 or
+   a top's at 1), ex-break-reads (a break changes nothing, a frame per
+   record, each that record's node) and ex-frames-pop (a pop restores the
+   frame it reported); break_frames among exec.inc's ratchet procs.
+   Fortran: exec_core runs N_LAZY and N_TOP (actions 29, 30); run_loop's
+   own cases gone; exec_gen.inc regenerated; fuzz-exec-gen draws 15, 26.
    **Next** (planned, not built):
-   - N_LAZY: a leaf, as N_FN is -- the closure of its template over the
-     frame (ex-mkclo, action 12's) wrapped by the host in a lazy seq,
-     vmx2's prim (:host 15 C) of that closure: a new action (or 12 then a
-     one-element collection's 27), ex-collok over 15 asking the wrap of a
-     good closure good; ex-tr (:prim (:host 15 C) (:mkclo ..)); the
-     clearing books read it as a fn (its captures, ex-outers). Its value
-     (OBJ_LAZY) is a seq the runtime realises: ex-lzok already makes
-     every realisation's answer good.
-   - N_TOP: a top-level form's record -- a frame of its own (new_frame of
-     gc_i2 slots) and then k_tail to its body (the flat form when there
-     is one: flat's, outside the model). In the machine an entry like a
-     call's 16 with no arguments and no restart: (ex-rec body ..) in a
-     frame of n nils, the caller's frame kept (17's return); in the VM,
-     the body under an mx2 let-block of n nil constants, so ex-vm-agree's
-     case is the body's at scope (slots 0..n-1). Its own lemma as letfn's.
-   - break_frames: no turn -- a read of the record stack (each record's
-     node, frame, fn and position). A function of ex-turn's state,
-     ex-frames ks fr, with a theorem that a break reads and changes
-     nothing (the state after it is the state before), and that each
-     frame it reports is a record's: the debugger's view, not a kind.
    - ex-anp-runs' (ex-defs-ok defs defs): an induction over ex-defs-ok's
      templates, each arity's body: ex-arwf from the body's ex-vwf0 (the
      same route ex-anp-runs takes for the top tree -- ex-vwf-cwf,
@@ -742,8 +753,8 @@ slot's read and write), and every kind not yet in the model.
    exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
    left, named in its paragraph above.
 5. **The rest**: def *(done)*, letfn *(done)*, deftype *(done)*, new *(done)*, set! *(done)*, dot *(done)*,
-   N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
-   Generated but for the actions, named.
+   N_LAZY *(done)*, N_TOP *(done)*, the debugger's frames (`break_frames`) *(done)*. The row is
+   Generated but for the actions, named; the templates' bodies left (above).
 
 N_FLAT (flat.inc, To be retired) and N_VMB (the VM itself) are not this
 row's.

@@ -41,6 +41,16 @@
 ;             28 a letfn's group sealed (each slot's closure's captures
 ;                of the group made (:grp G j), ex-seal), then become its
 ;                body as 4
+;             29 a lazy seq (N_LAZY 15, a leaf): the closure of its
+;                template over the frame (12's) wrapped by the host,
+;                vmx2's prim (:host 15 C) -- as 27's build, a value or a
+;                throw
+;             30 a top-level form (N_TOP 26) entered: its body (slot 2)
+;                pushed, no restart, in a frame of i2 nils, the frame
+;                below kept in the record (16's), and at pc 1 the body
+;                answered: 17. exec.inc's record holds its own frame, so
+;                there the body takes the record in place (k_tail) and
+;                its pop is 17's return
 ;             23 the callee is no fn (tv 0 at a call's pc 1, the IFn test,
 ;                ex-ifn): throw :not-fn, before any argument runs
 ;                                              0 not a core kind
@@ -63,8 +73,7 @@
 
 (in-package "ACL2")
 
-(include-book "seqk")
-(include-book "vmx2")
+(include-book "exec-tree")
 
 (defconst *ex40* 1099511627776)
 
@@ -75,7 +84,7 @@
 ; kinds as Eval.f90 numbers them: N_CONST 1, N_LOCAL 2, N_VAR 3, N_IF 4,
 ; N_DO 5, N_CALL 6, N_LET 11, N_LOOP 12, N_FN 14, N_RECUR 16, N_THROW 17,
 ; N_TRY 18, N_CASE 19, N_LETFN 13 (a let whose inits are its fns), N_NEW 22, N_NEWTYPE 23, and the host's actions N_DEF 10,
-; N_DEFTYPE 20, N_SETBANG 24 and N_DOT 21 as collections (pc 0 its test pushed, 1 the branch); tv 1 when the
+; N_DEFTYPE 20, N_SETBANG 24 and N_DOT 21 as collections, N_LAZY 15 a leaf, N_TOP 26 an entry (pc 0 its test pushed, 1 the branch); tv 1 when the
 ; value in flight is truthy. A call's record: pc 0 its head, 1 the callee
 ; kept, 2 and 3 its arguments (i the next), 4 the entry, 5 the body done.
 
@@ -99,6 +108,8 @@
                             (t 10)))
         ((equal k 3) 11)
         ((equal k 14) 12)
+        ((equal k 15) 29)
+        ((equal k 26) (if (equal pc 0) 30 17))
         ((equal k 17) (if (equal pc 0) 3 18))
         ((equal k 19) (if (equal pc 0) 3 24))
         ((equal k 18) (cond ((equal pc 0) 3)
@@ -129,6 +140,7 @@
   (declare (xargs :guard t) (ignore n2 tv))
   (cond ((equal k 4) 1)
         ((equal k 17) 1)
+        ((equal k 26) 1)
         ((equal k 19) 1)
         ((equal k 18) (cond ((equal pc 0) 1) ((or (equal pc 1) (equal pc 3)) 2) ((equal pc 4) 5) (t pc)))
         ((or (equal k 11) (equal k 12) (equal k 13)) (if (equal pc 1) 0 1))
@@ -167,7 +179,7 @@
   (declare (xargs :guard t))
   (cond ((and (equal k 18) (equal pc 1) (equal mt 1)) 1)
         ((and (equal k 18) (or (equal pc 1) (equal pc 3)) (equal fin 1)) 2)
-        ((and (equal k 6) (equal pc 5)) 5)
+        ((or (and (equal k 6) (equal pc 5)) (and (equal k 26) (equal pc 1))) 5)
         (t 3)))
 
 ; A CALL'S ARITY (bind_closure's pick, clj's: Compiler FnExpr's arities):
@@ -205,34 +217,6 @@
         ((not (equal fk 1)) 0)
         ((not (equal sq 1)) 3)
         (t 1)))
-
-; ---- THE TREE, as exec.inc reads it ------------------------------------------------------------
-;
-; a node (kind i2 kids c s2 mark rstart rn): gc_i1, gc_i2, its children
-; (slot 1); a constant's value (slot 2), a let's or loop's first slot
-; (int_of slot 2), a local marked for clearing (slot 3 a boolean: anpass's
-; last read), a recur's target slots (its rinfo's start and count)
-
-(defun ex-kind (e) (nth 0 e))
-(defun ex-i2 (e) (nfix (nth 1 e)))
-(defun ex-kids (e) (nth 2 e))
-(defun ex-c (e) (nth 3 e))
-(defun ex-s2 (e) (nfix (nth 4 e)))
-(defun ex-mark (e) (nth 5 e))
-(defun ex-rstart (e) (nfix (nth 6 e)))
-(defun ex-rn (e) (nfix (nth 7 e)))
-(defun ex-nk (e) (len (ex-kids e)))
-(defun ex-kid-of (e j) (nth j (ex-kids e)))
-
-(defun truthy (x) (not (or (null x) (eq x :false))))
-(defun val (r) (cdr r))
-(defun valp (r) (eq (car r) :val))
-
-; the recur marker (exec.inc recur_marker): one object, no value the
-; program can hold -- not even a list of values, a variadic call's rest
-; (so a dotted pair, no true list)
-(defconst *ex-mk* '(:recur-marker . :recur-marker))
-(defun no-mk (l) (not (member-equal *ex-mk* l)))
 
 ; ---- FNS AND CALLS, as exec.inc reads them ---------------------------------------------------
 ;
@@ -370,74 +354,6 @@
           ((equal w 2) (list 2 (take (nfix req) fx) (append (nthcdr (nfix req) fx) s)))
           (t (list 3 (append fx s) nil)))))
 
-;; THROW AND TRY. An N_THROW's child is the value thrown; an N_TRY's
-; children its body and, when it has one, its finally (nk 1 or 2), slot 2
-; its catches, each (class slot body) (analyze.inc anb_trynode). A catch's
-; test is clj's instance? of its class -- the runtime's type system, so
-; vmx2's prim (op :isa), whatever it answers (instance? throws nothing:
-; exec-vm asks that of it) -- walked in order (k_unwind): (1 . j) clause j
-; matched, (0) none did.
-(defun ex-catchw (cs v j)
-  (cond ((atom cs) (list 0))
-        ((truthy (prim :isa (list (nth 0 (car cs)) v))) (cons 1 (nfix j)))
-        (t (ex-catchw (cdr cs) v (1+ (nfix j))))))
-(defun ex-cbody (e j) (nth 2 (nth j (ex-c e))))
-(defun ex-cslot (e j) (nfix (nth 1 (nth j (ex-c e)))))
-
-;; CASE (case*, exec-PLAN 3b). An N_CASE's children its test and its
-; default (nk 2); slot 2 its table, read as data: each entry (test then),
-; then the branch's node (analyze.inc anb_casenode). Which entry takes the
-; test's value is the runtime's -- case_branch's hash probe (shift, mask,
-; the int or hashCode key, a merged bucket's skip-check) and Util.equiv,
-; vmx2's prim (op :case) of the entry's test and the value, whatever it
-; answers -- walked in order: (1 . j) entry j took it, (0) none did. The
-; macro's tests are distinct, so at most one entry takes a value and the
-; walk's first is the probe's only one.
-(defun ex-casew (ct v j)
-  (cond ((atom ct) (list 0))
-        ((truthy (prim :case (list (nth 0 (car ct)) v))) (cons 1 (nfix j)))
-        (t (ex-casew (cdr ct) v (1+ (nfix j))))))
-(defun ex-cthen (e j) (nth 1 (nth j (ex-c e))))
-; the branch: the taken entry's then, else the default
-(defun ex-csbr (e v)
-  (let ((w (ex-casew (ex-c e) v 0))) (if (equal (car w) 1) (ex-cthen e (cdr w)) (ex-kid-of e 1))))
-
-;; COLLECTIONS (N_VECTOR 7, N_MAP 8, N_SET 9, exec-PLAN 3b): children their
-; elements (a map's keys and values in turn), each value kept in the
-; record (exec.inc's slot 4), then the collection built of them. A vector
-; is seqk's (:vec . elems), as B_APPLY reads one; a map's and a set's build
-; is the runtime's (vec_to_map, vec_to_set), vmx2's prim (op :map or :set)
-; of the values, whatever it answers -- a value, or a throw (clj's
-; duplicate key)
-;
-; NEW (N_NEW 22, N_NEWTYPE 23, milestone 5): its arguments as a
-; collection's elements, then the construction -- exec.inc's new_cached,
-; eval_new or the deftype's constructor, the runtime's -- vmx2's prim of
-; op (:host k C), C the class (the node's slot 2), a value or a throw
-;
-; THE HOST'S ACTIONS (N_DEF 10, N_DEFTYPE 20, N_SETBANG 24, milestone 5):
-; the same -- the node's children run in turn as a collection's elements,
-; then the host's action on their values (exec.inc's def_finish: the
-; Var's root and metadata; deftype_finish: the type of its methods'
-; closures; setbang_finish: the Var's binding or the field), vmx2's prim
-; of op (:host k C), C the node's operand. A def's children are its init
-; (when it has one) and then its metadata (when evaluated), as clj's
-; DefExpr runs them; a deftype's its methods' fns; a set!'s its target
-; (when a field's) and its value. What the action does to the namespace,
-; the type registry or the field is the runtime's: a named hypothesis
-; (exec-vm's ex-collok), not a theorem. A `.` (N_DOT 21) the same: its
-; children (its target when evaluated, then its arguments) kept, then the
-; host's dispatch on their values (exec.inc dot_finish) -- what the member
-; does, a deftype's method entered in the loop or a yield re-dispatching,
-; the runtime's. A hinted target's cast (DEVIATIONS 84) is no action of its
-; own: the analyzer makes the target child (clotran-class-cast target C),
-; an ordinary call, so it runs before the arguments as clj's checkcast.
-(defun ex-cop (e) (case (ex-kind e) (7 :vector) (8 :map) (9 :set) (otherwise (list :host (ex-kind e) (ex-c e)))))
-(defun ex-cbuild (e vals)
-  (if (equal (ex-kind e) 7)
-      (cons :val (cons :vec vals))
-    (let ((a (prim (ex-cop e) vals))) (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))))
-
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;
 ; a state (records val frame); a record (node pc i restart rnode tmp), tmp
@@ -523,6 +439,9 @@
           (27 (let ((b (ex-cbuild e tmp)))
                 (if (valp b) (ex-finish (cdr b) ks fr) (list (cons (ex-throwr (cdr b)) ks) nil fr))))
           (28 (list (cons (ex-rec (ex-kid-of e j) 0 0 fl rs nil) (cdr ks)) val (ex-seal (ex-s2 e) n2 fr)))
+          (29 (let ((b (ex-cbuild e (list (ex-mkclo (ex-c e) fr)))))
+                (if (valp b) (ex-finish (cdr b) ks fr) (list (cons (ex-throwr (cdr b)) ks) nil fr))))
+          (30 (list (cons (ex-rec (ex-c e) 0 0 nil nil nil) (cons (ex-rec e pc2 i2 fl rs fr) (cdr ks))) val (make-list n2 :initial-element nil)))
           (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
           (otherwise s)))))))
 
@@ -634,7 +553,8 @@
                       (t t)))
            (otherwise
             (cond ((or (equal k 1) (equal k 3)) (not (equal (ex-c e) *ex-mk*)))
-                  ((or (equal k 2) (equal k 14)) t)
+                  ((or (equal k 2) (equal k 14) (equal k 15)) t)
+                  ((equal k 26) (ex-wf :m (ex-c e) 0 nil))
                   ((equal k 4) (and (or (equal nk 2) (equal nk 3))
                                     (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
                                     (or (equal nk 2) (ex-wf :m (ex-kid-of e 2) 0 tl))))
@@ -758,6 +678,10 @@
                              (list (car r) (cadr r) (c+ 1 (caddr r)))))
              ((equal k 3) (list (cons :val (ex-c e)) fr 1))
              ((equal k 14) (list (cons :val (ex-mkclo (ex-c e) fr)) fr 1))
+             ((equal k 15) (let ((b (ex-cbuild e (list (ex-mkclo (ex-c e) fr)))))
+                             (cond ((equal (cdr b) *ex-mk*) (list (list :out) fr 0)) ((valp b) (list b fr 1)) (t (list b fr 2)))))
+             ((equal k 26) (let ((r (ex-ev :m (ex-c e) 0 nil (make-list n2 :initial-element nil) fuel)))
+                             (if (or (valp (car r)) (ex-thp (car r))) (list (car r) fr (c+ 1 (c+ (caddr r) 1))) (list (list :out) fr 0))))
              ((equal k 6)
               (if (ex-linked (ex-kid-of e 0))
                   (if (not (ex-ifn (ex-c (ex-kid-of e 0))))

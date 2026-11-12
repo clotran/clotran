@@ -1,6 +1,6 @@
 ;; scripts/model-ratchet's record: what the model generates or describes, and
 ;; the books it answers to. scripts/model-ratchet --stamp writes the hashes.
-{:owed 3
+{:owed 2
  :entries
  [{:code "src/f/gen/vm_gen.f90", :model ["seqk" "vmg" "vmfg"], :code-sha "241be1b82f92073d96dafec4de99b67a78664dd86a47a500c510554b394a3e78", :model-sha "61a177d48eacd6261aff341a9d353cdc8e2a3720ccf4db7a2411fbed204c2508"}
   {:code "src/f/gen/vmc_gen.f90", :model ["vmic" "vmicg"], :code-sha "7325e0b33c076c1dbd5a2213b514e82a733f5515b51d1f3154d54f9c53c19001", :model-sha "2ca89c76001c8b3bdb8ac5c339db6716b9025f6c16da8461644359846472f587"}
@@ -47,5 +47,5 @@
   {:code "src/f/analyze.inc", :procs ["arith_kind" "apk_kid" "array_elem_kind" "recur_args_ok"], :model ["anprim" "anprim-proof"], :code-sha "b2aba3539afd2a4c955f4df1e7d76ca590bcf50fdf177f06fcf14e95a876c189", :model-sha "2ac0c02eecaac200e7eab8346a8779b40f21daba4b8ad90f16736f4547130bee"}
   {:code "src/f/Eval.f90", :procs ["clj_special"], :model ["anbuild"], :code-sha "f0185c209dd27d9d7813e4362f028fa57a40bf6127c4b164ba9e3e7ef5a9c744", :model-sha "edf89ed8543fe06a291bf70b78649f6b7dfbd288a0fef5bdfeaf72822b92cc7e"}
   {:code "src/c/tty_shim.c", :model ["lineedit"], :code-sha "2283d4c98310ef957bf6ca415626f312f5859013761e42d8e2bb78180b24c9d2", :model-sha "364cd32a5f8cea7b85ac4df6f1ec9b4495f734fc05340a5ee99cef981ab12837"}
-  {:code "src/f/gen/exec_gen.inc", :model ["seqk" "exec" "exec-proof" "exec-xvs" "exec-vmtr" "exec-vmcall" "exec-vmlf" "exec-vm" "exec-cost"], :code-sha "98b796a666fd3e07c0a12d42edf445765778d3bd16c8e4a23475823619dac555", :model-sha "5586c899eb27da9af244ec5cd1ef044785bf6a290fb8ee464661de4b8ee1e662"}
-  {:code "src/f/exec.inc", :procs ["exec_core" "k_finish" "call_head" "call_dispatch" "call_keep" "call_enter" "arity_in_pass" "pick_arity" "bind_closure" "variadic_req" "ap_kind" "ap_realise" "ap_first" "ap_next" "ap_look" "ap_spread"], :model ["seqk" "exec" "exec-proof"], :code-sha "983bbf265f21b707be86545b025165015c79f9b9ee88e161f475879c4c62de71", :model-sha "e12000aa75d748489594e3772fca2977f1438e71bbc4e67ff2f6bcd6d5fc07a3"}]}
+  {:code "src/f/gen/exec_gen.inc", :model ["seqk" "exec-tree" "exec" "exec-proof" "exec-xvs" "exec-vmtr" "exec-vmcall" "exec-vmlf" "exec-vm" "exec-vmok" "exec-cost"], :code-sha "56dca1ea78707676749be3a283dec340ecac3929c46ee439fe16399d632c3a54", :model-sha "add99a6fe46bace7c4eb3ebce458b4422fb0896001bbc80e0139952b82891caa"}
+  {:code "src/f/exec.inc", :procs ["exec_core" "k_finish" "call_head" "call_dispatch" "call_keep" "call_enter" "arity_in_pass" "pick_arity" "bind_closure" "variadic_req" "ap_kind" "ap_realise" "ap_first" "ap_next" "ap_look" "ap_spread" "break_frames"], :model ["seqk" "exec-tree" "exec" "exec-proof"], :code-sha "91faea5021e61f62fbf3fecb6806ba20ee970cb298e9692fb9f58b4ac4047817", :model-sha "9078753dc0a24252aa66c8e8683b5c76a975610546d9d47b4a9412a7c59baea6"}]}

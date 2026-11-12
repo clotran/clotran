@@ -1577,7 +1577,7 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     integer, intent(in) :: kbot, vbase
-    type(gc_value) :: val, nd, kids, v, fnv, newframe, body
+    type(gc_value) :: val, nd, kids, fnv, newframe, body
     integer :: kind, n, b, site
     logical :: ok
 
@@ -1619,29 +1619,12 @@
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE, &
-            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG, N_LETFN, N_DOT)
+            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG, N_LETFN, N_DOT, N_LAZY, N_TOP)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
           ! from its pc 4 when the task resumes
           if (tctx%yield_flag) exit
-       case (N_LAZY)
-          v = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
-          call vs_set(vst, b + 3, v)
-          val = gc_obj(OBJ_LAZY, [vs_get(vst, b + 3), gc_nil(), gc_nil()], [vs_get(vst, b + 3)])
-          call gc_set_i1(val, LAZY_PENDING)
-          call k_finish(val, tctx)
-       case (N_TOP)
-          ! its frame is on the stack, made when it was pushed (k_push)
-          v = vs_get(vst, b + 2)
-          if (v%tag /= GCT_SFRAME) then
-             v = new_frame(gc_i2(nd), [vs_get(vst, b + 1)])
-             call vs_set(vst, b + 2, v)
-          end if
-          ! its flat form when it has one (analyze_top)
-          v = gc_slot(vs_get(vst, b + 1), 3)
-          if (v%tag == GCT_NIL .or. .not. flat_enabled()) v = gc_slot(vs_get(vst, b + 1), 2)
-          call k_tail(v, tctx)
        case default
           val = exec_other(nd, vs_get(vst, b + 2))
           if (.not. tctx%has_error) call k_finish(val, tctx)
@@ -2276,6 +2259,28 @@
        case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
        end select
        call k_finish(val, tctx)
+    case (29)
+       ! a lazy seq (N_LAZY): its fn's closure over the frame, as 12's,
+       ! wrapped pending (the host's (:host 15 C)); realised by the runtime
+       fv = make_closure_from(gc_slot(nd, 2), vs_get(vst, b + 2), [vs_get(vst, b + 1)])
+       call vs_set(vst, b + 3, fv)
+       val = gc_obj(OBJ_LAZY, [vs_get(vst, b + 3), gc_nil(), gc_nil()], [vs_get(vst, b + 3)])
+       call gc_set_i1(val, LAZY_PENDING)
+       call k_finish(val, tctx)
+    case (30)
+       ! a top-level form (N_TOP) entered: its frame of i2 slots is on the
+       ! stack, made when it was pushed (k_push), and its body takes the
+       ! record in place -- the record's frame its own, so the model's
+       ! return at pc 1 (17, the frame below back) is this record's pop.
+       ! Its flat form when it has one (analyze_top; flat's, not the model's)
+       fv = vs_get(vst, b + 2)
+       if (fv%tag /= GCT_SFRAME) then
+          fv = new_frame(int(n2), [vs_get(vst, b + 1)])
+          call vs_set(vst, b + 2, fv)
+       end if
+       fv = gc_slot(vs_get(vst, b + 1), 3)
+       if (fv%tag == GCT_NIL .or. .not. flat_enabled()) fv = gc_slot(vs_get(vst, b + 1), 2)
+       call k_tail(fv, tctx)
     case (24)
        ! case*: the branch its table's probe picks (ex-csbr), the record become it
        call vs_set(vst, b + 3, val)

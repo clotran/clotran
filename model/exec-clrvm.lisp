@@ -73,7 +73,7 @@
            (otherwise
             (cond ((or (equal k 1) (equal k 3)) (ex-xvs defs (list (ex-c e))))
                   ((equal k 2) (member-equal (ex-i2 e) cm))
-                  ((equal k 14) (and (consp (assoc-equal (ex-c e) defs))
+                  ((member k '(14 15)) (and (consp (assoc-equal (ex-c e) defs))
                                      (nat-listp (ex-outers (nth 2 (ex-c e))))
                                      (subsetp-equal (ex-outers (nth 2 (ex-c e))) cm)))
                   ((equal k 6) (and (< 0 nk) (ex-vwf0 :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf0 :call e 1 (append cm (list nil)) lp defs)))
@@ -236,3 +236,15 @@
            :use ((:instance ex-vm-runs)
                  (:instance ex-vwf-cwf (flg :m) (i 0) (cm nil) (cm2 nil) (B nil) (lp nil))
                  (:instance ex-cwf-mkok (flg :m) (i 0) (B nil))))))
+
+; ... and a top-level form (N_TOP), whose body anpass marks in its own
+; frame (analyze_top's apply_clears): the body's run, in a frame of nils
+(defthm ex-top-runs
+  (implies (and (consp e) (equal (ex-kind e) 26) (ex-vwf0 :m (ex-c e) 0 nil nil defs) (ex-mkok :m (ex-c e) 0 L n) (equal (len L) n)
+                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
+                (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
+           (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
+                  (car (ex-ev :m e 0 nil fr fuel))))
+  :hints (("Goal" :in-theory (disable vcs2-run-program s2clk ex-ev ex-tr ex-vwf ex-vwf0 ex-cwf ex-mkok mx2 ex-defs-ok ex-anp-runs)
+           :expand ((ex-tr :m e 0 nil) (ex-ev :m e 0 nil fr fuel))
+           :use ((:instance ex-anp-runs (e (ex-c e)) (fr (make-list (ex-i2 e) :initial-element nil)))))))

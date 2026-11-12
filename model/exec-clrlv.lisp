@@ -51,7 +51,7 @@
   :hints (("Goal" :expand ((sp-out 0 (ex-ast e) j m A L n)))))
 
 (defthm ex-spo-fn
-  (implies (and (ex-nodep e) (equal (ex-kind e) 14) (ex-slp (ex-outers (nth 2 (ex-c e))))
+  (implies (and (ex-nodep e) (member-equal (ex-kind e) '(14 15)) (ex-slp (ex-outers (nth 2 (ex-c e))))
                 (< (len (ex-outers (nth 2 (ex-c e)))) *ex40*))
            (equal (sp-out 0 (ex-ast e) j m A L n) (ex-setl (ex-outers (nth 2 (ex-c e))) L n)))
   :hints (("Goal" :expand ((sp-out 0 (ex-ast e) j m A L n)) :in-theory (enable anp-sat)

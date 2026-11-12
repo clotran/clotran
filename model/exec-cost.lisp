@@ -336,3 +336,18 @@
   :hints (("Goal" :in-theory (e/d (c+) (ex-kid-of ex-lf-let-turns))
                   :use ((:instance ex-lf-let-turns (i 0) (tmp nil)))
                   :expand ((ex-ev :m e 0 nil fr fuel)))))
+
+; A LAZY SEQ'S TURNS (N_LAZY, milestone 5): one, its closure wrapped (or 2
+; for the wrap's throw)
+(defthm ex-lazy-turns
+  (implies (and (consp e) (equal (ex-kind e) 15))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel)) 2))
+  :hints (("Goal" :in-theory (disable ex-cbuild ex-mkclo) :expand ((ex-ev :m e 0 nil fr fuel)))))
+
+; A TOP-LEVEL FORM'S TURNS (N_TOP, milestone 5): its body's and two, the
+; entry (action 30) and the return (17, or k_unwind's 5 for a throw)
+(defthm ex-top-turns
+  (implies (and (consp e) (equal (ex-kind e) 26))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel))
+               (+ 2 (caddr (ex-ev :m (ex-c e) 0 nil (make-list (ex-i2 e) :initial-element nil) fuel)))))
+  :hints (("Goal" :in-theory (e/d (c+) (ex-kid-of)) :expand ((ex-ev :m e 0 nil fr fuel)))))

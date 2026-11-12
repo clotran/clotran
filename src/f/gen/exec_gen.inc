@@ -1,7 +1,7 @@
   ! GENERATED from model/exec.lisp by scripts/acl2-fortran -b exec. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the tree evaluator's turn for its core kinds -- a constant, a
-  ! local, a Var, if, do, let*, loop*, recur, fn, a call, throw and try -- what
+  ! local, a Var, if, do, let*, loop*, recur, fn, a call, throw and try, the host's, a lazy seq, a top-level form -- what
   ! run_loop does with the top record (ex_act), which child it takes (ex_kid),
   ! the record's pc and i after (ex_pc, ex_i), whether k_finish restarts it
   ! (ex_fin), what k_unwind does with the record under a throw (ex_unw), the arity a call's count picks (ex_arfit: the fixed one, else
@@ -176,6 +176,17 @@
         case (14_int64)
           r = 12_int64
           return
+        case (15_int64)
+          r = 29_int64
+          return
+        case (26_int64)
+          if ((pc_ == 0_int64)) then
+            r = 30_int64
+            return
+          else
+            r = 17_int64
+            return
+          end if
         case (17_int64)
           if ((pc_ == 0_int64)) then
             r = 3_int64
@@ -519,6 +530,9 @@
       r = 1_int64
       return
     case (17_int64)
+      r = 1_int64
+      return
+    case (26_int64)
       r = 1_int64
       return
     case (19_int64)
@@ -880,6 +894,9 @@
     logical :: t_4
     logical :: t_5
     logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    logical :: t_9
     if ((k_ == 18_int64)) then
       if ((pc_ == 1_int64)) then
         t_1 = (mt_ == 1_int64)
@@ -919,6 +936,21 @@
           t_6 = .false.
         end if
         if (t_6) then
+          if ((k_ == 6_int64)) then
+            t_7 = (pc_ == 5_int64)
+          else
+            t_7 = .false.
+          end if
+          t_9 = t_7
+        else
+          if ((k_ == 26_int64)) then
+            t_8 = (pc_ == 1_int64)
+          else
+            t_8 = .false.
+          end if
+          t_9 = t_8
+        end if
+        if (t_9) then
           r = 5_int64
           return
         else
