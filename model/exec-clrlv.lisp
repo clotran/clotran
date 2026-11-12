@@ -32,8 +32,16 @@
 
 ; ---- THE NODE, ONE KIND AT A TIME ----------------------------------------------------------------
 
+; a deftype's methods, its alternatives, are its children (ex-ch-deftype): anpass's walk of them is a collection's
+(defun ex-mind (x j m A L n)
+  (declare (ignore A) (irrelevant x L n) (xargs :measure (nfix (- (ifix m) (nfix j)))))
+  (if (and (natp j) (integerp m) (< j m)) (ex-mind x j (1- m) nil (sp-out 0 (anp-ch 1 x (1- m)) 0 0 nil L n) n) t))
+(defthm ex-spo-deftype
+  (implies (and (ex-nodep e) (equal (ex-kind e) 20)) (equal (sp-out 3 (ex-ast e) j m A L n) (sp-out 1 (ex-ast e) j m nil L n)))
+  :hints (("Goal" :induct (ex-mind (ex-ast e) j m A L n) :in-theory (e/d (sp-out-seq-open) (sp-out-seq-front ex-ast-open)))))
+
 (defthm ex-spo-seq
-  (implies (and (ex-nodep e) (member (ex-kind e) '(1 3 5 6 7 8 9 11 16 17 22 23 10 24)))
+  (implies (and (ex-nodep e) (member (ex-kind e) '(1 3 5 6 7 8 9 11 16 17 22 23 10 20 24)))
            (equal (sp-out 0 (ex-ast e) j m A L n) (sp-out 1 (ex-ast e) 0 (ex-nk e) nil L n)))
   :hints (("Goal" :expand ((sp-out 0 (ex-ast e) j m A L n)))))
 

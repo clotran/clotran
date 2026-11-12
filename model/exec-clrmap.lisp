@@ -31,7 +31,7 @@
            (let ((k (nth 0 x)))
              (list :ast nil k (nfix (nth 1 x)) (ex-astf 1 (nth 2 x)) nil
                    (if (equal k 14) (ex-outers (nth 2 (nth 3 x))) nil)
-                   (cond ((equal k 18) (ex-astf 2 (nth 3 x))) ((equal k 19) (ex-astf 3 (nth 3 x))) (t nil))
+                   (cond ((equal k 18) (ex-astf 2 (nth 3 x))) ((equal k 19) (ex-astf 3 (nth 3 x))) ((equal k 20) (ex-astf 1 (nth 2 x))) (t nil))
                    (if (nth 8 x) 1 0)))))
         ((atom x) nil)
         ((equal fl 1) (cons (ex-astf 0 (car x)) (ex-astf 1 (cdr x))))
@@ -73,7 +73,7 @@
                     ((equal k 16) (ex-shp :rec e 0))
                     ((equal k 17) (and (equal nk 1) (ex-shp :m (ex-kid-of e 0) 0)))
                     ((equal k 18) (and (<= nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :cs e 0) (ex-shp :fin e 0)))
-                    ((member k '(7 8 9 22 23 10 24)) (ex-shp :coll e 0))
+                    ((member k '(7 8 9 22 23 10 20 24)) (ex-shp :coll e 0))
                     ((equal k 19) (and (equal nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :m (ex-kid-of e 1) 0) (ex-shp :ct e 0)))
                     ((equal k 6) (ex-shp :call e 0))
                     (t nil))))))))
@@ -95,7 +95,8 @@
            (equal (ex-astf 0 e)
                   (list :ast nil (ex-kind e) (ex-i2 e) (ex-astf 1 (ex-kids e)) nil
                         (if (equal (ex-kind e) 14) (ex-outers (nth 2 (ex-c e))) nil)
-                        (cond ((equal (ex-kind e) 18) (ex-astf 2 (ex-c e))) ((equal (ex-kind e) 19) (ex-astf 3 (ex-c e))) (t nil))
+                        (cond ((equal (ex-kind e) 18) (ex-astf 2 (ex-c e))) ((equal (ex-kind e) 19) (ex-astf 3 (ex-c e)))
+                              ((equal (ex-kind e) 20) (ex-astf 1 (ex-kids e))) (t nil))
                         (if (nth 8 e) 1 0))))
   :hints (("Goal" :in-theory (enable ex-kind ex-i2 ex-kids ex-c))))
 (in-theory (disable ex-astf))
@@ -108,7 +109,7 @@
            (and (equal (ast-kind (ex-ast e)) (ex-kind e))
                 (equal (ast-i2 (ex-ast e)) (ex-i2 e))
                 (equal (ast-nkids (ex-ast e)) (ex-nk e))
-                (equal (ast-nalts (ex-ast e)) (if (or (equal (ex-kind e) 18) (equal (ex-kind e) 19)) (len (ex-c e)) 0))
+                (equal (ast-nalts (ex-ast e)) (cond ((or (equal (ex-kind e) 18) (equal (ex-kind e) 19)) (len (ex-c e))) ((equal (ex-kind e) 20) (ex-nk e)) (t 0)))
                 (equal (ast-ncaps (ex-ast e)) (if (equal (ex-kind e) 14) (anp-sat (len (ex-outers (nth 2 (ex-c e))))) 0))))
   :hints (("Goal" :in-theory (enable ast-kind ast-i2 ast-nkids ast-nalts ast-ncaps ast-p anp-nth anp-sat anp-fix ex-nk))))
 
@@ -121,8 +122,9 @@
 (defthm ex-ast-alt
   (implies (and (ex-nodep e) (natp j))
            (equal (ast-alt (ex-ast e) j)
-                  (cond ((equal (ex-kind e) 18) (ex-ast (ex-cbody e j))) ((equal (ex-kind e) 19) (ex-ast (ex-cthen e j))) (t nil))))
-  :hints (("Goal" :in-theory (enable ast-alt ast-nalts ast-p anp-nth anp-sat ex-cbody ex-cthen))))
+                  (cond ((equal (ex-kind e) 18) (ex-ast (ex-cbody e j))) ((equal (ex-kind e) 19) (ex-ast (ex-cthen e j)))
+                 ((equal (ex-kind e) 20) (ex-ast (ex-kid-of e j))) (t nil))))
+  :hints (("Goal" :in-theory (enable ast-alt ast-nalts ast-p anp-nth anp-sat ex-cbody ex-cthen ex-nk))))
 
 ; no s3: a def's metadata is among exec.lisp's children (its last), so
 ; anpass's walk of a def -- s3, then the kids -- is its kids in turn
@@ -162,6 +164,15 @@
 (defthm ex-sp-caps-setl (equal (sp-caps x i k L n) (ex-setl (cap-list x i k) L n)))
 (defthm ex-sp-rd-setl (equal (sp-rd fl x j m L n) (ex-setl (rds fl x j m) L n))
   :hints (("Goal" :induct (sp-rd fl x j m L n) :in-theory (disable rds-0-open) :expand ((rds fl x j m)))))
+
+; a deftype's methods, read as alternatives, are its children
+(defun ex-jind (j m) (declare (xargs :measure (nfix (- (ifix m) (nfix j))))) (if (and (natp j) (integerp m) (< j m)) (ex-jind (1+ j) m) t))
+(defthm ex-ch-deftype
+  (implies (and (ex-nodep e) (equal (ex-kind e) 20) (natp j)) (equal (anp-ch 3 (ex-ast e) j) (anp-ch 1 (ex-ast e) j)))
+  :hints (("Goal" :in-theory (enable anp-ch))))
+(defthm ex-rds-deftype
+  (implies (and (ex-nodep e) (equal (ex-kind e) 20)) (equal (rds 3 (ex-ast e) i m) (rds 1 (ex-ast e) i m)))
+  :hints (("Goal" :induct (ex-jind i m) :in-theory (disable ex-ast-open rds-0-open))))
 
 ; the piece of anpass's tree a place of exec.lisp's is
 (defun ex-rdp (flg e i)
