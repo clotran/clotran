@@ -66,6 +66,49 @@
       d
     (list :if (list :prim :case (list :const (nth 0 (car ct))) (list :local p)) (car ts) (ex-trcs (cdr ct) (cdr ts) d p))))
 
+; A LETFN (milestone 5): its n fns in slots s .. s+n-1, n of mx2's lets,
+; the j-th (:mkgrp (j . shape) caps..) -- shape each fn's template and
+; count of captures, caps every fn's captures in turn: one of the group's
+; slots (:const (:grp nil o-s)), any other its outer slot's local in the
+; letfn's scope cm -- then the body in scope cm ++ (s .. s+n-1)
+(defun ex-lfcaps (os s n cm)
+  (if (atom os)
+      nil
+    (cons (if (ex-ingrp (car os) s n) (list :const (list :grp nil (- (car os) (nfix s)))) (list :local (ex-pos (car os) cm)))
+          (ex-lfcaps (cdr os) s n cm))))
+(defun ex-lfos (e j) (ex-outers (nth 2 (ex-c (ex-kid-of e j)))))
+(defun ex-lfshape (e j)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e))
+      (cons (cons (ex-c (ex-kid-of e (nfix j))) (len (ex-lfos e (nfix j)))) (ex-lfshape e (1+ (nfix j))))
+    nil))
+(defun ex-lfargs (e j cm)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e))
+      (append (ex-lfcaps (ex-lfos e (nfix j)) (ex-s2 e) (ex-i2 e) cm) (ex-lfargs e (1+ (nfix j)) cm))
+    nil))
+(defun ex-trlf (e j cm x)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e))
+      (list :let (list* :mkgrp (cons (nfix j) (ex-lfshape e 0)) (ex-lfargs e 0 cm)) (ex-trlf e (1+ (nfix j)) cm x))
+    x))
+; well formed: each init a fn (kind 14) of a def's template, its outer
+; slots naturals, each one of the group's or in scope
+(defun ex-lfin (os s n cm)
+  (or (atom os) (and (natp (car os)) (or (ex-ingrp (car os) s n) (member-equal (car os) cm)) (ex-lfin (cdr os) s n cm))))
+(defun ex-lffns (e j)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e))
+      (and (consp (ex-kid-of e (nfix j))) (equal (ex-kind (ex-kid-of e (nfix j))) 14) (nat-listp (ex-lfos e (nfix j)))
+           (ex-lffns e (1+ (nfix j))))
+    t))
+(defun ex-lfok (e j cm defs)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e))
+      (and (consp (assoc-equal (ex-c (ex-kid-of e (nfix j))) defs)) (ex-lfin (ex-lfos e (nfix j)) (ex-s2 e) (ex-i2 e) cm)
+           (ex-lfok e (1+ (nfix j)) cm defs))
+    t))
+
 ; A COLLECTION: the runtime's build of its elements' values, (:prim op
 ; args..) -- a vector :vector, a map :map, a set :set, a new or a host action (:host k C)
 ; (ex-cop, exec.lisp)
@@ -140,6 +183,7 @@
                                     (if (< 2 nk) (ex-tr :m (ex-kid-of e 2) 0 cm1) '(:const nil)))))
                ((equal k 5) (ex-tr :do e 0 cm))
                ((or (equal k 11) (equal k 12)) (ex-tr :let e 0 cm))
+               ((equal k 13) (ex-trlf e 0 cm (ex-tr :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)))))
                ((equal k 16) (list* :recur '(:const nil) (ex-tr :rec e 0 cm)))
                ((equal k 17) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm)))
                ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
@@ -152,9 +196,42 @@
                                             (len cm))))
                (t '(:const nil))))))))
 
+; A LETFN GROUP'S CAPTURE (milestone 5) in a closure: (:grp G m), G its
+; group's entries (tm caps), m < |G|; each tm a def's, its caps as many as
+; tm's pairs, each the group's own (:grp nil m'), m' < |G|, or a plain
+; value. ex-gvals: the plain values a closure's captures hold, its groups'
+; entries' among them -- ex-xvs asks them good.
+(defun ex-gcap (x) (and (x2-grpp x) (cadr x) t))
+(defun ex-gnil (x) (and (x2-grpp x) (null (cadr x))))
+(defun ex-gplain (c) (cond ((atom c) nil) ((ex-gnil (car c)) (ex-gplain (cdr c))) (t (cons (car c) (ex-gplain (cdr c))))))
+(defun ex-gnils (c n) (or (atom c) (and (or (not (ex-gnil (car c))) (and (natp (caddr (car c))) (< (caddr (car c)) n))) (ex-gnils (cdr c) n))))
+(defun ex-gents (g defs n)
+  (or (atom g)
+      (and (consp (car g)) (consp (assoc-equal (car (car g)) defs)) (true-listp (cadr (car g)))
+           (equal (len (cadr (car g))) (len (ex-inners (nth 2 (car (car g)))))) (ex-gnils (cadr (car g)) n)
+           (ex-gents (cdr g) defs n))))
+(defun ex-gcok (c defs)
+  (or (atom c)
+      (and (or (not (ex-gcap (car c)))
+               (and (true-listp (cadr (car c))) (natp (caddr (car c))) (< (caddr (car c)) (len (cadr (car c))))
+                    (ex-gents (cadr (car c)) defs (len (cadr (car c))))))
+           (ex-gcok (cdr c) defs))))
+(defun ex-gall (g) (if (atom g) nil (append (ex-gplain (cadr (car g))) (ex-gall (cdr g)))))
+(defun ex-gvals (c)
+  (cond ((atom c) nil) ((ex-gcap (car c)) (append (ex-gall (cadr (car c))) (ex-gvals (cdr c)))) (t (cons (car c) (ex-gvals (cdr c))))))
+(defthm ex-count-app (implies (true-listp a) (equal (acl2-count (append a b)) (+ (acl2-count a) (acl2-count b)))))
+(defthm ex-tl-gplain (true-listp (ex-gplain c)))
+(defthm ex-tl-gall (true-listp (ex-gall g)))
+(defthm ex-count-gplain (<= (acl2-count (ex-gplain c)) (acl2-count c)) :rule-classes :linear)
+(defthm ex-count-gall (<= (acl2-count (ex-gall g)) (acl2-count g)) :rule-classes :linear
+  :hints (("Goal" :induct (ex-gall g)) ("Subgoal *1/2" :use ((:instance ex-count-gplain (c (cadr (car g))))))))
+(defthm ex-count-gvals (<= (acl2-count (ex-gvals c)) (acl2-count c)) :rule-classes :linear
+  :hints (("Goal" :induct (ex-gvals c)) ("Subgoal *1/2" :use ((:instance ex-count-gall (g (cadr (car c))))))))
+
 ; THE VALUES (milestone 2b): every closure-shaped value one whose template
 ; is in defs (so mx2's :callv finds its def), its captures as many as the
-; template's pairs and good themselves; any other value is good but the
+; template's pairs and good themselves or a good group's (ex-gcok, its
+; plain values ex-gvals good); any other value is good but the
 ; symbol :recur-marker (the tree's recur marker's) and
 ; symbols :clo and :grp themselves, so a variadic call's rest list of good
 ; values is never closure-shaped nor a letfn group's capture (the model's
@@ -170,7 +247,7 @@
                 (if (clop v)
                     (and (equal v (clo (cadr v) (caddr v))) (consp (assoc-equal (cadr v) defs))
                          (true-listp (caddr v)) (equal (len (caddr v)) (len (ex-inners (nth 2 (cadr v)))))
-                         (ex-xvs defs (caddr v)))
+                         (ex-gcok (caddr v) defs) (ex-xvs defs (ex-gvals (caddr v))))
                   (ex-xvs defs v))))
          (ex-xvs defs (cdr l)))))
 
@@ -227,6 +304,48 @@
   :hints (("Goal" :induct (ex-resl l) :in-theory (disable ex-xvs-car1 ex-xvs-res))
           ("Subgoal *1/2" :use ((:instance ex-xvs-car1) (:instance ex-xvs-res (v (car l)))
                                 (:instance ex-xvs-nthcdr-l (n 1))))))
+; A GROUP'S CAPTURE RESOLVED IS A GOOD CLOSURE (milestone 5): so a good
+; closure's captures, resolved as a call binds them, are good values; and
+; a plain good list is its own ex-gvals, no group capture among it
+(defthm ex-xvs-nogrp (implies (ex-xvs defs (list x)) (not (x2-grpp x)))
+  :hints (("Goal" :expand ((ex-xvs defs (list x)) (ex-xvs defs x) (ex-xvs defs (cdr x))))))
+(defthm ex-xvs-plain (implies (and (ex-xvs defs l) (true-listp l)) (and (equal (ex-gvals l) l) (ex-gcok l defs)))
+  :hints (("Goal" :induct (len l) :in-theory (disable ex-xvs-car1 ex-xvs-nogrp))
+          ("Subgoal *1/1" :use ((:instance ex-xvs-car1) (:instance ex-xvs-nogrp (x (car l))) (:instance ex-xvs-nthcdr-l (n 1))))))
+(defthm ex-gents-nth
+  (implies (and (ex-gents g defs n) (natp m) (< m (len g)))
+           (and (consp (assoc-equal (car (nth m g)) defs)) (true-listp (cadr (nth m g)))
+                (equal (len (cadr (nth m g))) (len (ex-inners (nth 2 (car (nth m g)))))) (ex-gnils (cadr (nth m g)) n)))
+  :hints (("Goal" :in-theory (enable nth) :induct (nth m g))))
+(defthm ex-gall-nth
+  (implies (and (ex-xvs defs (ex-gall g)) (natp m) (< m (len g))) (ex-xvs defs (ex-gplain (cadr (nth m g)))))
+  :hints (("Goal" :in-theory (enable nth) :induct (nth m g))))
+(defthm ex-fill-tl (equal (true-listp (x2-fill c g)) (true-listp c)))
+(defthm ex-fill-len (equal (len (x2-fill c g)) (len c)))
+(defthm ex-fill-good
+  (implies (and (consp g) (true-listp g) (ex-gnils c (len g)) (ex-gents g defs (len g))
+                (ex-xvs defs (ex-gplain c)) (ex-xvs defs (ex-gall g)))
+           (and (ex-gcok (x2-fill c g) defs) (ex-xvs defs (ex-gvals (x2-fill c g)))))
+  :hints (("Goal" :induct (len c) :in-theory (disable ex-xvs-car1 ex-xvs-nogrp))
+          ("Subgoal *1/1" :use ((:instance ex-xvs-car1 (l (ex-gplain c))) (:instance ex-xvs-nogrp (x (car c)))
+                                (:instance ex-xvs-nthcdr-l (n 1) (l (ex-gplain c)))))))
+(defthm ex-xvs-gres
+  (implies (and (ex-gcap x) (ex-gcok (list x) defs) (ex-xvs defs (ex-gall (cadr x))))
+           (ex-xvs defs (list (x2-res x))))
+  :hints (("Goal" :in-theory (e/d (x2-res clo clop) (ex-gents-nth ex-gall-nth ex-fill-good))
+                  :use ((:instance ex-gents-nth (g (cadr x)) (m (caddr x)) (n (len (cadr x))))
+                        (:instance ex-gall-nth (g (cadr x)) (m (caddr x)))
+                        (:instance ex-fill-good (g (cadr x)) (c (cadr (nth (caddr x) (cadr x))))))
+                  :expand ((:free (a) (ex-xvs defs (list a)))))))
+(defthm ex-xvs-resl-caps
+  (implies (and (ex-gcok c defs) (ex-xvs defs (ex-gvals c))) (ex-xvs defs (ex-resl c)))
+  :hints (("Goal" :induct (len c) :in-theory (e/d (ex-xvs-cons1) (ex-xvs-gres ex-xvs-res)))
+          ("Subgoal *1/1" :use ((:instance ex-xvs-gres (x (car c))) (:instance ex-xvs-res (v (car c)))))))
+(defthm ex-xvs-clo-resl
+  (implies (and (ex-xvs defs (list v)) (clop v)) (ex-xvs defs (ex-resl (caddr v))))
+  :hints (("Goal" :expand ((ex-xvs defs (list v))))))
+(defthm ex-resl-tl (equal (true-listp (ex-resl c)) (true-listp c)))
+(defthm ex-resl-len (equal (len (ex-resl c)) (len c)))
 ; A LAZY SEQ'S ELEMENTS are what the runtime's realisations give (seqk's
 ; sk-real, constrained by nothing): the agreement asks they be good values
 ; too, as it asks it of the scope's -- ex-lzok, the runtime handing the
@@ -332,6 +451,9 @@
                   ((equal k 11) (and (equal nk (1+ n2)) (ex-vwf :let e 0 cm lp defs)))
                   ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
                                      (ex-vwf :let e 0 cm lp defs)))
+                  ((equal k 13) (and (equal nk (1+ n2)) (< 0 n2) (ex-lffns e 0) (ex-lfok e 0 cm defs)
+                                     (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm) (ex-nomem (ex-clr :m (ex-kid-of e n2) 0) cm)
+                                     (ex-vwf :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) lp defs)))
                   ((equal k 16) (and (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))
                                      (equal nk (cdr lp)) (ex-vwf :rec e 0 cm lp defs)))
                   ((equal k 17) (and (equal nk 1) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)))
@@ -566,6 +688,22 @@
   :hints (("Goal" :induct (ex-trcs ct ts d p))))
 (in-theory (disable ex-trcs))
 
+; a letfn's lets: their captures locals in its scope, its body past them
+(defthm ex-xwf-args-app (equal (x2wf-args (append a b) n) (and (x2wf-args a n) (x2wf-args b n)))
+  :hints (("Goal" :induct (len a) :expand ((:free (x y) (x2wf-args (cons x y) n)) (x2wf-args a n)))))
+(defthm ex-lfcaps-xwf (implies (and (ex-lfin os s n cm) (natp m) (<= (len cm) m)) (x2wf-args (ex-lfcaps os s n cm) m))
+  :hints (("Goal" :induct (ex-lfcaps os s n cm) :expand ((:free (x y) (x2wf-args (cons x y) m))))))
+(defthm ex-lfargs-xwf (implies (and (ex-lfok e j cm defs) (natp m) (<= (len cm) m)) (x2wf-args (ex-lfargs e j cm) m))
+  :hints (("Goal" :induct (ex-lfargs e j cm) :in-theory (disable ex-lfos))))
+(defun ex-trlf-ind (e j n)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e)) (ex-trlf-ind e (1+ (nfix j)) (1+ n)) n))
+(defthm ex-trlf-xwf
+  (implies (and (ex-lfok e 0 cm defs) (natp n) (<= (len cm) n) (x2wf x (+ n (nfix (- (ex-i2 e) (nfix j)))) k))
+           (x2wf (ex-trlf e j cm x) n k))
+  :hints (("Goal" :induct (ex-trlf-ind e j n) :in-theory (disable ex-lfargs ex-lfshape ex-lfok)
+                  :expand ((:free (y m) (x2wf (cons :let y) m k)) (:free (y m) (x2wf (cons :mkgrp y) m nil))))))
+
 (defun ex-xgood (flg e i cm lp defs)
   (implies (ex-vwf flg e i cm lp defs)
            (case flg
@@ -579,7 +717,7 @@
   (ex-xgood flg e i cm lp defs)
   :rule-classes nil
   :hints (("Goal" :induct (ex-vwf flg e i cm lp defs)
-                  :in-theory (disable ex-kid-of)
+                  :in-theory (disable ex-kid-of ex-lffns ex-lfok ex-trlf)
                   :expand ((:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
                            (:free (x y n) (x2wf-args (cons x y) n))))))
 

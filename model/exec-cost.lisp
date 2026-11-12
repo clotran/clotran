@@ -316,23 +316,23 @@
 ; which seals the group and becomes the body: that turn rewrites each of
 ; the group's captures (exec.inc refresh_captures, the sum of its n fns'
 ; capture counts, as a closure's making copies its own), then the body's
-(defun ex-lf-parts (e i fr fuel)
+(defun ex-lf-pturns (e i fr fuel)
   (declare (xargs :measure (nfix (- (ex-i2 e) (nfix i)))))
   (if (< (nfix i) (ex-i2 e))
       (let ((r (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel)))
-        (+ (caddr r) (ex-lf-parts e (1+ (nfix i)) (update-nth (+ (ex-s2 e) (nfix i)) (val (car r)) (cadr r)) fuel)))
+        (+ (caddr r) (ex-lf-pturns e (1+ (nfix i)) (update-nth (+ (ex-s2 e) (nfix i)) (val (car r)) (cadr r)) fuel)))
     (caddr (ex-ev :m (ex-kid-of e (ex-i2 e)) 0 nil (ex-seal (ex-s2 e) (ex-i2 e) fr) fuel))))
 (defthm ex-lf-let-turns
   (implies (and (consp e) (equal (ex-kind e) 13))
            (<= (caddr (ex-ev :let e i tmp fr fuel))
-               (+ (* 2 (nfix (- (ex-i2 e) (nfix i)))) 1 (ex-lf-parts e i fr fuel))))
-  :hints (("Goal" :induct (ex-lf-parts e i fr fuel)
+               (+ (* 2 (nfix (- (ex-i2 e) (nfix i)))) 1 (ex-lf-pturns e i fr fuel))))
+  :hints (("Goal" :induct (ex-lf-pturns e i fr fuel)
                   :in-theory (e/d (c+) (ex-kid-of))
                   :expand ((ex-ev :let e i tmp fr fuel)))))
 (defthm ex-letfn-turns
   (implies (and (consp e) (equal (ex-kind e) 13))
            (<= (caddr (ex-ev :m e 0 nil fr fuel))
-               (+ (* 2 (ex-i2 e)) 1 (ex-lf-parts e 0 fr fuel))))
+               (+ (* 2 (ex-i2 e)) 1 (ex-lf-pturns e 0 fr fuel))))
   :hints (("Goal" :in-theory (e/d (c+) (ex-kid-of ex-lf-let-turns))
                   :use ((:instance ex-lf-let-turns (i 0) (tmp nil)))
                   :expand ((ex-ev :m e 0 nil fr fuel)))))

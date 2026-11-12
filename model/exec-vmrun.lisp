@@ -92,6 +92,22 @@
 (assert-event ; ex-example-arity
  (with-guard-checking :none (and (equal (mx2 (ex-tr :m (ex-callg nil) 0 nil) nil nil *ex-defs* 10) '(:thrown . :arity))
        (equal (vcs2-run-program (ex-tr :m (ex-callg nil) 0 nil) *ex-defs* 1000) '(:thrown . :arity)))))
+; letfn (milestone 5): (letfn [(h [x] (if x (h nil) 7))] (h true)) -- h's
+; capture of its own slot sealed (:grp G 0) in the tree, (:const (:grp nil
+; 0)) in the translation's (:mkgrp ..): the tree, mx2 and the VM all answer 7
+(defconst *ex-tmlf*
+  '(h ((1 nil 0 (4 0 ((2 0 nil nil 0 nil 0 0)
+                      (6 0 ((2 1 nil nil 0 nil 0 0) (1 0 nil nil 0 nil 0 0)) nil 0 nil 0 0)
+                      (1 0 nil 7 0 nil 0 0)) nil 0 nil 0 0)))
+      (0 1) 2 nil))
+(defconst *ex-lf*
+  `(13 1 ((14 0 nil ,*ex-tmlf* 0 nil 0 0) (6 0 ((2 0 nil nil 0 nil 0 0) (1 0 nil t 0 nil 0 0)) nil 0 nil 0 0)) nil 0 nil 0 0))
+(defconst *ex-defsl* (list (cons *ex-tmlf* (ex-def *ex-tmlf*))))
+(assert-event (and (ex-defs-ok *ex-defsl* *ex-defsl*) (ex-vwf :m *ex-lf* 0 nil nil *ex-defsl*)))
+(assert-event ; ex-example-letfn
+ (with-guard-checking :none (and (equal (car (ex-ev :m *ex-lf* 0 nil (make-list 1) 10)) '(:val . 7))
+       (equal (mx2 (ex-tr :m *ex-lf* 0 nil) nil nil *ex-defsl* 10) '(:val . 7))
+       (equal (vcs2-run-program (ex-tr :m *ex-lf* 0 nil) *ex-defsl* 1000) '(:val . 7)))))
 ; apply (2c-iii): (apply g 5 '(6 7)) spreads to (g 5 6 7), the rest (6 7);
 ; (apply g nil) to (g), the arity error -- the tree, mx2 (:applyv) and the
 ; VM alike

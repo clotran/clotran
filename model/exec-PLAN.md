@@ -627,14 +627,32 @@ slot's read and write), and every kind not yet in the model.
    recur in a member, a letfn in a loop's body, nested groups, map and
    apply of a member, a throwing body -- all agree with clj; no observable
    disagreement between the in-place cycle and the indirection.
-   LEFT (letfn): ex-vm-agree over it -- ex-tr's translation (n lets of
-   (:mkgrp (j . shape) ..), a group capture (:const (:grp nil m))), ex-vwf
-   admitting 13, and ex-xvs admitting a closure whose captures hold
-   (:grp G m) (G's entries good templates, its own nil-group captures in
-   range); exec-vmcall's entry already reads the captures resolved (ex-nths,
-   ex-fenv over ex-resl and ex-resclo, as ex-bind binds them); ex-xvs now
-   excludes (:grp ..) shapes, so x2-res is the identity on every good
-   value (ex-xvs-res) and the agreement stands as it was over the rest.
+   *(letfn's VM agreement done)*: ex-tr's kind 13 is n of mx2's lets
+   (ex-trlf), the j-th (:mkgrp (j . shape) caps..) -- shape each fn's
+   template and count of captures, caps every fn's in turn read in the
+   letfn's scope (ex-lfargs: a capture of the group's slot o the constant
+   (:grp nil o-s), any other its slot's local) -- then the body in scope
+   cm ++ (s .. s+n-1). ex-vwf admits 13: n > 0 inits, each a fn (kind 14)
+   of a def's template with natural outer slots, each the group's or in
+   scope (ex-lffns, ex-lfok); the group's slots new to the scope; the body
+   clearing nothing of the scope outside it (as a loop's body: ex-clr of
+   13 stays nil, so the clearing books are unchanged); the body well
+   formed in the grown scope. ex-xvs: a closure's captures may hold (:grp
+   G m) -- G's entries (tm caps) each a def's template with as many
+   captures, each the group's own (:grp nil m') in range or a plain value
+   (ex-gcok), every plain value among them good (ex-gvals); a group
+   capture resolved is a good closure (ex-xvs-gres), so a good closure's
+   resolved captures are good (ex-xvs-clo-resl, exec-vmcall's ex-efacts
+   now asks it of ex-resl). exec-vmlf (new): the tree's n inits and seal
+   are the sealed closures read from the letfn's starting frame (ex-ev-lf,
+   ex-seal-lfr: ex-lfr, ex-lfg, ex-lfsv over ex-gcv), each let's x2-seal
+   the same closure (ex-trlf-mx), the grown scope agreeing with the sealed
+   frame and the closures good (ex-lf-facts); exec-vm's case
+   ex-vgood-m-letfn, ex-vind's kind-13 tip the body in that scope, so
+   ex-vm-agree, ex-recur-stays and ex-vm-runs cover letfn. Not covered:
+   an empty letfn (n = 0), and a letfn whose body clears an outer local
+   (ex-vwf refuses both); ex-anp-runs still takes no letfn (ex-vwf0 and
+   the clearing books' ex-shp do not admit 13).
    Then dot (DEVIATIONS 84's cast: the analyzer to record the target's
    hint, the cast an action before the arguments as a call's 23).
 4. **Clearing joined**: the machine theorem over anpass's marks, from
@@ -642,7 +660,7 @@ slot's read and write), and every kind not yet in the model.
    *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
    exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
    left, named in its paragraph above.
-5. **The rest**: def *(done)*, letfn *(the machine done; the VM's agreement left)*, deftype *(done)*, new *(done)*, set! *(done)*, dot,
+5. **The rest**: def *(done)*, letfn *(done)*, deftype *(done)*, new *(done)*, set! *(done)*, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
 

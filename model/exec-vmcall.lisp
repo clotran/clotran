@@ -323,7 +323,7 @@
         (equal (nth 4 (cadr f)) (nth 4 (ex-ftm f)))
         (clop f) (equal (clo-caps f) (caddr f))
         (true-listp (caddr f)) (equal (len (caddr f)) (len (ex-inners (nth 2 (ex-ftm f)))))
-        (ex-xvs defs (caddr f)) (true-listp args)))
+        (ex-xvs defs (ex-resl (caddr f))) (true-listp args)))
 (defthm ex-ehyp-facts-plain
   (implies (and (ex-ehyp f args defs) (equal (ex-self f) f)) (ex-efacts))
   :rule-classes nil

@@ -82,7 +82,7 @@
 
 (in-package "ACL2")
 
-(include-book "exec-vmcall")
+(include-book "exec-vmlf")
 ; a part of a sequence clears what it does, then the rest what they do
 (defthm ex-clr-seq-open
   (implies (and (member-equal flg (quote (:rec :call :coll))) (consp e) (< (nfix i) (ex-nk e)))
@@ -475,6 +475,8 @@
                ((equal k 5) (ex-vind :do e 0 nil cm env fr fuel caps defs lp))
                ((or (equal k 11) (equal k 12)) (ex-vind :let e 0 nil cm env fr fuel caps defs lp))
                ((equal k 16) (ex-vind :rec e 0 nil cm env fr fuel caps defs lp))
+               ((equal k 13) (ex-vind :m (ex-kid-of e n2) 0 nil (append cm (ex-slots (ex-s2 e) n2)) (append env (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)))
+                                      (ex-write (ex-s2 e) (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)) (ex-lfr e 0 fr)) fuel caps defs lp))
                ((equal k 17) (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil))
                ((equal k 18)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
@@ -606,6 +608,16 @@
                            (:free (x env) (mx2 (cons :prim x) env caps defs fuel))
                            (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
                            (:free (env) (mx2-args nil env caps defs fuel))))))
+; LETFN (milestone 5): the body's case, in the scope its lets make and the
+; sealed frame (exec-vmlf's ex-lf-facts)
+(defthm ex-vgood-m-letfn
+  (implies (and (consp e) (not (member-equal flg '(:iter :do :let :rec :call :coll :fin))) (equal (ex-kind e) 13)
+                (ex-vgood :m (ex-kid-of e (ex-i2 e)) 0 nil (append cm (ex-slots (ex-s2 e) (ex-i2 e))) (append env (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)))
+                          (ex-write (ex-s2 e) (ex-lfsv e 0 fr (ex-lfg e 0 fr nil)) (ex-lfr e 0 fr)) fuel caps defs lp))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t
+                  :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-agree ex-vwf ex-ev ex-tr ex-clr ex-lfsv ex-lfg ex-lfr ex-write ex-lsl))
+                  :use ((:instance ex-lf-facts (caps caps) (d2 defs))))))
 (defthm ex-vgood-coll-mid
   (implies (and (equal flg :coll) (consp e) (< (nfix i) (ex-nk e))
                 (ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
@@ -725,12 +737,12 @@
         ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
          (ex-vgood :call e 1 (list (val (car (ex-k0)))) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append env (list (val (car (ex-k0)))))
                    (cadr (ex-k0)) fuel caps defs lp)))
-(ex-old ex-vgood-leaf-plain ((consp e) (ex-mflg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19 22 23 10 20 24)))
+(ex-old ex-vgood-leaf-plain ((consp e) (ex-mflg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 13 16 17 18 19 22 23 10 20 24)))
                          (not (and (equal (ex-kind e) 2) (ex-mark e)))) ())
 ; a marked read (milestone 4): its slot cleared, blanked in the scope after
 (ex-old ex-vgood-m-mark ((consp e) (ex-mflg) (equal (ex-kind e) 2) (ex-mark e)) ())
 (defthm ex-vgood-m-leaf
-  (implies (and (consp e) (ex-mflg) (not (member-equal (ex-kind e) (quote (4 5 6 7 8 9 11 12 16 17 18 19 22 23 10 20 24)))))
+  (implies (and (consp e) (ex-mflg) (not (member-equal (ex-kind e) (quote (4 5 6 7 8 9 11 12 13 16 17 18 19 22 23 10 20 24)))))
            (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
   :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-kid-of) :use (ex-vgood-leaf-plain ex-vgood-m-mark))))
 (in-theory (disable ex-vgood-m-leaf))
@@ -762,29 +774,3 @@
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
 
-; THE DEFS ARE THE VM'S: every clause's body x2wf at its locals (vmx2's x2defs-ok)
-(defthm ex-xwf-capts (x2wf-args (ex-capts j m) n))
-(defun ex-clets-ind2 (j m n) (if (zp m) n (ex-clets-ind2 (1+ (nfix j)) (1- m) (1+ n))))
-(defthm ex-xwf-clets (implies (natp n) (equal (x2wf (ex-clets j m x) n k) (x2wf x (+ n (nfix m)) k)))
-  :hints (("Goal" :induct (ex-clets-ind2 j m n) :expand ((:free (y n) (x2wf (cons :let y) n k))))))
-(defthm ex-len-fbcm (equal (len (ex-fbcm tm ar)) (+ (ex-anp ar) (len (ex-inners (nth 2 tm))) 1))
-  :hints (("Goal" :in-theory (enable ex-fbcm))))
-(defthm ex-len-fcm (equal (len (ex-fcm tm ar)) (len (ex-fbcm tm ar))) :hints (("Goal" :in-theory (enable ex-fcm))))
-(defthm ex-params-sub (subsetp-equal (ex-fparams ar) (ex-fbcm tm ar)) :hints (("Goal" :in-theory (enable ex-fbcm))))
-(defthm ex-len-fparams (equal (len (ex-fparams ar)) (ex-anp ar)))
-(defthm ex-arwf-vwf
-  (implies (ex-arwf tm ar defs) (ex-vwf :m (ex-abody ar) 0 (ex-fcmb tm ar) (ex-flp ar) defs))
-  :hints (("Goal" :in-theory (enable ex-arwf))))
-(defthm ex-fbtr-xwf
-  (implies (ex-arwf tm ar defs) (x2wf (ex-fbtr tm ar) (ex-anp ar) nil))
-  :hints (("Goal" :in-theory (e/d (ex-fbtr) (ex-tr-xwf ex-fparams ex-arwf-vwf))
-                  :use ((:instance ex-tr-xwf (e (ex-abody ar)) (cm (ex-fcmb tm ar)) (lp (ex-flp ar))) ex-arwf-vwf
-                        (:instance ex-locals-xwf (ls (ex-fparams ar)) (cm (ex-fbcm tm ar))))
-                  :expand ((:free (y n) (x2wf (cons :let y) n nil)) (:free (y n k) (x2wf (cons :loop y) n k))
-                           (:free (y n) (x2wf (cons :mkclo y) n nil)) (:free (x y n) (x2wf-args (cons x y) n))))))
-(defthm ex-clauses-ok (implies (ex-arswf tm ars defs) (clauses-ok (ex-clauses tm ars)))
-  :hints (("Goal" :in-theory (e/d (ex-clause ex-anp ex-anf ex-avar ex-arwf) (ex-fbtr-xwf))
-                  :induct (ex-clauses tm ars))
-          ("Subgoal *1/2" :use ((:instance ex-fbtr-xwf (ar (car ars)))))))
-(defthm ex-defs-xdefs (implies (ex-defs-ok ds defs) (x2defs-ok ds))
-  :hints (("Goal" :in-theory (enable ex-def ex-tmwf))))

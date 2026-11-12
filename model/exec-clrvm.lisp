@@ -129,7 +129,7 @@
 (defthm ex-mem-blank (implies (and (member-equal x cm) (not (member-equal x c))) (member-equal x (ex-blank c cm))))
 (defthm ex-sub-blank (implies (and (subsetp-equal a cm) (not (intersectp-equal c a))) (subsetp-equal a (ex-blank c cm))))
 (defthm ex-sub-snoc (equal (subsetp-equal (append a (list x)) l) (and (subsetp-equal a l) (member-equal x l) t)))
-(defthm ex-mem-slots
+(defthm ex-mem-slots-iff
   (iff (member-equal x (ex-slots s n)) (and (natp x) (<= (nfix s) x) (< x (+ (nfix s) (nfix n)))))
   :hints (("Goal" :induct (ex-slots s n) :in-theory (enable ex-slots))))
 (defthm ex-int-slots-less
