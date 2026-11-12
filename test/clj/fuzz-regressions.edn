@@ -10,6 +10,11 @@
  ;; is not a keyword is named by its toString (a message less the position
  ;; tree and compiled modes add, as scripts/fuzz-read compares it)
  (mapv #(try (read-string {:read-cond :allow :features #{:zz}} %) (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))) ["[#?@(:yy (0) :zz [1 \" \"]λ :default ())]" "[#?(:zz \"\" ':cljs #js {} :default 2)]" "[@#?@(:zz [a b])]" "[#?(yy 1)]" "[#?(:yy #?@(:zz [1 #\"[^\\s]\"]))]" "{:a #?@(:zz [1 :b 2])}" "[#_ #?@(:zz [a b]) c]" "['#?(:cljs 1) x]" "[#?(:else 2)]"])
+ ;; a collection a reader message names is its toString, RT.printString's pr
+ ;; with *print-namespace-maps* as bound (clojure.main's true): #:a{:b 1}
+ ;; (scripts/fuzz-read, seed 3809501600)
+ (mapv #(try (read-string {:read-cond :allow} %) (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))) ["#?({:a/b 1} 1)" "##{:a/b 1}" "{{:a/b 1} 1 {:a/b 1} 2}" "#{[{:a/b 1}] [{:a/b 1}]}"])
+ (binding [*print-namespace-maps* false] (try (read-string {:read-cond :allow} "#?({:a/b 1} 1)") (catch clotran.host.exception e (let [m (.getMessage e) k (.indexOf m "  at ")] (if (neg? k) m (subs m 0 k))))))
  ;; syntax-quote keeps the metadata of a symbol it leaves as read -- a
  ;; special form, a qualified name, a.b -- and drops it from one it
  ;; resolves or rebuilds, as LispReader.syntaxQuote (scripts/fuzz-read)

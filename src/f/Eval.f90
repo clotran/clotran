@@ -1279,6 +1279,7 @@ contains
     call gcr_set_sq_expander(sq_reader_hook)
     call gcr_set_eval_reader(eval_reader_hook)
     call gcr_set_tag_resolver(tag_resolver_hook)
+    call gcr_set_to_string(to_string_text)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     ! The sweep tells us when an object owning out-of-heap storage
@@ -1836,6 +1837,7 @@ contains
     call gcr_set_sq_expander(sq_reader_hook)
     call gcr_set_eval_reader(eval_reader_hook)
     call gcr_set_tag_resolver(tag_resolver_hook)
+    call gcr_set_to_string(to_string_text)
     ! the generated VM's runtime, before any thread can run VM code (vm.inc)
     if (vm_enabled()) call vmrt_init()
     call gc_set_finalizer(gce_finalize_obj, [OBJ_ARRAY, OBJ_REGEX, OBJ_MATCHER])

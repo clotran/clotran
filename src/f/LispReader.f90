@@ -38,7 +38,7 @@ module LispReader
 
   public :: gcr_read, gcr_read_all, gcr_error, gcr_has_error, gcr_error_class
   public :: gcr_begin_file, gcr_read_next, gcr_position, gcr_position_parts, POS_SHIFT
-  public :: gcr_set_suppress_read, gcr_set_tag_resolver
+  public :: gcr_set_suppress_read, gcr_set_tag_resolver, gcr_set_to_string
   public :: gcr_set_ns_resolver, gcr_set_tag_markers, gcr_set_read_cond, gcr_current_file, gcr_set_sq_expander, gcr_set_eval_reader
   public :: gcr_image_write, gcr_image_read, gcr_file_count, gcr_file_name
 
@@ -90,6 +90,19 @@ module LispReader
   ! read itself must judge the value -- a reader conditional's feature --
   ! it asks first, so an unknown tag is the error clj's reader gives.
   procedure(sq_expander_i), pointer, save :: tag_resolver => null()
+
+  ! A value's toString, where a message has one: the evaluator's
+  ! (Eval's to_string_text), so a collection prints as RT.printString
+  ! prints it -- through pr, *print-namespace-maps* and all: a map of
+  ! one namespace is #:ns{...} under clojure.main's binding
+  abstract interface
+     recursive subroutine to_string_i(v, s)
+       import :: gc_value
+       type(gc_value), intent(in) :: v
+       character(len=:), allocatable, intent(out) :: s
+     end subroutine to_string_i
+  end interface
+  procedure(to_string_i), pointer, save :: to_string_hook => null()
 
   ! SOURCE POSITIONS. A list form records where it was read from:
   ! OBJ_CONS's i2 (free: i1 is the count) holds file-id * 2^26 + the
@@ -1181,7 +1194,7 @@ contains
     case default
        ! printed, as toString prints it: a BigInt without its N, a
        ! BigDecimal without its M
-       call gcp_str(k, .true., s=t)
+       call coll_text(k, t)
        if ((k%tag == GCT_BIG .or. k%tag == GCT_DEC) .and. len(t) > 1) t = t(1:len(t) - 1)
        if (len(t) == 0) t = trim(adjustl(src))
     end select
@@ -1554,7 +1567,7 @@ contains
              else if (gc_kind(k) == OBJ_REGEX) then
                 call gcp_str(gc_slot(k, 1), .false., s=kt)
              else if (k%tag == GCT_VEC .or. k%tag == GCT_OBJ) then
-                call gcp_str(k, .true., s=kt)
+                call coll_text(k, kt)
              else
                 call key_text(k, "", kt)
              end if
@@ -1693,7 +1706,7 @@ contains
             end if
             call fail("Invalid token: ##" // ot)
          else
-            call gcp_str(o, .true., s=ot)
+            call coll_text(o, ot)
             call fail("Invalid token: ##" // ot)
          end if
          v = gc_nil()
@@ -2549,6 +2562,23 @@ contains
       end if
     end function checks
   end function symbol_token_ok
+
+  subroutine gcr_set_to_string(f)
+    procedure(to_string_i) :: f
+    to_string_hook => f
+  end subroutine gcr_set_to_string
+
+  ! toString of what a message names: a collection the evaluator's, the
+  ! rest (and everything before the evaluator is there) printed readably
+  recursive subroutine coll_text(v, s)
+    type(gc_value), intent(in) :: v
+    character(len=:), allocatable, intent(out) :: s
+    if (associated(to_string_hook) .and. (v%tag == GCT_VEC .or. v%tag == GCT_OBJ)) then
+       call to_string_hook(v, s)
+    else
+       call gcp_str(v, .true., s=s)
+    end if
+  end subroutine coll_text
 
   subroutine gcr_set_tag_resolver(f)
     procedure(sq_expander_i) :: f
