@@ -76,6 +76,13 @@
            (ex-ntm (ex-kid-of e (ex-i2 e))))
   :hints (("Goal" :in-theory (disable ex-ntm-do) :use ex-ntm-do)))
 
+; a letfn's body is in its tail, its fns in none
+(defthm ex-ntm-letfn
+  (implies (and (ex-nodep e) (equal (ex-kind e) 13) (ex-ntm e) (equal (ex-nk e) (1+ (ex-i2 e))))
+           (ex-ntm (ex-kid-of e (ex-i2 e))))
+  :hints (("Goal" :in-theory (enable ex-ntm anp-nn) :expand ((anp-tc 0 (ex-ast e) 0 0 1) (anp-hfr 0 (ex-ast e) 0 0))
+           :use ((:instance hfr-kid (x (ex-ast e)) (i (ex-i2 e)))))))
+
 ; a call's, collection's or try's parts and a loop's inits and body take
 ; no loop target from outside
 (defthm ex-vwf-lpfree
@@ -85,6 +92,10 @@
   :hints (("Goal" :induct (ex-vwf flg e i cm lp defs)
            :in-theory (disable (:definition ex-vwf) ex-clr ex-astf ex-ast-open)
            :expand ((:free (flg cm lp) (ex-vwf flg e i cm lp defs))))))
+
+; ex-vwf walks a letfn's body, not its fns, so no let's walk of one
+(defthm ex-vwf-let-13 (implies (equal (ex-kind e) 13) (not (ex-vwf :let e i cm lp defs)))
+  :hints (("Goal" :expand ((ex-vwf :let e i cm lp defs)))))
 
 ; ---- NO LOOP TARGET NEEDED ----------------------------------------------------------------------
 

@@ -84,6 +84,9 @@
                   ((equal k 11) (and (equal nk (1+ n2)) (ex-vwf0 :let e 0 cm lp defs)))
                   ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
                                      (ex-vwf0 :let e 0 cm lp defs)))
+                  ((equal k 13) (and (equal nk (1+ n2)) (< 0 n2) (ex-lffns e 0) (ex-lfok e 0 cm defs)
+                                     (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm) (ex-nomem (ex-clr :m (ex-kid-of e n2) 0) cm)
+                                     (ex-vwf0 :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) lp defs)))
                   ((equal k 16) (and (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))
                                      (equal nk (cdr lp)) (ex-vwf0 :rec e 0 cm lp defs)))
                   ((equal k 17) (and (equal nk 1) (ex-vwf0 :m (ex-kid-of e 0) 0 cm nil defs)))
@@ -142,6 +145,22 @@
   :hints (("Goal" :induct (ex-dn i n)) ("Subgoal *1/1" :use ((:instance ex-slots-snoc-n (i (1- i)))) :in-theory (disable ex-slots-snoc-n ex-slots-snoc))))
 (defthm ex-nomem-blank-x (implies (and x (not (member-equal x l))) (not (member-equal x (ex-blank c l)))))
 
+; a letfn: ex-cwf walks it as a let, its fns clearing nothing, so its body
+; is ex-cwf's at B and each fn's outer slots stay in the scope with B blanked
+(defthm ex-lfin-bl
+  (implies (and (ex-lfin os s n cm) (not (intersectp-equal B os)) (ex-bl B cm cm2)) (ex-lfin os s n cm2)))
+(defthm ex-cwf-lf-body
+  (implies (and (consp e) (equal (ex-kind e) 13) (ex-lffns e j) (ex-cwf :let e j B) (natp j) (<= j (ex-i2 e)))
+           (ex-cwf :m (ex-kid-of e (ex-i2 e)) 0 B))
+  :hints (("Goal" :induct (ex-lfoall e j) :in-theory (disable ex-kid-of ex-cwf ex-clr)
+           :expand ((ex-cwf :let e j B) (ex-lffns e j) (ex-clr :m (ex-kid-of e j) 0)))))
+(defthm ex-cwf-lf-fns
+  (implies (and (consp e) (equal (ex-kind e) 13) (ex-lffns e j) (ex-cwf :let e j B) (ex-lfok e j cm defs) (ex-bl B cm cm2) (natp j))
+           (ex-lfok e j cm2 defs))
+  :hints (("Goal" :induct (ex-lfoall e j) :in-theory (disable ex-kid-of ex-cwf ex-clr)
+           :expand ((ex-cwf :let e j B) (ex-lffns e j) (ex-lfok e j cm defs) (ex-lfok e j cm2 defs) (ex-clr :m (ex-kid-of e j) 0)
+                    (ex-cwf :m (ex-kid-of e j) 0 B)))))
+
 ; ---- THE COMPOSITION ------------------------------------------------------------------------------
 
 ; ex-vwf0's walk, with ex-vwf's scope cm2 and ex-cwf's B threaded beside it
@@ -179,6 +198,7 @@
                                     (ex-cmpind :m (ex-kid-of e 2) 0 cm (ex-blank c0 cm2) (append c0 B) lp)))
                  ((equal k 5) (ex-cmpind :do e 0 cm cm2 B lp))
                  ((or (equal k 11) (equal k 12)) (ex-cmpind :let e 0 cm cm2 B lp))
+                 ((equal k 13) (ex-cmpind :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) (append cm2 (ex-slots (ex-s2 e) n2)) B lp))
                  ((equal k 16) (ex-cmpind :rec e 0 cm cm2 B lp))
                  ((equal k 17) (ex-cmpind :m (ex-kid-of e 0) 0 cm cm2 B nil))
                  ((equal k 18) (list (ex-cmpind :m (ex-kid-of e 0) 0 cm cm2 B nil)

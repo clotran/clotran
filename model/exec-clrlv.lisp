@@ -108,6 +108,54 @@
 (defthm ex-spo-2-done
   (implies (and (natp i) (not (< i m))) (equal (sp-out 2 x i m A L n) A)))
 
+; a letfn: anpass's walk reads its fns' captures again after its body
+; (sp-fncaps, refresh_captures' second pass), sets its fns' sp-out has set
+; already -- so it is a let's walk of its fns and body
+(defthm ex-upd-comm
+  (implies (and (natp a) (natp b) (not (equal a b)))
+           (equal (update-nth a v (update-nth b w L)) (update-nth b w (update-nth a v L)))))
+(defthm ex-upd-idem (equal (update-nth a v (update-nth a w L)) (update-nth a v L)))
+(defthm ex-set-comm (equal (sp-set a (sp-set b L n) n) (sp-set b (sp-set a L n) n)) :hints (("Goal" :cases ((equal a b)))))
+(defthm ex-set-idem (equal (sp-set a (sp-set a L n) n) (sp-set a L n)))
+(in-theory (disable sp-set))
+(defthm ex-setl-set (equal (ex-setl X (sp-set a L n) n) (sp-set a (ex-setl X L n) n)))
+(defthm ex-setl-comm (equal (ex-setl X (ex-setl Y L n) n) (ex-setl Y (ex-setl X L n) n))
+  :hints (("Goal" :induct (ex-setl Y L n))))
+(defthm ex-setl-idem (equal (ex-setl X (ex-setl X L n) n) (ex-setl X L n)) :hints (("Goal" :induct (len X))))
+
+; the fns' outer slots j .. n-1, in turn
+(defun ex-lfoall (e j)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (< (nfix j) (ex-i2 e)) (append (ex-lfos e (nfix j)) (ex-lfoall e (1+ (nfix j)))) nil))
+(defun ex-lfoind (e j L n)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix j)))))
+  (if (and (natp j) (< j (ex-i2 e))) (ex-lfoind e (1+ j) (ex-setl (ex-lfos e j) L n) n) (list L n)))
+
+; a let's body, past its inits, is in ex-shp's shapes
+(defthm ex-shp-let-body
+  (implies (and (consp e) (ex-shp :let e j) (natp j) (<= j (ex-i2 e))) (ex-shp :m (ex-kid-of e (ex-i2 e)) 0))
+  :hints (("Goal" :induct (ex-lfoall e j) :in-theory (disable ex-kid-of) :expand ((ex-shp :let e j)))))
+
+(defthm ex-spo1-letfn
+  (implies (and (ex-nodep e) (equal (ex-kind e) 13) (equal (ex-nk e) (1+ (ex-i2 e))) (ex-shp :let e j) (ex-lffns e j) (natp j))
+           (equal (sp-out 1 (ex-ast e) j (ex-i2 e) nil L n) (ex-setl (ex-lfoall e j) L n)))
+  :hints (("Goal" :induct (ex-lfoall e j) :in-theory (disable ex-ast-open)
+           :expand ((ex-shp :let e j) (ex-shp :m (ex-kid-of e j) 0) (ex-lffns e j) (ex-lfoall e j)))))
+
+(defthm ex-fncaps-letfn
+  (implies (and (ex-nodep e) (equal (ex-kind e) 13) (equal (ex-nk e) (1+ (ex-i2 e))) (ex-shp :let e j) (ex-lffns e j) (natp j))
+           (equal (sp-fncaps (ex-ast e) j (ex-i2 e) L n) (ex-setl (ex-lfoall e j) L n)))
+  :hints (("Goal" :induct (ex-lfoind e j L n) :in-theory (e/d (anp-sat) (ex-ast-open))
+           :expand ((ex-shp :let e j) (ex-shp :m (ex-kid-of e j) 0) (ex-lffns e j) (ex-lfoall e j)
+                    (sp-fncaps (ex-ast e) j (ex-i2 e) L n)))
+          ("Subgoal *1/1" :use ((:instance ex-cap-list (e (ex-kid-of e j)) (i 0))))))
+
+(defthm ex-spo-letfn
+  (implies (and (ex-nodep e) (equal (ex-kind e) 13) (equal (ex-nk e) (1+ (ex-i2 e))) (ex-shp :let e 0) (ex-lffns e 0))
+           (equal (sp-out 0 (ex-ast e) j m A L n) (sp-out 1 (ex-ast e) 0 (ex-nk e) nil L n)))
+  :hints (("Goal" :expand ((sp-out 0 (ex-ast e) j m A L n)) :in-theory (e/d (anp-nn) (ex-ast-open ex-shp ex-lffns ex-lfoall sp-fncaps))
+           :use ((:instance sp-out-seq-open (fl 1) (x (ex-ast e)) (j 0) (m (ex-nk e)) (A nil))))))
+
 ; ---- THE MAP ----------------------------------------------------------------------------------------
 
 (defun ex-lvp (flg e i A L n)
@@ -144,7 +192,7 @@
          (cond ((equal k 4) (list (ex-lvind :m (ex-kid-of e 0) 0 nil (sp-or (ex-lv :m (ex-kid-of e 1) 0 nil L n) (ex-lv :m (ex-kid-of e 2) 0 nil L n)) n)
                                   (ex-lvind :m (ex-kid-of e 1) 0 nil L n) (ex-lvind :m (ex-kid-of e 2) 0 nil L n)))
                ((equal k 5) (ex-lvind :do e 0 nil L n))
-               ((or (equal k 11) (equal k 12)) (ex-lvind :let e 0 nil L n))
+               ((member k '(11 12 13)) (ex-lvind :let e 0 nil L n))
                ((equal k 16) (ex-lvind :rec e 0 nil L n))
                ((equal k 17) (ex-lvind :m (ex-kid-of e 0) 0 nil L n))
                ((equal k 18) (let ((L1 (ex-lv :fin e 0 nil L n)))

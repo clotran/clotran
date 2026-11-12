@@ -8,7 +8,7 @@
 ; nonzero the fn, as the analyzer records it).
 ;
 ;   ex-shp       the tree in the shapes exec.inc and anpass both take (a
-;                let's or loop's children its inits and its body, a throw's
+;                let's, loop's or letfn's children its inits and its body, a throw's
 ;                one child, an if's at most three) and the sizes anpass's
 ;                reads keep exact
 ;   ex-rds-ast   exec-clr's ex-rds is anpass's rds of the node
@@ -56,7 +56,7 @@
                         ((< i (- nk 1)) (and (ex-shp :m (ex-kid-of e i) 0) (ex-shp :do e (1+ i))))
                         ((equal i (- nk 1)) (ex-shp :m (ex-kid-of e i) 0))
                         (t nil)))
-             (:let (cond ((not (and (or (equal k 11) (equal k 12)) (equal nk (1+ n2)))) nil)
+             (:let (cond ((not (and (member k '(11 12 13)) (equal nk (1+ n2)))) nil)
                          ((< i n2) (and (ex-shp :m (ex-kid-of e i) 0) (ex-shp :let e (1+ i))))
                          ((equal i n2) (ex-shp :m (ex-kid-of e n2) 0))
                          (t nil)))
@@ -70,6 +70,7 @@
                     ((equal k 4) (and (<= nk 3) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :m (ex-kid-of e 1) 0) (ex-shp :m (ex-kid-of e 2) 0)))
                     ((equal k 5) (ex-shp :do e 0))
                     ((or (equal k 11) (equal k 12)) (and (equal nk (1+ n2)) (ex-shp :let e 0)))
+                    ((equal k 13) (and (equal nk (1+ n2)) (ex-lffns e 0) (ex-shp :let e 0)))
                     ((equal k 16) (ex-shp :rec e 0))
                     ((equal k 17) (and (equal nk 1) (ex-shp :m (ex-kid-of e 0) 0)))
                     ((equal k 18) (and (<= nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :cs e 0) (ex-shp :fin e 0)))
