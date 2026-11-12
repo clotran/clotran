@@ -6,8 +6,9 @@
 ; fn body clearing nothing of its captures or self slot unless it never
 ; recurs to the fn (ex-arwf). This book states the first two on exec.lisp's
 ; tree and proves them of marks anpass's liveness pass puts there;
-; exec-clrmap.lisp shows that liveness is anpass's (the tree read as
-; anpass.lisp reads it) and proves the third.
+; exec-clrmap.lisp and exec-clrlv.lisp show that liveness is anpass's (the
+; tree read as anpass.lisp reads it), exec-clrfn.lisp proves the third and
+; exec-clrvm.lisp joins them to exec-vm.
 ;
 ;   ex-rds   every slot a node reads (its locals, a fn's outer slots), as
 ;            ex-clr walks it

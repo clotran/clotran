@@ -476,26 +476,63 @@ slot's read and write), and every kind not yet in the model.
    rfn the node's slot 8, which exec.inc does not read), ex-shp the shapes
    both take, and ex-rds-ast: exec-clr's reads are anpass's rds of it.
    (anpass-proof's reg is anp-reg now: it clashed with vm-call's.)
-   **Next (milestone 4, the rest)**: (a) ex-lv-ast, ex-lv is sp-out of
-   ex-ast's node, so ex-mkok is anp-clears-spec's marks -- tried as one
-   induction over ex-lv (the piece of a place: :m sp-out 0 of the node, :do
-   :rec :call :coll sp-out 1 from i, a loop's :let sp-out 1 from i to n2 onto
-   the body's sp-out from its sp-rd, :cs :ct sp-out 2 from i with A, :fin
-   kid 1's) and it ran past 400 s;
-   it wants a lemma per kind, the :m node's sp-out opened once per kind,
-   sp-out's definition disabled (sp-out-seq-front, sp-out-2-open, -done the
-   only openers). (b) ex-arwf's fn-body condition: ex-vwf with the fn's lp
-   and no recur to the fn (anp-hfr of ex-ast's body nil) gives ex-vwf with
-   lp nil, through the tail check (anp-tc at tt 1 passed: a recur in the
-   fn's tail has rfn nonzero, so has_fn_recur sees it); when anp-hfr holds
-   anp-clears marks nothing, ex-clr is nil and ex-nomem holds. (c) the
-   composition with ex-vm-agree: ex-vwf with no blanking plus ex-cwf gives
-   ex-vwf, under the one case not admitted (a loop's later init clearing an
-   earlier init's slot) as a hypothesis.
+   **Milestone 4, the rest** *(done)*: exec-clrlv.lisp, ex-lv-ast: ex-lv
+   is sp-out of ex-ast's node on a tree of ex-shp's shapes (ex-lvp the
+   piece: :m sp-out 0 of the node, :do :rec :call :coll sp-out 1 from i, a
+   loop's :let sp-out 1 from i to n2 onto the body's sp-out from its sp-rd,
+   :cs :ct sp-out 2 from i with A, :fin kid 1's), sp-out disabled, its node
+   case opened once per kind (ex-spo-*), the sequences only by
+   sp-out-seq-front, -seq-done, -2-open and -2-done, ex-lv and ex-shp opened
+   by :expand on the induction's own node; the induction ex-lvind walks a
+   call as its children from 0, as ex-shp does (under 1 s; the one
+   induction with sp-out and ex-lv open ran past 600 s). ex-mk-local: sp-mk
+   marks a local exactly when ex-mkok lets it be marked, so ex-mkok is
+   anp-clears-spec's marks. exec-clrfn.lisp: ex-vwf-nolp, a body well formed
+   with the fn's lp, its tail check at tt 1 passed and anp-hfr nil, is well
+   formed with lp nil (ex-ntm-* the node's anp-tc and anp-hfr per kind; a
+   recur at tt 1 is refused with rfn 0 and seen by has_fn_recur with rfn
+   nonzero; ex-vwf-lpfree: a call's, collection's or try's parts and a
+   loop's inits and body take no outer lp); ex-arwf-body, ex-arwf's last
+   condition from the tail check and the marks being apply_clears' (none
+   when anp-hfr holds). exec-clrvm.lisp: ex-vwf0, ex-vwf with no scope
+   blanked and no clearing conditions but the one case not admitted asked
+   (a loop's init clears no slot of the loop); ex-bl, a scope with some of
+   B blanked; ex-vwf-cwf, ex-vwf0 and ex-cwf give ex-vwf; ex-anp-runs, end
+   to end: a tree ex-vwf0 calls well formed whose marks are anpass's
+   liveness decision (ex-mkok) runs on the VM as on the tree (ex-vm-runs'
+   conclusion; the templates in defs taken well formed as ex-vm-runs takes
+   them, ex-defs-ok). exec-clrmap's three copies of ex-ast-open made one.
+   Left, named: the templates' bodies brought through ex-vwf0 the same way
+   (an induction over ex-defs-ok, each body's ex-arwf from ex-vwf0,
+   ex-mkok from (zeros n) and ex-arwf-body), and the loop-init case, which
+   anpass marks when the body never reads the slot -- a hypothesis here,
+   not a theorem.
+   **Milestone 4 done.**
+   **Next (milestone 5)**: the kinds exec.inc still runs through a nested
+   `exec` (its `exec_aux`): N_DEF (exec_def: the init's value, then the
+   Var's root bound -- a host action, the namespace's), N_LETFN
+   (exec_letfn: the fns' closures into slots start .. start+n-1, then
+   refresh_captures over them, then the body -- as a let's inits but for
+   the captures' second pass, which wants the closure's capture slots
+   rewritten in place: a new action), N_DEFTYPE (exec_deftype: the
+   methods' closures, the type registered -- host), N_NEW/N_NEWTYPE (the
+   arguments as a collection's, then new_cached -- a prim, as :vector's),
+   N_SETBANG (exec_setbang: a Var's thread binding or a field set -- host),
+   and N_DOT (run_loop's: target then arguments into slots 3 and 4, then
+   dot_dispatch, re-executable, a yield inside it resumed by dispatching
+   again -- the call's shape with the host's dispatch for the callee; the
+   target's interface hint and its cast are DEVIATIONS 84's, which wants
+   the cast before the arguments, as a call's action 23). Order: new
+   (closest to the collections), then letfn (the frame action), then dot
+   (with 84's cast, removing the deviation), then def, set!, deftype as
+   host actions. Each: the kind into exec.lisp's ex-step and ex-ev, the
+   generated ex-act's action, exec_gen.inc regenerated, fuzz-exec-gen
+   drawing it, ex-vm-agree's case a lemma of its own (as exec-vm's ex-old).
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
-   First part done (the **Milestone 4, first part** paragraph above);
-   the second in part (exec-clr, exec-clrmap); its rest the Next there.
+   *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
+   exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
+   left, named in its paragraph above.
 5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.

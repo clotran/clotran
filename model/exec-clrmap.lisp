@@ -13,10 +13,7 @@
 ;                reads keep exact
 ;   ex-rds-ast   exec-clr's ex-rds is anpass's rds of the node
 ;
-; Not yet: that exec-clr's ex-lv is anpass's sp-out of the node (the live
-; set its liveness pass computes), which makes exec-clr's ex-mkok
-; anp-clears-spec's marks on this tree. The one induction over ex-lv runs
-; away (past 400 s); it wants a lemma per kind, as exec-vm's cases are.
+; exec-clrlv.lisp shows exec-clr's ex-lv is anpass's sp-out of the node.
 
 (in-package "ACL2")
 
@@ -92,26 +89,6 @@
   :hints (("Goal" :induct (nth j l) :expand ((ex-astf 3 l)) :in-theory (enable anp-nth))))
 (defthm ex-anp-len (equal (anp-len l) (len l)) :hints (("Goal" :in-theory (enable anp-len))))
 (defthm ex-ast-nil (equal (ex-astf 0 nil) nil))
-
-(defthm ex-ast-open
-  (implies (consp e)
-           (equal (ex-astf 0 e)
-                  (list :ast nil (ex-kind e) (ex-i2 e) (ex-astf 1 (ex-kids e)) nil
-                        (if (equal (ex-kind e) 14) (ex-outers (nth 2 (ex-c e))) nil)
-                        (cond ((equal (ex-kind e) 18) (ex-astf 2 (ex-c e))) ((equal (ex-kind e) 19) (ex-astf 3 (ex-c e))) (t nil))
-                        (if (nth 8 e) 1 0))))
-  :hints (("Goal" :in-theory (enable ex-kind ex-i2 ex-kids ex-c))))
-(in-theory (disable ex-astf))
-
-(defthm ex-ast-open
-  (implies (consp e)
-           (equal (ex-astf 0 e)
-                  (list :ast nil (ex-kind e) (ex-i2 e) (ex-astf 1 (ex-kids e)) nil
-                        (if (equal (ex-kind e) 14) (ex-outers (nth 2 (ex-c e))) nil)
-                        (cond ((equal (ex-kind e) 18) (ex-astf 2 (ex-c e))) ((equal (ex-kind e) 19) (ex-astf 3 (ex-c e))) (t nil))
-                        (if (nth 8 e) 1 0))))
-  :hints (("Goal" :in-theory (enable ex-kind ex-i2 ex-kids ex-c))))
-(in-theory (disable ex-astf))
 
 (defthm ex-ast-open
   (implies (consp e)
