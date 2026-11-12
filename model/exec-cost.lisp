@@ -16,7 +16,8 @@
 ; arity a call picks is at most two walks of its callee's a arities, one
 ; ex-arfit (10 comparisons) each: at most 2a (ex-arity-steps-bound). A
 ; case* its test's turns, its branch's and 2 (ex-case-turns); a collection of
-; n elements 2n + 2 beyond its elements' (ex-coll-turns).
+; n elements 2n + 2 beyond its elements' (ex-coll-turns); a letfn of n fns
+; 2n + 1 beyond its fns' and its body's (ex-letfn-turns).
 
 (in-package "ACL2")
 
@@ -308,4 +309,30 @@
                (+ (* 2 (ex-nk e)) 3 (ex-coll-parts e 0 nil fr fuel))))
   :hints (("Goal" :in-theory (e/d (c+) (ex-kid-of ex-cbuild ex-coll-turns))
                   :use ((:instance ex-coll-turns (i 0) (tmp nil)))
+                  :expand ((ex-ev :m e 0 nil fr fuel)))))
+
+; A LETFN'S TURNS (N_LETFN, milestone 5): a let's -- 2 a binding beyond its
+; fn's own (each one turn, a closure made) -- and one more, action 28,
+; which seals the group and becomes the body: that turn rewrites each of
+; the group's captures (exec.inc refresh_captures, the sum of its n fns'
+; capture counts, as a closure's making copies its own), then the body's
+(defun ex-lf-parts (e i fr fuel)
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix i)))))
+  (if (< (nfix i) (ex-i2 e))
+      (let ((r (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel)))
+        (+ (caddr r) (ex-lf-parts e (1+ (nfix i)) (update-nth (+ (ex-s2 e) (nfix i)) (val (car r)) (cadr r)) fuel)))
+    (caddr (ex-ev :m (ex-kid-of e (ex-i2 e)) 0 nil (ex-seal (ex-s2 e) (ex-i2 e) fr) fuel))))
+(defthm ex-lf-let-turns
+  (implies (and (consp e) (equal (ex-kind e) 13))
+           (<= (caddr (ex-ev :let e i tmp fr fuel))
+               (+ (* 2 (nfix (- (ex-i2 e) (nfix i)))) 1 (ex-lf-parts e i fr fuel))))
+  :hints (("Goal" :induct (ex-lf-parts e i fr fuel)
+                  :in-theory (e/d (c+) (ex-kid-of))
+                  :expand ((ex-ev :let e i tmp fr fuel)))))
+(defthm ex-letfn-turns
+  (implies (and (consp e) (equal (ex-kind e) 13))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel))
+               (+ (* 2 (ex-i2 e)) 1 (ex-lf-parts e 0 fr fuel))))
+  :hints (("Goal" :in-theory (e/d (c+) (ex-kid-of ex-lf-let-turns))
+                  :use ((:instance ex-lf-let-turns (i 0) (tmp nil)))
                   :expand ((ex-ev :m e 0 nil fr fuel)))))

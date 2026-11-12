@@ -96,6 +96,11 @@
   :hints (("Goal" :induct (ex-bind-caps capv caps fr))))
 (defthm no-mk-nthcdr (implies (no-mk l) (no-mk (nthcdr n l))) :hints (("Goal" :in-theory (enable no-mk))))
 (defthm ex-mk-not-true-list (implies (true-listp x) (not (equal x *ex-mk*))))
+; a call's captures resolved and a letfn's group sealed: closures, no marker
+(defthm ex-res-not-mk (implies (not (equal v *ex-mk*)) (not (equal (x2-res v) *ex-mk*))) :hints (("Goal" :in-theory (enable x2-res clo))))
+(defthm no-mk-resl (implies (no-mk l) (no-mk (ex-resl l))) :hints (("Goal" :induct (ex-resl l))))
+(defthm no-mk-sealvs (no-mk (ex-sealvs fs s n g)) :hints (("Goal" :induct (ex-sealvs fs s n g))))
+(defthm no-mk-seal (implies (no-mk fr) (no-mk (ex-seal s n fr))) :hints (("Goal" :in-theory (enable ex-seal))))
 (defthm no-mk-bargs (implies (and (no-mk args) (true-listp args)) (no-mk (ex-bargs ar args)))
   :hints (("Goal" :in-theory (enable ex-bargs ex-rest-args))))
 (defthm no-mk-bind
@@ -159,6 +164,7 @@
                            (ex-ind :let e (1+ i) tmp (update-nth (+ (ex-s2 e) i) (val (car r)) (cadr r)) fuel fl rs ks
                                    (val (car r)) tl))))
                   ((equal k 12) (ex-ind :iter (ex-kid-of e n2) 0 nil fr fuel fl rs ks v0 tl))
+                  ((equal k 13) (ex-ind :m (ex-kid-of e n2) 0 nil (ex-seal (ex-s2 e) n2 fr) fuel fl rs ks v0 tl))
                   (t (ex-ind :m (ex-kid-of e n2) 0 nil fr fuel fl rs ks v0 tl))))
       (:rec (cond ((not (consp e)) nil)
                   ((< i nk)
@@ -190,7 +196,7 @@
                       (ex-ind :m (ex-kid-of e 1) 0 nil (cadr r) fuel fl rs ks (val (car r)) tl)
                       (ex-ind :m (ex-kid-of e 2) 0 nil (cadr r) fuel fl rs ks (val (car r)) tl))))
              ((equal k 5) (ex-ind :do e 0 nil fr fuel fl rs ks v0 tl))
-             ((or (equal k 11) (equal k 12)) (ex-ind :let e 0 nil fr fuel fl rs ks v0 tl))
+             ((or (equal k 11) (equal k 12) (equal k 13)) (ex-ind :let e 0 nil fr fuel fl rs ks v0 tl))
              ((equal k 16) (ex-ind :rec e 0 nil fr fuel fl rs ks v0 tl))
              ((equal k 17) (ex-ind :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
              ((equal k 18)
@@ -237,7 +243,7 @@
 
 (ex-case ex-good-atom ((not (consp e))))
 
-(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19 22 23 10 20 24)))))
+(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 13 16 17 18 19 22 23 10 20 24)))))
 
 ; an if, a case for each way its test goes
 (defmacro ex-if-test () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
@@ -260,7 +266,7 @@
                           (and (valp (car (ex-r (ex-kid-of e 0) fr fuel))) (not (truthy (val (car (ex-r (ex-kid-of e 0) fr fuel))))) (not (< 2 (ex-nk e))))))))
 
 (ex-case ex-good-m-do ((ex-other flg) (consp e) (equal (ex-kind e) 5) (ex-good :do e 0 nil fr fuel fl rs ks v0 tl)))
-(ex-case ex-good-m-let ((ex-other flg) (consp e) (member-equal (ex-kind e) '(11 12)) (ex-good :let e 0 nil fr fuel fl rs ks v0 tl)))
+(ex-case ex-good-m-let ((ex-other flg) (consp e) (member-equal (ex-kind e) '(11 12 13)) (ex-good :let e 0 nil fr fuel fl rs ks v0 tl)))
 (ex-case ex-good-m-rec ((ex-other flg) (consp e) (equal (ex-kind e) 16) (ex-good :rec e 0 nil fr fuel fl rs ks v0 tl)))
 
 (ex-case ex-good-do-none ((consp e) (zp (ex-nk e))) :flg :do)
@@ -287,8 +293,13 @@
    (ex-good :iter (ex-kid-of e (ex-i2 e)) 0 nil fr fuel fl rs ks v0 tl))
   :flg :let)
 (ex-case ex-good-let-body
-  ((consp e) (not (< (nfix i) (ex-i2 e))) (not (equal (ex-kind e) 12))
+  ((consp e) (not (< (nfix i) (ex-i2 e))) (not (equal (ex-kind e) 12)) (not (equal (ex-kind e) 13))
    (ex-good :m (ex-kid-of e (ex-i2 e)) 0 nil fr fuel fl rs ks v0 tl))
+  :flg :let)
+; a letfn's: the group sealed (action 28), then its body
+(ex-case ex-good-let-seal
+  ((consp e) (not (< (nfix i) (ex-i2 e))) (equal (ex-kind e) 13)
+   (ex-good :m (ex-kid-of e (ex-i2 e)) 0 nil (ex-seal (ex-s2 e) (ex-i2 e) fr) fuel fl rs ks v0 tl))
   :flg :let)
 
 (ex-case ex-good-rec-mid

@@ -156,16 +156,17 @@
 ; is in defs (so mx2's :callv finds its def), its captures as many as the
 ; template's pairs and good themselves; any other value is good but the
 ; symbol :recur-marker (the tree's recur marker's) and
-; symbol :clo itself, so a variadic call's rest list of good values is
-; never closure-shaped (the model's list is the machine's seq, and :clo is
-; no value a program holds); and a list's elements good too, so apply's
+; symbols :clo and :grp themselves, so a variadic call's rest list of good
+; values is never closure-shaped nor a letfn group's capture (the model's
+; list is the machine's seq, and :clo and :grp no values a program holds:
+; x2-res is the identity on a good value, ex-xvs-res); and a list's elements good too, so apply's
 ; spread of a good seq is good arguments (2c-iii: apply is a value like
 ; any other, its call spread by vmx2's :applyv)
 (defun ex-xvs (defs l)
   (if (atom l)
       t
     (and (let ((v (car l)))
-           (and (not (equal v :clo)) (not (equal v :recur-marker))
+           (and (not (equal v :clo)) (not (equal v :recur-marker)) (not (equal v :grp))
                 (if (clop v)
                     (and (equal v (clo (cadr v) (caddr v))) (consp (assoc-equal (cadr v) defs))
                          (true-listp (caddr v)) (equal (len (caddr v)) (len (ex-inners (nth 2 (cadr v)))))
@@ -180,11 +181,6 @@
 (defthm ex-xvs-take (implies (ex-xvs defs l) (ex-xvs defs (take n l)))
   :hints (("Goal" :induct (take n l) :expand ((ex-xvs defs l) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-xvs-append (equal (ex-xvs defs (append a b)) (and (ex-xvs defs a) (ex-xvs defs b))))
-; A LAZY SEQ'S ELEMENTS are what the runtime's realisations give (seqk's
-; sk-real, constrained by nothing): the agreement asks they be good values
-; too, as it asks it of the scope's -- ex-lzok, the runtime handing the
-; machine only closures it knows. Then a good seq's elements, every kind,
-; are good.
 (defun-sk ex-lzok (defs) (forall c (ex-xvs defs (sk-real c))))
 (defthm ex-xvs-cons1 (implies (syntaxp (not (equal b ''nil)))
                               (equal (ex-xvs defs (cons a b)) (and (ex-xvs defs (list a)) (ex-xvs defs b))))
@@ -218,20 +214,34 @@
 ; top with the arguments past req consed on, one good value -- never the
 ; symbol :clo, as the walk hands over a seq that has another element, or
 ; arguments past req
-(defthm ex-xvs-list1 (implies (and (ex-xvs defs x) (not (equal x :clo)) (not (equal x :recur-marker))) (ex-xvs defs (list x)))
+(defthm ex-xvs-list1 (implies (and (ex-xvs defs x) (not (equal x :clo)) (not (equal x :recur-marker)) (not (equal x :grp))) (ex-xvs defs (list x)))
   :hints (("Goal" :expand ((ex-xvs defs (list x)) (ex-xvs defs x)))))
 (defthm ex-xvs-nthcdr-l (implies (ex-xvs defs l) (ex-xvs defs (nthcdr n l)))
   :hints (("Goal" :induct (nthcdr n l) :expand ((ex-xvs defs l)))))
+; a good value is its own resolution, and so a good list its captures read
+(defthm ex-xvs-res (implies (ex-xvs defs (list v)) (equal (x2-res v) v))
+  :hints (("Goal" :in-theory (enable x2-res x2-grpp) :expand ((ex-xvs defs (list v)) (ex-xvs defs v) (ex-xvs defs (cdr v))))))
+(defthm ex-xvs-car1 (implies (and (ex-xvs defs l) (consp l)) (ex-xvs defs (list (car l))))
+  :hints (("Goal" :expand ((ex-xvs defs l) (ex-xvs defs (list (car l)))))))
+(defthm ex-xvs-resl (implies (ex-xvs defs l) (equal (ex-resl l) l))
+  :hints (("Goal" :induct (ex-resl l) :in-theory (disable ex-xvs-car1 ex-xvs-res))
+          ("Subgoal *1/2" :use ((:instance ex-xvs-car1) (:instance ex-xvs-res (v (car l)))
+                                (:instance ex-xvs-nthcdr-l (n 1))))))
+; A LAZY SEQ'S ELEMENTS are what the runtime's realisations give (seqk's
+; sk-real, constrained by nothing): the agreement asks they be good values
+; too, as it asks it of the scope's -- ex-lzok, the runtime handing the
+; machine only closures it knows. Then a good seq's elements, every kind,
+; are good.
 (defthm ex-xvs-sk-topv (implies (ex-xvs defs v) (ex-xvs defs (sk-topv v)))
   :hints (("Goal" :induct (sk-topv v) :expand ((ex-xvs defs v) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-sk-cval-good (implies (ex-xvs defs (car c)) (ex-xvs defs (sk-cval c)))
   :hints (("Goal" :in-theory (enable sk-cval) :expand ((ex-xvs defs (car c)) (:free (b) (ex-xvs defs (cons :vec b)))))))
-(defthm ex-sk-cval-noclo (implies (sk-more (sk-d c)) (and (consp (sk-cval c)) (not (equal (sk-cval c) :clo)) (not (equal (sk-cval c) :recur-marker))))
+(defthm ex-sk-cval-noclo (implies (sk-more (sk-d c)) (and (consp (sk-cval c)) (not (equal (sk-cval c) :clo)) (not (equal (sk-cval c) :recur-marker)) (not (equal (sk-cval c) :grp))))
   :hints (("Goal" :in-theory (enable sk-cval sk-d sk-kind sk-step sk-topv))))
 (defthm ex-xvs-consv (implies (and (ex-xvs defs xs) (ex-xvs defs s)) (ex-xvs defs (sk-consv xs s)))
   :hints (("Goal" :induct (sk-consv xs s) :expand ((ex-xvs defs xs) (:free (a b) (ex-xvs defs (cons a b)))))))
 (defthm ex-consv-consp (implies (consp xs) (consp (sk-consv xs s))))
-(defthm ex-consv-noclo (implies (consp xs) (and (not (equal (sk-consv xs s) :clo)) (not (equal (sk-consv xs s) :recur-marker)))))
+(defthm ex-consv-noclo (implies (consp xs) (and (not (equal (sk-consv xs s) :clo)) (not (equal (sk-consv xs s) :recur-marker)) (not (equal (sk-consv xs s) :grp)))))
 (defthm ex-consv-id (implies (atom xs) (equal (sk-consv xs s) s)))
 (defthm ex-nthcdr-consp (implies (and (natp n) (< n (len l))) (consp (nthcdr n l))))
 (defthm ex-apwalk-good

@@ -1619,7 +1619,7 @@
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE, &
-            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG)
+            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE, N_DEF, N_DEFTYPE, N_SETBANG, N_LETFN)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
@@ -1880,8 +1880,6 @@
     kind = gc_i1(nd)
     kids = gc_slot(nd, 1)
     select case (kind)
-    case (N_LETFN)
-       out = exec_letfn(nd, frame)
     case (N_LATEVAR)
        v = resolve_var(gc_slot(nd, 2), gc_nil())
        if (.not. gcn_is_var(v)) then
@@ -2125,36 +2123,6 @@
 
   ! letfn*: every closure is made, stored, and then has its captures
   ! copied AGAIN, so each one sees the others.
-  recursive function exec_letfn(nd, frame) result(out)
-    type(gc_stack), pointer :: vst
-    type(eval_ctx), pointer :: tctx
-    type(gc_value), intent(in) :: nd, frame
-    type(gc_value) :: out, v
-    integer :: base, i, n, start
-    tctx => ctx_self()
-    vst => tctx%stk
-    out = gc_nil()
-    base = vs_enter(vst, 2)
-    call vs_set(vst, base + 1, nd)
-    call vs_set(vst, base + 2, frame)
-    n = gc_i2(nd)
-    start = int_of(gc_slot(nd, 2))
-    do i = 0, n - 1
-       v = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), i), vs_get(vst, base + 2))
-       if (tctx%has_error) then
-          call vs_leave(vst, base)
-          return
-       end if
-       call frame_set(vs_get(vst, base + 2), start + i, v)
-    end do
-    do i = 0, n - 1
-       v = frame_get(vs_get(vst, base + 2), start + i)
-       if (is_node_closure(v)) call refresh_captures(v, vs_get(vst, base + 2))
-    end do
-    out = exec(gcv_nth(gc_slot(vs_get(vst, base + 1), 1), n), vs_get(vst, base + 2))
-    call vs_leave(vst, base)
-  end function exec_letfn
-
   ! One turn of run_loop for a CORE KIND -- a constant, a local, a Var,
   ! if, do, let*, loop*, recur, fn, a call. What to do is decided by the generated ex_act,
   ! ex_kid, ex_pc and ex_i (src/f/gen/exec_gen.inc, model/exec.lisp:
@@ -2172,7 +2140,7 @@
     integer, intent(in) :: b, vbase
     type(gc_value), intent(inout) :: val
     type(gc_stack), pointer :: vst
-    type(gc_value) :: rinfo
+    type(gc_value) :: rinfo, fv
     integer(int64) :: k, pc, i, nk, n2, tv, j
     integer :: q, m, start, rb
     vst => tctx%stk
@@ -2218,6 +2186,17 @@
     case (5)
        val = gc_nil()
        call k_finish(val, tctx)
+    case (28)
+       ! a letfn's group sealed (exec.lisp ex-seal): each slot's closure's
+       ! captures read again from the frame, the group's now its closures
+       ! -- the in-place cycle the model's (:grp G j) unfolds to -- then
+       ! its body, as action 4
+       start = int_of(gc_slot(nd, 2))
+       do q = 0, int(n2) - 1
+          fv = frame_get(vs_get(vst, b + 2), start + q)
+          if (is_node_closure(fv)) call refresh_captures(fv, vs_get(vst, b + 2))
+       end do
+       call k_tail(gcv_nth(kids, int(j)), tctx)
     case (6)
        call frame_set(vs_get(vst, b + 2), int_of(gc_slot(nd, 2)) + int(i), val)
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))

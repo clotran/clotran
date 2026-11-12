@@ -1652,6 +1652,21 @@
 ;; Fortran) -- mutual recursion, and a group fn returned is the same fn
 (letfn [(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))] [(ev? 10) (od? 7) (letfn [(f [] g) (g [] f)] [(identical? g (f)) (identical? f (g)) (identical? f ((g)))])])
 
+;; letfn run by the core (action 28 seals the group before the body): an
+;; outer local captured beside the group, three fns in a cycle, a group fn
+;; escaping and called after the letfn returned, a closure made inside a
+;; group fn over its sibling, a variadic member, recur inside a member, a
+;; letfn in a loop's body reading the loop's locals, nested groups, a group
+;; fn handed to map and apply, and a throwing body
+(let [k 10] (letfn [(a [n] (if (pos? n) (b (dec n)) [:a k])) (b [n] (if (pos? n) (c (dec n)) [:b k])) (c [n] (if (pos? n) (a (dec n)) [:c k]))] [(a 0) (a 4) (b 4) (c 4) (mapv a (range 6))]))
+(let [g (letfn [(f [n] (if (zero? n) :done (h (dec n)))) (h [n] (f n))] h)] [(g 3) (g 0)])
+(letfn [(mk [x] (fn [] (sq x))) (sq [x] (* x x))] [((mk 3)) ((mk 4)) (apply sq [5])])
+(letfn [(s [& xs] (if (seq xs) (+ (first xs) (apply s (rest xs))) 0)) (t [n] (apply s (range n)))] [(s) (s 1 2 3) (t 5)])
+(letfn [(cnt [n acc] (if (zero? n) (odd acc) (recur (dec n) (inc acc)))) (odd [x] (if (odd? x) :odd :even))] [(cnt 3 0) (cnt 4 0)])
+(loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (letfn [(f [] (+ i (g))) (g [] (* 10 i))] (f)))) acc))
+(letfn [(outer [n] (letfn [(inner [m] (if (zero? m) (outer2 n) (inner (dec m)))) (outer2 [x] [:o x])] (inner n)))] [(outer 0) (outer 3)])
+(try (letfn [(f [] (g)) (g [] (throw (ex-info "in group" {})))] (f)) (catch clotran.host.throwable e (ex-message e)))
+
 ;; sequence, eduction, iterator-seq, volatile! and the buffering
 ;; transducers: the RT pieces ClojureScript writes in Clojure, written
 ;; in Clojure here too (clotran.rt), reached as clj members

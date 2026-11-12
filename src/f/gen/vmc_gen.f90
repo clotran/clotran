@@ -61,7 +61,6 @@ contains
     type(value), value :: e_
     integer(int64) :: r
     type(value) :: op_1
-    integer(int64) :: t_14
     integer(int64) :: t_15
     integer(int64) :: t_16
     integer(int64) :: t_17
@@ -71,26 +70,29 @@ contains
     integer(int64) :: t_21
     integer(int64) :: t_22
     integer(int64) :: t_23
+    integer(int64) :: t_24
+    integer(int64) :: t_25
     logical :: t_4
-    logical :: t_7
+    logical :: t_8
     integer(int64) :: var_10
     integer(int64) :: var_11
     integer(int64) :: var_12
     integer(int64) :: var_13
+    integer(int64) :: var_14
     integer(int64) :: var_2
     integer(int64) :: var_3
     integer(int64) :: var_5
     integer(int64) :: var_6
-    integer(int64) :: var_8
+    integer(int64) :: var_7
     integer(int64) :: var_9
     op_1 = rt_car(e_)
     if (rt_is(op_1, rt_keyword("if"))) then
       var_2 = (vmicg_size(rt_car(rt_cdr(e_))) + (1_int64 + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + (1_int64 + vmicg_size(rt_car(rt_cdr(rt_cdr(rt_cdr(e_)))))))))
-      t_23 = vmicg_sat(var_2)
+      t_25 = vmicg_sat(var_2)
     else
       if (rt_is(op_1, rt_keyword("let"))) then
         var_3 = (vmicg_size(rt_car(rt_cdr(e_))) + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + 1_int64))
-        t_22 = vmicg_sat(var_3)
+        t_24 = vmicg_sat(var_3)
       else
         if (rt_is(op_1, rt_keyword("add"))) then
           t_4 = rt_is(op_1, rt_keyword("add"))
@@ -99,62 +101,68 @@ contains
         end if
         if (t_4) then
           var_5 = (vmicg_size(rt_car(rt_cdr(e_))) + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + 1_int64))
-          t_21 = vmicg_sat(var_5)
+          t_23 = vmicg_sat(var_5)
         else
           if (rt_is(op_1, rt_keyword("mkclo"))) then
             var_6 = (vmicg_size_args(rt_cdr(rt_cdr(e_))) + 1_int64)
-            t_20 = vmicg_sat(var_6)
+            t_22 = vmicg_sat(var_6)
           else
-            if (rt_is(op_1, rt_keyword("callv"))) then
-              t_7 = rt_is(op_1, rt_keyword("callv"))
+            if (rt_is(op_1, rt_keyword("mkgrp"))) then
+              var_7 = (vmicg_size_args(rt_cdr(rt_cdr(e_))) + 1_int64)
+              t_21 = vmicg_sat(var_7)
             else
-              t_7 = rt_is(op_1, rt_keyword("applyv"))
-            end if
-            if (t_7) then
-              var_8 = (vmicg_size_args(rt_cdr(rt_cdr(e_))) + (vmicg_size(rt_car(rt_cdr(e_))) + 1_int64))
-              t_19 = vmicg_sat(var_8)
-            else
-              if (rt_is(op_1, rt_keyword("loop"))) then
-                var_9 = (vmicg_size_args(rt_car(rt_cdr(e_))) + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + vmicg_len(rt_car(rt_cdr(e_)))))
-                t_18 = vmicg_sat(var_9)
+              if (rt_is(op_1, rt_keyword("callv"))) then
+                t_8 = rt_is(op_1, rt_keyword("callv"))
               else
-                if (rt_is(op_1, rt_keyword("recur"))) then
-                  var_10 = (vmicg_size_args(rt_cdr(e_)) + 1_int64)
-                  t_17 = vmicg_sat(var_10)
-                else
-                  if (rt_is(op_1, rt_keyword("prim"))) then
-                    var_11 = (vmicg_size_args(rt_cdr(rt_cdr(e_))) + 1_int64)
-                    t_16 = vmicg_sat(var_11)
-                  else
-                    if (rt_is(op_1, rt_keyword("throw"))) then
-                      var_12 = (vmicg_size(rt_car(rt_cdr(e_))) + 1_int64)
-                      t_15 = vmicg_sat(var_12)
-                    else
-                      if (rt_is(op_1, rt_keyword("try"))) then
-                        var_13 = (1_int64 + (vmicg_size(rt_car(rt_cdr(e_))) + (2_int64 + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + 1_int64))))
-                        t_14 = vmicg_sat(var_13)
-                      else
-                        t_14 = 1_int64
-                      end if
-                      t_15 = t_14
-                    end if
-                    t_16 = t_15
-                  end if
-                  t_17 = t_16
-                end if
-                t_18 = t_17
+                t_8 = rt_is(op_1, rt_keyword("applyv"))
               end if
-              t_19 = t_18
+              if (t_8) then
+                var_9 = (vmicg_size_args(rt_cdr(rt_cdr(e_))) + (vmicg_size(rt_car(rt_cdr(e_))) + 1_int64))
+                t_20 = vmicg_sat(var_9)
+              else
+                if (rt_is(op_1, rt_keyword("loop"))) then
+                  var_10 = (vmicg_size_args(rt_car(rt_cdr(e_))) + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + vmicg_len(rt_car(rt_cdr(e_)))))
+                  t_19 = vmicg_sat(var_10)
+                else
+                  if (rt_is(op_1, rt_keyword("recur"))) then
+                    var_11 = (vmicg_size_args(rt_cdr(e_)) + 1_int64)
+                    t_18 = vmicg_sat(var_11)
+                  else
+                    if (rt_is(op_1, rt_keyword("prim"))) then
+                      var_12 = (vmicg_size_args(rt_cdr(rt_cdr(e_))) + 1_int64)
+                      t_17 = vmicg_sat(var_12)
+                    else
+                      if (rt_is(op_1, rt_keyword("throw"))) then
+                        var_13 = (vmicg_size(rt_car(rt_cdr(e_))) + 1_int64)
+                        t_16 = vmicg_sat(var_13)
+                      else
+                        if (rt_is(op_1, rt_keyword("try"))) then
+                          var_14 = (1_int64 + (vmicg_size(rt_car(rt_cdr(e_))) + (2_int64 + (vmicg_size(rt_car(rt_cdr(rt_cdr(e_)))) + 1_int64))))
+                          t_15 = vmicg_sat(var_14)
+                        else
+                          t_15 = 1_int64
+                        end if
+                        t_16 = t_15
+                      end if
+                      t_17 = t_16
+                    end if
+                    t_18 = t_17
+                  end if
+                  t_19 = t_18
+                end if
+                t_20 = t_19
+              end if
+              t_21 = t_20
             end if
-            t_20 = t_19
+            t_22 = t_21
           end if
-          t_21 = t_20
+          t_23 = t_22
         end if
-        t_22 = t_21
+        t_24 = t_23
       end if
-      t_23 = t_22
+      t_25 = t_24
     end if
-    r = t_23
+    r = t_25
     return
   end function vmicg_size
 
@@ -367,12 +375,12 @@ contains
     integer(int64), value :: lck_
     integer(int64), intent(out) :: r
     integer(int64) :: depth_3
-    integer(int64) :: f_40
-    integer(int64) :: head_54
+    integer(int64) :: f_43
+    integer(int64) :: head_57
     integer(int64) :: i_10
     integer(int64) :: i_6
-    integer(int64) :: k_44
-    integer(int64) :: k_52
+    integer(int64) :: k_47
+    integer(int64) :: k_55
     integer(int64) :: mv_14
     integer(int64) :: mv_16
     integer(int64) :: mv_19
@@ -381,38 +389,40 @@ contains
     integer(int64) :: mv_31
     integer(int64) :: mv_33
     integer(int64) :: mv_38
-    integer(int64) :: mv_45
-    integer(int64) :: mv_47
-    integer(int64) :: mv_53
-    integer(int64) :: mv_55
-    integer(int64) :: mv_60
+    integer(int64) :: mv_41
+    integer(int64) :: mv_48
+    integer(int64) :: mv_50
+    integer(int64) :: mv_56
+    integer(int64) :: mv_58
     integer(int64) :: mv_63
     integer(int64) :: mv_66
     integer(int64) :: mv_69
     integer(int64) :: mv_72
+    integer(int64) :: mv_75
     integer(int64) :: n_4
     type(value) :: op_1
     integer(int64) :: pa_15
     integer(int64) :: pa_24
     integer(int64) :: pa_32
     integer(int64) :: pa_39
-    integer(int64) :: pa_46
-    integer(int64) :: pa_61
+    integer(int64) :: pa_42
+    integer(int64) :: pa_49
     integer(int64) :: pa_64
     integer(int64) :: pa_67
+    integer(int64) :: pa_70
     integer(int64) :: pb_18
     integer(int64) :: pb_28
     integer(int64) :: pb_35
-    integer(int64) :: pb_49
-    integer(int64) :: pb_58
-    integer(int64) :: pb_71
+    integer(int64) :: pb_52
+    integer(int64) :: pb_61
+    integer(int64) :: pb_74
     integer(int64) :: pc2_21
     integer(int64) :: pc_2
-    integer(int64) :: ph_76
+    integer(int64) :: ph_79
     logical :: t_30
     integer(int64) :: t_36
-    logical :: t_43
-    integer(int64) :: t_50
+    logical :: t_46
+    integer(int64) :: t_53
     logical :: t_7
     integer(int64) :: var_11
     integer(int64) :: var_12
@@ -425,27 +435,28 @@ contains
     integer(int64) :: var_29
     integer(int64) :: var_34
     integer(int64) :: var_37
-    integer(int64) :: var_41
-    integer(int64) :: var_42
-    integer(int64) :: var_48
+    integer(int64) :: var_40
+    integer(int64) :: var_44
+    integer(int64) :: var_45
     integer(int64) :: var_5
     integer(int64) :: var_51
-    integer(int64) :: var_56
-    integer(int64) :: var_57
+    integer(int64) :: var_54
     integer(int64) :: var_59
+    integer(int64) :: var_60
     integer(int64) :: var_62
     integer(int64) :: var_65
     integer(int64) :: var_68
-    integer(int64) :: var_70
+    integer(int64) :: var_71
     integer(int64) :: var_73
-    integer(int64) :: var_74
-    integer(int64) :: var_75
+    integer(int64) :: var_76
     integer(int64) :: var_77
     integer(int64) :: var_78
-    integer(int64) :: var_79
     integer(int64) :: var_8
     integer(int64) :: var_80
     integer(int64) :: var_81
+    integer(int64) :: var_82
+    integer(int64) :: var_83
+    integer(int64) :: var_84
     integer(int64) :: var_9
     op_1 = rt_car(e_)
     pc_2 = max(0_int64, pc_)
@@ -537,102 +548,110 @@ contains
                 var_37 = (1_int64 + pb_35)
                 r = var_37
               else
-                if (rt_is(op_1, rt_keyword("mkclo"))) then
+                if (rt_is(op_1, rt_keyword("mkgrp"))) then
                   call vmicg_compile_args(st, ce, rt_cdr(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_38)
                   pa_39 = mv_38
-                  f_40 = rt_nat(rt_car(rt_cdr(e_)))
-                  if ((f_40 < 0_int64)) then
-                    call vmicg_fail(ce)
-                    var_41 = (1_int64 + pa_39)
-                    r = var_41
-                  else
-                    call vmicg_put(st, pa_39, 8_int64, f_40, rt_len(rt_cdr(rt_cdr(e_))), 0_int64, rt_nil())
-                    var_42 = (1_int64 + pa_39)
-                    r = var_42
-                  end if
+                  call vmicg_fail(ce)
+                  var_40 = (1_int64 + pa_39)
+                  r = var_40
                 else
-                  if (rt_is(op_1, rt_keyword("callv"))) then
-                    t_43 = rt_is(op_1, rt_keyword("callv"))
-                  else
-                    t_43 = rt_is(op_1, rt_keyword("applyv"))
-                  end if
-                  if (t_43) then
-                    k_44 = rt_len(rt_cdr(rt_cdr(e_)))
-                    call vmicg_compile_args(st, ce, rt_cdr(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_45)
-                    pa_46 = mv_45
-                    var_48 = (depth_3 + k_44)
-                    call vmicg_compile(st, ce, rt_car(rt_cdr(e_)), var_48, n_4, self_, pa_46, (-1_int64), 0_int64, 0_int64, mv_47)
-                    pb_49 = mv_47
-                    if (rt_is(op_1, rt_keyword("applyv"))) then
-                      t_50 = 17_int64
+                  if (rt_is(op_1, rt_keyword("mkclo"))) then
+                    call vmicg_compile_args(st, ce, rt_cdr(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_41)
+                    pa_42 = mv_41
+                    f_43 = rt_nat(rt_car(rt_cdr(e_)))
+                    if ((f_43 < 0_int64)) then
+                      call vmicg_fail(ce)
+                      var_44 = (1_int64 + pa_42)
+                      r = var_44
                     else
-                      t_50 = 10_int64
+                      call vmicg_put(st, pa_42, 8_int64, f_43, rt_len(rt_cdr(rt_cdr(e_))), 0_int64, rt_nil())
+                      var_45 = (1_int64 + pa_42)
+                      r = var_45
                     end if
-                    call vmicg_put(st, pb_49, t_50, k_44, 0_int64, 0_int64, rt_nil())
-                    var_51 = (1_int64 + pb_49)
-                    r = var_51
                   else
-                    if (rt_is(op_1, rt_keyword("loop"))) then
-                      k_52 = rt_len(rt_car(rt_cdr(e_)))
-                      call vmicg_compile_args(st, ce, rt_car(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_53)
-                      head_54 = mv_53
-                      call vmicg_count(ce, n_4, depth_3, k_52)
-                      var_56 = (depth_3 + k_52)
-                      var_57 = (n_4 + k_52)
-                      call vmicg_compile(st, ce, rt_car(rt_cdr(rt_cdr(e_))), var_56, var_57, self_, head_54, head_54, depth_3, k_52, mv_55)
-                      pb_58 = mv_55
-                      call vmicg_slides(st, pb_58, k_52)
-                      var_59 = (pb_58 + k_52)
-                      r = var_59
+                    if (rt_is(op_1, rt_keyword("callv"))) then
+                      t_46 = rt_is(op_1, rt_keyword("callv"))
                     else
-                      if (rt_is(op_1, rt_keyword("recur"))) then
-                        call vmicg_compile_args(st, ce, rt_cdr(e_), depth_3, n_4, self_, pc_2, mv_60)
-                        pa_61 = mv_60
-                        if ((lch_ < 0_int64)) then
-                          call vmicg_put(st, pa_61, 12_int64, 0_int64, 0_int64, 0_int64, rt_nil())
-                        else
-                          call vmicg_put(st, pa_61, 12_int64, max(0_int64, lck_), max(0_int64, lcb_), max(0_int64, lch_), rt_nil())
-                        end if
-                        var_62 = (1_int64 + pa_61)
+                      t_46 = rt_is(op_1, rt_keyword("applyv"))
+                    end if
+                    if (t_46) then
+                      k_47 = rt_len(rt_cdr(rt_cdr(e_)))
+                      call vmicg_compile_args(st, ce, rt_cdr(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_48)
+                      pa_49 = mv_48
+                      var_51 = (depth_3 + k_47)
+                      call vmicg_compile(st, ce, rt_car(rt_cdr(e_)), var_51, n_4, self_, pa_49, (-1_int64), 0_int64, 0_int64, mv_50)
+                      pb_52 = mv_50
+                      if (rt_is(op_1, rt_keyword("applyv"))) then
+                        t_53 = 17_int64
+                      else
+                        t_53 = 10_int64
+                      end if
+                      call vmicg_put(st, pb_52, t_53, k_47, 0_int64, 0_int64, rt_nil())
+                      var_54 = (1_int64 + pb_52)
+                      r = var_54
+                    else
+                      if (rt_is(op_1, rt_keyword("loop"))) then
+                        k_55 = rt_len(rt_car(rt_cdr(e_)))
+                        call vmicg_compile_args(st, ce, rt_car(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_56)
+                        head_57 = mv_56
+                        call vmicg_count(ce, n_4, depth_3, k_55)
+                        var_59 = (depth_3 + k_55)
+                        var_60 = (n_4 + k_55)
+                        call vmicg_compile(st, ce, rt_car(rt_cdr(rt_cdr(e_))), var_59, var_60, self_, head_57, head_57, depth_3, k_55, mv_58)
+                        pb_61 = mv_58
+                        call vmicg_slides(st, pb_61, k_55)
+                        var_62 = (pb_61 + k_55)
                         r = var_62
                       else
-                        if (rt_is(op_1, rt_keyword("prim"))) then
-                          call vmicg_compile_args(st, ce, rt_cdr(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_63)
+                        if (rt_is(op_1, rt_keyword("recur"))) then
+                          call vmicg_compile_args(st, ce, rt_cdr(e_), depth_3, n_4, self_, pc_2, mv_63)
                           pa_64 = mv_63
-                          call vmicg_put(st, pa_64, 13_int64, pa_64, rt_len(rt_cdr(rt_cdr(e_))), 0_int64, rt_car(rt_cdr(e_)))
+                          if ((lch_ < 0_int64)) then
+                            call vmicg_put(st, pa_64, 12_int64, 0_int64, 0_int64, 0_int64, rt_nil())
+                          else
+                            call vmicg_put(st, pa_64, 12_int64, max(0_int64, lck_), max(0_int64, lcb_), max(0_int64, lch_), rt_nil())
+                          end if
                           var_65 = (1_int64 + pa_64)
                           r = var_65
                         else
-                          if (rt_is(op_1, rt_keyword("throw"))) then
-                            call vmicg_compile(st, ce, rt_car(rt_cdr(e_)), depth_3, n_4, self_, pc_2, (-1_int64), 0_int64, 0_int64, mv_66)
+                          if (rt_is(op_1, rt_keyword("prim"))) then
+                            call vmicg_compile_args(st, ce, rt_cdr(rt_cdr(e_)), depth_3, n_4, self_, pc_2, mv_66)
                             pa_67 = mv_66
-                            call vmicg_put(st, pa_67, 14_int64, 0_int64, 0_int64, 0_int64, rt_nil())
+                            call vmicg_put(st, pa_67, 13_int64, pa_67, rt_len(rt_cdr(rt_cdr(e_))), 0_int64, rt_car(rt_cdr(e_)))
                             var_68 = (1_int64 + pa_67)
                             r = var_68
                           else
-                            if (rt_is(op_1, rt_keyword("try"))) then
-                              var_70 = (1_int64 + pc_2)
-                              call vmicg_compile(st, ce, rt_car(rt_cdr(e_)), depth_3, n_4, self_, var_70, (-1_int64), 0_int64, 0_int64, mv_69)
-                              pb_71 = mv_69
-                              call vmicg_set(ce, n_4, depth_3)
-                              var_73 = (1_int64 + depth_3)
-                              var_74 = (1_int64 + n_4)
-                              var_75 = (pb_71 + 2_int64)
-                              call vmicg_compile(st, ce, rt_car(rt_cdr(rt_cdr(e_))), var_73, var_74, self_, var_75, (-1_int64), 0_int64, 0_int64, mv_72)
-                              ph_76 = mv_72
-                              var_77 = (pb_71 + 2_int64)
-                              call vmicg_put(st, pc_2, 15_int64, var_77, depth_3, 0_int64, rt_nil())
-                              call vmicg_put(st, pb_71, 16_int64, 0_int64, 0_int64, 0_int64, rt_nil())
-                              var_78 = (1_int64 + pb_71)
-                              var_79 = (1_int64 + ph_76)
-                              call vmicg_put(st, var_78, 7_int64, var_79, 0_int64, 0_int64, rt_nil())
-                              call vmicg_put(st, ph_76, 5_int64, 0_int64, 0_int64, 0_int64, rt_nil())
-                              var_80 = (1_int64 + ph_76)
-                              r = var_80
+                            if (rt_is(op_1, rt_keyword("throw"))) then
+                              call vmicg_compile(st, ce, rt_car(rt_cdr(e_)), depth_3, n_4, self_, pc_2, (-1_int64), 0_int64, 0_int64, mv_69)
+                              pa_70 = mv_69
+                              call vmicg_put(st, pa_70, 14_int64, 0_int64, 0_int64, 0_int64, rt_nil())
+                              var_71 = (1_int64 + pa_70)
+                              r = var_71
                             else
-                              call vmicg_put(st, pc_2, 1_int64, pc_2, 0_int64, 0_int64, rt_nil())
-                              var_81 = (1_int64 + pc_2)
-                              r = var_81
+                              if (rt_is(op_1, rt_keyword("try"))) then
+                                var_73 = (1_int64 + pc_2)
+                                call vmicg_compile(st, ce, rt_car(rt_cdr(e_)), depth_3, n_4, self_, var_73, (-1_int64), 0_int64, 0_int64, mv_72)
+                                pb_74 = mv_72
+                                call vmicg_set(ce, n_4, depth_3)
+                                var_76 = (1_int64 + depth_3)
+                                var_77 = (1_int64 + n_4)
+                                var_78 = (pb_74 + 2_int64)
+                                call vmicg_compile(st, ce, rt_car(rt_cdr(rt_cdr(e_))), var_76, var_77, self_, var_78, (-1_int64), 0_int64, 0_int64, mv_75)
+                                ph_79 = mv_75
+                                var_80 = (pb_74 + 2_int64)
+                                call vmicg_put(st, pc_2, 15_int64, var_80, depth_3, 0_int64, rt_nil())
+                                call vmicg_put(st, pb_74, 16_int64, 0_int64, 0_int64, 0_int64, rt_nil())
+                                var_81 = (1_int64 + pb_74)
+                                var_82 = (1_int64 + ph_79)
+                                call vmicg_put(st, var_81, 7_int64, var_82, 0_int64, 0_int64, rt_nil())
+                                call vmicg_put(st, ph_79, 5_int64, 0_int64, 0_int64, 0_int64, rt_nil())
+                                var_83 = (1_int64 + ph_79)
+                                r = var_83
+                              else
+                                call vmicg_put(st, pc_2, 1_int64, pc_2, 0_int64, 0_int64, rt_nil())
+                                var_84 = (1_int64 + pc_2)
+                                r = var_84
+                              end if
                             end if
                           end if
                         end if

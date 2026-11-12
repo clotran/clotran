@@ -598,6 +598,43 @@ slot's read and write), and every kind not yet in the model.
    holds a closure, and every refreshed capture of a non-group slot reads
    the value it was made with (the inits make closures and nothing else);
    mutual recursion and (identical? g (f)) agree with clj (oracle).
+   *(letfn built)*: vmx2.lisp: x2-res, the resolution above (x2-fill, the
+   group's nil made G); mx2's (:capt j) answers (x2-res (nth j caps)), the
+   machine's :capt the same (vcs2-step's own case, no longer vcsx-step's);
+   (:mkgrp (j . shape) e1 .. eN), mkclo-shaped -- the N values every fn's
+   captures in turn (a group capture the constant (:grp nil m)), its value
+   x2-seal's j-th closure -- and the machine's (:mkgrp op N) instruction
+   (vmi has no opcode for it: the array compiler, vmic and vmicg, refuses
+   it -- vce-fail, as a closure of no function id -- so the array VM never
+   runs a letfn group; VmRuntime's keyword table has :mkgrp). Re-
+   proved: vmx2-proof (mkgrp2-*, s2good-mkgrp, each its own lemma beside
+   mkclo's; s2good-capt opening vcs2-step), vmx2-cost, vmx2-time, vmi (its
+   capt resolves), vmi-proof, vmg (rt-capt resolves), vmrt (vrt-decp-res:
+   no decoded value is (:grp ..), the Fortran's group being its in-place
+   cycle) and everything above them. exec.lisp: N_LETFN 13 a let whose
+   inits are its fns (actions 3, 6), then action 28, the group sealed
+   (ex-seal: each slot's closure's group captures (:grp G j), ex-gcaps,
+   ex-grp) and its body become (as 4); ex-bind resolves each capture as it
+   binds it and makes the self slot's closure of the resolved captures
+   (ex-resl, ex-resclo), as the translation's :capt reads make it.
+   Proved: ex-machine-correct over it (ex-good-let-seal, its own case);
+   exec-cost ex-letfn-turns (2n + 1 beyond its fns' and its body's).
+   Fortran: exec_core runs N_LETFN (action 28 is refresh_captures' pass
+   over the group's slots, then k_tail to the body); exec_letfn and its
+   nested execs gone; exec_gen.inc regenerated; fuzz-exec-gen draws 13.
+   Oracle: an outer local beside the group, three fns in a cycle, a group
+   fn escaping its letfn, a closure over a sibling, a variadic member,
+   recur in a member, a letfn in a loop's body, nested groups, map and
+   apply of a member, a throwing body -- all agree with clj; no observable
+   disagreement between the in-place cycle and the indirection.
+   LEFT (letfn): ex-vm-agree over it -- ex-tr's translation (n lets of
+   (:mkgrp (j . shape) ..), a group capture (:const (:grp nil m))), ex-vwf
+   admitting 13, and ex-xvs admitting a closure whose captures hold
+   (:grp G m) (G's entries good templates, its own nil-group captures in
+   range); exec-vmcall's entry already reads the captures resolved (ex-nths,
+   ex-fenv over ex-resl and ex-resclo, as ex-bind binds them); ex-xvs now
+   excludes (:grp ..) shapes, so x2-res is the identity on every good
+   value (ex-xvs-res) and the agreement stands as it was over the rest.
    Then dot (DEVIATIONS 84's cast: the analyzer to record the target's
    hint, the cast an action before the arguments as a call's 23).
 4. **Clearing joined**: the machine theorem over anpass's marks, from
@@ -605,7 +642,7 @@ slot's read and write), and every kind not yet in the model.
    *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
    exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
    left, named in its paragraph above.
-5. **The rest**: def *(done)*, letfn (`exec_letfn`), deftype *(done)*, new *(done)*, set! *(done)*, dot,
+5. **The rest**: def *(done)*, letfn *(the machine done; the VM's agreement left)*, deftype *(done)*, new *(done)*, set! *(done)*, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
 

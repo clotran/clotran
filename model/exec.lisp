@@ -38,6 +38,9 @@
 ;                                              (and a new's: 22/23 are
 ;                                              collections, the build
 ;                                              the construction)
+;             28 a letfn's group sealed (each slot's closure's captures
+;                of the group made (:grp G j), ex-seal), then become its
+;                body as 4
 ;             23 the callee is no fn (tv 0 at a call's pc 1, the IFn test,
 ;                ex-ifn): throw :not-fn, before any argument runs
 ;                                              0 not a core kind
@@ -71,7 +74,7 @@
 ;
 ; kinds as Eval.f90 numbers them: N_CONST 1, N_LOCAL 2, N_VAR 3, N_IF 4,
 ; N_DO 5, N_CALL 6, N_LET 11, N_LOOP 12, N_FN 14, N_RECUR 16, N_THROW 17,
-; N_TRY 18, N_CASE 19, N_NEW 22, N_NEWTYPE 23, and the host's actions N_DEF 10,
+; N_TRY 18, N_CASE 19, N_LETFN 13 (a let whose inits are its fns), N_NEW 22, N_NEWTYPE 23, and the host's actions N_DEF 10,
 ; N_DEFTYPE 20, N_SETBANG 24 as collections (pc 0 its test pushed, 1 the branch); tv 1 when the
 ; value in flight is truthy. A call's record: pc 0 its head, 1 the callee
 ; kept, 2 and 3 its arguments (i the next), 4 the entry, 5 the body done.
@@ -84,10 +87,11 @@
         ((equal k 5) (cond ((not (and (integerp nk) (< 0 nk))) 5)
                            ((and (integerp i) (< i (- nk 1))) 3)
                            (t 4)))
-        ((or (equal k 11) (equal k 12))
+        ((or (equal k 11) (equal k 12) (equal k 13))
          (cond ((equal pc 1) 6)
                ((and (integerp i) (integerp n2) (< i n2)) 3)
                ((equal k 12) 7)
+               ((equal k 13) 28)
                (t 4)))
         ((equal k 16) (cond ((equal pc 0) 8)
                             ((equal pc 2) 9)
@@ -117,7 +121,7 @@
   (declare (xargs :guard t))
   (cond ((equal k 4) (cond ((equal pc 0) 0) ((equal tv 1) 1) (t 2)))
         ((equal k 5) (if (and (integerp i) (integerp nk) (< i (- nk 1))) i (if (and (ex40p nk) (< 0 nk)) (- nk 1) 0)))
-        ((or (equal k 11) (equal k 12)) (if (and (integerp i) (integerp n2) (< i n2)) i (if (ex40p n2) n2 0)))
+        ((or (equal k 11) (equal k 12) (equal k 13)) (if (and (integerp i) (integerp n2) (< i n2)) i (if (ex40p n2) n2 0)))
         ((equal k 18) (if (or (equal pc 1) (equal pc 3)) 1 0))
         (t (if (ex40p i) i 0))))
 
@@ -127,7 +131,7 @@
         ((equal k 17) 1)
         ((equal k 19) 1)
         ((equal k 18) (cond ((equal pc 0) 1) ((or (equal pc 1) (equal pc 3)) 2) ((equal pc 4) 5) (t pc)))
-        ((or (equal k 11) (equal k 12)) (if (equal pc 1) 0 1))
+        ((or (equal k 11) (equal k 12) (equal k 13)) (if (equal pc 1) 0 1))
         ((equal k 16) (if (equal pc 1) 2 1))
         ((equal k 6) (cond ((equal pc 0) 1)
                            ((equal pc 1) 2)
@@ -143,7 +147,7 @@
   (declare (xargs :guard t) (ignore nk n2 tv))
   (let ((i1 (if (ex40p i) (+ i 1) 0)))
     (cond ((equal k 5) i1)
-          ((or (equal k 11) (equal k 12)) (if (equal pc 1) i1 i))
+          ((or (equal k 11) (equal k 12) (equal k 13)) (if (equal pc 1) i1 i))
           ((equal k 16) (cond ((equal pc 0) 0) ((equal pc 2) i1) (t i)))
           ((equal k 6) (cond ((equal pc 1) 1) ((equal pc 3) i1) (t i)))
           ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23) (equal k 10) (equal k 20) (equal k 24)) (cond ((equal pc 0) 0) ((equal pc 3) i1) (t i)))
@@ -276,6 +280,31 @@
 ; vals into slots start, start+1, ... (exec_core's action 10, a call's arguments)
 (defun ex-write (start vals fr)
   (if (atom vals) fr (ex-write (1+ (nfix start)) (cdr vals) (update-nth (nfix start) (car vals) fr))))
+
+; LETFN'S GROUP SEALED (action 28; exec_core's refresh_captures pass): the
+; n closures in slots start .. start+n-1, each capture whose outer slot is
+; one of them made (:grp G j), j that slot's place in the group and G the
+; group -- vmx2's x2-res: (tm_k caps_k) per closure, its group captures
+; (:grp nil j). Read (resolved) when a call binds it: the closure in slot
+; start+j, as the Fortran's in-place cycle answers the object there.
+(defun ex-ingrp (o start n) (and (natp o) (<= (nfix start) o) (< o (+ (nfix start) (nfix n)))))
+(defun ex-gcaps (capv caps start n g)
+  (if (or (atom capv) (atom (cdr capv)))
+      nil
+    (cons (if (ex-ingrp (car capv) start n) (list :grp g (- (car capv) (nfix start))) (car caps))
+          (ex-gcaps (cddr capv) (cdr caps) start n g))))
+(defun ex-grp (fs start n)
+  (if (atom fs) nil (cons (list (cadr (car fs)) (ex-gcaps (nth 2 (cadr (car fs))) (caddr (car fs)) start n nil)) (ex-grp (cdr fs) start n))))
+(defun ex-sealvs (fs start n g)
+  (if (atom fs) nil (cons (list :clo (cadr (car fs)) (ex-gcaps (nth 2 (cadr (car fs))) (caddr (car fs)) start n g)) (ex-sealvs (cdr fs) start n g))))
+(defun ex-seal (start n fr)
+  (let ((fs (take (nfix n) (nthcdr (nfix start) fr))))
+    (ex-write start (ex-sealvs fs start n (ex-grp fs start n)) fr)))
+; a call's captures read: each resolved (x2-res), and the self slot's closure
+; made of them, as vmx2's translation makes it from its :capt reads
+(in-theory (disable ex-seal))
+(defun ex-resl (l) (if (atom l) l (cons (x2-res (car l)) (ex-resl (cdr l)))))
+(defun ex-resclo (g) (list :clo (cadr g) (ex-resl (caddr g))))
 (defun ex-bind-caps (capv caps fr)
   (if (or (atom capv) (atom (cdr capv))) fr (ex-bind-caps (cddr capv) (cdr caps) (update-nth (nfix (cadr capv)) (car caps) fr))))
 ; a variadic arity's locals: its nf fixed arguments, then the rest as one
@@ -287,8 +316,8 @@
 (defun ex-self (f) (if (and (consp (cdddr f)) (consp (cadddr f)) (eq (car (cadddr f)) :clo)) (cadddr f) f))
 (defun ex-bind (f args)
   (let* ((tm (cadr f)) (ar (ex-arity (nth 1 tm) (len args)))
-         (fr (ex-bind-caps (nth 2 tm) (caddr f) (ex-write (nth 2 ar) (ex-bargs ar args) (make-list (nfix (nth 3 tm)) :initial-element nil)))))
-    (if (natp (nth 4 tm)) (update-nth (nth 4 tm) (ex-self f) fr) fr)))
+         (fr (ex-bind-caps (nth 2 tm) (ex-resl (caddr f)) (ex-write (nth 2 ar) (ex-bargs ar args) (make-list (nfix (nth 3 tm)) :initial-element nil)))))
+    (if (natp (nth 4 tm)) (update-nth (nth 4 tm) (ex-resclo (ex-self f)) fr) fr)))
 
 ; the variadic arity's count of fixed parameters, -1 for none (B_APPLY's
 ; req: exec.inc variadic_req, the first variadic arity's, as the variadic
@@ -487,6 +516,7 @@
           (26 (list (cons (ex-rec e pc2 i2 fl rs (append tmp (list val))) (cdr ks)) val fr))
           (27 (let ((b (ex-cbuild e tmp)))
                 (if (valp b) (ex-finish (cdr b) ks fr) (list (cons (ex-throwr (cdr b)) ks) nil fr))))
+          (28 (list (cons (ex-rec (ex-kid-of e j) 0 0 fl rs nil) (cdr ks)) val (ex-seal (ex-s2 e) n2 fr)))
           (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
           (otherwise s)))))))
 
@@ -576,7 +606,7 @@
                       ((zp nk) t)
                       ((< i (- nk 1)) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :do e (1+ i) tl)))
                       (t (ex-wf :m (ex-kid-of e (- nk 1)) 0 tl))))
-           (:let (cond ((not (or (equal k 11) (equal k 12))) nil)
+           (:let (cond ((not (or (equal k 11) (equal k 12) (equal k 13))) nil)
                        ((< i n2) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :let e (1+ i) tl)))
                        ((equal k 12) (ex-wf :m (ex-kid-of e n2) 0 t))
                        (t (ex-wf :m (ex-kid-of e n2) 0 tl))))
@@ -603,7 +633,7 @@
                                     (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
                                     (or (equal nk 2) (ex-wf :m (ex-kid-of e 2) 0 tl))))
                   ((equal k 5) (ex-wf :do e 0 tl))
-                  ((or (equal k 11) (equal k 12)) (and (equal nk (1+ n2)) (ex-wf :let e 0 tl)))
+                  ((or (equal k 11) (equal k 12) (equal k 13)) (and (equal nk (1+ n2)) (ex-wf :let e 0 tl)))
                   ((equal k 16) (and tl (equal (ex-rn e) nk) (ex-wf :rec e 0 tl)))
                   ((equal k 6) (and (< 0 nk) (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :call e 1 tl)))
                   ((equal k 17) (and (equal nk 1) (ex-wf :m (ex-kid-of e 0) 0 nil)))
@@ -654,6 +684,9 @@
                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
                   ((equal k 12)
                    (let ((r (ex-ev :iter (ex-kid-of e n2) 0 nil fr fuel)))
+                     (list (car r) (cadr r) (c+ 1 (caddr r)))))
+                  ((equal k 13)
+                   (let ((r (ex-ev :m (ex-kid-of e n2) 0 nil (ex-seal (ex-s2 e) n2 fr) fuel)))
                      (list (car r) (cadr r) (c+ 1 (caddr r)))))
                   (t (let ((r (ex-ev :m (ex-kid-of e n2) 0 nil fr fuel)))
                        (list (car r) (cadr r) (c+ 1 (caddr r)))))))
@@ -714,7 +747,7 @@
                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))
                       (t (list (cons :val nil) (cadr r) (c+ 1 (c+ (caddr r) 1)))))))
              ((equal k 5) (ex-ev :do e 0 nil fr fuel))
-             ((or (equal k 11) (equal k 12)) (ex-ev :let e 0 nil fr fuel))
+             ((or (equal k 11) (equal k 12) (equal k 13)) (ex-ev :let e 0 nil fr fuel))
              ((equal k 16) (let ((r (ex-ev :rec e 0 nil fr fuel)))
                              (list (car r) (cadr r) (c+ 1 (caddr r)))))
              ((equal k 3) (list (cons :val (ex-c e)) fr 1))

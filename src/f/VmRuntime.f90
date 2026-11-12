@@ -167,8 +167,8 @@ contains
   ! every keyword the generated code and the primitives test, made once
   ! before any thread runs VM code; and the private heads
   subroutine vmrt_init()
-    character(len=17), parameter :: names(20) = [character(len=17) :: "const", "local", "capt", "if", &
-         "let", "add", "lt", "mkclo", "callv", "loop", "recur", "prim", "throw", "try", "rest", &
+    character(len=17), parameter :: names(21) = [character(len=17) :: "const", "local", "capt", "if", &
+         "let", "add", "lt", "mkclo", "mkgrp", "callv", "loop", "recur", "prim", "throw", "try", "rest", &
          "clotran.vm/arg", "clotran.vm/deref", "clotran.vm/invoke", "invoke", "clotran.vm/arity"]
     type(value) :: k
     integer :: i

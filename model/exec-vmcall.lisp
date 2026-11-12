@@ -226,14 +226,14 @@
          (let ((rs (mx2-args (cdr x) env caps defs fuel))) (if (valp rs) (cons :val (clo (car x) (val rs))) rs)))
   :hints (("Goal" :expand ((mx2 (cons :mkclo x) env caps defs fuel)))))
 
-; the body's lets
-(defun ex-nths (j m l) (if (zp m) nil (cons (nth (nfix j) l) (ex-nths (1+ (nfix j)) (1- m) l))))
+; the body's lets: its captures read, each resolved (x2-res)
+(defun ex-nths (j m l) (if (zp m) nil (cons (x2-res (nth (nfix j) l)) (ex-nths (1+ (nfix j)) (1- m) l))))
 (defthm ex-capts-mx (equal (mx2-args (ex-capts j m) env caps defs fuel) (cons :val (ex-nths j m caps)))
   :hints (("Goal" :induct (ex-capts j m)
                   :expand ((:free (x y) (mx2-args (cons x y) env caps defs fuel))
                            (:free (x) (mx2 (cons :capt x) env caps defs fuel))))))
 (defun ex-clets-ind (j m env caps)
-  (if (zp m) env (ex-clets-ind (1+ (nfix j)) (1- m) (append env (list (nth (nfix j) caps))) caps)))
+  (if (zp m) env (ex-clets-ind (1+ (nfix j)) (1- m) (append env (list (x2-res (nth (nfix j) caps)))) caps)))
 (defthm ex-clets-mx
   (implies (true-listp env)
            (equal (mx2 (ex-clets j m x) env caps defs fuel) (mx2 x (append env (ex-nths j m caps)) caps defs fuel)))
@@ -244,11 +244,14 @@
   (implies (and (natp j) (< j (len l))) (equal (cons (nth j l) (nthcdr j (cdr l))) (nthcdr j l)))
   :hints (("Goal" :induct (nthcdr j l))))
 (defthm ex-nthcdr-len (implies (true-listp l) (not (nthcdr (len l) l))))
+(defthm ex-resl-nthcdr-step
+  (implies (and (natp j) (< j (len l))) (equal (cons (x2-res (nth j l)) (ex-resl (nthcdr j (cdr l)))) (ex-resl (nthcdr j l))))
+  :hints (("Goal" :use ex-nthcdr-step :in-theory (disable ex-nthcdr-step))))
 (defthm ex-nths-nthcdr
-  (implies (and (natp j) (true-listp l) (equal (+ j (nfix m)) (len l))) (equal (ex-nths j m l) (nthcdr j l)))
+  (implies (and (natp j) (true-listp l) (equal (+ j (nfix m)) (len l))) (equal (ex-nths j m l) (ex-resl (nthcdr j l))))
   :hints (("Goal" :induct (ex-nths j m l))))
 (defthm ex-nths-all
-  (implies (and (true-listp l) (equal m (len l))) (equal (ex-nths 0 m l) l))
+  (implies (and (true-listp l) (equal m (len l))) (equal (ex-nths 0 m l) (ex-resl l)))
   :hints (("Goal" :use ((:instance ex-nths-nthcdr (j 0))))))
 
 ; a call of f with args: the arity it picks, mx2's environment for that
@@ -259,7 +262,7 @@
 ; the def mx2 runs, the closure its self slot holds
 (defun ex-ftm (f) (cadr (ex-self f)))
 (defun ex-car (f args) (ex-arity (nth 1 (cadr f)) (len args)))
-(defun ex-fenv (f args) (append (ex-bargs (ex-car f args) args) (caddr f) (list (ex-self f))))
+(defun ex-fenv (f args) (append (ex-bargs (ex-car f args) args) (ex-resl (caddr f)) (list (ex-resclo (ex-self f)))))
 (defun ex-fvs (f args)
   (cdr (mx2-args (ex-locals (ex-fparams (ex-car f args)) (ex-fbcm (ex-ftm f) (ex-car f args))) (ex-fenv f args) nil nil 0)))
 
@@ -415,16 +418,16 @@
   (implies (and (true-listp args) (true-listp caps) (equal (len caps) (len (ex-inners (nth 2 tm)))))
            (equal (mx2 (ex-fbtr tm ar) args caps defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))
-                            (append args caps (list (clo tm caps)))
+                            (append args (ex-resl caps) (list (clo tm (ex-resl caps))))
                             (cons nil (cdr (mx2-args (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
-                                                     (append args caps (list (clo tm caps))) nil nil 0)))
+                                                     (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) nil nil 0)))
                             caps defs fuel)))
   :hints (("Goal" :use ((:instance ex-mx-loop-body
                                    (e (list :loop (cons '(:const nil) (ex-locals (ex-fparams ar) (ex-fbcm tm ar)))
                                             (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar))))
-                                   (base (append args caps (list (clo tm caps))))
+                                   (base (append args (ex-resl caps) (list (clo tm (ex-resl caps)))))
                                    (vs (cons nil (cdr (mx2-args (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
-                                                                (append args caps (list (clo tm caps))) nil nil 0))))))
+                                                                (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) nil nil 0))))))
                   :in-theory (e/d (ex-fbtr) (ex-mx-loop-body ex-fbcm ex-fparams ex-fcm ex-fcmb ex-abody clo))
                   :expand ((:free (y env) (mx2 (cons :let y) env caps defs fuel))
                            (:free (y env) (mx2 (cons :loop y) env caps defs fuel))

@@ -489,6 +489,26 @@
                 (not (equal (vrt-decp p tag ref ival d hd hpg vrx) :clo))))
   :hints (("Goal" :expand ((vrt-decp p tag ref ival d hd hpg vrx)))))
 
+; no decoded value is a letfn group's capture (:grp G j), which only the
+; model's values hold: the Fortran's group is its closures' cycle in place,
+; so rt-capt's resolution (vmx2's x2-res) is the identity on what it reads
+(defthm vrt-dec-not-grp
+  (implies (acl2-numberp ival) (not (equal (vrt-dec tag ref ival d hd hpg vrx) :grp)))
+  :hints (("Goal" :expand ((vrt-dec tag ref ival d hd hpg vrx))
+                  :in-theory (disable vrt-cfid vrt-cncap vrt-consp vrt-throwp vrt-clol vrt-decp vrt-dec-caps))))
+(defthm vrt-decp-not-grp
+  (implies (and (acl2-numberp ival) (hpgp hpg) (vrxp vrx)) (not (equal (vrt-decp p tag ref ival d hd hpg vrx) :grp)))
+  :hints (("Goal" :expand ((vrt-decp p tag ref ival d hd hpg vrx)) :in-theory (disable vrt-dec))))
+(defthm vrt-dec-res
+  (implies (and (acl2-numberp ival) (hpgp hpg) (vrxp vrx))
+           (equal (x2-res (vrt-dec tag ref ival d hd hpg vrx)) (vrt-dec tag ref ival d hd hpg vrx)))
+  :hints (("Goal" :in-theory (e/d (x2-res x2-grpp) (vrt-cfid vrt-cncap vrt-consp vrt-throwp vrt-clol vrt-decp vrt-dec-caps))
+                  :expand ((vrt-dec tag ref ival d hd hpg vrx)))))
+(defthm vrt-decp-res
+  (implies (and (acl2-numberp ival) (hpgp hpg) (vrxp vrx))
+           (equal (x2-res (vrt-decp p tag ref ival d hd hpg vrx)) (vrt-decp p tag ref ival d hd hpg vrx)))
+  :hints (("Goal" :expand ((vrt-decp p tag ref ival d hd hpg vrx)) :in-theory (disable vrt-dec x2-res))))
+
 ; a compiled closure is no list cell: its object, or the one its wrappers hold, is an OBJ_CLOSURE
 (defthm vrt-ctab-unmeta-not-list
   (implies (< 0 (vrt-ctab (vrt-unmeta-k tag ref k hpg) hpg vrx))

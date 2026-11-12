@@ -245,7 +245,7 @@
   (declare (xargs :stobjs vmi :verify-guards nil))
   (let* ((sp (nfix (v-sp vmi)))
          (c (vmi-sreg (+ (nfix (v-fb vmi)) (nfix (vmi-w (v-pc vmi) 1 vmi))) vmi))
-         (vmi (vmi-sset sp (nth (nfix (vmi-w (v-pc vmi) 2 vmi)) (clo-caps c)) vmi))
+         (vmi (vmi-sset sp (x2-res (nth (nfix (vmi-w (v-pc vmi) 2 vmi)) (clo-caps c))) vmi))
          (vmi (update-v-sp (1+ sp) vmi)))
     (vmi-next vmi)))
 

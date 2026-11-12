@@ -111,7 +111,34 @@
 ; the clauses a call picks from
 (defun x2-cls (op c vs fns cls) (if (x2-hands op c vs fns) (x2-hcls cls) cls))
 
-; ---- THE MEANING --------------------------------------------------------------
+; ---- THE MEANING --------------------------------------------------------------;
+; LETFN'S GROUP (exec-PLAN milestone 5): a capture of a closure's own
+; group holds (:grp G j), G the group -- (f_k caps_k) for each of its n
+; fns, the group's captures inside it written (:grp nil m), nil standing
+; for the G around it, so the value is finite. RESOLVED when read, it is
+; the j-th closure, (clo f_j caps_j) with each (:grp nil m) made (:grp G
+; m); any other value reads as itself. (:mkgrp (j . shape) e1 .. eN):
+; shape ((f_0 . k_0) ..), the N values every fn's captures in turn (a
+; group capture's (:const (:grp nil m))), and its value the j-th closure
+; sealed.
+
+(defun x2-grpp (v) (and (consp v) (eq (car v) :grp) (consp (cdr v)) (consp (cddr v))))
+(defun x2-fill (caps g)
+  (if (atom caps)
+      caps
+    (cons (if (and (x2-grpp (car caps)) (null (cadr (car caps)))) (list :grp g (caddr (car caps))) (car caps))
+          (x2-fill (cdr caps) g))))
+(defun x2-res (v)
+  (if (and (x2-grpp v) (cadr v))
+      (let ((ent (nth (nfix (caddr v)) (cadr v)))) (clo (car ent) (x2-fill (cadr ent) (cadr v))))
+    v))
+(defun x2-split (shape vs)
+  (if (atom shape)
+      nil
+    (cons (list (caar shape) (take (nfix (cdar shape)) vs)) (x2-split (cdr shape) (nthcdr (nfix (cdar shape)) vs)))))
+(defun x2-seal (op vs) (x2-res (list :grp (x2-split (cdr op) vs) (car op))))
+(in-theory (disable x2-res x2-seal))
+
 ;
 ; An answer is (:val . v), (:recur . vs), (:thrown . v) or (:out).
 
@@ -124,7 +151,7 @@
    (case (car e)
      (:const (cons :val (cadr e)))
      (:local (cons :val (nth (nfix (cadr e)) env)))
-     (:capt (cons :val (nth (nfix (cadr e)) caps)))
+     (:capt (cons :val (x2-res (nth (nfix (cadr e)) caps))))
      (:if (let ((rc (mx2 (cadr e) env caps defs fuel)))
             (cond ((not (valp rc)) rc)
                   ((truthy (val rc)) (mx2 (caddr e) env caps defs fuel))
@@ -141,6 +168,8 @@
                   (t (cons :val (bool (< (rfix (val ra)) (rfix (val rb)))))))))))
      (:mkclo (let ((rs (mx2-args (cddr e) env caps defs fuel)))
                (if (valp rs) (cons :val (clo (cadr e) (val rs))) rs)))
+     (:mkgrp (let ((rs (mx2-args (cddr e) env caps defs fuel)))
+               (if (valp rs) (cons :val (x2-seal (cadr e) (val rs))) rs)))
      ((:callv :applyv)
       (let ((rs (mx2-args (cddr e) env caps defs fuel)))
         (if (not (valp rs))
@@ -206,7 +235,7 @@
      (:if (and (x2wf (cadr e) n nil) (x2wf (caddr e) n k) (x2wf (cadddr e) n k)))
      (:let (and (x2wf (cadr e) n nil) (x2wf (caddr e) (1+ (nfix n)) k)))
      ((:add :lt) (and (x2wf (cadr e) n nil) (x2wf (caddr e) n nil)))
-     (:mkclo (x2wf-args (cddr e) n))
+     ((:mkclo :mkgrp) (x2wf-args (cddr e) n))
      ((:callv :applyv) (and (x2wf (cadr e) n nil) (x2wf-args (cddr e) n)))
      (:loop (and (true-listp (cadr e)) (consp (cadr e)) (x2wf-args (cadr e) n)
                  (x2wf (caddr e) (+ (nfix n) (len (cadr e))) (len (cadr e)))))
@@ -294,6 +323,14 @@
                      (if (throwp a)
                          (unwind (cdr a) ctl stk)
                        (list (1+ pc) fb (1+ (- sp n)) (ssetreg (- sp n) a stk) ctl))))))
+        (:capt (let ((ins (nth pc (car prog))))
+                 (list (1+ pc) fb (1+ sp)
+                       (ssetreg sp (x2-res (nth (nfix (caddr ins)) (clo-caps (sreg (+ fb (nfix (cadr ins))) stk)))) stk)
+                       ctl)))
+        (:mkgrp (let* ((ins (nth pc (car prog))) (k (nfix (caddr ins))))
+                  (if (< sp k)
+                      s
+                    (list (1+ pc) fb (1+ (- sp k)) (ssetreg (- sp k) (x2-seal (cadr ins) (stk-from (- sp k) k stk)) stk) ctl))))
         (:throw (if (zp sp) s (unwind (sreg (1- sp) stk) ctl stk)))
         (:try (let ((ins (nth pc (car prog))))
                 (list (1+ pc) fb sp stk (cons (list :h (nfix (cadr ins)) fb (nfix (caddr ins))) ctl))))
@@ -327,6 +364,8 @@
         (append ac bc (list (list (car e))))))
      (:mkclo (let ((ac (vcs2-compile-args (cddr e) depth cenv self pc)))
                (append ac (list (list :mkclo (cadr e) (len (cddr e)))))))
+     (:mkgrp (let ((ac (vcs2-compile-args (cddr e) depth cenv self pc)))
+               (append ac (list (list :mkgrp (cadr e) (len (cddr e)))))))
      ((:callv :applyv)
       (let* ((n (len (cddr e)))
              (ac (vcs2-compile-args (cddr e) depth cenv self pc))
@@ -497,6 +536,20 @@
                                                       (:recur (:add (:local 1) (:const 1)))
                                                       (:throw (:local 0)))))
                 (:add (:local 0) (:const 40))))
+; letfn's group: even? and odd? capturing each other, sealed and called
+(defconst *x2-gdefs*
+  '((ev (1 (:if (:lt (:local 0) (:const 1)) (:const t) (:callv (:capt 0) (:add (:local 0) (:const -1))))))
+    (od (1 (:if (:lt (:local 0) (:const 1)) (:const nil) (:callv (:capt 0) (:add (:local 0) (:const -1))))))))
+(defmacro check-x2g (e want)
+  `(assert-event (and (equal (mx2 ',e nil nil *x2-gdefs* 1000) ',want)
+                      (equal (vcs2-run-program ',e *x2-gdefs* 100000) ',want))))
+(check-x2g (:let (:mkgrp (0 (ev . 1) (od . 1)) (:const (:grp nil 1)) (:const (:grp nil 0)))
+                 (:callv (:local 0) (:const 5)))
+           (:val . nil))
+(check-x2g (:let (:mkgrp (1 (ev . 1) (od . 1)) (:const (:grp nil 1)) (:const (:grp nil 0)))
+                 (:callv (:local 0) (:const 7)))
+           (:val . t))
+(assert-event (x2wf '(:mkgrp (0 (ev . 1)) (:local 0)) 1 nil))
 ; well formed, and a recur across a try not
 (assert-event (x2defs-ok *x2-defs*))
 (assert-event (not (x2wf '(:loop ((:const 0)) (:try (:recur (:const 1)) (:const 2))) 0 nil)))

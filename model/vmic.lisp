@@ -91,6 +91,7 @@
            ((rt-is op :let) (+ (vmic-size (rcadr e)) (vmic-size (rcaddr e)) 1))
            ((or (rt-is op :add) (rt-is op :lt)) (+ (vmic-size (rcadr e)) (vmic-size (rcaddr e)) 1))
            ((rt-is op :mkclo) (+ (vmic-size-args (rcddr e)) 1))
+           ((rt-is op :mkgrp) (+ (vmic-size-args (rcddr e)) 1))
            ((or (rt-is op :callv) (rt-is op :applyv)) (+ (vmic-size-args (rcddr e)) (vmic-size (rcadr e)) 1))
            ((rt-is op :loop) (+ (vmic-size-args (rcadr e)) (vmic-size (rcaddr e)) (rt-len (rcadr e))))
            ((rt-is op :recur) (+ (vmic-size-args (rt-cdr e)) 1))
@@ -142,6 +143,10 @@
        (mv-let (pa vmi vce) (vmic-compile (rcadr e) depth n self pc -1 0 0 vmi vce)
          (mv-let (pb vmi vce) (vmic-compile (rcaddr e) (1+ depth) n self pa -1 0 0 vmi vce)
            (let ((vmi (vmic-put pb (if (rt-is op :add) 3 4) 0 0 0 nil vmi))) (mv (1+ pb) vmi vce)))))
+      ;; a letfn group (vmx2's :mkgrp): no instruction of the arrays' -- refused
+      ((rt-is op :mkgrp)
+       (mv-let (pa vmi vce) (vmic-compile-args (rcddr e) depth n self pc vmi vce)
+         (let ((vce (vce-fail vce))) (mv (1+ pa) vmi vce))))
       ((rt-is op :mkclo)
        (mv-let (pa vmi vce) (vmic-compile-args (rcddr e) depth n self pc vmi vce)
          (let ((f (rt-nat (rcadr e))))

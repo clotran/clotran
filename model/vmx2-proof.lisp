@@ -64,7 +64,7 @@
                          (c+ (s2clk (caddr e) env caps defs fuel)
                              (if (valp (mx2 (caddr e) env caps defs fuel)) 1 0))
                        0)))
-     (:mkclo (c+ (s2clk-args (cddr e) env caps defs fuel)
+     ((:mkclo :mkgrp) (c+ (s2clk-args (cddr e) env caps defs fuel)
                  (if (valp (mx2-args (cddr e) env caps defs fuel)) 1 0)))
      ((:callv :applyv)
              (c+ (s2clk-args (cddr e) env caps defs fuel)
@@ -119,7 +119,7 @@
      (:if (+ (s2code-len (cadr e)) 1 (s2code-len (caddr e)) 1 (s2code-len (cadddr e))))
      (:let (+ (s2code-len (cadr e)) (s2code-len (caddr e)) 1))
      ((:add :lt) (+ (s2code-len (cadr e)) (s2code-len (caddr e)) 1))
-     (:mkclo (+ (s2code-len-args (cddr e)) 1))
+     ((:mkclo :mkgrp) (+ (s2code-len-args (cddr e)) 1))
      ((:callv :applyv) (+ (s2code-len-args (cddr e)) (s2code-len (cadr e)) 1))
      (:loop (+ (s2code-len-args (cadr e)) (s2code-len (caddr e)) (len (cadr e))))
      (:recur (+ (s2code-len-args (cdr e)) 1))
@@ -153,7 +153,7 @@
       ((:add :lt) (let ((ac (vcs2-compile (cadr e) depth cenv self pc nil)))
                     (list (s2c-ind :m (cadr e) depth cenv self pc nil)
                           (s2c-ind :m (caddr e) (1+ depth) cenv self (+ pc (len ac)) nil))))
-      ((:mkclo :prim) (s2c-ind :args (cddr e) depth cenv self pc nil))
+      ((:mkclo :prim :mkgrp) (s2c-ind :args (cddr e) depth cenv self pc nil))
       ((:callv :applyv) (let ((ac (vcs2-compile-args (cddr e) depth cenv self pc)))
                 (list (s2c-ind :args (cddr e) depth cenv self pc nil)
                       (s2c-ind :m (cadr e) (+ depth (len (cddr e))) cenv self (+ pc (len ac)) nil))))
@@ -197,7 +197,7 @@
 
 (defthm vcs2-step-old
   (implies (and (natp (car s))
-                (not (member-equal (car (nth (car s) (car prog))) '(:callv :applyv :prim :throw :try :endtry))))
+                (not (member-equal (car (nth (car s) (car prog))) '(:callv :applyv :prim :throw :try :endtry :capt :mkgrp))))
            (equal (vcs2-step prog s) (vcsx-step prog s))))
 
 (defthm vcs2-step-nopc
@@ -525,7 +525,7 @@
       (:let (list (mx2-ind :m (cadr e) env caps defs fuel)
                   (mx2-ind :m (caddr e) (append env (list (val (mx2 (cadr e) env caps defs fuel)))) caps defs fuel)))
       ((:add :lt) (list (mx2-ind :m (cadr e) env caps defs fuel) (mx2-ind :m (caddr e) env caps defs fuel)))
-      ((:mkclo :prim) (mx2-ind :args (cddr e) env caps defs fuel))
+      ((:mkclo :prim :mkgrp) (mx2-ind :args (cddr e) env caps defs fuel))
       ((:callv :applyv) (list (mx2-ind :args (cddr e) env caps defs fuel) (mx2-ind :m (cadr e) env caps defs fuel)
                     (if (zp fuel) nil
                       (mx2-ind :m (cadr (x2-cl)) (x2-benv) (clo-caps (x2-c)) defs (1- fuel)))))
@@ -668,16 +668,16 @@
 
 (defthm s2good-capt
   (implies (equal (car e) :capt) (s2good e depth cenv self caps s env defs fuel prog lc))
-  :hints (("Goal" :in-theory (disable nth update-nth) :cases ((natp self)))))
+  :hints (("Goal" :in-theory (e/d (vcs2-step) (nth update-nth)) :cases ((natp self)))))
 
 (defthm s2good-other
-  (implies (not (member-equal (car e) '(:const :local :capt :if :let :add :lt :mkclo :callv :applyv :loop :recur
+  (implies (not (member-equal (car e) '(:const :local :capt :if :let :add :lt :mkclo :mkgrp :callv :applyv :loop :recur
                                         :prim :throw :try)))
            (s2good e depth cenv self caps s env defs fuel prog lc))
   :hints (("Goal" :in-theory (disable nth update-nth))))
 
 (defthm s2good-leaf
-  (implies (not (member-equal (car e) '(:if :let :add :lt :mkclo :callv :applyv :loop :recur :prim :throw :try)))
+  (implies (not (member-equal (car e) '(:if :let :add :lt :mkclo :mkgrp :callv :applyv :loop :recur :prim :throw :try)))
            (s2good e depth cenv self caps s env defs fuel prog lc))
   :hints (("Goal" :cases ((equal (car e) :const) (equal (car e) :local) (equal (car e) :capt))
                   :in-theory (union-theories '(s2good-const s2good-local s2good-capt s2good-other member-equal)
@@ -1397,7 +1397,7 @@
 
 (defthm x2wf-args-parts
   (implies (x2wf e n k)
-           (and (implies (member-equal (car e) (quote (:mkclo :prim))) (x2wf-args (cddr e) n))
+           (and (implies (member-equal (car e) (quote (:mkclo :prim :mkgrp))) (x2wf-args (cddr e) n))
                 (implies (equal (car e) :recur) (x2wf-args (cdr e) n))))
   :rule-classes nil)
 
@@ -1455,6 +1455,69 @@
                                              (theory 'minimal-theory))
                   :do-not-induct t
                   :use ((:instance mkclo2-args) (:instance mkclo2-path-val) (:instance mkclo2-clock)))))
+
+(defthm mkgrp2-code
+  (implies (and (equal (car e) :mkgrp) (ccode-at code pc (vcs2-compile e depth cenv self pc lc)) (natp pc))
+           (and (ccode-at code pc (vcs2-compile-args (cddr e) depth cenv self pc))
+                (equal (nth (+ pc (s2code-len-args (cddr e))) code) (list :mkgrp (cadr e) (len (cddr e))))
+                (equal (s2code-len e) (+ (s2code-len-args (cddr e)) 1))))
+  :rule-classes nil
+  :hints (("Goal" :expand ((vcs2-compile e depth cenv self pc lc) (s2code-len e)))))
+
+(defthm mkgrp2-args
+  (implies (and (equal (car e) :mkgrp) (s2-hyps e depth cenv self caps s env defs prog lc)
+                (s2good-args (cddr e) depth cenv self caps s env defs fuel prog))
+           (and (implies (valp (m2-rs))
+                         (and (sstatep (m2-s1))
+                              (equal (car (m2-s1)) (+ (car s) (s2code-len-args (cddr e))))
+                              (equal (cadr (m2-s1)) (cadr s))
+                              (equal (caddr (m2-s1)) (+ (caddr s) (len (cddr e))))
+                              (equal (s-ctl (m2-s1)) (s-ctl s))
+                              (cagree (cadddr (m2-s1)) (cadddr s) (caddr s))
+                              (cvals-at (caddr s) (cdr (m2-rs)) (cadddr (m2-s1)))))
+                (s2-thr s (m2-rs) (m2-s1))
+                (not (recurp (m2-rs)))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (union-theories '(s2good-args s2-hyps) (l2-thy)) :do-not-induct t
+                  :use ((:instance x2wf-args-parts (n (len env)) (k (lck lc)))
+                        (:instance mkgrp2-code (code (car prog)) (pc (car s)))
+                        (:instance mx2-args-not-recur (es (cddr e)))))))
+
+(defthm mx2-mkgrp
+  (implies (equal (car e) :mkgrp)
+           (equal (mx2 e env caps defs fuel)
+                  (if (valp (m2-rs)) (cons :val (x2-seal (cadr e) (cdr (m2-rs)))) (m2-rs))))
+  :hints (("Goal" :expand ((mx2 e env caps defs fuel)))))
+(in-theory (disable mx2-mkgrp))
+
+(defthm mkgrp2-clock
+  (implies (equal (car e) :mkgrp)
+           (equal (vcs2-run prog s (s2clk e env caps defs fuel))
+                  (if (valp (m2-rs)) (vcs2-step prog (m2-s1)) (m2-s1))))
+  :rule-classes nil
+  :hints (("Goal" :expand ((s2clk e env caps defs fuel)) :in-theory (disable c+))))
+
+(defthm mkgrp2-path-val
+  (implies (and (equal (car e) :mkgrp) (s2-hyps e depth cenv self caps s env defs prog lc)
+                (s2good-args (cddr e) depth cenv self caps s env defs fuel prog) (valp (m2-rs)))
+           (s2-val e s (mx2 e env caps defs fuel) (vcs2-step prog (m2-s1))))
+  :rule-classes nil
+  :hints (("Goal" :in-theory (e/d (mx2-mkgrp vcs2-step) (nth update-nth s2good-args mx2 mx2-args s2-hyps))
+                  :do-not-induct t
+                  :use ((:instance mkgrp2-args) (:instance (:definition s2-hyps))
+                        (:instance mkgrp2-code (code (car prog)) (pc (car s)))
+                        (:instance mx2-args-val-shape (es (cddr e)))
+                        (:instance cagree-write-at (n (caddr s)) (a (cadddr (m2-s1))) (b (cadddr s))
+                                   (x (x2-seal (cadr e) (cdr (m2-rs)))))
+                        (:instance stk-from-vals (a (caddr s)) (vs (cdr (m2-rs))) (stk (cadddr (m2-s1))))))))
+
+(defthm s2good-mkgrp
+  (implies (and (equal (car e) :mkgrp) (s2good-args (cddr e) depth cenv self caps s env defs fuel prog))
+           (s2good e depth cenv self caps s env defs fuel prog lc))
+  :hints (("Goal" :in-theory (union-theories '(s2good s2-val s2-rec s2-thr valp recurp thrownp mx2-mkgrp car-cons cdr-cons)
+                                             (theory 'minimal-theory))
+                  :do-not-induct t
+                  :use ((:instance mkgrp2-args) (:instance mkgrp2-path-val) (:instance mkgrp2-clock)))))
 
 (defmacro r2-s1 () '(vcs2-run prog s (s2clk-args (cdr e) env caps defs fuel)))
 (defmacro r2-rs () '(mx2-args (cdr e) env caps defs fuel))
@@ -2661,7 +2724,7 @@
                   (s2ind :m (caddr e) (1+ depth) (append cenv (list depth)) self caps (l2-s1) (l2-env) defs fuel prog lc nil)))
       ((:add :lt) (list (s2ind :m (cadr e) depth cenv self caps s env defs fuel prog nil nil)
                         (s2ind :m (caddr e) (1+ depth) cenv self caps (b2-s1) env defs fuel prog nil nil)))
-      ((:mkclo :prim) (s2ind :args (cddr e) depth cenv self caps s env defs fuel prog nil nil))
+      ((:mkclo :prim :mkgrp) (s2ind :args (cddr e) depth cenv self caps s env defs fuel prog nil nil))
       ((:callv :applyv) (list (s2ind :args (cddr e) depth cenv self caps s env defs fuel prog nil nil)
                     (s2ind :m (cadr e) (+ depth (c2-n)) cenv self caps (c2-s1) env defs fuel prog nil nil)
                     (if (and (valp (c2-ra)) (valp (c2-rf)) (clop (c2-c)) (consp (c2-cl)) (not (zp fuel)))
@@ -2682,7 +2745,7 @@
         (t (s2good e depth cenv self caps s env defs fuel prog lc)))
   :rule-classes nil
   :hints (("Goal" :induct (s2ind flg e depth cenv self caps s env defs fuel prog lc vs)
-                  :in-theory (union-theories '(s2good-if s2good-let s2good-binop s2good-mkclo s2good-callv
+                  :in-theory (union-theories '(s2good-if s2good-let s2good-binop s2good-mkclo s2good-mkgrp s2good-callv
                                                s2good-loop s2good-recur s2good-prim s2good-throw s2good-try
                                                s2good-leaf
                                                s2good-args-nil s2good-args-cons

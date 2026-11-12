@@ -180,7 +180,7 @@
 (defun rt-clo (f caps) (declare (xargs :guard t)) (ec-call (clo f caps)))
 (defun rt-clop (c) (declare (xargs :guard t)) (ec-call (clop c)))
 (defun rt-clo-f (c) (declare (xargs :guard t)) (ec-call (clo-f c)))
-(defun rt-capt (i c) (declare (xargs :guard t)) (ec-call (nth i (ec-call (clo-caps c)))))
+(defun rt-capt (i c) (declare (xargs :guard t)) (ec-call (x2-res (ec-call (nth i (ec-call (clo-caps c)))))))
 (defun rt-prim (op args) (declare (xargs :guard t)) (prim op args))
 (defun rt-throwp (a) (declare (xargs :guard t)) (ec-call (throwp a)))
 (defun rt-thrown (a) (declare (xargs :guard t)) (ec-call (cdr a)))
