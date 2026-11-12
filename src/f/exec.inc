@@ -1619,7 +1619,7 @@
           call vm_run(tctx, nd, vs_get(vst, b + 2), vs_get(vst, b + 7), val)
           if (.not. tctx%has_error) call k_finish(val, tctx)
        case (N_CONST, N_LOCAL, N_VAR, N_IF, N_DO, N_CALL, N_LET, N_LOOP, N_FN, N_RECUR, N_THROW, N_TRY, N_CASE, &
-            N_VECTOR, N_MAP, N_SET)
+            N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE)
           ! the core kinds: decided by the generated exec_gen.inc
           call exec_core(tctx, nd, kids, b, vbase, val)
           ! a call parked in the host's apply (tasks.inc): re-dispatched
@@ -1886,13 +1886,6 @@
        out = exec_letfn(nd, frame)
     case (N_DEFTYPE)
        out = exec_deftype(nd, frame)
-    case (N_NEW, N_NEWTYPE)
-       call note_site(nd)   ! the construction's place, for an error's report
-       v = exec_args(kids, 0, frame)
-       if (.not. tctx%has_error) then
-          call vs_set(vst, base + 3, v)
-          out = new_cached(vs_get(vst, base + 1), vs_get(vst, base + 3))
-       end if
     case (N_SETBANG)
        out = exec_setbang(nd, frame)
     case (N_LATEVAR)
@@ -2200,7 +2193,8 @@
     i = tctx%kst(tctx%ksp)%i
     nk = 0
     if (k == N_IF .or. k == N_DO .or. k == N_RECUR .or. k == N_CALL .or. k == N_THROW &
-         .or. k == N_VECTOR .or. k == N_MAP .or. k == N_SET) nk = gcv_count(kids)
+         .or. k == N_VECTOR .or. k == N_MAP .or. k == N_SET .or. k == N_NEW .or. k == N_NEWTYPE) &
+         nk = gcv_count(kids)
     ! a try's children: its body, and its finally when it has one
     if (k == N_TRY) nk = merge(2, 1, gc_kind(gcv_nth(kids, 1)) == OBJ_AST)
     n2 = gc_i2(nd)
@@ -2325,8 +2319,13 @@
        tctx%kst(tctx%ksp)%pc = int(ex_pc(k, pc, i, nk, n2, tv))
        tctx%kst(tctx%ksp)%i = int(ex_i(k, pc, i, nk, n2, tv))
     case (27)
-       ! the collection built of them (a map's and a set's the host's)
+       ! the collection built of them (a map's and a set's the host's),
+       ! or a new's construction of its arguments (new_cached, the host's)
        select case (k)
+       case (N_NEW, N_NEWTYPE)
+          call note_site(nd)   ! the construction's place, for an error's report
+          val = new_cached(vs_get(vst, b + 1), vs_get(vst, b + 4))
+          if (tctx%has_error) return
        case (N_VECTOR); val = vs_get(vst, b + 4)
        case (N_SET);    val = vec_to_set(vs_get(vst, b + 4), [vs_get(vst, b + 1)])
        case default;    val = vec_to_map(vs_get(vst, b + 4), [vs_get(vst, b + 1)])

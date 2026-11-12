@@ -42,7 +42,7 @@
 
 (defun ex-slp (l) (if (atom l) t (and (natp (car l)) (< (car l) *ex40*) (ex-slp (cdr l)))))
 
-(defconst *ex-core* '(1 2 3 4 5 6 7 8 9 11 12 14 16 17 18 19))
+(defconst *ex-core* '(1 2 3 4 5 6 7 8 9 11 12 14 16 17 18 19 22 23))
 
 (defun ex-shp (flg e i)
   (declare (xargs :measure (ex-cmeas) :well-founded-relation o<
@@ -73,7 +73,7 @@
                     ((equal k 16) (ex-shp :rec e 0))
                     ((equal k 17) (and (equal nk 1) (ex-shp :m (ex-kid-of e 0) 0)))
                     ((equal k 18) (and (<= nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :cs e 0) (ex-shp :fin e 0)))
-                    ((member k '(7 8 9)) (ex-shp :coll e 0))
+                    ((member k '(7 8 9 22 23)) (ex-shp :coll e 0))
                     ((equal k 19) (and (equal nk 2) (ex-shp :m (ex-kid-of e 0) 0) (ex-shp :m (ex-kid-of e 1) 0) (ex-shp :ct e 0)))
                     ((equal k 6) (ex-shp :call e 0))
                     (t nil))))))))

@@ -287,3 +287,14 @@
   :hints (("Goal" :induct (ex-coll-parts e i tmp fr fuel)
                   :in-theory (e/d (c+) (ex-kid-of ex-cbuild))
                   :expand ((ex-ev :coll e i tmp fr fuel)))))
+
+; A NEW'S TURNS (N_NEW, N_NEWTYPE, milestone 5): a collection's -- its
+; record, 2 an argument beyond the arguments' own, the construction (1, or
+; 2 for its throw)
+(defthm ex-new-turns
+  (implies (and (consp e) (member-equal (ex-kind e) '(22 23)))
+           (<= (caddr (ex-ev :m e 0 nil fr fuel))
+               (+ (* 2 (ex-nk e)) 3 (ex-coll-parts e 0 nil fr fuel))))
+  :hints (("Goal" :in-theory (e/d (c+) (ex-kid-of ex-cbuild ex-coll-turns))
+                  :use ((:instance ex-coll-turns (i 0) (tmp nil)))
+                  :expand ((ex-ev :m e 0 nil fr fuel)))))

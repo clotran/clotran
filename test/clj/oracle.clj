@@ -1632,6 +1632,11 @@
 
 (do (deftype TF [x]) [(.-x (TF. 3)) (. (TF. 4) -x)])
 
+;; new in the tree evaluator's loop (exec-PLAN milestone 5): its arguments
+;; run in order before the construction, in a loop's body, and a throwing
+;; argument constructs nothing
+(do (deftype TN [a b]) [(loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (.-b (TN. i (* i i))))) acc)) (try (TN. 1 (throw (ex-info "arg" {}))) (catch clotran.host.throwable e (ex-message e)))])
+
 ;; sequence, eduction, iterator-seq, volatile! and the buffering
 ;; transducers: the RT pieces ClojureScript writes in Clojure, written
 ;; in Clojure here too (clotran.rt), reached as clj members

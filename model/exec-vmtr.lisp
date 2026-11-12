@@ -67,8 +67,8 @@
     (list :if (list :prim :case (list :const (nth 0 (car ct))) (list :local p)) (car ts) (ex-trcs (cdr ct) (cdr ts) d p))))
 
 ; A COLLECTION: the runtime's build of its elements' values, (:prim op
-; args..) -- a vector :vector, a map :map, a set :set
-(defun ex-cop (k) (case k (7 :vector) (8 :map) (otherwise :set)))
+; args..) -- a vector :vector, a map :map, a set :set, a new (:new k C)
+; (ex-cop, exec.lisp)
 
 ; THE SLOTS A NODE MAY CLEAR (milestone 4): its marked reads', every one a
 ; run of it may make -- a branch's, a catch's -- but none of a fn's body,
@@ -98,7 +98,7 @@
                ((equal k 16) (ex-clr :rec e 0))
                ((equal k 17) (ex-clr :m (ex-kid-of e 0) 0))
                ((equal k 18) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0) (ex-clr :fin e 0)))
-               ((member k '(7 8 9)) (ex-clr :coll e 0))
+               ((member k '(7 8 9 22 23)) (ex-clr :coll e 0))
                ((equal k 19) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :m (ex-kid-of e 1) 0) (ex-clr :ct e 0)))
                ((equal k 6) (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :call e 1)))
                (t nil)))))))
@@ -145,7 +145,7 @@
                ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
                                        (ex-tr :fin e 0 (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm))
                                        (ex-c e) (< 1 nk) (len cm)))
-               ((member k '(7 8 9)) (list* :prim (ex-cop k) (ex-tr :coll e 0 cm)))
+               ((member k '(7 8 9 22 23)) (list* :prim (ex-cop e) (ex-tr :coll e 0 cm)))
                ((equal k 19) (list :let (ex-tr :m (ex-kid-of e 0) 0 cm)
                                    (ex-trcs (ex-c e) (ex-tr :ct e 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)))
                                             (ex-tr :m (ex-kid-of e 1) 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)))
@@ -300,7 +300,7 @@
                               (ex-vwf :cs e (1+ i) cm lp defs))
                        t)))
            (:fin (or (not (< 1 nk)) (ex-vwf :m (ex-kid-of e 1) 0 (append cm (list nil)) nil defs)))
-           (:coll (and (member k '(7 8 9))
+           (:coll (and (member k '(7 8 9 22 23))
                        (if (< i nk)
                            (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :coll e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) lp defs))
                          t)))
@@ -328,7 +328,7 @@
                   ((equal k 18) (and (or (equal nk 1) (equal nk 2)) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
                                      (ex-vwf :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) nil defs)
                                      (ex-vwf :fin e 0 (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm) nil defs)))
-                  ((member k '(7 8 9)) (ex-vwf :coll e 0 cm nil defs))
+                  ((member k '(7 8 9 22 23)) (ex-vwf :coll e 0 cm nil defs))
                   ((equal k 19) (and (equal nk 2) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs)
                                      (ex-vwf :m (ex-kid-of e 1) 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)
                                      (ex-vwf :ct e 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)))

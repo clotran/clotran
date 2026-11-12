@@ -203,7 +203,7 @@
                       (ex-ind :m (ex-cbody e (cdr w)) 0 nil fh fuel nil nil (cons (ex-rec e 3 0 fl rs nil) ks) nil nil)
                       (ex-ind :m f 0 nil (cadr rh) fuel nil nil (cons (ex-rec e 2 0 fl rs (list (val (car rh)))) ks) (val (car rh)) nil)
                       (ex-ind :m f 0 nil (cadr rh) fuel nil nil (cons (ex-rec e 4 0 fl rs (list (val (car rh)))) ks) nil nil))))
-             ((member k '(7 8 9)) (ex-ind :coll e 0 nil fr fuel fl rs ks v0 tl))
+             ((member k '(7 8 9 22 23)) (ex-ind :coll e 0 nil fr fuel fl rs ks v0 tl))
              ((equal k 19)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                 (list (ex-ind :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil)
@@ -237,7 +237,7 @@
 
 (ex-case ex-good-atom ((not (consp e))))
 
-(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19)))))
+(ex-case ex-good-leaf ((ex-other flg) (not (member-equal (ex-kind e) '(4 5 6 7 8 9 11 12 16 17 18 19 22 23)))))
 
 ; an if, a case for each way its test goes
 (defmacro ex-if-test () '(ex-good :m (ex-kid-of e 0) 0 nil fr fuel nil nil (cons (ex-rec e 1 0 fl rs nil) ks) v0 nil))
@@ -365,7 +365,7 @@
 
 ;; a collection: each element kept, then the build -- its value
 ; finished with, or its throw over the record, which k_unwind pops
-(ex-case ex-good-m-coll ((ex-other flg) (consp e) (member-equal (ex-kind e) '(7 8 9)) (ex-good :coll e 0 nil fr fuel fl rs ks v0 tl)))
+(ex-case ex-good-m-coll ((ex-other flg) (consp e) (member-equal (ex-kind e) '(7 8 9 22 23)) (ex-good :coll e 0 nil fr fuel fl rs ks v0 tl)))
 (ex-case ex-good-coll-mid
   ((consp e) (< (nfix i) (ex-nk e))
    (ex-good :m (ex-kid-of e (nfix i)) 0 nil fr fuel nil nil (cons (ex-rec e 3 (nfix i) fl rs tmp) ks) v0 nil)

@@ -528,12 +528,26 @@ slot's read and write), and every kind not yet in the model.
    host actions. Each: the kind into exec.lisp's ex-step and ex-ev, the
    generated ex-act's action, exec_gen.inc regenerated, fuzz-exec-gen
    drawing it, ex-vm-agree's case a lemma of its own (as exec-vm's ex-old).
+   *(new done)*: N_NEW 22 and N_NEWTYPE 23 are collections of ex-act
+   (actions 25, 3, 26, 27: the record opened, each argument pushed and
+   kept, then built); the build is the runtime's, vmx2's prim of op
+   (:new k C), C the node's class (ex-cop, ex-cbuild now of the node);
+   the translation (:prim (:new k C) arguments..); ex-collok asks the
+   construction of good values good, or a good throw (ex-collok-new).
+   Proved: ex-machine-correct, ex-vm-agree (ex-vgood-m-new, its own case;
+   the flag proof unchanged but ex-vind's kind list), the clearing books
+   over it as a collection (ex-spo-seq: anpass reads its children in
+   turn); exec-cost ex-new-turns (2n + 3 beyond its arguments'). Fortran:
+   exec_core's action 27 calls new_cached (note_site first); exec_other
+   no longer has it; exec_gen.inc regenerated; fuzz-exec-gen draws 22, 23.
+   Oracle: a deftype constructed in a loop's body, and a throwing argument.
+   Next: letfn.
 4. **Clearing joined**: the machine theorem over anpass's marks, from
    tr-sound -- a marked read's slot is never read again.
    *(done)*: exec-vm (first part), exec-clr, exec-clrmap, exec-clrlv,
    exec-clrfn, exec-clrvm; the templates' bodies and the loop-init case
    left, named in its paragraph above.
-5. **The rest**: def, letfn (`exec_letfn`), deftype, new, set!, dot,
+5. **The rest**: def, letfn (`exec_letfn`), deftype, new *(done)*, set!, dot,
    N_LAZY, N_TOP, the debugger's frames (`break_frames`). Then the row is
    Generated but for the actions, named.
 

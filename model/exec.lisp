@@ -35,6 +35,9 @@
 ;             25 a collection's record opened (its values none yet)
 ;             26 an element's value kept   27 the collection built from
 ;                them and finished with (or the build's throw thrown)
+;                                              (and a new's: 22/23 are
+;                                              collections, the build
+;                                              the construction)
 ;             23 the callee is no fn (tv 0 at a call's pc 1, the IFn test,
 ;                ex-ifn): throw :not-fn, before any argument runs
 ;                                              0 not a core kind
@@ -68,7 +71,7 @@
 ;
 ; kinds as Eval.f90 numbers them: N_CONST 1, N_LOCAL 2, N_VAR 3, N_IF 4,
 ; N_DO 5, N_CALL 6, N_LET 11, N_LOOP 12, N_FN 14, N_RECUR 16, N_THROW 17,
-; N_TRY 18, N_CASE 19 (pc 0 its test pushed, 1 the branch); tv 1 when the
+; N_TRY 18, N_CASE 19, N_NEW 22, N_NEWTYPE 23 (pc 0 its test pushed, 1 the branch); tv 1 when the
 ; value in flight is truthy. A call's record: pc 0 its head, 1 the callee
 ; kept, 2 and 3 its arguments (i the next), 4 the entry, 5 the body done.
 
@@ -105,7 +108,7 @@
                            ((equal pc 4) 16)
                            ((equal pc 5) 17)
                            (t 0)))
-        ((or (equal k 7) (equal k 8) (equal k 9))
+        ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23))
          (cond ((equal pc 0) 25) ((equal pc 3) 26) ((and (integerp i) (integerp nk) (< i nk)) 3) (t 27)))
         (t 0)))
 
@@ -131,7 +134,7 @@
                            ((equal pc 3) 2)
                            ((equal pc 4) 5)
                            (t pc)))
-        ((or (equal k 7) (equal k 8) (equal k 9))
+        ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23))
          (cond ((or (equal pc 0) (equal pc 3)) 2) ((and (integerp i) (integerp nk) (< i nk)) 3) (t pc)))
         (t 0)))
 
@@ -142,7 +145,7 @@
           ((or (equal k 11) (equal k 12)) (if (equal pc 1) i1 i))
           ((equal k 16) (cond ((equal pc 0) 0) ((equal pc 2) i1) (t i)))
           ((equal k 6) (cond ((equal pc 1) 1) ((equal pc 3) i1) (t i)))
-          ((or (equal k 7) (equal k 8) (equal k 9)) (cond ((equal pc 0) 0) ((equal pc 3) i1) (t i)))
+          ((or (equal k 7) (equal k 8) (equal k 9) (equal k 22) (equal k 23)) (cond ((equal pc 0) 0) ((equal pc 3) i1) (t i)))
           (t i))))
 
 (defun ex-fin (rf mk)
@@ -376,10 +379,16 @@
 ; is the runtime's (vec_to_map, vec_to_set), vmx2's prim (op :map or :set)
 ; of the values, whatever it answers -- a value, or a throw (clj's
 ; duplicate key)
-(defun ex-cbuild (k vals)
-  (if (equal k 7)
+;
+; NEW (N_NEW 22, N_NEWTYPE 23, milestone 5): its arguments as a
+; collection's elements, then the construction -- exec.inc's new_cached,
+; eval_new or the deftype's constructor, the runtime's -- vmx2's prim of
+; op (:new k C), C the class (the node's slot 2), a value or a throw
+(defun ex-cop (e) (case (ex-kind e) (7 :vector) (8 :map) (9 :set) (otherwise (list :new (ex-kind e) (ex-c e)))))
+(defun ex-cbuild (e vals)
+  (if (equal (ex-kind e) 7)
       (cons :val (cons :vec vals))
-    (let ((a (prim (if (equal k 8) :map :set) vals))) (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))))
+    (let ((a (prim (ex-cop e) vals))) (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))))
 
 ; ---- THE MACHINE: run_loop's turn for the core kinds -----------------------------------------
 ;
@@ -463,7 +472,7 @@
           (24 (list (cons (ex-rec (ex-csbr e val) 0 0 fl rs nil) (cdr ks)) val fr))
           (25 (list (cons (ex-rec e pc2 i2 fl rs nil) (cdr ks)) val fr))
           (26 (list (cons (ex-rec e pc2 i2 fl rs (append tmp (list val))) (cdr ks)) val fr))
-          (27 (let ((b (ex-cbuild k tmp)))
+          (27 (let ((b (ex-cbuild e tmp)))
                 (if (valp b) (ex-finish (cdr b) ks fr) (list (cons (ex-throwr (cdr b)) ks) nil fr))))
           (22 (list (cons (ex-throwr (car tmp)) (cons (ex-rec e pc2 i2 fl rs tmp) (cdr ks))) nil fr))
           (otherwise s)))))))
@@ -565,7 +574,7 @@
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :call e (1+ i) tl)))
                         (t t)))
            (:fin nil)
-           (:coll (cond ((not (member k '(7 8 9))) nil)
+           (:coll (cond ((not (member k '(7 8 9 22 23))) nil)
                         ((< i nk) (and (ex-wf :m (ex-kid-of e i) 0 nil) (ex-wf :coll e (1+ i) tl)))
                         (t t)))
            (:ct (cond ((not (equal k 19)) nil)
@@ -589,7 +598,7 @@
                                      (or (equal nk 1) (ex-wf :m (ex-kid-of e 1) 0 nil)) (ex-wf :cs e 0 nil)))
                   ((equal k 19) (and (equal nk 2) (ex-wf :m (ex-kid-of e 0) 0 nil) (ex-wf :m (ex-kid-of e 1) 0 tl)
                                      (ex-wf :ct e 0 tl)))
-                  ((member k '(7 8 9)) (ex-wf :coll e 0 tl))
+                  ((member k '(7 8 9 22 23)) (ex-wf :coll e 0 tl))
                   (t nil)))))))
 
 ; a call enters f with n arguments, in the meaning: a closure with that
@@ -658,7 +667,7 @@
                           (ex-nv r fr)
                         (let ((r2 (ex-ev :coll e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
                           (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
-                   (t (let ((b (ex-cbuild k tmp)))
+                   (t (let ((b (ex-cbuild e tmp)))
                         (cond ((equal (cdr b) *ex-mk*) (list (list :out) fr 0))
                               ((valp b) (list b fr 1))
                               (t (list b fr 2)))))))
@@ -723,7 +732,7 @@
                              (ex-ev :fin e 0 (list (car rh) (c+ 1 (c+ (caddr r) (c+ 1 (caddr rh))))) (cadr rh) fuel)
                            (list (list :out) fr 0))))
                       (t (ex-ev :fin e 0 (list (car r) (c+ 1 (caddr r))) (cadr r) fuel)))))
-             ((member k '(7 8 9)) (let ((r (ex-ev :coll e 0 nil fr fuel))) (list (car r) (cadr r) (c+ 1 (caddr r)))))
+             ((member k '(7 8 9 22 23)) (let ((r (ex-ev :coll e 0 nil fr fuel))) (list (car r) (cadr r) (c+ 1 (caddr r)))))
              ((equal k 19)
               (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                 (if (not (valp (car r)))
