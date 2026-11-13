@@ -2101,7 +2101,7 @@
 
 (defthm x2wf-loop-parts
   (implies (and (equal (car e) :loop) (x2wf e n k))
-           (and (x2wf-args (cadr e) n) (consp (cadr e)) (true-listp (cadr e))))
+           (and (x2wf-args (cadr e) n) (true-listp (cadr e))))
   :rule-classes nil)
 
 (defthm loop2-args

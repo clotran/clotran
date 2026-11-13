@@ -225,7 +225,8 @@
 ; as vmx.lisp's xwf, and: a prim's and a throw's operands are in no tail;
 ; a try's body and handler are in none either -- no recur across a try,
 ; as clj's compiler refuses one. A function's clauses each well formed
-; for their locals: n, or n + 1 with the rest.
+; for their locals: n, or n + 1 with the rest. A loop may bind none (vm.inc
+; emits (:loop () body) for one, and a recur of no values to it).
 
 (mutual-recursion
  (defun x2wf (e n k)
@@ -237,7 +238,7 @@
      ((:add :lt) (and (x2wf (cadr e) n nil) (x2wf (caddr e) n nil)))
      ((:mkclo :mkgrp) (x2wf-args (cddr e) n))
      ((:callv :applyv) (and (x2wf (cadr e) n nil) (x2wf-args (cddr e) n)))
-     (:loop (and (true-listp (cadr e)) (consp (cadr e)) (x2wf-args (cadr e) n)
+     (:loop (and (true-listp (cadr e)) (x2wf-args (cadr e) n)
                  (x2wf (caddr e) (+ (nfix n) (len (cadr e))) (len (cadr e)))))
      (:recur (and (natp k) (true-listp (cdr e)) (equal (len (cdr e)) k) (x2wf-args (cdr e) n)))
      (:prim (x2wf-args (cddr e) n))

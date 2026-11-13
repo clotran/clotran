@@ -788,12 +788,12 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 |---|---|---|
 | `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_DO, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 5, 17, 11 | yes -- **generated now** (vmtrg) |
 | N_LOCAL of a capture | ex-fbtc reads it in place, `(:capt j)` (exec-vmcs's ex-cs) | yes -- vtg_local exact |
-| N_LOOP, N_RECUR | lets, then `(:loop ((:const nil) locals..) body)`, `(:recur (:const nil) ..)` | no: the dummy, and vm.inc's independent-inits loop (PLAN 34, no let keeps a walked seq's head) |
+| N_LOOP, N_RECUR | lets, then `(:loop (locals..) body)`, `(:recur ..)` -- no dummy (item 3) | partly: the same when an init reads an earlier binding; vm.inc's independent-inits loop `(:loop (inits..) body)` (PLAN 34, no let keeps a walked seq's head) is not ex-tr's yet |
 | N_CALL | ex-trcall: `:ifn` then `:applyv` | no: vm.inc's builtin `(:prim f ..)`, a Var wrapping one `callw`, else `:callv` |
 | N_VAR | `(:const value)` | no: vm.inc derefs (`:clotran.vm/deref`, the link epoch) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
-| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop always round the body with its dummy (vm.inc only on a fn recur, no dummy); the arity-error clause is not in ex-def |
+| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop always round the body (vm.inc only on a fn recur; the dummy gone from both); the arity-error clause is not in ex-def |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
 **Generated now**: model/vmtrg.lisp, `vtg-tr`,
@@ -857,13 +857,33 @@ position.
    append the closure to caps.
    **Left:** generating `vm_clause` from ex-fbtc/ex-clause. It differs
    from the model still in the loop (ex-fbtc's is always round the body,
-   with item 3's dummy; vm.inc's only on a fn recur, no dummy), the
+   vm.inc's only on a fn recur: item 3 (b)), the
    self let (its value, and vm.inc's only when read: above), and ex-def has no arity-error clause
    (vm_compile_fn's `(0 (:prim :clotran.vm/arity ..) :rest)`, which needs
    ex-mxcl's :arity throw to be that prim's). Take it with item 3: once
    the loop's encoding is one, vm_clause is ex-fbtc's shape.
-3. loop/recur: drop the dummy (x2wf's at-least-one-binding needs a
-   zero-binding loop's own case) and model the independent-inits loop.
+3. loop/recur. **The dummy: dropped.** x2wf no longer asks a loop bind at
+   least one: `(:loop () body)` is well formed, a recur to it `(:recur)`
+   -- what vm.inc already emitted for a zero-binding loop. Weighed: the
+   other way, a dummy only for a zero-binding loop, kept vmx2 but split
+   every exec-vm loop lemma on n = 0 and made vm.inc emit it too; relaxing
+   x2wf is one conjunct (vmx2, vmx2-proof's x2wf-loop-parts) and the vmx2
+   chain (vmx2-proof .. vmg, vmic, vmf, vmj, vmrt) re-certified unchanged,
+   and the exec books' change a deletion: ex-lsl is a loop's slots, ex-k
+   its count, ex-tr's loop `(:loop (locals..) body)` and recur `(:recur
+   args..)`, ex-fbin's loop the parameters' copies; ex-vm-agree and
+   ex-vm-runs stand in statement unchanged.
+   **Left:** (a) the independent-inits loop: vm.inc's `(:loop (inits..)
+   body)` when no init reads an earlier binding (vm_loop_indep) -- every
+   one-binding loop -- against ex-tr's lets and copies. The model needs
+   vm_reads_in as a predicate on the tree and the inits walked as
+   :rec's arguments are (no lets), a new place in ex-vind/ex-vpost (each
+   init's slot written in the frame, not in cm: ex-agree-write-blank),
+   and ex-vwf's loop case taking the inits in the outer scope. (b) the
+   fn's loop only on a recur to the fn (vm.inc's c%fn_recur): ex-fbin
+   without the loop is the body in ex-fbcm, the parameters not copied, a
+   second entry path (:m, not :iter) through exec-vmcall's ex-enter-*.
+   Until both, vm_tr keeps N_LOOP/N_RECUR and vtg-tr does not take them.
 4. calls and Vars: vm.inc's builtin prim and callw as ex-trcall's cases
    (the head a known builtin: a prim; else :ifn/:applyv), the deref as a
    host prim under ex-collok's hypothesis; collections' op as the node.

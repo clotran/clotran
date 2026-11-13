@@ -181,6 +181,18 @@
 ; the rest at :m), proved as the flag proof once proved them all -- ex-vgood
 ; opened only once stable -- and disabled until the flag proof, which meets
 ; them with ex-vgood closed, so its induction never expands a case
+; a loop of no bindings: its scope and values cm ++ nil, env ++ nil
+(defthm ex-agree-app-nil-env (equal (ex-agree cm (append env nil) fr) (ex-agree cm env fr)))
+(defthm ex-agree-app-nil-cm (equal (ex-agree (append cm nil) env fr) (ex-agree cm env fr)))
+(defthm ex-nomem-nil (ex-nomem nil cm))
+; ex-mx-loop-body for a loop whose inits may be none
+(defthm ex-mx-loop-body0
+  (implies (and (consp e) (syntaxp (not (and (consp e) (eq (car e) 'cons) (consp (caddr e)) (equal (cadr (caddr e)) ''nil)))))
+           (equal (mx2-loop e base vs caps defs fuel) (mx2-loop (list :loop nil (caddr e)) base vs caps defs fuel)))
+  :hints (("Goal" :induct (ex-mxl-ind e base vs caps defs fuel)
+                  :expand ((mx2-loop e base vs caps defs fuel)
+                           (:free (vs) (mx2-loop (list :loop nil (caddr e)) base vs caps defs fuel))))))
+
 (defmacro ex-old (name conds hyps &optional use)
   `(progn
      (defthm ,name
@@ -225,8 +237,8 @@
                    (update-nth (+ (ex-s2 e) (nfix i)) (val (car (ex-r0))) (cadr (ex-r0))) fuel caps defs lp)))
 (ex-old ex-vgood-let-loop ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (equal (ex-kind e) 12))
         ((ex-vgood :iter (ex-kid-of e (ex-i2 e)) 0
-                   (cons nil (val (mx2-args (ex-locals (cdr (cons nil (ex-slots (ex-s2 e) (ex-i2 e)))) cm) env caps defs fuel)))
-                   (ex-blank (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm) env fr fuel caps defs (cons (ex-s2 e) (ex-i2 e)))))
+                   (val (mx2-args (ex-locals (ex-slots (ex-s2 e) (ex-i2 e)) cm) env caps defs fuel))
+                   (ex-blank (ex-slots (ex-s2 e) (ex-i2 e)) cm) env fr fuel caps defs (cons (ex-s2 e) (ex-i2 e)))))
 (ex-old ex-vgood-let-body ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (not (equal (ex-kind e) 12)))
         ((ex-vgood :m (ex-kid-of e (ex-i2 e)) 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-rec-mid ((consp e) (equal flg :rec) (< (nfix i) (ex-nk e)))
@@ -239,7 +251,7 @@
 (ex-old ex-vgood-call-zp ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (zp fuel)) ())
 (ex-old ex-vgood-call-enter ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (not (zp fuel)))
         ((ex-vgood :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0
-                   (cons nil (ex-fvs (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                   (ex-fvs (car (ex-callee tmp)) (cdr (ex-callee tmp)))
                    (ex-fcm (ex-ftm (car (ex-callee tmp))) (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
                    (ex-fenv (car (ex-callee tmp)) (cdr (ex-callee tmp))) (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp)))
                    (1- fuel) (caddr (car (ex-callee tmp))) defs

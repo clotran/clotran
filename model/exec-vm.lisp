@@ -23,12 +23,11 @@
 ; A LOOP. The tree binds a loop's inits one after another, each seeing
 ; the ones before; vmx's :loop binds its inits at once. So a loop of n
 ; bindings in slots s .. s+n-1 is n of mx2's lets (the inits, in order)
-; around (:loop (nil, copies of the n positions) body): the body's scope
+; around (:loop (copies of the n positions) body): the body's scope
 ; is the lets' positions blanked -- after a recur they hold the first
-; round's values, and no name reaches them -- then a dummy and the
-; copies, so its slots name the loop's own positions. A recur is (:recur
-; nil args...): the dummy makes every loop bind at least one, as x2wf asks,
-; and keeps a zero-binding loop one translation.
+; round's values, and no name reaches them -- then the copies, so its
+; slots name the loop's own positions. A recur is (:recur args...), as
+; vm.inc's; a loop of no bindings (:loop () body), x2wf admitting it.
 ;
 ; FNS AND CALLS. A Var is (:const its value) (the namespace is the host's;
 ; the machine reads the value from the node). A fn is (:mkclo template
@@ -373,7 +372,7 @@
                            (ex-agree (ex-blank (ex-clr :m e 0) cm) env fr2) (ex-xvs defs (list (val res))))))
       (:rec (let ((m (mx2-args (ex-tr :rec e i cm) env caps defs fuel)))
               (and (implies (equal (car res) :recur)
-                            (and (valp m) (ex-agree (cdr ls) (append tmp (val m)) fr2)
+                            (and (valp m) (ex-agree ls (append tmp (val m)) fr2)
                                  (ex-agree (ex-blank ls (ex-blank (ex-clr :rec e i) cm)) env fr2) (ex-xvs defs (append tmp (val m)))))
                    (implies (thrownp res)
                             (and (equal m res) (ex-agree (ex-blank (ex-clr :rec e i) cm) env fr2) (ex-xvs defs (list (val res))))))))
@@ -440,9 +439,9 @@
                              (ex-vind :let e (1+ i) tmp (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i))) (append env (list (val (car r))))
                                       (update-nth (+ (ex-s2 e) i) (val (car r)) (cadr r)) fuel caps defs lp))))
                     ((equal k 12)
-                     (let* ((ls (cons nil (ex-slots (ex-s2 e) n2)))
-                            (vs (val (mx2-args (ex-locals (cdr ls) cm) env caps defs fuel))))
-                       (ex-vind :iter (ex-kid-of e n2) 0 (cons nil vs) (ex-blank ls cm) env fr fuel caps defs
+                     (let* ((ls (ex-slots (ex-s2 e) n2))
+                            (vs (val (mx2-args (ex-locals ls cm) env caps defs fuel))))
+                       (ex-vind :iter (ex-kid-of e n2) 0 vs (ex-blank ls cm) env fr fuel caps defs
                                 (cons (ex-s2 e) n2))))
                     (t (ex-vind :m (ex-kid-of e n2) 0 nil cm env fr fuel caps defs lp))))
         (:rec (if (< i nk)
@@ -456,7 +455,7 @@
                               (ex-vind :call e (1+ i) (append tmp (list (val (car r)))) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) env (cadr r) fuel caps defs lp))))
                      ((zp fuel) nil)
                      (t (let* ((f (car (ex-callee tmp))) (args (cdr (ex-callee tmp))) (ar (ex-car f args)))
-                          (ex-vind :iter (ex-fbody f (len args)) 0 (cons nil (ex-fvs f args)) (ex-fcm (ex-ftm f) ar)
+                          (ex-vind :iter (ex-fbody f (len args)) 0 (ex-fvs f args) (ex-fcm (ex-ftm f) ar)
                                    (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
                                    (cons (ex-astart ar) (ex-anp ar)))))))
         (:coll (if (< i nk)

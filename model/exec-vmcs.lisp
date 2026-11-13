@@ -7,6 +7,7 @@
 ; fewer positions. So a fn's body need not copy its captures into locals
 ; first (exec-vmtr's ex-fbtc is ex-fbtr's body, so rewritten), and
 ; vm.inc's capture read (:capt j) is the translation's.
+; ex-cs-steps-bound: its work linear in the expression.
 
 (in-package "ACL2")
 
@@ -151,3 +152,16 @@
   (implies (and (x2wf e n k) (natp np) (natp m) (<= (+ np m) (nfix n)))
            (x2wf (ex-cs nil e np m) (- n m) k))
   :hints (("Goal" :use ((:instance ex-cs-xwf-flag (flg nil))))))
+
+; ITS COST: ex-cs-steps, a step a call of ex-cs (a position's read ex-cloc,
+; a constant) -- at most 2 a cons of the expression, plus 1: linear in it
+(defun ex-cs-steps (flg e)
+  (declare (xargs :measure (acl2-count e)))
+  (cond ((atom e) 1)
+        (flg (+ 1 (ex-cs-steps nil (car e)) (ex-cs-steps t (cdr e))))
+        (t (case (car e)
+             ((:if :let :add :lt :throw :try :callv :applyv :recur) (+ 1 (ex-cs-steps t (cdr e))))
+             ((:mkclo :mkgrp :prim) (if (consp (cdr e)) (+ 1 (ex-cs-steps t (cddr e))) 1))
+             (:loop (if (consp (cdr e)) (+ 1 (ex-cs-steps t (cadr e)) (ex-cs-steps t (cddr e))) 1))
+             (otherwise 1)))))
+(defthm ex-cs-steps-bound (<= (ex-cs-steps flg e) (1+ (* 2 (acl2-count e)))) :rule-classes :linear)

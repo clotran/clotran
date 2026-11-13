@@ -367,14 +367,14 @@
 (defthm ex-enter-vwf
   (implies (ex-ehyp f args defs)
            (ex-vwf :m (ex-abody (ex-car f args)) 0
-                   (append (ex-fcm (ex-ftm f) (ex-car f args)) (cons nil (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args)))))
+                   (append (ex-fcm (ex-ftm f) (ex-car f args)) (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args))))
                    (cons (ex-astart (ex-car f args)) (ex-anp (ex-car f args))) defs))
   :hints (("Goal" :use ex-ehyp-facts :in-theory (e/d (ex-arwf) (ex-ehyp ex-car ex-fcm ex-astart ex-anp ex-abody)))))
 (defthm ex-enter-iterok
   (implies (ex-ehyp f args defs)
            (or (ex-nomem (ex-clr :m (ex-abody (ex-car f args)) 0) (ex-fcm (ex-ftm f) (ex-car f args)))
                (ex-vwf :m (ex-abody (ex-car f args)) 0
-                       (append (ex-fcm (ex-ftm f) (ex-car f args)) (cons nil (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args)))))
+                       (append (ex-fcm (ex-ftm f) (ex-car f args)) (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args))))
                        nil defs)))
   :rule-classes nil
   :hints (("Goal" :use ex-ehyp-facts :in-theory (e/d (ex-arwf) (ex-ehyp ex-car ex-fcm ex-astart ex-anp ex-abody)))))
@@ -398,7 +398,7 @@
 (defthm ex-enter-xvs-vs
   (implies (ex-ehyp f args defs) (ex-xvs defs (ex-fvs f args)))
   :hints (("Goal" :in-theory (e/d (ex-fvs) (ex-ehyp ex-fenv ex-locals-indep ex-car)))))
-(defthm ex-enter-nomem (ex-nomem (cons nil (ex-slots (ex-astart ar) (ex-anp ar))) (ex-fcm tm ar))
+(defthm ex-enter-nomem (ex-nomem (ex-slots (ex-astart ar) (ex-anp ar)) (ex-fcm tm ar))
   :hints (("Goal" :in-theory (e/d (ex-fcm) (ex-fbcm ex-anp ex-astart ex-blank)))))
 (defthm ex-car-assoc (implies (consp (assoc-equal x l)) (equal (car (assoc-equal x l)) x)))
 (defthm ex-assoc-def
@@ -426,15 +426,15 @@
            (equal (mx2 (ex-fbtr tm ar) args caps defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))
                             (append args (ex-resl caps) (list (clo tm (ex-resl caps))))
-                            (cons nil (cdr (mx2-args (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
-                                                     (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) nil nil 0)))
+                            (cdr (mx2-args (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
+                                                     (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) nil nil 0))
                             caps defs fuel)))
   :hints (("Goal" :use ((:instance ex-mx-loop-body
-                                   (e (list :loop (cons '(:const nil) (ex-locals (ex-fparams ar) (ex-fbcm tm ar)))
+                                   (e (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
                                             (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar))))
                                    (base (append args (ex-resl caps) (list (clo tm (ex-resl caps)))))
-                                   (vs (cons nil (cdr (mx2-args (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
-                                                                (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) nil nil 0))))))
+                                   (vs (cdr (mx2-args (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
+                                                                (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) nil nil 0)))))
                   :in-theory (e/d (ex-fbtr) (ex-mx-loop-body ex-fbcm ex-fparams ex-fcm ex-fcmb ex-abody clo))
                   :expand ((:free (y env) (mx2 (cons :let y) env caps defs fuel))
                            (:free (y env) (mx2 (cons :loop y) env caps defs fuel))
@@ -445,8 +445,8 @@
            (equal (ex-mxcall0 f args defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody (ex-car f args)) 0
                                                    (append (ex-fcm (ex-ftm f) (ex-car f args))
-                                                           (cons nil (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args)))))))
-                            (ex-fenv f args) (cons nil (ex-fvs f args)) (caddr f) defs (+ -1 fuel))))
+                                                           (ex-slots (ex-astart (ex-car f args)) (ex-anp (ex-car f args))))))
+                            (ex-fenv f args) (ex-fvs f args) (caddr f) defs (+ -1 fuel))))
   :hints (("Goal" :use ex-ehyp-facts
                   :in-theory (e/d (ex-fvs ex-fenv ex-fcmb) (ex-ehyp ex-fbtr ex-fbcm ex-fparams ex-fcm ex-abody ex-car ex-bargs
                                                             ex-mxcall0)))))
@@ -492,13 +492,13 @@
   :hints (("Goal" :by (:instance ex-enter-fbody (f (car tmp)) (args (cdr tmp))))))
 (defthm ex-call-vwf
   (implies (ex-chyp)
-           (ex-vwf :m (ex-abody (ex-cr)) 0 (append (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (cons nil (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr)))))
+           (ex-vwf :m (ex-abody (ex-cr)) 0 (append (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr))))
                    (cons (ex-astart (ex-cr)) (ex-anp (ex-cr))) defs))
   :hints (("Goal" :by (:instance ex-enter-vwf (f (car tmp)) (args (cdr tmp))))))
 (defthm ex-call-iterok
   (implies (ex-chyp)
            (or (ex-nomem (ex-clr :m (ex-abody (ex-cr)) 0) (ex-fcm (ex-ftm (car tmp)) (ex-cr)))
-               (ex-vwf :m (ex-abody (ex-cr)) 0 (append (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (cons nil (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr)))))
+               (ex-vwf :m (ex-abody (ex-cr)) 0 (append (ex-fcm (ex-ftm (car tmp)) (ex-cr)) (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr))))
                        nil defs)))
   :rule-classes nil
   :hints (("Goal" :use ((:instance ex-enter-iterok (f (car tmp)) (args (cdr tmp)))))))
@@ -523,8 +523,8 @@
            (equal (ex-mxcall0 (car tmp) (cdr tmp) defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody (ex-cr)) 0
                                                    (append (ex-fcm (ex-ftm (car tmp)) (ex-cr))
-                                                           (cons nil (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr)))))))
-                            (ex-fenv (car tmp) (cdr tmp)) (cons nil (ex-fvs (car tmp) (cdr tmp))) (caddr (car tmp)) defs (+ -1 fuel))))
+                                                           (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr))))))
+                            (ex-fenv (car tmp) (cdr tmp)) (ex-fvs (car tmp) (cdr tmp)) (caddr (car tmp)) defs (+ -1 fuel))))
   :hints (("Goal" :by (:instance ex-enter-mx (f (car tmp)) (args (cdr tmp))))))
 
 (defthm ex-linked-ev

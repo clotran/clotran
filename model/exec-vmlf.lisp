@@ -102,10 +102,10 @@
 (defthm ex-mem-slots (implies (and (natp j) (< j (nfix n))) (member-equal (+ (nfix s) j) (ex-slots s n)))
   :hints (("Goal" :induct (ex-msi s j n) :expand ((ex-slots s n)))))
 (defthm ex-agree-lfr
-  (implies (and (ex-agree cm env fr) (ex-nomem (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm) (natp j))
+  (implies (and (ex-agree cm env fr) (ex-nomem (ex-slots (ex-s2 e) (ex-i2 e)) cm) (natp j))
            (ex-agree cm env (ex-lfr e j fr)))
   :hints (("Goal" :induct (ex-lfr e j fr) :in-theory (disable ex-kid-of ex-mkclo ex-nomem-mem ex-mem-slots))
-          ("Subgoal *1/1" :use ((:instance ex-nomem-mem (ls (cons nil (ex-slots (ex-s2 e) (ex-i2 e)))) (x (+ j (ex-s2 e))))
+          ("Subgoal *1/1" :use ((:instance ex-nomem-mem (ls (ex-slots (ex-s2 e) (ex-i2 e))) (x (+ j (ex-s2 e))))
                                 (:instance ex-mem-slots (s (ex-s2 e)) (n (ex-i2 e)))))))
 
 ; ---- MX2: the lets' captures read, each let's value a sealed closure ---------------------------
@@ -224,7 +224,7 @@
   (implies (and (consp e) (equal (ex-kind e) 13))
            (and (equal (ex-vwf :m e i cm lp defs)
                        (and (equal (ex-nk e) (1+ (ex-i2 e))) (ex-lffns e 0) (ex-lfok e 0 cm defs)
-                            (ex-nomem (cons nil (ex-slots (ex-s2 e) (ex-i2 e))) cm)
+                            (ex-nomem (ex-slots (ex-s2 e) (ex-i2 e)) cm)
                             (ex-vwf :m (ex-lfb) 0 (ex-lfcm) lp defs)))
                 (equal (ex-tr :m e i cm) (ex-trlf e 0 cm (ex-tr :m (ex-lfb) 0 (ex-lfcm))))
                 (equal (ex-clr :m e i) (ex-clr :let e 0))

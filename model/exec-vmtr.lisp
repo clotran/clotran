@@ -22,11 +22,11 @@
 
 (defun ex-pos (s cm) (cond ((atom cm) 0) ((equal s (car cm)) 0) (t (1+ (ex-pos s (cdr cm))))))
 
-; slots s .. s+n-1; a loop's scope list: the dummy, then its slots
+; slots s .. s+n-1; a loop's scope list: its slots
 (defun ex-slots (s n) (if (zp n) nil (cons (nfix s) (ex-slots (1+ (nfix s)) (1- n)))))
-(defun ex-lsl (lp) (cons nil (ex-slots (car lp) (cdr lp))))
+(defun ex-lsl (lp) (ex-slots (car lp) (cdr lp)))
 ; the arity x2wf asks a recur in the tail of loop lp (nil: none may stand)
-(defun ex-k (lp) (if (consp lp) (1+ (nfix (cdr lp))) nil))
+(defun ex-k (lp) (if (consp lp) (nfix (cdr lp)) nil))
 ; cm with every entry of ls blanked
 (defun ex-blank (ls cm)
   (if (atom cm) cm (cons (if (member-equal (car cm) ls) nil (car cm)) (ex-blank ls (cdr cm)))))
@@ -163,8 +163,8 @@
                      (list :let (ex-tr :m (ex-kid-of e i) 0 cm)
                            (ex-tr :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i))))))
                     ((equal k 12)
-                     (let ((ls (cons nil (ex-slots (ex-s2 e) n2))))
-                       (list :loop (cons '(:const nil) (ex-locals (cdr ls) cm))
+                     (let ((ls (ex-slots (ex-s2 e) n2)))
+                       (list :loop (ex-locals ls cm)
                              (ex-tr :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls)))))
                     (t (ex-tr :m (ex-kid-of e n2) 0 cm))))
         ((:rec :call :coll)
@@ -188,7 +188,7 @@
                ((equal k 5) (ex-tr :do e 0 cm))
                ((or (equal k 11) (equal k 12)) (ex-tr :let e 0 cm))
                ((equal k 13) (ex-trlf e 0 cm (ex-tr :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)))))
-               ((equal k 16) (list* :recur '(:const nil) (ex-tr :rec e 0 cm)))
+               ((equal k 16) (cons :recur (ex-tr :rec e 0 cm)))
                ((equal k 17) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm)))
                ((equal k 18) (ex-trtry (ex-tr :m (ex-kid-of e 0) 0 cm) (ex-tr :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
                                        (ex-tr :fin e 0 (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm))
@@ -223,8 +223,8 @@
                              (ex-vwf :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i))) lp defs)))
                        ((equal k 11) (ex-vwf :m (ex-kid-of e n2) 0 cm lp defs))
                        ((equal k 12)
-                        (let ((ls (cons nil (ex-slots (ex-s2 e) n2))))
-                          (and (subsetp-equal (cdr ls) cm) (ex-nomem (ex-clr :m (ex-kid-of e n2) 0) (ex-blank ls cm))
+                        (let ((ls (ex-slots (ex-s2 e) n2)))
+                          (and (subsetp-equal ls cm) (ex-nomem (ex-clr :m (ex-kid-of e n2) 0) (ex-blank ls cm))
                                (ex-vwf :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls) (cons (ex-s2 e) n2) defs))))
                        (t nil)))
            (:rec (and (equal k 16) (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))
@@ -264,10 +264,10 @@
                                     (or (equal nk 2) (ex-vwf :m (ex-kid-of e 2) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) lp defs))))
                   ((equal k 5) (ex-vwf :do e 0 cm lp defs))
                   ((equal k 11) (and (equal nk (1+ n2)) (ex-vwf :let e 0 cm lp defs)))
-                  ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
+                  ((equal k 12) (and (equal nk (1+ n2)) (ex-nomem (ex-slots (ex-s2 e) n2) cm)
                                      (ex-vwf :let e 0 cm lp defs)))
                   ((equal k 13) (and (equal nk (1+ n2)) (ex-lffns e 0) (ex-lfok e 0 cm defs)
-                                     (ex-nomem (cons nil (ex-slots (ex-s2 e) n2)) cm)
+                                     (ex-nomem (ex-slots (ex-s2 e) n2) cm)
                                      (ex-vwf :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) lp defs)))
                   ((equal k 16) (and (consp lp) (equal (ex-rstart e) (car lp)) (equal (ex-rn e) (cdr lp))
                                      (equal nk (cdr lp)) (ex-vwf :rec e 0 cm lp defs)))
@@ -309,7 +309,7 @@
 (defun ex-fbtr (tm ar)
   (let ((m (len (ex-inners (nth 2 tm)))))
     (ex-clets 0 m (list :let (list* :mkclo tm (ex-capts 0 m))
-                        (list :loop (cons '(:const nil) (ex-locals (ex-fparams ar) (ex-fbcm tm ar)))
+                        (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
                               (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))))))
 ; the clause's body: ex-fbtr's with the captures read in place (exec-vmcs's
 ; ex-cs) -- no lets of them: the parameters, then the self slot's let and
@@ -317,7 +317,7 @@
 (defun ex-fbin (tm ar)
   (let ((m (len (ex-inners (nth 2 tm)))))
     (list :let (list* :mkclo tm (ex-capts 0 m))
-          (list :loop (cons '(:const nil) (ex-locals (ex-fparams ar) (ex-fbcm tm ar)))
+          (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
                 (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar))))))
 (defun ex-fbtc (tm ar) (ex-cs nil (ex-fbin tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm)))))
 (defthm ex-fbtr-fbin (equal (ex-fbtr tm ar) (ex-clets 0 (len (ex-inners (nth 2 tm))) (ex-fbin tm ar))) :rule-classes nil)
@@ -454,7 +454,7 @@
 
 (defthm ex-agree-write-blank
   (implies (and (ex-agree cm env fr) (equal n (len vs)))
-           (ex-agree (ex-blank (cons nil (ex-slots s n)) cm) env (ex-write s vs fr)))
+           (ex-agree (ex-blank (ex-slots s n) cm) env (ex-write s vs fr)))
   :hints (("Goal" :induct (ex-agree cm env fr))))
 
 (defthm ex-pos-bound (implies (member-equal s cm) (< (ex-pos s cm) (len cm))) :rule-classes :linear)
