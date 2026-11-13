@@ -1,7 +1,7 @@
 ; THE VM'S TRANSLATION, GENERATED (src/f/gen/vm_tr_gen.inc,
 ; scripts/acl2-fortran -b vmtrg): exec-vmtr's ex-tr at the level the
 ; Fortran is generated from, guard-verified, for the kinds whose encoding
-; vm.inc and ex-tr share -- a constant, a local, if, let* and throw --
+; vm.inc and ex-tr share -- a constant, a local, if, do, let* and throw --
 ; every other kind the host's (vtg-other: vm.inc's hand-written vm_tr,
 ; which calls back here for these kinds). exec-PLAN's Lane 3 says what
 ; is left.
@@ -10,7 +10,8 @@
 ; generated code never holds an expression in a variable: a node's
 ; translation leaves one expression on top, and vtg-node makes (op items..)
 ; of the top n. THE SCOPE is ex-tr's cm, the slots in scope by position,
-; kept by the host: vtg-bind appends a slot, vtg-blank blanks what a node
+; kept by the host: vtg-bind appends a slot, vtg-dead a dead position (a
+; do's value no one reads), vtg-blank blanks what a node
 ; may clear (ex-clr), vtg-save / vtg-restore keep and give back the whole
 ; scope, vtg-local reads a slot's position. In clotran the stack is the
 ; context's value stack and the scope vm.inc's vm_tr_ctx (its map from
@@ -25,7 +26,7 @@
 ; Proved: vtg-tr-ex-tr -- on a tree of these kinds (vtg-frag) the
 ; generated translation pushes exactly ex-tr's, leaving the scope as it
 ; found it.
-; vtg-steps-bound -- its work at most 8 steps a node it reaches (vtg-size):
+; vtg-steps-bound -- its work at most 9 steps a node it reaches (vtg-size):
 ; each node's shims a constant number.
 
 (in-package "ACL2")
@@ -58,6 +59,7 @@
 (defthm vtg-kid-count-k (implies (not (equal (vtg-kind e) 0)) (< (acl2-count (vtg-kid e j)) (acl2-count e)))
   :rule-classes :linear :hints (("Goal" :in-theory (disable vtg-kid-count) :use vtg-kid-count)))
 (defthm vtg-i2-range (< (vtg-i2 e) *vtg40*) :rule-classes :linear)
+(defthm vtg-nk-range (< (vtg-nk e) *vtg40*) :rule-classes :linear)
 (in-theory (disable vtg-int vtg-kid vtg-kind vtg-i2 vtg-s2 vtg-nk vtg-c))
 
 ; ---- THE BUILDER AND THE SCOPE ----------------------------------------------------------------
@@ -82,6 +84,8 @@
     (update-vtb-stk (cons (cons (vtg-op op) items) rest) vtb)))
 ; slot s a new position (vtg_bind: the slot's local the depth, the depth one more)
 (defun vtg-bind (s vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-cm (append (true-list-fix (vtb-cm vtb)) (list s)) vtb))
+; a dead local: a new position no slot names (vtg_dead: the depth one more)
+(defun vtg-dead (vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-cm (append (true-list-fix (vtb-cm vtb)) (list nil)) vtb))
 ; what x may clear blanked (vtg_blank: nothing, named above)
 (defun vtg-blank (x vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-cm (ec-call (ex-blank (ec-call (ex-clr :m x 0)) (vtb-cm vtb))) vtb))
 ; the scope kept, and given back (vtg_save, vtg_restore: the depth and the binds since)
@@ -98,9 +102,11 @@
 
 ; ---- THE TRANSLATION --------------------------------------------------------------------------
 
-; flg 0: node e; flg 1: a let*'s bindings from i, then its body
+; flg 0: node e; flg 1: a let*'s bindings from i, then its body; flg 2: a
+; do's children from i
 (defun vtg-m (flg e i)
-  (make-ord 1 (1+ (acl2-count e)) (if (equal flg 1) (nfix (- (vtg-i2 e) (nfix i))) *vtg40*)))
+  (make-ord 1 (1+ (acl2-count e))
+            (cond ((equal flg 1) (nfix (- (vtg-i2 e) (nfix i)))) ((equal flg 2) (nfix (- (vtg-nk e) (nfix i)))) (t *vtg40*))))
 
 (defun vtg-tr (flg e i vtb)
   (declare (xargs :stobjs vtb :guard (and (natp flg) (natp i) (< i *vtg40*)) :verify-guards nil
@@ -118,6 +124,20 @@
                   (vtg-node 2 2 vtb))
               (vtg-tr 0 (vtg-kid e (vtg-i2 e)) 0 vtb)))
         (vtg-other e vtb))
+    (if (equal flg 2)
+        (if (equal (vtg-kind e) 5)
+            (let ((i (nfix i)) (nk (vtg-nk e)))
+              (cond ((zp nk) (vtg-nil vtb))
+                    ((< i (- nk 1))
+                     (let* ((vtb (vtg-tr 0 (vtg-kid e i) 0 vtb))
+                            (vtb (vtg-save vtb))
+                            (vtb (vtg-blank (vtg-kid e i) vtb))
+                            (vtb (vtg-dead vtb))
+                            (vtb (vtg-tr 2 e (+ 1 i) vtb))
+                            (vtb (vtg-restore vtb)))
+                       (vtg-node 2 2 vtb)))
+                    (t (vtg-tr 0 (vtg-kid e (- nk 1)) 0 vtb))))
+          (vtg-other e vtb))
     (let ((k (vtg-kind e)))
       (cond ((equal k 1) (vtg-const (vtg-c e) vtb))
             ((equal k 2) (vtg-local (vtg-i2 e) vtb))
@@ -131,9 +151,10 @@
                (vtg-node 1 3 vtb)))
             ((equal k 17) (let ((vtb (vtg-tr 0 (vtg-kid e 0) 0 vtb))) (vtg-node 3 1 vtb)))
             ((equal k 11) (vtg-tr 1 e 0 vtb))
-            (t (vtg-other e vtb))))))
+            ((equal k 5) (vtg-tr 2 e 0 vtb))
+            (t (vtg-other e vtb)))))))
 
-(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-nil))))
+(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-nil))))
 
 ; ---- IT IS EX-TR ------------------------------------------------------------------------------
 
@@ -149,12 +170,18 @@
               (if (< (nfix i) (vtg-i2 e))
                   (and (vtg-frag 0 (vtg-kid e (nfix i)) 0) (vtg-frag 1 e (+ 1 (nfix i))))
                 (vtg-frag 0 (vtg-kid e (vtg-i2 e)) 0))))
+        ((equal flg 2)
+         (and (equal (vtg-kind e) 5)
+              (cond ((zp (vtg-nk e)) t)
+                    ((< (nfix i) (- (vtg-nk e) 1)) (and (vtg-frag 0 (vtg-kid e (nfix i)) 0) (vtg-frag 2 e (+ 1 (nfix i)))))
+                    (t (vtg-frag 0 (vtg-kid e (- (vtg-nk e) 1)) 0)))))
         (t (let ((k (vtg-kind e)))
              (cond ((member k '(1 2)) t)
                    ((equal k 4) (and (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 0 (vtg-kid e 1) 0)
                                      (or (<= (vtg-nk e) 2) (vtg-frag 0 (vtg-kid e 2) 0))))
                    ((equal k 17) (vtg-frag 0 (vtg-kid e 0) 0))
                    ((equal k 11) (vtg-frag 1 e 0))
+                   ((equal k 5) (vtg-frag 2 e 0))
                    (t nil))))))
 
 (defthm vtg-reads-ex
@@ -184,7 +211,15 @@
                                 (list :let (ex-tr :m (ex-kid-of e i) 0 cm)
                                       (ex-tr :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i)))))))
                 (implies (and (equal (ex-kind e) 11) (natp i) (<= (ex-i2 e) i))
-                         (equal (ex-tr :let e i cm) (ex-tr :m (ex-kid-of e (ex-i2 e)) 0 cm)))))
+                         (equal (ex-tr :let e i cm) (ex-tr :m (ex-kid-of e (ex-i2 e)) 0 cm)))
+                (implies (equal (ex-kind e) 5) (equal (ex-tr :m e 0 cm) (ex-tr :do e 0 cm)))
+                (implies (zp (ex-nk e)) (equal (ex-tr :do e i cm) '(:const nil)))
+                (implies (and (natp i) (< i (- (ex-nk e) 1)))
+                         (equal (ex-tr :do e i cm)
+                                (list :let (ex-tr :m (ex-kid-of e i) 0 cm)
+                                      (ex-tr :do e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list nil))))))
+                (implies (and (natp i) (not (zp (ex-nk e))) (<= (- (ex-nk e) 1) i))
+                         (equal (ex-tr :do e i cm) (ex-tr :m (ex-kid-of e (- (ex-nk e) 1)) 0 cm)))))
   :hints (("Goal" :in-theory (disable ex-kid-of ex-clr ex-blank) :expand ((ex-tr :m e 0 cm) (ex-tr :let e i cm)))))
 
 ; THE STATE as its three fields, and each shim on it
@@ -197,6 +232,7 @@
        (equal (vtg-restore (vtg-st s c (cons c0 sv))) (vtg-st s c0 sv))
        (equal (vtg-blank x (vtg-st s c sv)) (vtg-st s (ex-blank (ex-clr :m x 0) c) sv))
        (equal (vtg-bind n (vtg-st s c sv)) (vtg-st s (append (true-list-fix c) (list n)) sv))
+       (equal (vtg-dead (vtg-st s c sv)) (vtg-st s (append (true-list-fix c) (list nil)) sv))
        (equal (vtg-node 1 3 (vtg-st (list* z y x s) c sv)) (vtg-st (cons (list :if x y z) s) c sv))
        (equal (vtg-node 2 2 (vtg-st (list* y x s) c sv)) (vtg-st (cons (list :let x y) s) c sv))
        (equal (vtg-node 3 1 (vtg-st (list* x s) c sv)) (vtg-st (cons (list :throw x) s) c sv)))
@@ -204,12 +240,12 @@
 
 (defthm ex-blank-nil-true (implies (true-listp c) (true-listp (append c (list n)))))
 (defthm vtg-ok-consp (implies (vtg-ok e) (consp e)) :rule-classes :forward-chaining)
-(in-theory (disable ex-tr vtg-st vtg-const vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-node vtg-frag vtg-ok))
+(in-theory (disable ex-tr vtg-st vtg-const vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-dead vtg-node vtg-frag vtg-ok))
 
 (defthm vtg-frag-facts
   (implies (vtg-frag flg e i)
-           (and (vtg-ok e) (implies (equal flg 1) (equal (vtg-kind e) 11))
-                (implies (not (equal flg 1)) (member (vtg-kind e) (quote (1 2 4 11 17))))))
+           (and (vtg-ok e) (implies (equal flg 1) (equal (vtg-kind e) 11)) (implies (equal flg 2) (equal (vtg-kind e) 5))
+                (implies (not (member flg '(1 2))) (member (vtg-kind e) (quote (1 2 4 5 11 17))))))
   :rule-classes :forward-chaining :hints (("Goal" :expand ((vtg-frag flg e i)))))
 
 ; the induction: vtg-tr's, each call on the state it is handed
@@ -225,6 +261,16 @@
                                (append (ex-blank (ex-clr :m k 0) c) (list (+ (vtg-s2 e) (nfix i)))) (cons c sv))))
             (vtg-ind 0 (vtg-kid e (vtg-i2 e)) 0 s c sv))
         nil)
+    (if (equal flg 2)
+        (if (equal (vtg-kind e) 5)
+            (cond ((zp (vtg-nk e)) nil)
+                  ((< (nfix i) (- (vtg-nk e) 1))
+                   (let ((k (vtg-kid e (nfix i))))
+                     (list (vtg-ind 0 k 0 s c sv)
+                           (vtg-ind 2 e (+ 1 (nfix i)) (cons (ex-tr :m k 0 c) s)
+                                    (append (ex-blank (ex-clr :m k 0) c) (list nil)) (cons c sv)))))
+                  (t (vtg-ind 0 (vtg-kid e (- (vtg-nk e) 1)) 0 s c sv)))
+          nil)
     (let ((k (vtg-kind e)))
       (cond ((equal k 4)
              (let* ((k0 (vtg-kid e 0)) (c1 (ex-blank (ex-clr :m k0 0) c)) (t0 (ex-tr :m k0 0 c)))
@@ -233,12 +279,17 @@
                      (vtg-ind 0 (vtg-kid e 2) 0 (cons (ex-tr :m (vtg-kid e 1) 0 c1) (cons t0 s)) c1 (cons c sv)))))
             ((equal k 17) (vtg-ind 0 (vtg-kid e 0) 0 s c sv))
             ((equal k 11) (vtg-ind 1 e 0 s c sv))
-            (t nil)))))
+            ((equal k 5) (vtg-ind 2 e 0 s c sv))
+            (t nil))))))
+
+; what vtg-tr pushes: ex-tr's at the place flg names
+(defun vtg-want (flg e i c)
+  (cond ((equal flg 1) (ex-tr :let e (nfix i) c)) ((equal flg 2) (ex-tr :do e (nfix i) c)) (t (ex-tr :m e 0 c))))
 
 (defthm vtg-tr-st
   (implies (and (vtg-frag flg e i) (true-listp c))
            (equal (vtg-tr flg e i (vtg-st s c sv))
-                  (vtg-st (cons (if (equal flg 1) (ex-tr :let e (nfix i) c) (ex-tr :m e 0 c)) s) c sv)))
+                  (vtg-st (cons (vtg-want flg e i c) s) c sv)))
   :hints (("Goal" :induct (vtg-ind flg e i s c sv)
                   :in-theory (disable ex-kid-of ex-clr ex-blank)
                   :expand ((:free (flg) (vtg-frag flg e i)) (:free (flg) (vtg-tr flg e i (vtg-st s c sv)))))
@@ -257,7 +308,7 @@
 (defthm vtg-tr-ex-tr
   (implies (and (vtg-frag flg e i) (vtbp vtb) (true-listp (vtb-cm vtb)))
            (and (equal (vtb-stk (vtg-tr flg e i vtb))
-                       (cons (if (equal flg 1) (ex-tr :let e (nfix i) (vtb-cm vtb)) (ex-tr :m e 0 (vtb-cm vtb))) (vtb-stk vtb)))
+                       (cons (vtg-want flg e i (vtb-cm vtb)) (vtb-stk vtb)))
                 (equal (vtb-cm (vtg-tr flg e i vtb)) (vtb-cm vtb))
                 (equal (vtb-sv (vtg-tr flg e i vtb)) (vtb-sv vtb))))
   :hints (("Goal" :use ((:instance vtg-tr-st (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb))))
@@ -268,7 +319,7 @@
 ; vtg-steps: vtg-tr's work as the generated code does it -- a step a call
 ; (a cycle among them) and a step a shim, vtg_other's own work its host's;
 ; vtg-size: the nodes it reaches, a let's bindings and body among them.
-; vtg-steps-bound: at most 8 steps a node -- each node's shims a constant.
+; vtg-steps-bound: at most 9 steps a node -- each node's shims a constant.
 (defun vtg-steps (flg e i)
   (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
   (if (equal flg 1)
@@ -277,12 +328,19 @@
               (+ 6 (vtg-steps 0 (vtg-kid e (nfix i)) 0) (vtg-steps 1 e (+ 1 (nfix i))))
             (+ 1 (vtg-steps 0 (vtg-kid e (vtg-i2 e)) 0)))
         2)
+    (if (equal flg 2)
+        (if (equal (vtg-kind e) 5)
+            (cond ((zp (vtg-nk e)) 2)
+                  ((< (nfix i) (- (vtg-nk e) 1)) (+ 7 (vtg-steps 0 (vtg-kid e (nfix i)) 0) (vtg-steps 2 e (+ 1 (nfix i)))))
+                  (t (+ 1 (vtg-steps 0 (vtg-kid e (- (vtg-nk e) 1)) 0))))
+          2)
     (let ((k (vtg-kind e)))
       (cond ((equal k 4) (+ 5 (vtg-steps 0 (vtg-kid e 0) 0) (vtg-steps 0 (vtg-kid e 1) 0)
                             (if (< 2 (vtg-nk e)) (vtg-steps 0 (vtg-kid e 2) 0) 1)))
             ((equal k 17) (+ 2 (vtg-steps 0 (vtg-kid e 0) 0)))
             ((equal k 11) (+ 1 (vtg-steps 1 e 0)))
-            (t 2)))))
+            ((equal k 5) (+ 1 (vtg-steps 2 e 0)))
+            (t 2))))))
 (defun vtg-size (flg e i)
   (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
   (if (equal flg 1)
@@ -291,16 +349,23 @@
               (+ (vtg-size 0 (vtg-kid e (nfix i)) 0) (vtg-size 1 e (+ 1 (nfix i))))
             (vtg-size 0 (vtg-kid e (vtg-i2 e)) 0))
         1)
+    (if (equal flg 2)
+        (if (equal (vtg-kind e) 5)
+            (cond ((zp (vtg-nk e)) 1)
+                  ((< (nfix i) (- (vtg-nk e) 1)) (+ (vtg-size 0 (vtg-kid e (nfix i)) 0) (vtg-size 2 e (+ 1 (nfix i)))))
+                  (t (vtg-size 0 (vtg-kid e (- (vtg-nk e) 1)) 0)))
+          1)
     (let ((k (vtg-kind e)))
       (cond ((equal k 4) (+ 1 (vtg-size 0 (vtg-kid e 0) 0) (vtg-size 0 (vtg-kid e 1) 0)
                             (if (< 2 (vtg-nk e)) (vtg-size 0 (vtg-kid e 2) 0) 0)))
             ((equal k 17) (+ 1 (vtg-size 0 (vtg-kid e 0) 0)))
             ((equal k 11) (+ 1 (vtg-size 1 e 0)))
-            (t 1)))))
+            ((equal k 5) (+ 1 (vtg-size 2 e 0)))
+            (t 1))))))
 (defthm vtg-steps-bound-flag
-  (<= (vtg-steps flg e i) (if (equal flg 1) (+ 1 (* 8 (vtg-size flg e i))) (- (* 8 (vtg-size flg e i)) 6)))
+  (<= (vtg-steps flg e i) (if (member flg '(1 2)) (+ 1 (* 9 (vtg-size flg e i))) (- (* 9 (vtg-size flg e i)) 7)))
   :rule-classes nil
   :hints (("Goal" :induct (vtg-steps flg e i) :in-theory (disable vtg-kid-ex)
                   :expand ((:free (flg) (vtg-steps flg e i)) (:free (flg) (vtg-size flg e i))))))
-(defthm vtg-steps-bound (<= (vtg-steps 0 e 0) (* 8 (vtg-size 0 e 0)))
+(defthm vtg-steps-bound (<= (vtg-steps 0 e 0) (* 9 (vtg-size 0 e 0)))
   :rule-classes :linear :hints (("Goal" :use ((:instance vtg-steps-bound-flag (flg 0) (i 0))))))

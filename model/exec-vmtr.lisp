@@ -156,7 +156,7 @@
         '(:const nil)
       (case flg
         (:do (cond ((zp nk) '(:const nil))
-                   ((< i (- nk 1)) (let ((r (ex-tr :do e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm)))) (list :if (ex-tr :m (ex-kid-of e i) 0 cm) r r)))
+                   ((< i (- nk 1)) (list :let (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :do e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list nil)))))
                    (t (ex-tr :m (ex-kid-of e (- nk 1)) 0 cm))))
         (:let (cond ((< i n2)
                      (list :let (ex-tr :m (ex-kid-of e i) 0 cm)
@@ -214,7 +214,7 @@
     (and (consp e)
          (case flg
            (:do (cond ((zp nk) t)
-                      ((< i (- nk 1)) (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :do e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) lp defs)))
+                      ((< i (- nk 1)) (and (ex-vwf :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf :do e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list nil)) lp defs)))
                       (t (ex-vwf :m (ex-kid-of e (- nk 1)) 0 cm lp defs))))
            (:let (cond ((< i n2)
                         (and (or (equal k 11) (equal k 12)) (not (member-equal (+ (ex-s2 e) i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm)))

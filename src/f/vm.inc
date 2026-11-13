@@ -460,7 +460,7 @@
     if (gcv_is(kids)) nk = gcv_count(kids)
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
-         .or. gc_i1(nd) == N_LET) then
+         .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -487,21 +487,6 @@
           call vs_set(vst, base + 2, x)
        end do
        if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
-    case (N_DO)
-       if (nk == 0) then
-          call vs_set(vst, base + 5, vm_kw("const"))
-          e = vm_l([vs_get(vst, base + 5), gc_nil()], roots)
-       else
-          ! every value but the last a local no one reads
-          d0 = c%depth
-          call vm_tr_kids(c, kids, 0, nk - 2, base + 2, roots, bump=.true.)
-          if (c%ok) then
-             x = vm_tr(c, gcv_nth(kids, nk - 1), [roots, vs_get(vst, base + 2)])
-             call vs_set(vst, base + 3, x)
-             e = vm_wrap_lets(vs_get(vst, base + 2), vs_get(vst, base + 3), roots)
-          end if
-          c%depth = d0
-       end if
     case (N_LET, N_LOOP)
        n = gc_i2(nd)
        start = int_of(gc_slot(nd, 2))
@@ -641,7 +626,7 @@
   end function vm_tr
 
   ! ---- THE GENERATED TRANSLATION'S HOST (model/vmtrg.lisp) ---------------
-  ! A constant, a local, if, let* and throw are translated by vtg_tr
+  ! A constant, a local, if, do, let* and throw are translated by vtg_tr
   ! (src/f/gen/vm_tr_gen.inc), generated from model/vmtrg.lisp, which
   ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
   ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
@@ -758,6 +743,11 @@
     tb%c%map(s) = tb%c%depth
     tb%c%depth = tb%c%depth + 1
   end subroutine vtg_bind
+  ! a dead local: the next local, no slot mapped to it (vtg_restore gives the depth back)
+  subroutine vtg_dead(tb)
+    type(vtg_state), intent(inout) :: tb
+    tb%c%depth = tb%c%depth + 1
+  end subroutine vtg_dead
   subroutine vtg_blank(tb, x)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
@@ -865,12 +855,11 @@
     call vs_leave(vst, base)
   end function vm_deref_of
 
-  ! kids i..j translated into a vector in slot acc; bump: each a dead local
-  recursive subroutine vm_tr_kids(c, kids, i, j, acc, roots, bump)
+  ! kids i..j translated into a vector in slot acc
+  recursive subroutine vm_tr_kids(c, kids, i, j, acc, roots)
     type(vm_tr_ctx), intent(inout), target :: c
     type(gc_value), intent(in) :: kids, roots(:)
     integer, intent(in) :: i, j, acc
-    logical, intent(in), optional :: bump
     type(gc_stack), pointer :: vst
     type(gc_value) :: x
     integer :: k, base
@@ -884,7 +873,6 @@
        call vs_set(vst, base + 2, x)
        x = gcv_conj(vs_get(vst, acc), vs_get(vst, base + 2), [roots, vs_get(vst, acc), vs_get(vst, base + 2)])
        call vs_set(vst, acc, x)
-       if (present(bump)) c%depth = c%depth + 1
     end do
     call vs_leave(vst, base)
   end subroutine vm_tr_kids

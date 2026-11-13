@@ -786,9 +786,8 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 
 | vm.inc | the model | encoding the same? |
 |---|---|---|
-| `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 17, 11 | yes -- **generated now** (vmtrg) |
+| `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_DO, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 5, 17, 11 | yes -- **generated now** (vmtrg) |
 | N_LOCAL of a capture | ex-fbtr binds captures to locals (`ex-clets`) | no: vm.inc reads `(:capt i)` |
-| N_DO | ex-tr `(:if e r r)` | no, and ex-tr's cannot ship: r is compiled twice a level, exponential in a do's length; vm.inc binds each value to a dead local |
 | N_LOOP, N_RECUR | lets, then `(:loop ((:const nil) locals..) body)`, `(:recur (:const nil) ..)` | no: the dummy, and vm.inc's independent-inits loop (PLAN 34, no let keeps a walked seq's head) |
 | N_CALL | ex-trcall: `:ifn` then `:applyv` | no: vm.inc's builtin `(:prim f ..)`, a Var wrapping one `callw`, else `:callv` |
 | N_VAR | `(:const value)` | no: vm.inc derefs (`:clotran.vm/deref`, the link epoch) |
@@ -797,33 +796,67 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtr, ex-clause, ex-def | no: the self `:mkclo` and capture lets, the loop always round the body (vm.inc only on a fn recur); the arity-error clause is not in ex-def |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
-**Generated now** (this lane's first slice): model/vmtrg.lisp, `vtg-tr`,
+**Generated now**: model/vmtrg.lisp, `vtg-tr`,
 guard-verified, generated to src/f/gen/vm_tr_gen.inc (`make gen-vm`;
 check-vm-gen compares it). It builds on the value stack as anbuild does
 and keeps the scope through shims (`vtg_bind`, `vtg_save`,
 `vtg_restore`, `vtg_blank`, `vtg_local`, the reads, `vtg_other` for
 every other kind -- vm_tr, which calls back). vtg-tr-ex-tr: on a tree of
-the five kinds it pushes exactly ex-tr's and leaves the scope as it
-found it. Named, not exact: `vtg_blank` blanks nothing and `vtg_restore`
+the six kinds it pushes exactly ex-tr's and leaves the scope as it
+found it. vtg-steps-bound: its work at most 9 steps a node it reaches
+(vtg-size), each node's shims a constant. `scripts/fuzz-vmtr-gen` (in
+check-vm-gen) runs the generated vtg_tr, through shims that are
+vmtrg.lisp's exactly (test/vmtrg/vmtr_check.f90), against ACL2's ex-tr
+on random trees of these kinds and others; -x reverses a node's items.
+
+**do** (done): ex-tr's do was `(:if e r r)`, r compiled twice a level,
+exponential in a do's length. Now each value but the last is a dead
+local, `(:let e r)`, r in scope cm ++ (nil) -- vm.inc's encoding -- in
+ex-tr, ex-vwf, ex-vind (exec-vm), ex-vgood-do-mid (exec-vmok), and
+exec-clrvm's ex-vwf0 and ex-cmpind, the k 19/:call pattern; ex-vm-agree,
+ex-vm-runs and ex-anp-runs re-proved in statement unchanged (exec-cost's
+ex-turns-bound-flag now inducts on its own walk, ex-ltind, a do's rest in
+ex-lfwf's scope). vmtrg's
+flg 2 walks a do's children with a new shim, `vtg_dead` (the depth one
+more); vm_tr's own N_DO case is gone.
+
+Named, not exact: `vtg_blank` blanks nothing and `vtg_restore`
 undoes binds only (equal on ex-vwf trees, which never read a blanked
 slot), `vtg_local` answers a capture `(:capt i)` (the entry gap).
 
 **Next**, each a model change before the code, so ex-vm-agree carries:
-1. do: change ex-tr's do to dead lets, `(:let e r)` in scope cm ++ (nil)
-   (the :fin/:cs pattern), re-prove ex-vm-agree's do case; then generate.
+1. (do: done, above.)
 2. the entry: ex-fbtr reading captures in place, `(:capt i)` and the fn
    as `(:capt m)` (vmx2 has :capt), so no prologue; then `vtg_local` is
    exact and `vm_clause` can be generated (with the arity-error clause
    in ex-def).
+   What it takes (scoped, not started): a scope entry that is a capture,
+   so ex-tr's local answers `(:capt j)` for one and ex-agree relates it
+   to caps (x2-res of caps[j] is the slot's value: ex-clets-mx's fact,
+   moved into the agreement) -- ex-tr, ex-vwf, ex-agree and every
+   ex-vgood case that opens a local; and the fn itself: vm.inc reads it
+   as `(:capt ncap)`, a cap past the captures, which vmx2's call does not
+   put there (mx2's caps are the closure's captures only), so either
+   vmx2's call appends the closure to caps (vmx2, vmx2-proof, -cost,
+   -time, vmi, vmg: the VM's own books) or the self slot keeps ex-fbtr's
+   `:mkclo` let and vm.inc's self read changes to match.
+   What it takes (scoped, not started): a scope entry that is a capture,
+   so ex-tr's local answers `(:capt j)` for one and ex-agree relates it
+   to caps (x2-res of caps[j] is the slot's value: ex-clets-mx's fact,
+   moved into the agreement) -- ex-tr, ex-vwf, ex-agree and every
+   ex-vgood case that opens a local; and the fn itself: vm.inc reads it
+   as `(:capt ncap)`, a cap past the captures, which vmx2's call does not
+   put there (mx2's caps are the closure's captures only), so either
+   vmx2's call appends the closure to caps (vmx2, vmx2-proof, -cost,
+   -time, vmi, vmg: the VM's own books) or the self slot keeps ex-fbtr's
+   `:mkclo` let and vm.inc's self read changes to match.
 3. loop/recur: drop the dummy (x2wf's at-least-one-binding needs a
    zero-binding loop's own case) and model the independent-inits loop.
 4. calls and Vars: vm.inc's builtin prim and callw as ex-trcall's cases
    (the head a known builtin: a prim; else :ifn/:applyv), the deref as a
    host prim under ex-collok's hypothesis; collections' op as the node.
 5. try, letfn, case: vm_scan refuses them; take them once 1-4 land.
-6. a cost theorem for vtg-tr (each node's shims a constant) and
-   `scripts/fuzz-vmtr-gen` (generated Fortran against ACL2's ex-tr on
-   random trees, negative control), as the other generated books have.
+6. (the cost theorem and fuzz-vmtr-gen: done, above.)
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to
 ex-defs-ok0, exec-clrvm).

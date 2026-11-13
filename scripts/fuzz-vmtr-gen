@@ -6,7 +6,8 @@
 ;;   scripts/fuzz-vmtr-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
 ;;
 ;; Random trees of the generated kinds -- a constant, a local (marked for
-;; clearing or not, in scope or not), if (two children or three), let* (its
+;; clearing or not, in scope or not), if (two children or three), do (none,
+;; one, several: each value but the last a dead local), let* (its
 ;; slots new or shadowing, too few children), throw -- with a Var and a
 ;; kind ex-tr does not know among them (vtg_other's), under a scope of
 ;; slots and blanks. ACL2 prints ex-tr :m of the tree in the scope;
@@ -36,7 +37,7 @@
 (defn node [k & {:keys [i2 s2 c mark kids] :or {i2 0 s2 0 c nil mark 0 kids []}}]
   {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids})
 (defn gen [d]
-  (let [k (if (zero? d) (pick [1 2 2 3]) (pick [1 2 2 3 4 4 4 11 11 11 17 17 99]))
+  (let [k (if (zero? d) (pick [1 2 2 3]) (pick [1 2 2 3 4 4 4 5 5 5 11 11 11 17 17 99]))
         sub #(gen (dec d))]
     (case k
       1 (node 1 :c (pick [nil 0 1 7 42]))
@@ -45,6 +46,7 @@
       4 (node 4 :kids (vec (repeatedly (pick [2 3 3 1]) sub)))
       11 (let [nb (pick [0 1 1 2 3])]
            (node 11 :i2 nb :s2 (pick [2 4 6 8]) :kids (vec (repeatedly (+ nb (pick [1 1 1 1 0])) sub))))
+      5 (node 5 :kids (vec (repeatedly (pick [0 1 2 2 3 4]) sub)))
       17 (node 17 :kids [(sub)])
       99 (node 99 :kids [(sub)]))))
 (defn gen-case [] {:t (gen (pick [1 2 3 3 4 5])) :cm (vec (repeatedly (rnd 6) #(pick [0 1 2 3 4 5 nil])))})

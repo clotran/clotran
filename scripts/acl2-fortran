@@ -361,7 +361,7 @@
     {:out "src/f/gen/vm_tr_gen.inc" :include true
      :fns [vtg-tr]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
-     :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-blank vtg-save vtg-restore vtg-other]
+     :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-dead vtg-blank vtg-save vtg-restore vtg-other]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {vtg-tr #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}}
@@ -374,8 +374,8 @@
           vtg-nk ["vtg_nk" [:val] :int] vtg-c ["vtg_c" [:val] :val] vtg-kid ["vtg_kid" [:val :int] :val]}
      :header ["  ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
-              "  ! contains part: the VM's translation of a constant, a local, if, let* and"
-              "  ! throw (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --"
+              "  ! contains part: the VM's translation of a constant, a local, if, do, let*"
+              "  ! and throw (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --"
               "  ! guard-verified, reading the tree through vm.inc's vtg_* reads and building"
               "  ! the expression on the value stack through its vtg_* shims. vmtrg.lisp"
               "  ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds"

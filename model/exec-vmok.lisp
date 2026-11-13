@@ -216,7 +216,7 @@
 (ex-old ex-vgood-do-none ((consp e) (equal flg :do) (zp (ex-nk e))) ())
 (ex-old ex-vgood-do-mid ((consp e) (equal flg :do) (not (zp (ex-nk e))) (< (nfix i) (- (ex-nk e) 1)))
         ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
-         (ex-vgood :do e (1+ (nfix i)) tmp (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm) env (cadr (ex-r0)) fuel caps defs lp)))
+         (ex-vgood :do e (1+ (nfix i)) tmp (append (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm) (list nil)) (append env (list (val (car (ex-r0))))) (cadr (ex-r0)) fuel caps defs lp)))
 (ex-old ex-vgood-do-last ((consp e) (equal flg :do) (not (zp (ex-nk e))) (not (< (nfix i) (- (ex-nk e) 1))))
         ((ex-vgood :m (ex-kid-of e (- (ex-nk e) 1)) 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-let-mid ((consp e) (equal flg :let) (< (nfix i) (ex-i2 e)))

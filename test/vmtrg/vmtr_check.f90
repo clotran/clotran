@@ -148,6 +148,10 @@ contains
     integer(int64), value :: s
     tb%cm = [tb%cm, s]
   end subroutine vtg_bind
+  subroutine vtg_dead(tb)
+    type(vtg_state), intent(inout) :: tb
+    tb%cm = [tb%cm, -1_int64]
+  end subroutine vtg_dead
   ! exec-vmtr's ex-clr :m: the slots of x's marked reads, for these kinds
   recursive subroutine clr(x, l)
     type(gc_value), intent(in) :: x
@@ -159,6 +163,8 @@ contains
        if (nmark(x%id) /= 0) l = [l, int(ni2(x%id), int64)]
     case (4)
        m = 2
+    case (5)
+       m = nnk(x%id) - 1
     case (11)
        m = ni2(x%id)
     case (17)

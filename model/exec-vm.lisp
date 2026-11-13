@@ -9,9 +9,9 @@
 ; numbers by reservation, never reusing one in scope; mx2 names it by its
 ; POSITION in an environment a let grows by one. The translation (ex-tr)
 ; carries cm, the slots in scope by position: a local is (:local p) for
-; its slot's position p, a let a nest of mx2's one-binding lets, a do an if
-; on each value but the last with the rest on both branches (the core is
-; pure: a value only chooses between equal branches). The relation
+; its slot's position p, a let a nest of mx2's one-binding lets, a do a
+; let of each value but the last, a dead local -- a position no slot names
+; (nil in cm) -- with the rest in its scope, as vm.inc's. The relation
 ; (ex-agree cm env fr): position p's value is slot (nth p cm)'s, for each
 ; position whose cm entry is a slot (a nil entry is a position no name
 ; reaches any more). A MARKED READ clears its slot (milestone 4): what a
@@ -431,7 +431,7 @@
                    ((< i (- nk 1))
                     (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
                       (list (ex-vind :m (ex-kid-of e i) 0 nil cm env fr fuel caps defs nil)
-                            (ex-vind :do e (1+ i) tmp (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) env (cadr r) fuel caps defs lp))))
+                            (ex-vind :do e (1+ i) tmp (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list nil)) (append env (list (val (car r)))) (cadr r) fuel caps defs lp))))
                    (t (ex-vind :m (ex-kid-of e (- nk 1)) 0 nil cm env fr fuel caps defs lp))))
         (:let (cond ((< i n2)
                      (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
