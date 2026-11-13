@@ -1,0 +1,262 @@
+; THE VM'S TRANSLATION, GENERATED (src/f/gen/vm_tr_gen.inc,
+; scripts/acl2-fortran -b vmtrg): exec-vmtr's ex-tr at the level the
+; Fortran is generated from, guard-verified, for the kinds whose encoding
+; vm.inc and ex-tr share -- a constant, a local, if, let* and throw --
+; every other kind the host's (vtg-other: vm.inc's hand-written vm_tr,
+; which calls back here for these kinds). exec-PLAN's Lane 3 says what
+; is left.
+;
+; THE OUTPUT is built on a stack, as anbuild builds nodes, so the
+; generated code never holds an expression in a variable: a node's
+; translation leaves one expression on top, and vtg-node makes (op items..)
+; of the top n. THE SCOPE is ex-tr's cm, the slots in scope by position,
+; kept by the host: vtg-bind appends a slot, vtg-blank blanks what a node
+; may clear (ex-clr), vtg-save / vtg-restore keep and give back the whole
+; scope, vtg-local reads a slot's position. In clotran the stack is the
+; context's value stack and the scope vm.inc's vm_tr_ctx (its map from
+; slot to local, its depth); the shims are vm.inc's vtg_*, each stated
+; here. Two of them are named, not exact: vtg_blank blanks nothing and
+; vtg_restore undoes only binds -- a blanked slot is read by no tree
+; ex-vwf admits (exec-vm's ex-vm-agree asks it), so the positions it would
+; read agree -- and vtg_local reads a captured slot (:capt i) where
+; ex-fbtr's prologue binds the captures to locals (the gap at the fn's
+; entry, exec-PLAN Lane 3).
+;
+; Proved: vtg-tr-ex-tr -- on a tree of these kinds (vtg-frag) the
+; generated translation pushes exactly ex-tr's, leaving the scope as it
+; found it.
+
+(in-package "ACL2")
+
+(include-book "exec-vmtr")
+
+(defconst *vtg40* 1099511627776)
+
+; ---- THE TREE'S READS (vm.inc's vtg_kind .. vtg_c on the OBJ_AST) -----------------------------
+
+(defun vtg-nth (n x)
+  (declare (xargs :guard (natp n)))
+  (if (atom x) nil (if (zp n) (car x) (vtg-nth (1- n) (cdr x)))))
+(defthm vtg-nth-is-nth (equal (vtg-nth n x) (nth n x)))
+(defun vtg-int (x) (declare (xargs :guard t)) (if (and (natp x) (< x *vtg40*)) x 0))
+(defun vtg-kind (e) (declare (xargs :guard t)) (vtg-int (vtg-nth 0 e)))
+(defun vtg-i2 (e) (declare (xargs :guard t)) (vtg-int (vtg-nth 1 e)))
+(defun vtg-s2 (e) (declare (xargs :guard t)) (vtg-int (vtg-nth 4 e)))
+(defun vtg-c (e) (declare (xargs :guard t)) (vtg-nth 3 e))
+(defun vtg-nk (e) (declare (xargs :guard t)) (vtg-int (len (vtg-nth 2 e))))
+(defun vtg-kid (e j) (declare (xargs :guard (natp j))) (vtg-nth j (vtg-nth 2 e)))
+
+(defthm vtg-int-range (and (natp (vtg-int x)) (< (vtg-int x) *vtg40*))
+  :rule-classes ((:type-prescription :corollary (natp (vtg-int x))) (:linear :corollary (< (vtg-int x) *vtg40*))))
+(defthm vtg-nth-count (<= (acl2-count (vtg-nth n x)) (acl2-count x)) :rule-classes :linear)
+(defthm vtg-nth-count-cons (implies (consp x) (< (acl2-count (vtg-nth n x)) (acl2-count x))) :rule-classes :linear)
+(defthm vtg-kid-count (implies (consp e) (< (acl2-count (vtg-kid e j)) (acl2-count e))) :rule-classes (:linear :rewrite)
+  :hints (("Goal" :in-theory (disable vtg-nth-is-nth) :expand ((vtg-nth 2 e) (vtg-nth 1 (cdr e))))))
+(defthm vtg-kind-consp (implies (not (equal (vtg-kind e) 0)) (consp e)) :rule-classes :forward-chaining)
+(defthm vtg-kid-count-k (implies (not (equal (vtg-kind e) 0)) (< (acl2-count (vtg-kid e j)) (acl2-count e)))
+  :rule-classes :linear :hints (("Goal" :in-theory (disable vtg-kid-count) :use vtg-kid-count)))
+(defthm vtg-i2-range (< (vtg-i2 e) *vtg40*) :rule-classes :linear)
+(in-theory (disable vtg-int vtg-kid vtg-kind vtg-i2 vtg-s2 vtg-nk vtg-c))
+
+; ---- THE BUILDER AND THE SCOPE ----------------------------------------------------------------
+
+(defstobj vtb (vtb-stk :type t :initially nil) (vtb-cm :type t :initially nil) (vtb-sv :type t :initially nil))
+
+(defun vtg-push (v vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-stk (cons v (vtb-stk vtb)) vtb))
+(defun vtg-popn (n l acc)
+  (declare (xargs :guard (natp n)))
+  (if (or (zp n) (atom l)) (mv acc l) (vtg-popn (- n 1) (cdr l) (cons (car l) acc))))
+(defun vtg-op (op) (declare (xargs :guard t)) (case op (1 :if) (2 :let) (otherwise :throw)))
+
+; (:const v), (:const nil) (vtg_const, vtg_nil)
+(defun vtg-const (v vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :const v) vtb))
+(defun vtg-nil (vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push '(:const nil) vtb))
+; a slot's read: its position in the scope (vtg_local: vm_slot_ref)
+(defun vtg-local (s vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :local (ec-call (ex-pos s (vtb-cm vtb)))) vtb))
+; (op items..) of the top n, the deepest first (vtg_node)
+(defun vtg-node (op n vtb)
+  (declare (xargs :stobjs vtb :guard (and (signed-byte-p 64 op) (signed-byte-p 64 n))))
+  (mv-let (items rest) (vtg-popn (nfix n) (vtb-stk vtb) nil)
+    (update-vtb-stk (cons (cons (vtg-op op) items) rest) vtb)))
+; slot s a new position (vtg_bind: the slot's local the depth, the depth one more)
+(defun vtg-bind (s vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-cm (append (true-list-fix (vtb-cm vtb)) (list s)) vtb))
+; what x may clear blanked (vtg_blank: nothing, named above)
+(defun vtg-blank (x vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-cm (ec-call (ex-blank (ec-call (ex-clr :m x 0)) (vtb-cm vtb))) vtb))
+; the scope kept, and given back (vtg_save, vtg_restore: the depth and the binds since)
+(defun vtg-save (vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-sv (cons (vtb-cm vtb) (vtb-sv vtb)) vtb))
+(defun vtg-restore (vtb)
+  (declare (xargs :stobjs vtb :guard t))
+  (let* ((sv (vtb-sv vtb)) (vtb (update-vtb-cm (if (consp sv) (car sv) nil) vtb)))
+    (update-vtb-sv (if (consp sv) (cdr sv) nil) vtb)))
+
+; every other kind: vm.inc's own translation (vtg_other: vm_tr), pushing
+; one expression and leaving the scope as it was
+(encapsulate (((vtg-other * vtb) => vtb :formals (x vtb) :guard t))
+  (local (defun vtg-other (x vtb) (declare (xargs :stobjs vtb :guard t) (ignore x)) (vtg-nil vtb))))
+
+; ---- THE TRANSLATION --------------------------------------------------------------------------
+
+; flg 0: node e; flg 1: a let*'s bindings from i, then its body
+(defun vtg-m (flg e i)
+  (make-ord 1 (1+ (acl2-count e)) (if (equal flg 1) (nfix (- (vtg-i2 e) (nfix i))) *vtg40*)))
+
+(defun vtg-tr (flg e i vtb)
+  (declare (xargs :stobjs vtb :guard (and (natp flg) (natp i) (< i *vtg40*)) :verify-guards nil
+                  :measure (vtg-m flg e i) :well-founded-relation o<))
+  (if (equal flg 1)
+      (if (equal (vtg-kind e) 11)
+          (let ((i (nfix i)))
+            (if (< i (vtg-i2 e))
+                (let* ((vtb (vtg-tr 0 (vtg-kid e i) 0 vtb))
+                       (vtb (vtg-save vtb))
+                       (vtb (vtg-blank (vtg-kid e i) vtb))
+                       (vtb (vtg-bind (+ (vtg-s2 e) i) vtb))
+                       (vtb (vtg-tr 1 e (+ 1 i) vtb))
+                       (vtb (vtg-restore vtb)))
+                  (vtg-node 2 2 vtb))
+              (vtg-tr 0 (vtg-kid e (vtg-i2 e)) 0 vtb)))
+        (vtg-other e vtb))
+    (let ((k (vtg-kind e)))
+      (cond ((equal k 1) (vtg-const (vtg-c e) vtb))
+            ((equal k 2) (vtg-local (vtg-i2 e) vtb))
+            ((equal k 4)
+             (let* ((vtb (vtg-tr 0 (vtg-kid e 0) 0 vtb))
+                    (vtb (vtg-save vtb))
+                    (vtb (vtg-blank (vtg-kid e 0) vtb))
+                    (vtb (vtg-tr 0 (vtg-kid e 1) 0 vtb))
+                    (vtb (if (< 2 (vtg-nk e)) (vtg-tr 0 (vtg-kid e 2) 0 vtb) (vtg-nil vtb)))
+                    (vtb (vtg-restore vtb)))
+               (vtg-node 1 3 vtb)))
+            ((equal k 17) (let ((vtb (vtg-tr 0 (vtg-kid e 0) 0 vtb))) (vtg-node 3 1 vtb)))
+            ((equal k 11) (vtg-tr 1 e 0 vtb))
+            (t (vtg-other e vtb))))))
+
+(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-nil))))
+
+; ---- IT IS EX-TR ------------------------------------------------------------------------------
+
+; a node the generated kinds make up, its numbers in the reads' range
+(defun vtg-ok (e)
+  (and (consp e) (natp (nth 0 e)) (< (nth 0 e) *vtg40*) (natp (nth 1 e)) (< (nth 1 e) *vtg40*)
+       (natp (nth 4 e)) (< (nth 4 e) *vtg40*) (< (len (nth 2 e)) *vtg40*)))
+(defun vtg-frag (flg e i)
+  (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o<))
+  (cond ((not (vtg-ok e)) nil)
+        ((equal flg 1)
+         (and (equal (vtg-kind e) 11)
+              (if (< (nfix i) (vtg-i2 e))
+                  (and (vtg-frag 0 (vtg-kid e (nfix i)) 0) (vtg-frag 1 e (+ 1 (nfix i))))
+                (vtg-frag 0 (vtg-kid e (vtg-i2 e)) 0))))
+        (t (let ((k (vtg-kind e)))
+             (cond ((member k '(1 2)) t)
+                   ((equal k 4) (and (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 0 (vtg-kid e 1) 0)
+                                     (or (<= (vtg-nk e) 2) (vtg-frag 0 (vtg-kid e 2) 0))))
+                   ((equal k 17) (vtg-frag 0 (vtg-kid e 0) 0))
+                   ((equal k 11) (vtg-frag 1 e 0))
+                   (t nil))))))
+
+(defthm vtg-reads-ex
+  (implies (vtg-ok e)
+           (and (equal (vtg-kind e) (ex-kind e)) (equal (vtg-i2 e) (ex-i2 e)) (equal (vtg-s2 e) (ex-s2 e))
+                (equal (vtg-nk e) (ex-nk e)) (equal (vtg-c e) (ex-c e))))
+  :hints (("Goal" :in-theory (enable vtg-int vtg-kind vtg-i2 vtg-s2 vtg-nk vtg-c ex-kind ex-i2 ex-s2 ex-nk ex-c ex-kids))))
+(defthm vtg-kid-ex (equal (vtg-kid e j) (ex-kid-of e (nfix j))) :hints (("Goal" :in-theory (enable vtg-kid ex-kid-of ex-kids))))
+
+(defthm true-list-fix-id (implies (true-listp x) (equal (true-list-fix x) x)))
+(defthm true-listp-ex-blank (implies (true-listp cm) (true-listp (ex-blank ls cm))))
+
+; ex-tr, one lemma a kind
+(defthm ex-tr-gen-kinds
+  (implies (consp e)
+           (and (implies (equal (ex-kind e) 1) (equal (ex-tr :m e 0 cm) (list :const (ex-c e))))
+                (implies (equal (ex-kind e) 2) (equal (ex-tr :m e 0 cm) (list :local (ex-pos (ex-i2 e) cm))))
+                (implies (equal (ex-kind e) 4)
+                         (equal (ex-tr :m e 0 cm)
+                                (list :if (ex-tr :m (ex-kid-of e 0) 0 cm)
+                                      (ex-tr :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
+                                      (if (< 2 (ex-nk e)) (ex-tr :m (ex-kid-of e 2) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm)) '(:const nil)))))
+                (implies (equal (ex-kind e) 17) (equal (ex-tr :m e 0 cm) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm))))
+                (implies (equal (ex-kind e) 11) (equal (ex-tr :m e 0 cm) (ex-tr :let e 0 cm)))
+                (implies (and (equal (ex-kind e) 11) (natp i) (< i (ex-i2 e)))
+                         (equal (ex-tr :let e i cm)
+                                (list :let (ex-tr :m (ex-kid-of e i) 0 cm)
+                                      (ex-tr :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i)))))))
+                (implies (and (equal (ex-kind e) 11) (natp i) (<= (ex-i2 e) i))
+                         (equal (ex-tr :let e i cm) (ex-tr :m (ex-kid-of e (ex-i2 e)) 0 cm)))))
+  :hints (("Goal" :in-theory (disable ex-kid-of ex-clr ex-blank) :expand ((ex-tr :m e 0 cm) (ex-tr :let e i cm)))))
+
+; THE STATE as its three fields, and each shim on it
+(defun vtg-st (stk cm sv) (list stk cm sv))
+(defthm vtg-shims
+  (and (equal (vtg-const v (vtg-st s c sv)) (vtg-st (cons (list :const v) s) c sv))
+       (equal (vtg-nil (vtg-st s c sv)) (vtg-st (cons '(:const nil) s) c sv))
+       (equal (vtg-local n (vtg-st s c sv)) (vtg-st (cons (list :local (ex-pos n c)) s) c sv))
+       (equal (vtg-save (vtg-st s c sv)) (vtg-st s c (cons c sv)))
+       (equal (vtg-restore (vtg-st s c (cons c0 sv))) (vtg-st s c0 sv))
+       (equal (vtg-blank x (vtg-st s c sv)) (vtg-st s (ex-blank (ex-clr :m x 0) c) sv))
+       (equal (vtg-bind n (vtg-st s c sv)) (vtg-st s (append (true-list-fix c) (list n)) sv))
+       (equal (vtg-node 1 3 (vtg-st (list* z y x s) c sv)) (vtg-st (cons (list :if x y z) s) c sv))
+       (equal (vtg-node 2 2 (vtg-st (list* y x s) c sv)) (vtg-st (cons (list :let x y) s) c sv))
+       (equal (vtg-node 3 1 (vtg-st (list* x s) c sv)) (vtg-st (cons (list :throw x) s) c sv)))
+  :hints (("Goal" :expand ((:free (n l acc) (vtg-popn n l acc))))))
+
+(defthm ex-blank-nil-true (implies (true-listp c) (true-listp (append c (list n)))))
+(defthm vtg-ok-consp (implies (vtg-ok e) (consp e)) :rule-classes :forward-chaining)
+(in-theory (disable ex-tr vtg-st vtg-const vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-node vtg-frag vtg-ok))
+
+(defthm vtg-frag-facts
+  (implies (vtg-frag flg e i)
+           (and (vtg-ok e) (implies (equal flg 1) (equal (vtg-kind e) 11))
+                (implies (not (equal flg 1)) (member (vtg-kind e) (quote (1 2 4 11 17))))))
+  :rule-classes :forward-chaining :hints (("Goal" :expand ((vtg-frag flg e i)))))
+
+; the induction: vtg-tr's, each call on the state it is handed
+(defun vtg-ind (flg e i s c sv)
+  (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :verify-guards nil :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
+  (declare (irrelevant s c sv))
+  (if (equal flg 1)
+      (if (equal (vtg-kind e) 11)
+          (if (< (nfix i) (vtg-i2 e))
+              (let ((k (vtg-kid e (nfix i))))
+                (list (vtg-ind 0 k 0 s c sv)
+                      (vtg-ind 1 e (+ 1 (nfix i)) (cons (ex-tr :m k 0 c) s)
+                               (append (ex-blank (ex-clr :m k 0) c) (list (+ (vtg-s2 e) (nfix i)))) (cons c sv))))
+            (vtg-ind 0 (vtg-kid e (vtg-i2 e)) 0 s c sv))
+        nil)
+    (let ((k (vtg-kind e)))
+      (cond ((equal k 4)
+             (let* ((k0 (vtg-kid e 0)) (c1 (ex-blank (ex-clr :m k0 0) c)) (t0 (ex-tr :m k0 0 c)))
+               (list (vtg-ind 0 k0 0 s c sv)
+                     (vtg-ind 0 (vtg-kid e 1) 0 (cons t0 s) c1 (cons c sv))
+                     (vtg-ind 0 (vtg-kid e 2) 0 (cons (ex-tr :m (vtg-kid e 1) 0 c1) (cons t0 s)) c1 (cons c sv)))))
+            ((equal k 17) (vtg-ind 0 (vtg-kid e 0) 0 s c sv))
+            ((equal k 11) (vtg-ind 1 e 0 s c sv))
+            (t nil)))))
+
+(defthm vtg-tr-st
+  (implies (and (vtg-frag flg e i) (true-listp c))
+           (equal (vtg-tr flg e i (vtg-st s c sv))
+                  (vtg-st (cons (if (equal flg 1) (ex-tr :let e (nfix i) c) (ex-tr :m e 0 c)) s) c sv)))
+  :hints (("Goal" :induct (vtg-ind flg e i s c sv)
+                  :in-theory (disable ex-kid-of ex-clr ex-blank)
+                  :expand ((:free (flg) (vtg-frag flg e i)) (:free (flg) (vtg-tr flg e i (vtg-st s c sv)))))
+          (and stable-under-simplificationp '(:in-theory (e/d (vtg-kid-ex vtg-ok) (ex-kid-of ex-clr ex-blank))))))
+
+(defthm list3-id (implies (and (true-listp x) (equal (len x) 3)) (equal (list (car x) (cadr x) (caddr x)) x))
+  :hints (("Goal" :expand ((len x) (len (cdr x)) (len (cddr x)) (len (cdddr x)) (true-listp x) (true-listp (cdr x)) (true-listp (cddr x)) (true-listp (cdddr x))))))
+(defthm vtb-as-st (implies (vtbp vtb) (equal (vtg-st (vtb-stk vtb) (vtb-cm vtb) (vtb-sv vtb)) vtb))
+  :hints (("Goal" :in-theory (e/d (vtg-st) (list3-id)) :use ((:instance list3-id (x vtb))))))
+(defthm vtg-st-fields
+  (and (equal (vtb-stk (vtg-st s c sv)) s) (equal (vtb-cm (vtg-st s c sv)) c) (equal (vtb-sv (vtg-st s c sv)) sv))
+  :hints (("Goal" :in-theory (enable vtg-st))))
+
+; and so on the stobj: on a tree of the generated kinds the generated
+; translation pushes exactly ex-tr's, the scope and the saves as they were
+(defthm vtg-tr-ex-tr
+  (implies (and (vtg-frag flg e i) (vtbp vtb) (true-listp (vtb-cm vtb)))
+           (and (equal (vtb-stk (vtg-tr flg e i vtb))
+                       (cons (if (equal flg 1) (ex-tr :let e (nfix i) (vtb-cm vtb)) (ex-tr :m e 0 (vtb-cm vtb))) (vtb-stk vtb)))
+                (equal (vtb-cm (vtg-tr flg e i vtb)) (vtb-cm vtb))
+                (equal (vtb-sv (vtg-tr flg e i vtb)) (vtb-sv vtb))))
+  :hints (("Goal" :use ((:instance vtg-tr-st (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb))))
+                  :in-theory (disable vtg-tr-st vtg-tr vtb-stk vtb-cm vtb-sv vtbp))))

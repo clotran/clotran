@@ -4,7 +4,7 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec|vmtrg] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
@@ -357,6 +357,29 @@
               "  ! exec.inc's exec_core does what they decide. exec-proof.lisp proves the"
               "  ! machine they drive answers each node's meaning, exec-vm.lisp that the"
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
+    "vmtrg"
+    {:out "src/f/gen/vm_tr_gen.inc" :include true
+     :fns [vtg-tr]
+     ;; the shims (vm.inc vtg_*): the output stack and the scope
+     :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-blank vtg-save vtg-restore vtg-other]
+     :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
+     :fields {} :array-names {} :prefix {} :value-arrays #{}
+     :value-formals {vtg-tr #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}}
+     :value-fns #{}
+     :reentrant #{vtg-tr}
+     :bool-fns #{}
+     ;; a node is a value of clotran's heap, read by vm.inc's shims
+     :val-type "gc_value"
+     :rt {vtg-kind ["vtg_kind" [:val] :int] vtg-i2 ["vtg_i2" [:val] :int] vtg-s2 ["vtg_s2" [:val] :int]
+          vtg-nk ["vtg_nk" [:val] :int] vtg-c ["vtg_c" [:val] :val] vtg-kid ["vtg_kid" [:val :int] :val]}
+     :header ["  ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the VM's translation of a constant, a local, if, let* and"
+              "  ! throw (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --"
+              "  ! guard-verified, reading the tree through vm.inc's vtg_* reads and building"
+              "  ! the expression on the value stack through its vtg_* shims. vmtrg.lisp"
+              "  ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds"
+              "  ! (vtg-tr-ex-tr)."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn

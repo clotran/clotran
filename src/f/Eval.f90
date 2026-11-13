@@ -536,7 +536,16 @@ module Eval
      integer :: depth = 0
      logical, allocatable :: reads(:), binds(:)
      integer, allocatable :: map(:), capt(:)
+     ! the generated translation's scope (vm.inc vtg_*): each bind's slot and
+     ! the local it had (the trail), and each save's depth and trail length
+     integer, allocatable :: trs(:), tro(:), svd(:), svt(:)
+     integer :: ntr = 0, nsv = 0
   end type vm_tr_ctx
+  ! model/vmtrg.lisp's stobj vtb (src/f/gen/vm_tr_gen.inc): its stack the
+  ! context's value stack, its scope the translation's (vm.inc vtg_*)
+  type :: vtg_state
+     type(vm_tr_ctx), pointer :: c => null()
+  end type vtg_state
   ! THE PROGRAM (vm.inc): one for the process, its arrays made once and
   ! never moved -- threads run it while another adds to it -- and added
   ! to at reserved places, reserved under the state lock
@@ -24620,6 +24629,7 @@ contains
   include "exec.inc"
   include "rational.inc"
   include "flat.inc"
+  include "gen/vm_tr_gen.inc"
   include "vm.inc"
   include "vmjit.inc"
   include "repl.inc"

@@ -445,7 +445,7 @@
   ! nd as core language: c%map holds each slot's local, c%capt each
   ! captured slot's capture index, c%depth the locals' count
   recursive function vm_tr(c, nd, roots) result(e)
-    type(vm_tr_ctx), intent(inout) :: c
+    type(vm_tr_ctx), intent(inout), target :: c
     type(gc_value), intent(in) :: nd, roots(:)
     type(gc_value) :: e, kids, x, head, v
     type(gc_stack), pointer :: vst
@@ -459,26 +459,16 @@
     nk = 0
     if (gcv_is(kids)) nk = gcv_count(kids)
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
+    if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
+         .or. gc_i1(nd) == N_LET) then
+       e = vm_tr_gen(c, nd, roots)
+       return
+    end if
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
-    case (N_CONST)
-       call vs_set(vst, base + 5, vm_kw("const"))
-       e = vm_l([vs_get(vst, base + 5), gc_slot(nd, 2)], [roots, vs_get(vst, base + 1)])
-    case (N_LOCAL)
-       e = vm_slot_ref(c, gc_i2(nd), roots)
     case (N_VAR)
        e = vm_deref_of(vm_var_ref(nd), [roots, vs_get(vst, base + 1)])
-    case (N_IF)
-       call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
-       if (nk == 2) then
-          call vs_set(vst, base + 5, vm_kw("const"))
-          x = vm_l([vs_get(vst, base + 5), gc_nil()], [roots, vs_get(vst, base + 2)])
-          call vs_set(vst, base + 3, x)
-          x = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [roots, vs_get(vst, base + 2)])
-          call vs_set(vst, base + 2, x)
-       end if
-       if (c%ok) e = vm_head_list("if", vs_get(vst, base + 2), roots)
     case (N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT)
        ! the runtime's node on the parts' values (vm_node_hook)
        call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
@@ -497,9 +487,6 @@
           call vs_set(vst, base + 2, x)
        end do
        if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
-    case (N_THROW)
-       call vm_tr_kids(c, kids, 0, 0, base + 2, roots)
-       if (c%ok) e = vm_head_list("throw", vs_get(vst, base + 2), roots)
     case (N_DO)
        if (nk == 0) then
           call vs_set(vst, base + 5, vm_kw("const"))
@@ -653,6 +640,157 @@
     e = v
   end function vm_tr
 
+  ! ---- THE GENERATED TRANSLATION'S HOST (model/vmtrg.lisp) ---------------
+  ! A constant, a local, if, let* and throw are translated by vtg_tr
+  ! (src/f/gen/vm_tr_gen.inc), generated from model/vmtrg.lisp, which
+  ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
+  ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
+  ! output stack (the value stack), and the scope (vm_tr_ctx's map and
+  ! depth). Named, not exact: vtg_blank blanks nothing and vtg_restore
+  ! undoes binds only -- a blanked slot is read by no tree exec-vm's
+  ! ex-vwf admits -- and vtg_local answers a captured slot (:capt i).
+
+  ! nd by vtg_tr: the caller's roots kept on the value stack while it runs
+  recursive function vm_tr_gen(c, nd, roots) result(e)
+    type(vm_tr_ctx), intent(inout), target :: c
+    type(gc_value), intent(in) :: nd, roots(:)
+    type(gc_value) :: e
+    type(gc_stack), pointer :: vst
+    type(vtg_state) :: tb
+    integer :: base, j
+    vst => gc_my_stack()
+    base = vs_enter(vst, size(roots) + 1)
+    do j = 1, size(roots)
+       call vs_set(vst, base + j, roots(j))
+    end do
+    call vs_set(vst, base + size(roots) + 1, nd)
+    tb%c => c
+    call vtg_tr(tb, 0_int64, nd, 0_int64)
+    e = vs_get(vst, vst%vs_top)
+    call vs_leave(vst, base)
+  end function vm_tr_gen
+
+  integer(int64) function vtg_kind(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_kind = ast_kind(nd)
+  end function vtg_kind
+  integer(int64) function vtg_i2(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_i2 = ast_i2(nd)
+  end function vtg_i2
+  integer(int64) function vtg_nk(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_nk = ast_nkids(nd)
+  end function vtg_nk
+  function vtg_kid(nd, j) result(k)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: j
+    type(gc_value) :: k
+    k = ast_kid(nd, j)
+  end function vtg_kid
+  ! slot 2: a constant's value, a let's first slot
+  function vtg_c(nd) result(v)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: v
+    v = gc_nil()
+    if (gc_kind(nd) == OBJ_AST) v = gc_slot(nd, 2)
+  end function vtg_c
+  integer(int64) function vtg_s2(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_s2 = 0
+    if (gc_kind(nd) == OBJ_AST) vtg_s2 = int_of(gc_slot(nd, 2))
+  end function vtg_s2
+
+  subroutine vtg_const(tb, v)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: v
+    type(gc_value) :: k
+    k = vm_kw("const")
+    call anb_push(vm_l([k, v], [k, v]))
+  end subroutine vtg_const
+  subroutine vtg_nil(tb)
+    type(vtg_state), intent(inout) :: tb
+    call vtg_const(tb, gc_nil())
+  end subroutine vtg_nil
+  subroutine vtg_local(tb, s)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s
+    call anb_push(vm_slot_ref(tb%c, int(s), [gc_value ::]))
+  end subroutine vtg_local
+  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw
+  subroutine vtg_node(tb, op, n)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: op, n
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: l, k
+    integer :: j, top
+    vst => gc_my_stack()
+    top = vst%vs_top
+    l = gc_nil()
+    do j = top, top - int(n) + 1, -1
+       l = gcl_cons(vs_get(vst, j), l, [l])
+    end do
+    select case (op)
+    case (1); k = vm_kw("if")
+    case (2); k = vm_kw("let")
+    case default; k = vm_kw("throw")
+    end select
+    l = gcl_cons(k, l, [l, k])
+    call vs_leave(vst, top - int(n))
+    call anb_push(l)
+  end subroutine vtg_node
+  ! slot s the next local, the old mapping on the trail
+  subroutine vtg_bind(tb, s)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s
+    if (s < 0 .or. s > ubound(tb%c%map, 1)) then
+       tb%c%ok = .false.
+       return
+    end if
+    if (.not. allocated(tb%c%trs)) allocate(tb%c%trs(16), tb%c%tro(16))
+    if (tb%c%ntr >= size(tb%c%trs)) then
+       call grow_int(tb%c%trs)
+       call grow_int(tb%c%tro)
+    end if
+    tb%c%ntr = tb%c%ntr + 1
+    tb%c%trs(tb%c%ntr) = int(s)
+    tb%c%tro(tb%c%ntr) = tb%c%map(s)
+    tb%c%map(s) = tb%c%depth
+    tb%c%depth = tb%c%depth + 1
+  end subroutine vtg_bind
+  subroutine vtg_blank(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+  end subroutine vtg_blank
+  subroutine vtg_save(tb)
+    type(vtg_state), intent(inout) :: tb
+    if (.not. allocated(tb%c%svd)) allocate(tb%c%svd(16), tb%c%svt(16))
+    if (tb%c%nsv >= size(tb%c%svd)) then
+       call grow_int(tb%c%svd)
+       call grow_int(tb%c%svt)
+    end if
+    tb%c%nsv = tb%c%nsv + 1
+    tb%c%svd(tb%c%nsv) = tb%c%depth
+    tb%c%svt(tb%c%nsv) = tb%c%ntr
+  end subroutine vtg_save
+  subroutine vtg_restore(tb)
+    type(vtg_state), intent(inout) :: tb
+    if (tb%c%nsv <= 0) return
+    do while (tb%c%ntr > tb%c%svt(tb%c%nsv))
+       tb%c%map(tb%c%trs(tb%c%ntr)) = tb%c%tro(tb%c%ntr)
+       tb%c%ntr = tb%c%ntr - 1
+    end do
+    tb%c%depth = tb%c%svd(tb%c%nsv)
+    tb%c%nsv = tb%c%nsv - 1
+  end subroutine vtg_restore
+  ! every other kind: vm_tr's own (which calls back for the kinds above)
+  recursive subroutine vtg_other(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    call anb_push(vm_tr(tb%c, x, [gc_value ::]))
+  end subroutine vtg_other
+
+
   ! a Var node's fn -- the one it is direct-linked to, else its Var's value
   ! now -- only wraps a builtin (not a runtime fn of the analyzer's own)
   ! when called with n arguments
@@ -729,7 +867,7 @@
 
   ! kids i..j translated into a vector in slot acc; bump: each a dead local
   recursive subroutine vm_tr_kids(c, kids, i, j, acc, roots, bump)
-    type(vm_tr_ctx), intent(inout) :: c
+    type(vm_tr_ctx), intent(inout), target :: c
     type(gc_value), intent(in) :: kids, roots(:)
     integer, intent(in) :: i, j, acc
     logical, intent(in), optional :: bump
@@ -832,7 +970,7 @@
     integer, intent(in) :: nslots, self_slot
     type(gc_value) :: cl, x, body
     type(gc_stack), pointer :: vst
-    type(vm_tr_ctx), allocatable :: c
+    type(vm_tr_ctx), allocatable, target :: c
     integer :: base, i, nfixed, start, nl, ncap, s
     logical :: variadic
     cl = gc_nil()
