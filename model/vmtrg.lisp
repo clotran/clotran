@@ -25,6 +25,8 @@
 ; Proved: vtg-tr-ex-tr -- on a tree of these kinds (vtg-frag) the
 ; generated translation pushes exactly ex-tr's, leaving the scope as it
 ; found it.
+; vtg-steps-bound -- its work at most 8 steps a node it reaches (vtg-size):
+; each node's shims a constant number.
 
 (in-package "ACL2")
 
@@ -260,3 +262,45 @@
                 (equal (vtb-sv (vtg-tr flg e i vtb)) (vtb-sv vtb))))
   :hints (("Goal" :use ((:instance vtg-tr-st (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb))))
                   :in-theory (disable vtg-tr-st vtg-tr vtb-stk vtb-cm vtb-sv vtbp))))
+
+; ---- THE COST ---------------------------------------------------------------------------------
+;
+; vtg-steps: vtg-tr's work as the generated code does it -- a step a call
+; (a cycle among them) and a step a shim, vtg_other's own work its host's;
+; vtg-size: the nodes it reaches, a let's bindings and body among them.
+; vtg-steps-bound: at most 8 steps a node -- each node's shims a constant.
+(defun vtg-steps (flg e i)
+  (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
+  (if (equal flg 1)
+      (if (equal (vtg-kind e) 11)
+          (if (< (nfix i) (vtg-i2 e))
+              (+ 6 (vtg-steps 0 (vtg-kid e (nfix i)) 0) (vtg-steps 1 e (+ 1 (nfix i))))
+            (+ 1 (vtg-steps 0 (vtg-kid e (vtg-i2 e)) 0)))
+        2)
+    (let ((k (vtg-kind e)))
+      (cond ((equal k 4) (+ 5 (vtg-steps 0 (vtg-kid e 0) 0) (vtg-steps 0 (vtg-kid e 1) 0)
+                            (if (< 2 (vtg-nk e)) (vtg-steps 0 (vtg-kid e 2) 0) 1)))
+            ((equal k 17) (+ 2 (vtg-steps 0 (vtg-kid e 0) 0)))
+            ((equal k 11) (+ 1 (vtg-steps 1 e 0)))
+            (t 2)))))
+(defun vtg-size (flg e i)
+  (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
+  (if (equal flg 1)
+      (if (equal (vtg-kind e) 11)
+          (if (< (nfix i) (vtg-i2 e))
+              (+ (vtg-size 0 (vtg-kid e (nfix i)) 0) (vtg-size 1 e (+ 1 (nfix i))))
+            (vtg-size 0 (vtg-kid e (vtg-i2 e)) 0))
+        1)
+    (let ((k (vtg-kind e)))
+      (cond ((equal k 4) (+ 1 (vtg-size 0 (vtg-kid e 0) 0) (vtg-size 0 (vtg-kid e 1) 0)
+                            (if (< 2 (vtg-nk e)) (vtg-size 0 (vtg-kid e 2) 0) 0)))
+            ((equal k 17) (+ 1 (vtg-size 0 (vtg-kid e 0) 0)))
+            ((equal k 11) (+ 1 (vtg-size 1 e 0)))
+            (t 1)))))
+(defthm vtg-steps-bound-flag
+  (<= (vtg-steps flg e i) (if (equal flg 1) (+ 1 (* 8 (vtg-size flg e i))) (- (* 8 (vtg-size flg e i)) 6)))
+  :rule-classes nil
+  :hints (("Goal" :induct (vtg-steps flg e i) :in-theory (disable vtg-kid-ex)
+                  :expand ((:free (flg) (vtg-steps flg e i)) (:free (flg) (vtg-size flg e i))))))
+(defthm vtg-steps-bound (<= (vtg-steps 0 e 0) (* 8 (vtg-size 0 e 0)))
+  :rule-classes :linear :hints (("Goal" :use ((:instance vtg-steps-bound-flag (flg 0) (i 0))))))

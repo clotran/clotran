@@ -1279,6 +1279,9 @@ check-vm-gen: model | $(B)
 	scripts/fuzz-exec-gen -n 100 -s 2 -x
 	scripts/acl2-fortran -b vmtrg -o $(B)/vm_tr_gen.inc
 	@cmp -s $(B)/vm_tr_gen.inc src/f/gen/vm_tr_gen.inc || { echo "src/f/gen/vm_tr_gen.inc is not what model/vmtrg.lisp generates: make gen-vm"; exit 1; }
+	scripts/fuzz-vmtr-gen -n 300 -s 1
+	scripts/fuzz-vmtr-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-vmtr-gen -n 100 -s 2 -x
 # pandoc writes HTML; a headless Chrome or Chromium prints it to PDF. No
 # LaTeX. CHROME=/path/to/it overrides the browser found here.
 CHROME ?= $(shell for c in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome chromium chromium-browser chrome; do \

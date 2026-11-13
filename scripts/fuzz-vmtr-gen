@@ -1,0 +1,114 @@
+#!/usr/bin/env bb
+;; fuzz-vmtr-gen: the GENERATED VM translation (src/f/gen/vm_tr_gen.inc,
+;; written by scripts/acl2-fortran -b vmtrg from model/vmtrg.lisp) against
+;; exec-vmtr's ex-tr, the translation ex-vm-agree proves.
+;;
+;;   scripts/fuzz-vmtr-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random trees of the generated kinds -- a constant, a local (marked for
+;; clearing or not, in scope or not), if (two children or three), let* (its
+;; slots new or shadowing, too few children), throw -- with a Var and a
+;; kind ex-tr does not know among them (vtg_other's), under a scope of
+;; slots and blanks. ACL2 prints ex-tr :m of the tree in the scope;
+;; test/vmtrg/vmtr_check runs the generated vtg_tr through shims that are
+;; vmtrg.lisp's exactly (vtg_blank blanking ex-clr's slots, vtg_restore
+;; the saved scope) and prints what it built; they must agree.
+;;
+;; -x is the NEGATIVE CONTROL: the Fortran side takes a node's items in the
+;; wrong order, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "300")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-vmtr-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+;; a node {:k :i2 :s2 :c :mark :kids}; c nil or a small number
+(defn node [k & {:keys [i2 s2 c mark kids] :or {i2 0 s2 0 c nil mark 0 kids []}}]
+  {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids})
+(defn gen [d]
+  (let [k (if (zero? d) (pick [1 2 2 3]) (pick [1 2 2 3 4 4 4 11 11 11 17 17 99]))
+        sub #(gen (dec d))]
+    (case k
+      1 (node 1 :c (pick [nil 0 1 7 42]))
+      3 (node 3 :c (pick [nil 5 9]))
+      2 (node 2 :i2 (rnd 10) :mark (pick [0 0 1]))
+      4 (node 4 :kids (vec (repeatedly (pick [2 3 3 1]) sub)))
+      11 (let [nb (pick [0 1 1 2 3])]
+           (node 11 :i2 nb :s2 (pick [2 4 6 8]) :kids (vec (repeatedly (+ nb (pick [1 1 1 1 0])) sub))))
+      17 (node 17 :kids [(sub)])
+      99 (node 99 :kids [(sub)]))))
+(defn gen-case [] {:t (gen (pick [1 2 3 3 4 5])) :cm (vec (repeatedly (rnd 6) #(pick [0 1 2 3 4 5 nil])))})
+(def cases (vec (repeatedly n gen-case)))
+
+(defn acl2-tree [{:keys [k i2 s2 c mark kids]}]
+  (str "(" k " " i2 " (" (str/join " " (map acl2-tree kids)) ") " (if (nil? c) "nil" c) " " s2 " " (if (= mark 1) "t" "nil") ")"))
+(defn acl2-cm [cm] (str "(" (str/join " " (map #(if (nil? %) "nil" %) cm)) ")"))
+
+;; the Fortran's case: nodes numbered depth first, the root 1
+(defn flat [t]
+  (let [out (atom [])]
+    (letfn [(walk [{:keys [k i2 s2 c mark kids]}]
+              (let [me (count @out)]
+                (swap! out conj nil)
+                (let [ids (mapv walk kids)]
+                  (swap! out assoc me (str/join " " (concat [k i2 s2 (if (nil? c) -1 c) mark (count kids)] ids))))
+                (inc me)))]
+      (walk t))
+    @out))
+(defn ftn-case [{:keys [t cm]}]
+  (let [rows (flat t)]
+    (str (str/join " " (concat [(count rows) (count cm)] (map #(if (nil? %) -1 %) cm))) "\n" (str/join "\n" rows) "\n")))
+
+;; ---- what ACL2 answers -------------------------------------------------------------------
+
+(def driver
+  (str "(include-book \"exec-vmtr\")\n(set-print-case :downcase state)\n(set-iprint nil)\n"
+       (str/join (map-indexed (fn [j c] (str "(cw \"~%CASE " j " ~f0 END~%\" (ex-tr :m '" (acl2-tree (:t c)) " 0 '" (acl2-cm (:cm c)) "))\n")) cases))
+       "(good-bye)\n"))
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def norm #(-> % (str/replace #"\s+" " ") (str/replace "( " "(") (str/replace " )" ")") str/trim))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected (into {} (for [[_ c l] (re-seq #"CASE (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
+(when (not= (count expected) n)
+  (println (str "fuzz-vmtr-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 3000))))
+  (System/exit 1))
+
+;; ---- the generated code ------------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "vmtrg" "-o" (str work "/vm_tr_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "test/vmtrg/vmtr_check.f90" (str work "/vmtr_check.f90"))
+(def exe (str work "/vmtr_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc
+               (concat ["-O2"] (when (= fc "gfortran") ["-frecursive" "-ffree-line-length-none"]) ["-o" exe "vmtr_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(def case-file (str work "/cases.txt"))
+(spit case-file (str/join (map ftn-case cases)))
+(def got (let [r (apply p/shell {:continue true :out :string :err :string} exe case-file (when broken ["broken"]))]
+           (mapv norm (str/split-lines (str/trim (:out r))))))
+(def results (vec (for [k (range n)] {:k k :got (get got k) :want (expected k) :ok (= (get got k) (expected k))})))
+(def bad (remove :ok results))
+(defn kinds [t] (cons (:k t) (mapcat kinds (:kids t))))
+(println (str n " cases, seed " seed (when broken " (negative control: a node's items reversed)")))
+(println (str "  nodes by kind: " (str/join ", " (for [[k c] (sort (frequencies (mapcat (comp kinds :t) cases)))] (str k ":" c)))
+              "; marked reads " (count (re-seq #" t\)" (str/join (map (comp acl2-tree :t) cases))))))
+(println (str "generated VM translation against ACL2's ex-tr: " (count bad) " cases differ"))
+(doseq [b (take 3 bad)]
+  (println "  case" (:k b) (acl2-tree (:t (nth cases (:k b)))) (acl2-cm (:cm (nth cases (:k b)))))
+  (println "    ACL2     " (:want b))
+  (println "    generated" (:got b)))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))
