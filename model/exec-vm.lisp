@@ -43,8 +43,9 @@
 ; same throw in both. mx2's
 ; defs are keyed by the template itself (vcs2-correct asks only x2defs-ok,
 ; and both look a name up by equal), the def a clause for each arity, (nf
-; body) or (nf body :rest): lets of the captures and of the closure remade,
-; for the self slot, around the loop translation of the parameters (a
+; body) or (nf body :rest): the captures read in place, (:capt j)
+; (exec-vmcs's ex-cs, ex-fbtc), a let of the closure remade for the self
+; slot, around the loop translation of the parameters (a
 ; variadic arity's rest among them, a list, as mx2's split-rest makes it),
 ; so a recur to the fn is that loop's. The arity a call's count picks is
 ; the one mx2's pick-arity picks (ex-pick-arity): the fixed one, else the

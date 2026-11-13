@@ -787,13 +787,13 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | vm.inc | the model | encoding the same? |
 |---|---|---|
 | `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_DO, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 5, 17, 11 | yes -- **generated now** (vmtrg) |
-| N_LOCAL of a capture | ex-fbtr binds captures to locals (`ex-clets`) | no: vm.inc reads `(:capt i)` |
+| N_LOCAL of a capture | ex-fbtc reads it in place, `(:capt j)` (exec-vmcs's ex-cs) | yes -- vtg_local exact |
 | N_LOOP, N_RECUR | lets, then `(:loop ((:const nil) locals..) body)`, `(:recur (:const nil) ..)` | no: the dummy, and vm.inc's independent-inits loop (PLAN 34, no let keeps a walked seq's head) |
 | N_CALL | ex-trcall: `:ifn` then `:applyv` | no: vm.inc's builtin `(:prim f ..)`, a Var wrapping one `callw`, else `:callv` |
 | N_VAR | `(:const value)` | no: vm.inc derefs (`:clotran.vm/deref`, the link epoch) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
-| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtr, ex-clause, ex-def | no: the self `:mkclo` and capture lets, the loop always round the body (vm.inc only on a fn recur); the arity-error clause is not in ex-def |
+| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop always round the body with its dummy (vm.inc only on a fn recur, no dummy); the arity-error clause is not in ex-def |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
 **Generated now**: model/vmtrg.lisp, `vtg-tr`,
@@ -822,34 +822,46 @@ more); vm_tr's own N_DO case is gone.
 
 Named, not exact: `vtg_blank` blanks nothing and `vtg_restore`
 undoes binds only (equal on ex-vwf trees, which never read a blanked
-slot), `vtg_local` answers a capture `(:capt i)` (the entry gap).
+slot). `vtg_local` is exact: the scope carries `vtb-cs`, the clause's
+parameter and capture counts, and a read is exec-vmcs's `ex-cloc` of its
+position.
 
 **Next**, each a model change before the code, so ex-vm-agree carries:
 1. (do: done, above.)
-2. the entry: ex-fbtr reading captures in place, `(:capt i)` and the fn
-   as `(:capt m)` (vmx2 has :capt), so no prologue; then `vtg_local` is
-   exact and `vm_clause` can be generated (with the arity-error clause
-   in ex-def).
-   What it takes (scoped, not started): a scope entry that is a capture,
-   so ex-tr's local answers `(:capt j)` for one and ex-agree relates it
-   to caps (x2-res of caps[j] is the slot's value: ex-clets-mx's fact,
-   moved into the agreement) -- ex-tr, ex-vwf, ex-agree and every
-   ex-vgood case that opens a local; and the fn itself: vm.inc reads it
-   as `(:capt ncap)`, a cap past the captures, which vmx2's call does not
-   put there (mx2's caps are the closure's captures only), so either
-   vmx2's call appends the closure to caps (vmx2, vmx2-proof, -cost,
-   -time, vmi, vmg: the VM's own books) or the self slot keeps ex-fbtr's
-   `:mkclo` let and vm.inc's self read changes to match.
-   What it takes (scoped, not started): a scope entry that is a capture,
-   so ex-tr's local answers `(:capt j)` for one and ex-agree relates it
-   to caps (x2-res of caps[j] is the slot's value: ex-clets-mx's fact,
-   moved into the agreement) -- ex-tr, ex-vwf, ex-agree and every
-   ex-vgood case that opens a local; and the fn itself: vm.inc reads it
-   as `(:capt ncap)`, a cap past the captures, which vmx2's call does not
-   put there (mx2's caps are the closure's captures only), so either
-   vmx2's call appends the closure to caps (vmx2, vmx2-proof, -cost,
-   -time, vmi, vmg: the VM's own books) or the self slot keeps ex-fbtr's
-   `:mkclo` let and vm.inc's self read changes to match.
+2. the entry. **Captures in place: done.** A clause's body is ex-fbtc,
+   ex-fbtr's body with no capture lets, rewritten by exec-vmcs's `ex-cs`:
+   a position of the captures' is `(:capt j)`, one past them m lower.
+   ex-cs-mx (mx2 answers the same of both: the environment a ++ c ++ b
+   against a ++ b, c the captures resolved) and ex-cs-xwf (well formed in
+   m fewer positions) carry ex-fbtc-mx and ex-fbtc-xwf, so ex-enter-mx1
+   and ex-clauses-ok -- and everything above them, ex-vm-agree,
+   ex-vm-runs -- stand unchanged in statement; ex-tr, ex-vwf, ex-agree and
+   ex-vgood are untouched (the rewrite is of the translation, not of the
+   scope). vmtrg's `vtg-local` reads through the same rewrite (`vtb-cs`),
+   so `vtg_local` is exact; vtg-tr-ex-tr pushes ex-cs of ex-tr's;
+   fuzz-vmtr-gen draws np and m.
+   **The fn itself: option (a).** The self slot keeps ex-fbtc's let, the
+   local after the parameters, and vm.inc's self read changed to match:
+   vm_clause wraps the body in `(:let (:capt ncap) ..)` and maps the self
+   slot to position nl (the loop's copies one higher). Its value is the
+   named gap: the model remakes the closure, `(:mkclo tm (:capt 0)..)`;
+   vm.inc reads the runtime's closure, which holds itself past its
+   captures (VmRuntime rt_capt) -- the same fn, and the one Clojure's
+   self name is (identical?, and a machine CLO list could not escape to
+   the evaluator). vm.inc lets it only when the body reads the self slot
+   (ex-fbtc always does: a position no name reaches otherwise, named with
+   the rest of the entry) -- let always, fib (no self read) ran 115 ms for
+   94 (fib 27, CLOTRAN_VM=1). Cost: a push a call of a fn that names
+   itself, against (b)'s re-proof of vmx2,
+   vmx2-proof, -cost, -time, vmi and vmg (~1940 s alone) to make mx2's call
+   append the closure to caps.
+   **Left:** generating `vm_clause` from ex-fbtc/ex-clause. It differs
+   from the model still in the loop (ex-fbtc's is always round the body,
+   with item 3's dummy; vm.inc's only on a fn recur, no dummy), the
+   self let (its value, and vm.inc's only when read: above), and ex-def has no arity-error clause
+   (vm_compile_fn's `(0 (:prim :clotran.vm/arity ..) :rest)`, which needs
+   ex-mxcl's :arity throw to be that prim's). Take it with item 3: once
+   the loop's encoding is one, vm_clause is ex-fbtc's shape.
 3. loop/recur: drop the dummy (x2wf's at-least-one-binding needs a
    zero-binding loop's own case) and model the independent-inits loop.
 4. calls and Vars: vm.inc's builtin prim and callw as ex-trcall's cases

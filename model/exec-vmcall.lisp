@@ -86,12 +86,12 @@
   (implies (and (ex-arswf tm ars defs) (natp m))
            (equal (pick-fixed (ex-clauses tm ars) m)
                   (if (ex-arity-pass ars m 0) (ex-clause tm (ex-arity-pass ars m 0)) nil)))
-  :hints (("Goal" :in-theory (e/d (ex-anf ex-avar) (ex-fbtr)))))
+  :hints (("Goal" :in-theory (e/d (ex-anf ex-avar) (ex-fbtr ex-fbtc)))))
 (defthm ex-pick-rest
   (implies (and (ex-arswf tm ars defs) (natp m))
            (equal (pick-rest (ex-clauses tm ars) m)
                   (if (ex-arity-pass ars m 1) (ex-clause tm (ex-arity-pass ars m 1)) nil)))
-  :hints (("Goal" :in-theory (e/d (ex-anf ex-avar) (ex-fbtr)))))
+  :hints (("Goal" :in-theory (e/d (ex-anf ex-avar) (ex-fbtr ex-fbtc)))))
 (defthm ex-pick-arity
   (implies (and (ex-arswf tm ars defs) (natp m))
            (equal (pick-arity (ex-clauses tm ars) m) (if (ex-arity ars m) (ex-clause tm (ex-arity ars m)) nil)))
@@ -227,7 +227,6 @@
   :hints (("Goal" :expand ((mx2 (cons :mkclo x) env caps defs fuel)))))
 
 ; the body's lets: its captures read, each resolved (x2-res)
-(defun ex-nths (j m l) (if (zp m) nil (cons (x2-res (nth (nfix j) l)) (ex-nths (1+ (nfix j)) (1- m) l))))
 (defthm ex-capts-mx (equal (mx2-args (ex-capts j m) env caps defs fuel) (cons :val (ex-nths j m caps)))
   :hints (("Goal" :induct (ex-capts j m)
                   :expand ((:free (x y) (mx2-args (cons x y) env caps defs fuel))
@@ -290,12 +289,14 @@
 (in-theory (disable ex-anf ex-avar ex-anp ex-astart ex-abody ex-har))
 (defthm ex-har-fbtr (implies (truthy (nth 1 ar)) (equal (ex-fbtr tm (ex-har ar)) (ex-fbtr tm ar)))
   :hints (("Goal" :in-theory (enable ex-fbtr ex-fparams ex-fbcm ex-flp ex-fcm ex-fcmb))))
+(defthm ex-har-fbtc (implies (truthy (nth 1 ar)) (equal (ex-fbtc tm (ex-har ar)) (ex-fbtc tm ar)))
+  :hints (("Goal" :in-theory (enable ex-fbin ex-fparams ex-fbcm ex-flp ex-fcm ex-fcmb))))
 (defthm ex-har-arwf (implies (and (truthy (nth 1 ar)) (ex-arwf tm ar defs)) (ex-arwf tm (ex-har ar) defs))
   :hints (("Goal" :in-theory (enable ex-arwf ex-fparams ex-fbcm ex-flp ex-fcm ex-fcmb))))
 (defthm ex-hars-arswf (implies (ex-arswf tm ars defs) (ex-arswf tm (ex-hars2 ars) defs))
   :hints (("Goal" :induct (ex-hars2 ars))))
 (defthm ex-hars-clauses (equal (x2-hcls (ex-clauses tm ars)) (ex-clauses tm (ex-hars2 ars)))
-  :hints (("Goal" :induct (ex-hars2 ars) :in-theory (e/d (ex-clause x2-hcls restp ex-avar) (ex-fbtr)) :expand ((ex-clauses tm ars)))))
+  :hints (("Goal" :induct (ex-hars2 ars) :in-theory (e/d (ex-clause x2-hcls restp ex-avar) (ex-fbtr ex-fbtc)) :expand ((ex-clauses tm ars)))))
 (defthm ex-hclo-parts
   (and (equal (cadr (ex-hclo g)) (update-nth 1 (ex-hars2 (nth 1 (cadr g))) (cadr g)))
        (equal (caddr (ex-hclo g)) (caddr g)) (clop (ex-hclo g)) (equal (clo-caps (ex-hclo g)) (caddr g))
@@ -405,6 +406,12 @@
            (equal (assoc-equal tm defs) (cons tm (ex-def tm))))
   :hints (("Goal" :use ((:instance ex-defs-ok-assoc (ds defs)))
                   :in-theory (disable ex-defs-ok-assoc ex-def ex-defs-ok))))
+; the clause's body answers what ex-fbtr's does: the captures read in place
+(defthm ex-fbtc-mx
+  (implies (and (true-listp args) (equal (len args) (ex-anp ar)))
+           (equal (mx2 (ex-fbtc tm ar) args caps defs fuel) (mx2 (ex-fbtr tm ar) args caps defs fuel)))
+  :hints (("Goal" :use ex-fbtr-fbin :in-theory (disable ex-fbin ex-cs mx2 ex-fbtr))))
+(in-theory (disable ex-fbtc))
 (defthm ex-enter-mx1
   (implies (and (ex-ehyp f args defs) (not (zp fuel)))
            (equal (ex-mxcall0 f args defs fuel)

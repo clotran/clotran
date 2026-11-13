@@ -27,7 +27,10 @@
   ! The translation, node by node:
   !   const                 (:const v)
   !   a parameter           (:local i)
-  !   a capture, the fn     (:capt i), the fn itself (:capt ncap)
+  !   a capture             (:capt i), read in place (exec-vmcs's ex-cs)
+  !   the fn itself         a local: the clause's (:let (:capt ncap) ..)
+  !                         after the parameters (when the body reads
+  !                         it), as ex-fbtc's self let
   !   var                   (:prim :clotran.vm/deref (:const var))
   !   if, throw             (:if c a b), (:throw e)
   !   do                    nested (:let e1 ..), each value a dead local
@@ -631,9 +634,10 @@
   ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
   ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
   ! output stack (the value stack), and the scope (vm_tr_ctx's map and
-  ! depth). Named, not exact: vtg_blank blanks nothing and vtg_restore
-  ! undoes binds only -- a blanked slot is read by no tree exec-vm's
-  ! ex-vwf admits -- and vtg_local answers a captured slot (:capt i).
+  ! depth; vtg_local's map the positions with the fn's captures read in
+  ! place, (:capt i), exec-vmcs's ex-cs -- exact). Named, not exact:
+  ! vtg_blank blanks nothing and vtg_restore undoes binds only -- a blanked
+  ! slot is read by no tree exec-vm's ex-vwf admits.
 
   ! nd by vtg_tr: the caller's roots kept on the value stack while it runs
   recursive function vm_tr_gen(c, nd, roots) result(e)
@@ -959,7 +963,7 @@
     type(gc_value) :: cl, x, body
     type(gc_stack), pointer :: vst
     type(vm_tr_ctx), allocatable, target :: c
-    integer :: base, i, nfixed, start, nl, ncap, s
+    integer :: base, i, nfixed, start, nl, ncap, s, sl
     logical :: variadic
     cl = gc_nil()
     if (nslots > 4000) return
@@ -979,7 +983,18 @@
     c%capt = -1
     call vm_scan(c, body)
     if (.not. c%ok) return
-    ! the parameters the clause's locals, the captures and the fn its closure's
+    ! the parameters the clause's locals, the captures its closure's read
+    ! in place, the fn the local after the parameters (ex-fbtc's self let:
+    ! its value the closure, (:capt ncap) -- the runtime's closure holds
+    ! itself past its captures, VmRuntime rt_capt -- where the model remakes
+    ! it, (:mkclo template (:capt 0) ..): equal under the runtime's
+    ! decoding), and only when the body reads it: a let a call costs fib
+    ! a fifth (scripts/bench), and its slot is a position no name reaches
+    ! otherwise (the entry is named, not generated: exec-PLAN Lane 3)
+    sl = 0
+    if (self_slot >= 0 .and. self_slot <= ubound(c%map, 1)) then
+       if (c%reads(self_slot)) sl = 1
+    end if
     do i = 0, nl - 1
        c%map(start + i) = i
     end do
@@ -987,8 +1002,8 @@
        s = int_of(gcv_nth(capv, 2 * i + 1))
        if (s >= 0 .and. s <= ubound(c%capt, 1)) c%capt(s) = i
     end do
-    if (self_slot >= 0 .and. self_slot <= ubound(c%capt, 1)) c%capt(self_slot) = ncap
-    c%depth = nl
+    if (sl == 1) c%map(self_slot) = nl
+    c%depth = nl + sl
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, body)
     if (c%fn_recur) then
@@ -1000,9 +1015,9 @@
           call vs_set(vst, base + 4, x)
           x = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
           call vs_set(vst, base + 3, x)
-          c%map(start + i) = nl + i
+          c%map(start + i) = nl + sl + i
        end do
-       c%depth = 2 * nl
+       c%depth = 2 * nl + sl
        x = vm_tr(c, vs_get(vst, base + 1), [roots, vs_get(vst, base + 3)])
        call vs_set(vst, base + 2, x)
        if (c%ok) then
@@ -1014,6 +1029,15 @@
        end if
     else
        x = vm_tr(c, vs_get(vst, base + 1), roots)
+       call vs_set(vst, base + 2, x)
+    end if
+    if (c%ok .and. sl == 1) then
+       ! (:let (:capt ncap) body): the self slot's let
+       call vs_set(vst, base + 5, vm_kw("capt"))
+       x = vm_l([vs_get(vst, base + 5), gc_int(int(ncap, gc_ip))], [roots, vs_get(vst, base + 2)])
+       call vs_set(vst, base + 4, x)
+       call vs_set(vst, base + 5, vm_kw("let"))
+       x = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 4), vs_get(vst, base + 2)], roots)
        call vs_set(vst, base + 2, x)
     end if
     if (c%ok) then

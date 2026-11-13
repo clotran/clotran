@@ -10,7 +10,8 @@
 ;; one, several: each value but the last a dead local), let* (its
 ;; slots new or shadowing, too few children), throw -- with a Var and a
 ;; kind ex-tr does not know among them (vtg_other's), under a scope of
-;; slots and blanks. ACL2 prints ex-tr :m of the tree in the scope;
+;; slots and blanks, np parameters and m captures (vtb-cs). ACL2 prints
+;; ex-tr :m of the tree in the scope, its captures read in place (ex-cs);
 ;; test/vmtrg/vmtr_check runs the generated vtg_tr through shims that are
 ;; vmtrg.lisp's exactly (vtg_blank blanking ex-clr's slots, vtg_restore
 ;; the saved scope) and prints what it built; they must agree.
@@ -49,7 +50,7 @@
       5 (node 5 :kids (vec (repeatedly (pick [0 1 2 2 3 4]) sub)))
       17 (node 17 :kids [(sub)])
       99 (node 99 :kids [(sub)]))))
-(defn gen-case [] {:t (gen (pick [1 2 3 3 4 5])) :cm (vec (repeatedly (rnd 6) #(pick [0 1 2 3 4 5 nil])))})
+(defn gen-case [] {:t (gen (pick [1 2 3 3 4 5])) :cm (vec (repeatedly (rnd 6) #(pick [0 1 2 3 4 5 nil]))) :np (rnd 3) :m (rnd 3)})
 (def cases (vec (repeatedly n gen-case)))
 
 (defn acl2-tree [{:keys [k i2 s2 c mark kids]}]
@@ -67,15 +68,15 @@
                 (inc me)))]
       (walk t))
     @out))
-(defn ftn-case [{:keys [t cm]}]
+(defn ftn-case [{:keys [t cm np m]}]
   (let [rows (flat t)]
-    (str (str/join " " (concat [(count rows) (count cm)] (map #(if (nil? %) -1 %) cm))) "\n" (str/join "\n" rows) "\n")))
+    (str (str/join " " (concat [(count rows) np m (count cm)] (map #(if (nil? %) -1 %) cm))) "\n" (str/join "\n" rows) "\n")))
 
 ;; ---- what ACL2 answers -------------------------------------------------------------------
 
 (def driver
   (str "(include-book \"exec-vmtr\")\n(set-print-case :downcase state)\n(set-iprint nil)\n"
-       (str/join (map-indexed (fn [j c] (str "(cw \"~%CASE " j " ~f0 END~%\" (ex-tr :m '" (acl2-tree (:t c)) " 0 '" (acl2-cm (:cm c)) "))\n")) cases))
+       (str/join (map-indexed (fn [j c] (str "(cw \"~%CASE " j " ~f0 END~%\" (ex-cs nil (ex-tr :m '" (acl2-tree (:t c)) " 0 '" (acl2-cm (:cm c)) ") " (:np c) " " (:m c) "))\n")) cases))
        "(good-bye)\n"))
 (def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
             (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
@@ -110,7 +111,7 @@
               "; marked reads " (count (re-seq #" t\)" (str/join (map (comp acl2-tree :t) cases))))))
 (println (str "generated VM translation against ACL2's ex-tr: " (count bad) " cases differ"))
 (doseq [b (take 3 bad)]
-  (println "  case" (:k b) (acl2-tree (:t (nth cases (:k b)))) (acl2-cm (:cm (nth cases (:k b)))))
+  (println "  case" (:k b) (acl2-tree (:t (nth cases (:k b)))) (acl2-cm (:cm (nth cases (:k b)))) "np" (:np (nth cases (:k b))) "m" (:m (nth cases (:k b))))
   (println "    ACL2     " (:want b))
   (println "    generated" (:got b)))
 (System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

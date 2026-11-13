@@ -11,7 +11,8 @@
 !
 !   vmtr_check CASEFILE [broken]
 !
-! CASEFILE: per case a line `nnodes ncm cm..`, then a line a node, 1..nnodes,
+! CASEFILE: per case a line `nnodes np m ncm cm..` (np, m vtb-cs: the
+! clause's parameters and captures, a capture read in place), then a line a node, 1..nnodes,
 ! node 1 the root: kind i2 s2 c mark nk kid.. (c -1 nil; a kid 0 nil).
 ! Out: a line a case, the translation as ACL2 prints it.
 module vmtr_mock
@@ -32,6 +33,7 @@ module vmtr_mock
      integer(int64), allocatable :: cm(:)
      type(ivec), allocatable :: sv(:)
      integer :: nsv = 0
+     integer(int64) :: np = 0, m = 0
   end type vtg_state
   integer, allocatable :: nkind(:), ni2(:), ns2(:), nc(:), nmark(:), nnk(:), noff(:), kids(:)
   logical :: broken = .false.
@@ -116,10 +118,19 @@ contains
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: s
     integer :: j
+    integer(int64) :: p
     do j = 1, size(tb%cm)
        if (tb%cm(j) == s) exit
     end do
-    call push(tb, '(:local ' // itoa(int(j - 1, int64)) // ')')
+    ! ex-cloc: below np a local, then the captures, past them m lower
+    p = j - 1
+    if (p < tb%np) then
+       call push(tb, '(:local ' // itoa(p) // ')')
+    else if (p < tb%np + tb%m) then
+       call push(tb, '(:capt ' // itoa(p - tb%np) // ')')
+    else
+       call push(tb, '(:local ' // itoa(p - tb%m) // ')')
+    end if
   end subroutine vtg_local
   subroutine vtg_node(tb, op, n)
     type(vtg_state), intent(inout) :: tb
@@ -239,11 +250,11 @@ program vmtr_check
   open (newunit=u, file=trim(arg(1:2047)), status='old', action='read')
   allocate (row(4096))
   do
-     read (u, *, iostat=ios) nn, ncm
+     read (u, *, iostat=ios) nn, tb%np, tb%m, ncm
      if (ios /= 0) exit
      backspace (u)
      allocate (tb%cm(ncm))
-     read (u, *) nn, ncm, tb%cm
+     read (u, *) nn, tb%np, tb%m, ncm, tb%cm
      allocate (nkind(nn), ni2(nn), ns2(nn), nc(nn), nmark(nn), nnk(nn), noff(nn), kids(64 * nn + 64))
      tot = 1
      do j = 1, nn

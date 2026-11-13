@@ -7,6 +7,7 @@
 
 (include-book "exec")
 (include-book "exec-xvs")
+(include-book "exec-vmcs")
 
 (defthm ex-i2-natp (natp (ex-i2 e)) :rule-classes :type-prescription)
 (defthm ex-s2-natp (natp (ex-s2 e)) :rule-classes :type-prescription)
@@ -310,8 +311,19 @@
     (ex-clets 0 m (list :let (list* :mkclo tm (ex-capts 0 m))
                         (list :loop (cons '(:const nil) (ex-locals (ex-fparams ar) (ex-fbcm tm ar)))
                               (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))))))
+; the clause's body: ex-fbtr's with the captures read in place (exec-vmcs's
+; ex-cs) -- no lets of them: the parameters, then the self slot's let and
+; the loop -- so a capture's read is (:capt j), as vm.inc's
+(defun ex-fbin (tm ar)
+  (let ((m (len (ex-inners (nth 2 tm)))))
+    (list :let (list* :mkclo tm (ex-capts 0 m))
+          (list :loop (cons '(:const nil) (ex-locals (ex-fparams ar) (ex-fbcm tm ar)))
+                (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar))))))
+(defun ex-fbtc (tm ar) (ex-cs nil (ex-fbin tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm)))))
+(defthm ex-fbtr-fbin (equal (ex-fbtr tm ar) (ex-clets 0 (len (ex-inners (nth 2 tm))) (ex-fbin tm ar))) :rule-classes nil)
+(in-theory (disable ex-fbin))
 (defun ex-clause (tm ar)
-  (if (ex-avar ar) (list (ex-anf ar) (ex-fbtr tm ar) :rest) (list (ex-anf ar) (ex-fbtr tm ar))))
+  (if (ex-avar ar) (list (ex-anf ar) (ex-fbtc tm ar) :rest) (list (ex-anf ar) (ex-fbtc tm ar))))
 (defun ex-clauses (tm ars) (if (atom ars) nil (cons (ex-clause tm (car ars)) (ex-clauses tm (cdr ars)))))
 (defun ex-def (tm) (ex-clauses tm (nth 1 tm)))
 (defun ex-arwf (tm ar defs)

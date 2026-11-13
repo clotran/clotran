@@ -16,16 +16,16 @@
 ; scope, vtg-local reads a slot's position. In clotran the stack is the
 ; context's value stack and the scope vm.inc's vm_tr_ctx (its map from
 ; slot to local, its depth); the shims are vm.inc's vtg_*, each stated
-; here. Two of them are named, not exact: vtg_blank blanks nothing and
-; vtg_restore undoes only binds -- a blanked slot is read by no tree
-; ex-vwf admits (exec-vm's ex-vm-agree asks it), so the positions it would
-; read agree -- and vtg_local reads a captured slot (:capt i) where
-; ex-fbtr's prologue binds the captures to locals (the gap at the fn's
-; entry, exec-PLAN Lane 3).
+; here. vtg-local reads a fn's capture in place, (:capt j), as the
+; clause's body does (exec-vmtr's ex-fbtc, exec-vmcs's ex-cs; the scope's
+; vtb-cs the clause's parameter and capture counts). Two shims are named,
+; not exact: vtg_blank blanks nothing and vtg_restore undoes only binds --
+; a blanked slot is read by no tree ex-vwf admits (exec-vm's ex-vm-agree
+; asks it), so the positions it would read agree.
 ;
 ; Proved: vtg-tr-ex-tr -- on a tree of these kinds (vtg-frag) the
-; generated translation pushes exactly ex-tr's, leaving the scope as it
-; found it.
+; generated translation pushes exactly ex-tr's, its captures read in place
+; (ex-cs), leaving the scope as it found it.
 ; vtg-steps-bound -- its work at most 9 steps a node it reaches (vtg-size):
 ; each node's shims a constant number.
 
@@ -64,7 +64,8 @@
 
 ; ---- THE BUILDER AND THE SCOPE ----------------------------------------------------------------
 
-(defstobj vtb (vtb-stk :type t :initially nil) (vtb-cm :type t :initially nil) (vtb-sv :type t :initially nil))
+(defstobj vtb (vtb-stk :type t :initially nil) (vtb-cm :type t :initially nil) (vtb-sv :type t :initially nil)
+  (vtb-cs :type t :initially nil))
 
 (defun vtg-push (v vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-stk (cons v (vtb-stk vtb)) vtb))
 (defun vtg-popn (n l acc)
@@ -75,8 +76,15 @@
 ; (:const v), (:const nil) (vtg_const, vtg_nil)
 (defun vtg-const (v vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :const v) vtb))
 (defun vtg-nil (vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push '(:const nil) vtb))
-; a slot's read: its position in the scope (vtg_local: vm_slot_ref)
-(defun vtg-local (s vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :local (ec-call (ex-pos s (vtb-cm vtb)))) vtb))
+; a slot's read: its position in the scope, the fn's captures read in
+; place -- cs is (np . m), the clause's np parameters and m captures, the
+; captures' positions np .. np+m-1 of the scope -- as exec-vmcs's ex-cs
+; reads them: (:capt j) for capture j, a position past them m lower
+; (vtg_local: vm_slot_ref, its map the positions so lowered)
+(defun vtg-local (s vtb)
+  (declare (xargs :stobjs vtb :guard t))
+  (let ((cs (vtb-cs vtb)))
+    (vtg-push (ec-call (ex-cloc (ec-call (ex-pos s (vtb-cm vtb))) (if (consp cs) (car cs) 0) (if (consp cs) (cdr cs) 0))) vtb)))
 ; (op items..) of the top n, the deepest first (vtg_node)
 (defun vtg-node (op n vtb)
   (declare (xargs :stobjs vtb :guard (and (signed-byte-p 64 op) (signed-byte-p 64 n))))
@@ -223,23 +231,32 @@
   :hints (("Goal" :in-theory (disable ex-kid-of ex-clr ex-blank) :expand ((ex-tr :m e 0 cm) (ex-tr :let e i cm)))))
 
 ; THE STATE as its three fields, and each shim on it
-(defun vtg-st (stk cm sv) (list stk cm sv))
+(defun vtg-st (stk cm sv cs) (list stk cm sv cs))
+(defun vtg-np (cs) (if (consp cs) (car cs) 0))
+(defun vtg-nm (cs) (if (consp cs) (cdr cs) 0))
 (defthm vtg-shims
-  (and (equal (vtg-const v (vtg-st s c sv)) (vtg-st (cons (list :const v) s) c sv))
-       (equal (vtg-nil (vtg-st s c sv)) (vtg-st (cons '(:const nil) s) c sv))
-       (equal (vtg-local n (vtg-st s c sv)) (vtg-st (cons (list :local (ex-pos n c)) s) c sv))
-       (equal (vtg-save (vtg-st s c sv)) (vtg-st s c (cons c sv)))
-       (equal (vtg-restore (vtg-st s c (cons c0 sv))) (vtg-st s c0 sv))
-       (equal (vtg-blank x (vtg-st s c sv)) (vtg-st s (ex-blank (ex-clr :m x 0) c) sv))
-       (equal (vtg-bind n (vtg-st s c sv)) (vtg-st s (append (true-list-fix c) (list n)) sv))
-       (equal (vtg-dead (vtg-st s c sv)) (vtg-st s (append (true-list-fix c) (list nil)) sv))
-       (equal (vtg-node 1 3 (vtg-st (list* z y x s) c sv)) (vtg-st (cons (list :if x y z) s) c sv))
-       (equal (vtg-node 2 2 (vtg-st (list* y x s) c sv)) (vtg-st (cons (list :let x y) s) c sv))
-       (equal (vtg-node 3 1 (vtg-st (list* x s) c sv)) (vtg-st (cons (list :throw x) s) c sv)))
+  (and (equal (vtg-const v (vtg-st s c sv cs)) (vtg-st (cons (list :const v) s) c sv cs))
+       (equal (vtg-nil (vtg-st s c sv cs)) (vtg-st (cons '(:const nil) s) c sv cs))
+       (equal (vtg-local n (vtg-st s c sv cs)) (vtg-st (cons (ex-cs nil (list :local (ex-pos n c)) (vtg-np cs) (vtg-nm cs)) s) c sv cs))
+       (equal (vtg-save (vtg-st s c sv cs)) (vtg-st s c (cons c sv) cs))
+       (equal (vtg-restore (vtg-st s c (cons c0 sv) cs)) (vtg-st s c0 sv cs))
+       (equal (vtg-blank x (vtg-st s c sv cs)) (vtg-st s (ex-blank (ex-clr :m x 0) c) sv cs))
+       (equal (vtg-bind n (vtg-st s c sv cs)) (vtg-st s (append (true-list-fix c) (list n)) sv cs))
+       (equal (vtg-dead (vtg-st s c sv cs)) (vtg-st s (append (true-list-fix c) (list nil)) sv cs))
+       (equal (vtg-node 1 3 (vtg-st (list* z y x s) c sv cs)) (vtg-st (cons (list :if x y z) s) c sv cs))
+       (equal (vtg-node 2 2 (vtg-st (list* y x s) c sv cs)) (vtg-st (cons (list :let x y) s) c sv cs))
+       (equal (vtg-node 3 1 (vtg-st (list* x s) c sv cs)) (vtg-st (cons (list :throw x) s) c sv cs)))
   :hints (("Goal" :expand ((:free (n l acc) (vtg-popn n l acc))))))
 
 (defthm ex-blank-nil-true (implies (true-listp c) (true-listp (append c (list n)))))
 (defthm vtg-ok-consp (implies (vtg-ok e) (consp e)) :rule-classes :forward-chaining)
+; the rewrite of the captures, through the nodes the generated kinds make
+(defthm vtg-cs-nodes
+  (and (equal (ex-cs nil (list :const v) np m) (list :const v))
+       (equal (ex-cs nil (list :if x y z) np m) (list :if (ex-cs nil x np m) (ex-cs nil y np m) (ex-cs nil z np m)))
+       (equal (ex-cs nil (list :let x y) np m) (list :let (ex-cs nil x np m) (ex-cs nil y np m)))
+       (equal (ex-cs nil (list :throw x) np m) (list :throw (ex-cs nil x np m)))))
+(in-theory (disable ex-cs vtg-np vtg-nm))
 (in-theory (disable ex-tr vtg-st vtg-const vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-dead vtg-node vtg-frag vtg-ok))
 
 (defthm vtg-frag-facts
@@ -248,71 +265,78 @@
                 (implies (not (member flg '(1 2))) (member (vtg-kind e) (quote (1 2 4 5 11 17))))))
   :rule-classes :forward-chaining :hints (("Goal" :expand ((vtg-frag flg e i)))))
 
+; ex-tr's translation x with the captures read in place
+(defun vtg-cw (x cs) (ex-cs nil x (vtg-np cs) (vtg-nm cs)))
 ; the induction: vtg-tr's, each call on the state it is handed
-(defun vtg-ind (flg e i s c sv)
+(defun vtg-ind (flg e i s c sv cs)
   (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :verify-guards nil :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
-  (declare (irrelevant s c sv))
+  (declare (irrelevant s c sv cs))
   (if (equal flg 1)
       (if (equal (vtg-kind e) 11)
           (if (< (nfix i) (vtg-i2 e))
               (let ((k (vtg-kid e (nfix i))))
-                (list (vtg-ind 0 k 0 s c sv)
-                      (vtg-ind 1 e (+ 1 (nfix i)) (cons (ex-tr :m k 0 c) s)
-                               (append (ex-blank (ex-clr :m k 0) c) (list (+ (vtg-s2 e) (nfix i)))) (cons c sv))))
-            (vtg-ind 0 (vtg-kid e (vtg-i2 e)) 0 s c sv))
+                (list (vtg-ind 0 k 0 s c sv cs)
+                      (vtg-ind 1 e (+ 1 (nfix i)) (cons (vtg-cw (ex-tr :m k 0 c) cs) s)
+                               (append (ex-blank (ex-clr :m k 0) c) (list (+ (vtg-s2 e) (nfix i)))) (cons c sv) cs)))
+            (vtg-ind 0 (vtg-kid e (vtg-i2 e)) 0 s c sv cs))
         nil)
     (if (equal flg 2)
         (if (equal (vtg-kind e) 5)
             (cond ((zp (vtg-nk e)) nil)
                   ((< (nfix i) (- (vtg-nk e) 1))
                    (let ((k (vtg-kid e (nfix i))))
-                     (list (vtg-ind 0 k 0 s c sv)
-                           (vtg-ind 2 e (+ 1 (nfix i)) (cons (ex-tr :m k 0 c) s)
-                                    (append (ex-blank (ex-clr :m k 0) c) (list nil)) (cons c sv)))))
-                  (t (vtg-ind 0 (vtg-kid e (- (vtg-nk e) 1)) 0 s c sv)))
+                     (list (vtg-ind 0 k 0 s c sv cs)
+                           (vtg-ind 2 e (+ 1 (nfix i)) (cons (vtg-cw (ex-tr :m k 0 c) cs) s)
+                                    (append (ex-blank (ex-clr :m k 0) c) (list nil)) (cons c sv) cs))))
+                  (t (vtg-ind 0 (vtg-kid e (- (vtg-nk e) 1)) 0 s c sv cs)))
           nil)
     (let ((k (vtg-kind e)))
       (cond ((equal k 4)
-             (let* ((k0 (vtg-kid e 0)) (c1 (ex-blank (ex-clr :m k0 0) c)) (t0 (ex-tr :m k0 0 c)))
-               (list (vtg-ind 0 k0 0 s c sv)
-                     (vtg-ind 0 (vtg-kid e 1) 0 (cons t0 s) c1 (cons c sv))
-                     (vtg-ind 0 (vtg-kid e 2) 0 (cons (ex-tr :m (vtg-kid e 1) 0 c1) (cons t0 s)) c1 (cons c sv)))))
-            ((equal k 17) (vtg-ind 0 (vtg-kid e 0) 0 s c sv))
-            ((equal k 11) (vtg-ind 1 e 0 s c sv))
-            ((equal k 5) (vtg-ind 2 e 0 s c sv))
+             (let* ((k0 (vtg-kid e 0)) (c1 (ex-blank (ex-clr :m k0 0) c)) (t0 (vtg-cw (ex-tr :m k0 0 c) cs)))
+               (list (vtg-ind 0 k0 0 s c sv cs)
+                     (vtg-ind 0 (vtg-kid e 1) 0 (cons t0 s) c1 (cons c sv) cs)
+                     (vtg-ind 0 (vtg-kid e 2) 0 (cons (vtg-cw (ex-tr :m (vtg-kid e 1) 0 c1) cs) (cons t0 s)) c1 (cons c sv) cs))))
+            ((equal k 17) (vtg-ind 0 (vtg-kid e 0) 0 s c sv cs))
+            ((equal k 11) (vtg-ind 1 e 0 s c sv cs))
+            ((equal k 5) (vtg-ind 2 e 0 s c sv cs))
             (t nil))))))
 
-; what vtg-tr pushes: ex-tr's at the place flg names
-(defun vtg-want (flg e i c)
-  (cond ((equal flg 1) (ex-tr :let e (nfix i) c)) ((equal flg 2) (ex-tr :do e (nfix i) c)) (t (ex-tr :m e 0 c))))
+; what vtg-tr pushes: ex-tr's at the place flg names, the captures read in place
+(defun vtg-want (flg e i c cs)
+  (vtg-cw (cond ((equal flg 1) (ex-tr :let e (nfix i) c)) ((equal flg 2) (ex-tr :do e (nfix i) c)) (t (ex-tr :m e 0 c))) cs))
 
 (defthm vtg-tr-st
   (implies (and (vtg-frag flg e i) (true-listp c))
-           (equal (vtg-tr flg e i (vtg-st s c sv))
-                  (vtg-st (cons (vtg-want flg e i c) s) c sv)))
-  :hints (("Goal" :induct (vtg-ind flg e i s c sv)
+           (equal (vtg-tr flg e i (vtg-st s c sv cs))
+                  (vtg-st (cons (vtg-want flg e i c cs) s) c sv cs)))
+  :hints (("Goal" :induct (vtg-ind flg e i s c sv cs)
                   :in-theory (disable ex-kid-of ex-clr ex-blank)
-                  :expand ((:free (flg) (vtg-frag flg e i)) (:free (flg) (vtg-tr flg e i (vtg-st s c sv)))))
+                  :expand ((:free (flg) (vtg-frag flg e i)) (:free (flg) (vtg-tr flg e i (vtg-st s c sv cs)))))
           (and stable-under-simplificationp '(:in-theory (e/d (vtg-kid-ex vtg-ok) (ex-kid-of ex-clr ex-blank))))))
 
-(defthm list3-id (implies (and (true-listp x) (equal (len x) 3)) (equal (list (car x) (cadr x) (caddr x)) x))
-  :hints (("Goal" :expand ((len x) (len (cdr x)) (len (cddr x)) (len (cdddr x)) (true-listp x) (true-listp (cdr x)) (true-listp (cddr x)) (true-listp (cdddr x))))))
-(defthm vtb-as-st (implies (vtbp vtb) (equal (vtg-st (vtb-stk vtb) (vtb-cm vtb) (vtb-sv vtb)) vtb))
-  :hints (("Goal" :in-theory (e/d (vtg-st) (list3-id)) :use ((:instance list3-id (x vtb))))))
+(defthm list4-id (implies (and (true-listp x) (equal (len x) 4)) (equal (list (car x) (cadr x) (caddr x) (cadddr x)) x))
+  :hints (("Goal" :expand ((len x) (len (cdr x)) (len (cddr x)) (len (cdddr x)) (len (cddddr x)) (true-listp x) (true-listp (cdr x))
+                            (true-listp (cddr x)) (true-listp (cdddr x)) (true-listp (cddddr x))))))
+(defthm vtb-as-st (implies (vtbp vtb) (equal (vtg-st (vtb-stk vtb) (vtb-cm vtb) (vtb-sv vtb) (vtb-cs vtb)) vtb))
+  :hints (("Goal" :in-theory (e/d (vtg-st) (list4-id)) :use ((:instance list4-id (x vtb))))))
 (defthm vtg-st-fields
-  (and (equal (vtb-stk (vtg-st s c sv)) s) (equal (vtb-cm (vtg-st s c sv)) c) (equal (vtb-sv (vtg-st s c sv)) sv))
+  (and (equal (vtb-stk (vtg-st s c sv cs)) s) (equal (vtb-cm (vtg-st s c sv cs)) c) (equal (vtb-sv (vtg-st s c sv cs)) sv)
+       (equal (vtb-cs (vtg-st s c sv cs)) cs))
   :hints (("Goal" :in-theory (enable vtg-st))))
 
 ; and so on the stobj: on a tree of the generated kinds the generated
-; translation pushes exactly ex-tr's, the scope and the saves as they were
+; translation pushes exactly ex-tr's, the captures read in place (the
+; fn's clause body's, exec-vmtr's ex-fbtc), the scope and the saves as
+; they were
 (defthm vtg-tr-ex-tr
   (implies (and (vtg-frag flg e i) (vtbp vtb) (true-listp (vtb-cm vtb)))
            (and (equal (vtb-stk (vtg-tr flg e i vtb))
-                       (cons (vtg-want flg e i (vtb-cm vtb)) (vtb-stk vtb)))
+                       (cons (vtg-want flg e i (vtb-cm vtb) (vtb-cs vtb)) (vtb-stk vtb)))
                 (equal (vtb-cm (vtg-tr flg e i vtb)) (vtb-cm vtb))
-                (equal (vtb-sv (vtg-tr flg e i vtb)) (vtb-sv vtb))))
-  :hints (("Goal" :use ((:instance vtg-tr-st (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb))))
-                  :in-theory (disable vtg-tr-st vtg-tr vtb-stk vtb-cm vtb-sv vtbp))))
+                (equal (vtb-sv (vtg-tr flg e i vtb)) (vtb-sv vtb))
+                (equal (vtb-cs (vtg-tr flg e i vtb)) (vtb-cs vtb))))
+  :hints (("Goal" :use ((:instance vtg-tr-st (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb)) (cs (vtb-cs vtb))))
+                  :in-theory (disable vtg-tr-st vtg-tr vtb-stk vtb-cm vtb-sv vtb-cs vtbp))))
 
 ; ---- THE COST ---------------------------------------------------------------------------------
 ;
