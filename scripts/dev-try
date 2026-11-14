@@ -1,0 +1,48 @@
+#!/usr/bin/env bb
+;; dev-try BOOK EVENT: iterate on one lemma without recertifying its book.
+;;
+;; DEV ONLY. Never included by a book, never run by any gate or make target:
+;; it writes a scratch .lsp under build/ that SKIPS PROOFS for every event of
+;; model/BOOK.lisp before EVENT (the book's own include-books load their
+;; certified .cert files as usual), then submits EVENT with proofs, in gag
+;; mode. Nothing it proves counts: the real answer is `make model`.
+;;
+;;   scripts/dev-try exec-vmok ex-vm-agree-flag
+;;
+;; Top-level forms are taken to start at column 0 with "(". Prints PASS or
+;; FAIL, its time, and (on FAIL) its key checkpoints, at most 60 lines; the
+;; whole log is build/dev-try-BOOK-EVENT.log. Find an event: make book-map.
+(require '[clojure.string :as str] '[clojure.java.io :as io] '[babashka.process :as p])
+(let [[book ev] *command-line-args*
+      _ (when-not (and book ev) (println "usage: scripts/dev-try BOOK EVENT") (System/exit 2))
+      lines (str/split-lines (slurp (str "model/" book ".lisp")))
+      ;; a form starts at a line beginning "(" and runs to the next such line
+      chunks (->> (map-indexed vector lines)
+                  (partition-by (let [n (atom -1)] (fn [[_ l]] (when (str/starts-with? l "(") (swap! n inc)) @n)))
+                  (map #(str/join "\n" (map second %))))
+      name-of #(second (re-find #"^\s*\((?:def\S*)\s+(\S+)" %))
+      idx (first (keep-indexed (fn [i c] (when (and (re-find #"(?m)^\(def" c) (= ev (name-of (str/replace c #"(?s)^[^(]*" "")))) i)) chunks))
+      _ (when-not idx (println "no event" ev "in model/" book ".lisp") (System/exit 2))
+      acl2 (or (System/getenv "ACL2")
+               (->> [(str (System/getProperty "user.dir") "/../acl2/saved_acl2") (str (System/getenv "HOME") "/clotran/acl2/saved_acl2")]
+                    (filter #(.exists (io/file %))) first))
+      base (str "build/dev-try-" book "-" ev)
+      body (str/join "\n" (concat ["(set-ld-skip-proofsp t state)"]
+                                  (take idx chunks)
+                                  ["(set-ld-skip-proofsp nil state)" "(set-gag-mode t)" "(cw \"~%DEVTRY-BEGIN~%\")"
+                                   (nth chunks idx) "(cw \"~%DEVTRY-END~%\")" "(good-bye)"]))]
+  (.mkdirs (io/file "build"))
+  (spit (str base ".lsp") (str "; DEV ONLY scratch from scripts/dev-try: proofs skipped before " ev "\n" body "\n"))
+  (let [r (p/shell {:in (slurp (str base ".lsp")) :out (str base ".log") :err :out :continue true :dir "model"}
+                   acl2)
+        out (-> (slurp (str base ".log")) (str/split #"DEVTRY-BEGIN") last)
+        out-ls (str/split-lines out)
+        pass (and (str/includes? out "Q.E.D.") (not (str/includes? out "ACL2 Error")) (not (str/includes? out "FAILED")))
+        tm (last (re-seq #"Time:\s+[\d.]+ seconds" out))]
+    (if pass
+      (println "PASS" ev tm)
+      (do (println "FAIL" ev tm)
+          (let [ck (drop-while #(not (re-find #"Key Checkpoint|key checkpoint|ACL2 Error|FAILED" %)) out-ls)]
+            (doseq [l (take 55 (if (seq ck) ck out-ls))] (println l)))))
+    (println "log:" (str base ".log"))
+    (System/exit (if pass 0 1))))

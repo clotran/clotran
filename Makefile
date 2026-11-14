@@ -948,8 +948,9 @@ crosscheck:
 	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) CLOTRAN_IDE=$(CLOTRAN_IDE) $(MAKE) -C $(XC_DIR)/flang crosscheck-here FC=flang SEED=$(SEED) > $(XC_DIR)/flang.log 2>&1; echo $$? > $(XC_DIR)/flang.rc ) $(XC_BG) \
 	( CLOTRAN_DEPS=$(CLOTRAN_DEPS) CLOTRAN_NREPL=$(CLOTRAN_NREPL) CLOTRAN_CLJFMT=$(CLOTRAN_CLJFMT) CLOTRAN_IDE=$(CLOTRAN_IDE) $(MAKE) -C $(XC_DIR)/gfortran crosscheck-here FC=gfortran SEED=$(SEED) > $(XC_DIR)/gfortran.log 2>&1; echo $$? > $(XC_DIR)/gfortran.rc ) $(XC_BG) \
 	wait; \
-	echo "======== flang ========"; cat $(XC_DIR)/flang.log; \
-	echo "======== gfortran ========"; cat $(XC_DIR)/gfortran.log; \
+	mkdir -p $(B); cp $(XC_DIR)/flang.log $(B)/crosscheck-flang.log; cp $(XC_DIR)/gfortran.log $(B)/crosscheck-gfortran.log; \
+	for c in flang gfortran; do [ "$$(cat $(XC_DIR)/$$c.rc)" = 0 ] || { echo "======== $$c failed ========"; { grep -m 20 -iE 'fail|error|differ|killed|did not' $(XC_DIR)/$$c.log || tail -20 $(XC_DIR)/$$c.log; } | head -20; }; done; \
+	echo "logs: $(B)/crosscheck-flang.log, $(B)/crosscheck-gfortran.log"; \
 	echo "flang: exit $$(cat $(XC_DIR)/flang.rc), gfortran: exit $$(cat $(XC_DIR)/gfortran.rc)"; \
 	[ "$$(cat $(XC_DIR)/flang.rc)" = 0 ] && [ "$$(cat $(XC_DIR)/gfortran.rc)" = 0 ]
 crosscheck-here:
@@ -1090,7 +1091,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary seqk vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt heaprtg vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost anlocal anlocal-frames anlocal-proof anlocal-checks anlocal-cost anform anform-proof anform-cost anprim anprim-proof anprim-cost anbuild anbuild-proof anbuild-props anbuild-cost exec-tree exec exec-proof exec-xvs exec-vmcs exec-vmtr exec-vmcall exec-vmlf exec-vm exec-vmok exec-vmrun exec-cost exec-clr exec-clrmap exec-clrlv exec-clrfn exec-clrvm vmtrg
+MODEL_BOOKS = boundary seqk vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt heaprtg vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost anlocal anlocal-frames anlocal-proof anlocal-checks anlocal-cost anform anform-proof anform-cost anprim anprim-proof anprim-cost anbuild anbuild-proof anbuild-props anbuild-cost exec-tree exec exec-proof exec-xvs exec-vmcs exec-vmtr exec-vmcall exec-vmlf exec-vm exec-vmok1 exec-vmok exec-vmrun exec-cost exec-clr exec-clrmap exec-clrlv exec-clrfn exec-clrvm vmtrg
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 # A book past CERT_SECS seconds of CPU is killed: a runaway proof, not a
 # slow one (the slowest, vmg, takes ~1940s). CPU, not wall time, so a
@@ -1134,12 +1135,13 @@ endif
 # The drift ratchet (scripts/model-ratchet): what the model generates or
 # describes moves only with its books, the Owed rows only shrink, and
 # every book in model/ is one `make model` certifies.
-check-model-ratchet:
+check-model-ratchet: | $(B)
 	@echo "--- the model's drift ratchet: model/ratchet.edn's code and books, docs/model-coverage.md's Owed rows ---"
-	@test "$(sort $(MODEL_BOOKS))" = "$(sort $(basename $(notdir $(wildcard model/*.lisp))))" || \
-	  { echo "model/*.lisp and MODEL_BOOKS differ: $(filter-out $(MODEL_BOOKS),$(basename $(notdir $(wildcard model/*.lisp)))) $(filter-out $(basename $(notdir $(wildcard model/*.lisp))),$(MODEL_BOOKS))"; exit 1; }
-	scripts/model-ratchet
-	scripts/model-ratchet --control
+	@( test "$(sort $(MODEL_BOOKS))" = "$(sort $(basename $(notdir $(wildcard model/*.lisp))))" || \
+	  { echo "model/*.lisp and MODEL_BOOKS differ: $(filter-out $(MODEL_BOOKS),$(basename $(notdir $(wildcard model/*.lisp)))) $(filter-out $(basename $(notdir $(wildcard model/*.lisp))),$(MODEL_BOOKS))"; exit 1; }; \
+	  scripts/model-ratchet && scripts/model-ratchet --control ) > $(B)/ratchet.log 2>&1 \
+	  && { echo "check-model-ratchet: ok (log: $(B)/ratchet.log)"; } \
+	  || { tail -20 $(B)/ratchet.log; exit 1; }
 
 # The package door against the model: every scalar value the fuzzer
 # makes must cross or be refused exactly as model/boundary.lisp's
@@ -1201,6 +1203,9 @@ fuzz-model: model
 # generates, and runs them against ACL2 -- the machine step for step, the
 # compiler array for array -- under both compilers, with negative controls.
 .PHONY: gen-vm check-vm-gen
+.PHONY: book-map
+book-map:
+	@scripts/book-map
 gen-vm: model
 	scripts/acl2-fortran
 	scripts/acl2-fortran -b vmicg
@@ -1215,6 +1220,11 @@ gen-vm: model
 	scripts/acl2-fortran -b exec
 	scripts/acl2-fortran -b vmtrg
 check-vm-gen: model | $(B)
+	@$(MAKE) --no-print-directory check-vm-gen-run > $(B)/check-vm-gen.log 2>&1 \
+	  && { echo "check-vm-gen: ok (log: $(B)/check-vm-gen.log)"; } \
+	  || { grep -v '^scripts/' $(B)/check-vm-gen.log | tail -20; echo "check-vm-gen: FAILED (log: $(B)/check-vm-gen.log)"; exit 1; }
+.PHONY: check-vm-gen-run
+check-vm-gen-run:
 	scripts/acl2-fortran -o $(B)/vm_gen.f90
 	@cmp -s $(B)/vm_gen.f90 src/f/gen/vm_gen.f90 || { echo "src/f/gen/vm_gen.f90 is not what model/vmg.lisp generates: make gen-vm"; exit 1; }
 	scripts/acl2-fortran -b vmicg -o $(B)/vmc_gen.f90

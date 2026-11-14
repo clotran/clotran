@@ -1,0 +1,14 @@
+#!/usr/bin/env bb
+;; book-map: build/book-map.txt, one line per defun/defthm/defun-sk/defmacro/
+;; defconst event of each MODEL_BOOKS book: `book:line event-name`. Grep it
+;; instead of reading a book to find where a lemma lives. `make book-map`.
+(require '[clojure.string :as str])
+(let [books (-> (re-find #"(?m)^MODEL_BOOKS = (.*)$" (slurp "Makefile")) second (str/split #"\s+"))
+      out (for [b books
+                [i l] (map-indexed vector (str/split-lines (slurp (str "model/" b ".lisp"))))
+                :let [[_ n] (re-find #"^\((?:defun|defthm|defun-sk|defmacro|defconst)\s+(\S+)" l)]
+                :when n]
+            (str b ":" (inc i) " " n))]
+  (.mkdirs (java.io.File. "build"))
+  (spit "build/book-map.txt" (str (str/join "\n" out) "\n"))
+  (println (count out) "events in" (count books) "books -> build/book-map.txt"))
