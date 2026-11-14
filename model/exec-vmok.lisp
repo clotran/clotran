@@ -65,14 +65,62 @@
          (ex-vgood :do e (1+ (nfix i)) tmp (append (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm) (list nil)) (append env (list (val (car (ex-r0))))) (cadr (ex-r0)) fuel caps defs lp)))
 (ex-old ex-vgood-do-last ((consp e) (equal flg :do) (not (zp (ex-nk e))) (not (< (nfix i) (- (ex-nk e) 1))))
         ((ex-vgood :m (ex-kid-of e (- (ex-nk e) 1)) 0 nil cm env fr fuel caps defs lp)))
-(ex-old ex-vgood-let-mid ((consp e) (equal flg :let) (< (nfix i) (ex-i2 e)))
+(ex-old ex-vgood-let-mid ((consp e) (equal flg :let) (< (nfix i) (ex-i2 e)) (not (and (equal (ex-kind e) 12) (ex-lind e 1))))
         ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
          (ex-vgood :let e (1+ (nfix i)) tmp (append (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm) (list (+ (ex-s2 e) (nfix i)))) (append env (list (val (car (ex-r0)))))
                    (update-nth (+ (ex-s2 e) (nfix i)) (val (car (ex-r0))) (cadr (ex-r0))) fuel caps defs lp)))
-(ex-old ex-vgood-let-loop ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (equal (ex-kind e) 12))
+(ex-old ex-vgood-let-loop ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (equal (ex-kind e) 12) (not (ex-lind e 1)))
         ((ex-vgood :iter (ex-kid-of e (ex-i2 e)) 0
                    (val (mx2-args (ex-locals (ex-slots (ex-s2 e) (ex-i2 e)) cm) env caps defs fuel))
                    (ex-blank (ex-slots (ex-s2 e) (ex-i2 e)) cm) env fr fuel caps defs (cons (ex-s2 e) (ex-i2 e)))))
+;; the loop's slots so far, one more (moved here from exec-clrvm)
+(defthm ex-slots-snoc-n
+  (implies (and (natp s) (natp i)) (equal (ex-slots s (1+ i)) (append (ex-slots s i) (list (+ s i)))))
+  :hints (("Goal" :induct (ex-slots s i) :in-theory (enable ex-slots) :expand ((ex-slots s (1+ i)) (ex-slots s 1)))))
+(defthm ex-slots-snoc
+  (implies (natp s) (equal (ex-slots s (1+ (nfix i))) (append (ex-slots s (nfix i)) (list (+ s (nfix i))))))
+  :hints (("Goal" :use ((:instance ex-slots-snoc-n (i (nfix i)))) :in-theory (disable ex-slots-snoc-n))))
+(defthm ex-mem-slots-iff
+  (iff (member-equal x (ex-slots s n)) (and (natp x) (<= (nfix s) x) (< x (+ (nfix s) (nfix n)))))
+  :hints (("Goal" :induct (ex-slots s n) :in-theory (enable ex-slots))))
+(defun ex-sl2-ind (s i n) (if (zp i) (list s n) (ex-sl2-ind (1+ (nfix s)) (1- i) (1- n))))
+(defthm ex-nomem-slots-less
+  (implies (and (ex-nomem c (ex-slots s n)) (<= (nfix i) (nfix n))) (ex-nomem c (ex-slots s i)))
+  :hints (("Goal" :induct (ex-sl2-ind s i n) :in-theory (disable ex-slots-snoc ex-slots-snoc-n) :expand ((ex-slots s i) (ex-slots s n)))))
+(defthm ex-agree-slots-snoc
+  (implies (and (natp s) (natp i) (ex-agree (ex-slots s i) tmp fr))
+           (ex-agree (ex-slots s (1+ i)) (append tmp (list v)) (update-nth (+ s i) v fr))))
+; a let's walk reads no tmp; the end of one asks only its body's clears
+(defun ex-evl-ind (e i fr fuel)
+  (declare (irrelevant fr fuel))
+  (declare (xargs :measure (nfix (- (ex-i2 e) (nfix i)))))
+  (if (< (nfix i) (ex-i2 e))
+      (let ((r (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel))) (ex-evl-ind e (1+ (nfix i)) (update-nth (+ (ex-s2 e) (nfix i)) (val (car r)) (cadr r)) fuel))
+    t))
+(defthm ex-ev-let-tmp
+  (implies (syntaxp (not (equal tmp ''nil))) (equal (ex-ev :let e i tmp fr fuel) (ex-ev :let e i nil fr fuel)))
+  :hints (("Goal" :induct (ex-evl-ind e i fr fuel) :in-theory (disable ex-kid-of) :expand ((ex-ev :let e i tmp fr fuel) (ex-ev :let e i nil fr fuel)))))
+(defthm ex-clr-let-end
+  (implies (not (< (nfix i) (ex-i2 e))) (equal (ex-clr :let e i) (if (consp e) (ex-clr :m (ex-kid-of e (ex-i2 e)) 0) (ex-clr :let e i))))
+  :hints (("Goal" :expand ((ex-clr :let e i)))))
+(defthm ex-clr-let-mid
+  (implies (and (consp e) (< (nfix i) (ex-i2 e)))
+           (equal (ex-clr :let e i) (append (ex-clr :m (ex-kid-of e (nfix i)) 0) (ex-clr :let e (1+ (nfix i))))))
+  :hints (("Goal" :expand ((ex-clr :let e i)))))
+(defthm ex-blank-swap (equal (ex-blank (append b a) cm) (ex-blank (append a b) cm)) :rule-classes nil)
+(defthm ex-agree-blank-swap
+  (implies (ex-agree (ex-blank (append a b) cm) env fr) (ex-agree (ex-blank (append b a) cm) env fr))
+  :hints (("Goal" :use ex-blank-swap)))
+; an independent-inits loop (exec-PLAN Lane 3 item 3(a)): each init in the
+; outer scope and again beside the loop's slots so far, then the loop on them all
+(ex-old ex-vgood-let-imid ((consp e) (equal flg :let) (< (nfix i) (ex-i2 e)) (equal (ex-kind e) 12) (ex-lind e 1))
+        ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
+         (ex-vgood :m (ex-kid-of e (nfix i)) 0 nil (append cm (ex-slots (ex-s2 e) (nfix i))) (append env tmp) fr fuel caps defs nil)
+         (ex-vgood :let e (1+ (nfix i)) (append tmp (list (val (car (ex-r0))))) (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm) env
+                   (update-nth (+ (ex-s2 e) (nfix i)) (val (car (ex-r0))) (cadr (ex-r0))) fuel caps defs lp)))
+(ex-old ex-vgood-let-iend ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (equal (ex-kind e) 12) (ex-lind e 1))
+        ((ex-vgood :iter (ex-kid-of e (ex-i2 e)) 0 tmp (ex-blank (ex-slots (ex-s2 e) (ex-i2 e)) cm) env fr fuel caps defs (cons (ex-s2 e) (ex-i2 e)))))
+(in-theory (disable ex-clr-let-mid ex-clr-let-end ex-ev-let-tmp))
 (ex-old ex-vgood-let-body ((consp e) (equal flg :let) (not (< (nfix i) (ex-i2 e))) (not (equal (ex-kind e) 12)))
         ((ex-vgood :m (ex-kid-of e (ex-i2 e)) 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-rec-mid ((consp e) (equal flg :rec) (< (nfix i) (ex-nk e)))
@@ -111,8 +159,15 @@
                   :use (ex-vgood-if-out ex-vgood-if-then ex-vgood-if-else ex-vgood-if-nil))))
 (in-theory (disable ex-vgood-m-if))
 (ex-old ex-vgood-m-do ((consp e) (ex-mflg) (equal (ex-kind e) 5)) ((ex-vgood :do e 0 nil cm env fr fuel caps defs lp)))
-(ex-old ex-vgood-m-let ((consp e) (ex-mflg) (or (equal (ex-kind e) 11) (equal (ex-kind e) 12)))
+(ex-old ex-vgood-m-let0 ((consp e) (ex-mflg) (or (equal (ex-kind e) 11) (equal (ex-kind e) 12)) (not (and (equal (ex-kind e) 12) (ex-lind e 1))))
         ((ex-vgood :let e 0 nil cm env fr fuel caps defs lp)))
+(ex-old ex-vgood-m-ilet ((consp e) (ex-mflg) (equal (ex-kind e) 12) (ex-lind e 1))
+        ((ex-vgood :let e 0 nil cm env fr fuel caps defs lp)))
+(defthm ex-vgood-m-let
+  (implies (and (consp e) (ex-mflg) (or (equal (ex-kind e) 11) (equal (ex-kind e) 12)) (ex-vgood :let e 0 nil cm env fr fuel caps defs lp))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-kid-of ex-lind) :use (ex-vgood-m-let0 ex-vgood-m-ilet))))
+(in-theory (disable ex-vgood-m-let))
 (ex-old ex-vgood-m-rec ((consp e) (ex-mflg) (equal (ex-kind e) 16)) ((ex-vgood :rec e 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-m-throw ((consp e) (ex-mflg) (equal (ex-kind e) 17)) ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)))
 (ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6))
@@ -129,7 +184,7 @@
   :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-kid-of) :use (ex-vgood-leaf-plain ex-vgood-m-mark ex-vgood-m-lazy))))
 (in-theory (disable ex-vgood-m-leaf))
 (in-theory (enable ex-vgood-atom ex-vgood-iter-zp ex-vgood-iter ex-vgood-do-none ex-vgood-do-mid ex-vgood-do-last
-                   ex-vgood-let-mid ex-vgood-let-loop ex-vgood-let-body ex-vgood-rec-mid ex-vgood-rec-end
+                   ex-vgood-let-mid ex-vgood-let-loop ex-vgood-let-imid ex-vgood-let-iend ex-vgood-let-body ex-vgood-rec-mid ex-vgood-rec-end
                    ex-vgood-call-mid ex-vgood-call-zp ex-vgood-call-enter ex-vgood-fin ex-vgood-fin-end
                    ex-vgood-m-if ex-vgood-m-lazy ex-vgood-m-top ex-vgood-m-do ex-vgood-m-let ex-vgood-m-rec ex-vgood-m-throw ex-vgood-m-call ex-vgood-m-leaf
                    ex-vgood-m-mark))

@@ -875,11 +875,60 @@ position.
    ex-vm-runs stand in statement unchanged.
    **Left:** (a) the independent-inits loop: vm.inc's `(:loop (inits..)
    body)` when no init reads an earlier binding (vm_loop_indep) -- every
-   one-binding loop -- against ex-tr's lets and copies. The model needs
-   vm_reads_in as a predicate on the tree and the inits walked as
-   :rec's arguments are (no lets), a new place in ex-vind/ex-vpost (each
-   init's slot written in the frame, not in cm: ex-agree-write-blank),
-   and ex-vwf's loop case taking the inits in the outer scope. (b) the
+   one-binding loop -- against ex-tr's lets and copies. **The predicate:
+   done.** exec-vmtr's `ex-rd` is vm_reads_in on the tree (a local, a fn's
+   or lazy's capture in lo..hi-1; the same kinds walked; any other kind
+   reads), `ex-lind e 1` vm_loop_indep (init i from 1 reads none of s..s+i-1).
+   **Left, the design** (checked against ex-ev, not yet built):
+   ex-tr's k 12 when `(ex-lind e 1)`: `(:loop (ex-tr :lin e 0 cm) (ex-tr
+   :let e 0 cm))`, :lin a new flag walking the inits as :rec does (each
+   in the outer scope, blanked by the ones before), and :let's walk for
+   it emitting no let (scope blanked, not appended) and at n2 the body in
+   `(ex-blank ls cm) ++ ls` as now. ex-ev is untouched: its :let ignores
+   tmp, so ex-vind's :let carries the inits' values in tmp (as :rec does)
+   and at n2 enters :iter with them; ex-vhyp asks `(len tmp) = i`, their
+   ex-xvs, and `(ex-agree (ex-slots s i) tmp fr)`; ex-vpost's m for it is
+   mx2-loop of `(:loop nil (ex-tr :let e i cm))` on tmp ++ the rest's
+   mx2-args (ex-mx-loop-body0 gives :m's from it). **The trap:** an init
+   in the outer scope may reuse an earlier loop slot for a let of its own
+   (ex-vwf only keeps a let's slot out of *its* scope), so the tree
+   overwrites s+j before the body reads it while the VM keeps the init's
+   value -- false without a condition. So ex-vwf's indep step asks each
+   init well formed twice: in cm (the translation's scope) *and* in cm ++
+   (ex-slots s i) (the slots reserved), plus `(ex-nomem (ex-clr init) ls)`;
+   ex-vind lists both of the init's instances: the first gives mx2's
+   answer, the second -- env ++ tmp, which agrees by the vhyp conjunct --
+   gives the agreement on ex-slots s i after the init (its clears miss
+   ls), so no frame lemma is needed. ex-vwf0 (exec-clrvm) and ex-cmpind
+   take the same two instances; then ex-tr-xwf-flag (:lin as :rec's
+   x2wf-args), exec-vmok's case lemmas (ex-vgood-let-imid/-iend beside
+   ex-vgood-let-mid/-loop; ex-vgood-m-let split on ex-lind), exec-cost.
+   ex-vm-agree / ex-vm-runs keep their statements.
+   **Part 1 done (exec-vmtr, exec-vm certify):** ex-tr :lin (ex-vrank
+   now :lin 1, :m 2; ex-vleft :lin as :let), :let's lind walk and k 12's
+   `(:loop (ex-tr :lin e 0 cm) (ex-tr :let e 0 cm))`; ex-vwf :let lind step
+   (slot new, init in cm and in cm ++ ex-slots s i, `ex-nomem (ex-clr init)
+   (ex-slots s n2)`), its n2 (no subsetp ls cm), :lin, and k 12 asks
+   `(or (not lind) (ex-vwf :lin e 0 cm lp defs))`; ex-xgood :lin as :rec,
+   :let lind `x2wf .. (+ (len cm) n2) n2` (ex-tr-lin-len/-true-listp);
+   exec-vm ex-vhyp conjunct (tmp len i, xvs, agree ex-slots s i), ex-vpost
+   :let-lind case (not :recur; m = ma thrown or mx2-loop of (:loop nil
+   (ex-tr :let e i cm)) on tmp ++ (val ma)), ex-vind lind step (3 kids)
+   and n2 (:iter on tmp, cm blank ls). **Part 2 done (all books certify):**
+   ex-vhyp's lind conjunct also bounds i <= n2; exec-vmok ex-vgood-let-mid/-loop
+   and -m-let exclude lind, ex-vgood-let-imid/-iend and -m-ilet beside them
+   (helpers ex-ev-let-tmp: a let's walk reads no tmp; ex-agree-slots-snoc;
+   ex-nomem-slots-less; ex-slots-snoc moved in from exec-clrvm; ex-vgood-m-let
+   one lemma over -m-let0/-m-ilet, the flag proof not splitting on ex-lind);
+   exec-clrfn ex-vwf-lin-lp (ex-vwf-nolp); exec-clrvm
+   ex-vwf0's lind step asks the init in cm and in cm ++ ex-slots s i, the rest
+   in cm (no slot), the body without subsetp; ex-cmpind takes the two init
+   instances; ex-vwf-let-lin gives ex-vwf's :lin from its :let walk;
+   ex-vwf-cwf excludes flg :lin (ex-vwf0 has no :lin walk). The
+   measures (ex-vrank :lin 1, else 2) needed no change. Still open: vtg-tr
+   (vmtrg) takes no k 12/16 -- it would need ex-lind as a guarded vtg
+   function, the :lin walk and :recur, and vm_tr's (b) case first.
+   (b) the
    fn's loop only on a recur to the fn (vm.inc's c%fn_recur): ex-fbin
    without the loop is the body in ex-fbcm, the parameters not copied, a
    second entry path (:m, not :iter) through exec-vmcall's ex-enter-*.

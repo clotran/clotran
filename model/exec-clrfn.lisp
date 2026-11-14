@@ -99,6 +99,11 @@
 
 ; ---- NO LOOP TARGET NEEDED ----------------------------------------------------------------------
 
+; an independent-inits loop's inits never read the loop's target
+(defthm ex-vwf-lin-lp
+  (implies (syntaxp (not (equal lp ''nil))) (equal (ex-vwf :lin e i cm lp defs) (ex-vwf :lin e i cm nil defs)))
+  :hints (("Goal" :induct (ex-lindc e i cm) :in-theory (disable ex-kid-of ex-clr) :expand ((ex-vwf :lin e i cm lp defs) (ex-vwf :lin e i cm nil defs)))))
+
 (defthm ex-vwf-nolp
   (implies (and (ex-shp flg e i) (natp i) (ex-vwf flg e i cm lp defs) (ex-ntl flg e i))
            (ex-vwf flg e i cm nil defs))

@@ -21,7 +21,9 @@ captures in place, do's dead-local encoding done.
 
 ## Next lanes, in order (exec-PLAN.md "Lane 3: vm.inc's translation generated", "Next")
 1. Entry: generate `vm_clause` from ex-fbtc/ex-clause (needs item 3 first).
-2. loop/recur: (a) independent-inits loop (vm_loop_indep), (b) fn's loop only
+2. loop/recur: (a) independent-inits loop (vm_loop_indep): ex-tr's `(:loop (inits..)
+   body)` proved (ex-lind; ex-vm-agree/ex-vm-runs/ex-anp-runs unchanged); vtg-tr
+   still takes no loop (exec-PLAN item 3), (b) fn's loop only
    on a recur to the fn (c%fn_recur).
 3. Calls and Vars: builtin prim / callw as ex-trcall's cases; deref as host prim.
 4. try, letfn, case: vm_scan refuses them today.

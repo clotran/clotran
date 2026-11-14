@@ -43,12 +43,21 @@
            (:do (cond ((zp nk) t)
                       ((< i (- nk 1)) (and (ex-vwf0 :m (ex-kid-of e i) 0 cm nil defs) (ex-vwf0 :do e (1+ i) (append cm (list nil)) lp defs)))
                       (t (ex-vwf0 :m (ex-kid-of e (- nk 1)) 0 cm lp defs))))
-           (:let (cond ((< i n2)
+           (:let (cond ((and (< i n2) (equal k 12) (ex-lind e 1))
+                        (and (not (member-equal (+ (ex-s2 e) i) cm))
+                             (not (intersectp-equal (ex-clr :m (ex-kid-of e i) 0) (ex-slots (ex-s2 e) n2)))
+                             (ex-vwf0 :m (ex-kid-of e i) 0 cm nil defs)
+                             (ex-vwf0 :m (ex-kid-of e i) 0 (append cm (ex-slots (ex-s2 e) i)) nil defs)
+                             (ex-vwf0 :let e (1+ i) cm lp defs)))
+                       ((< i n2)
                         (and (or (equal k 11) (equal k 12)) (not (member-equal (+ (ex-s2 e) i) cm))
                              (or (equal k 11) (not (intersectp-equal (ex-clr :m (ex-kid-of e i) 0) (ex-slots (ex-s2 e) n2))))
                              (ex-vwf0 :m (ex-kid-of e i) 0 cm nil defs)
                              (ex-vwf0 :let e (1+ i) (append cm (list (+ (ex-s2 e) i))) lp defs)))
                        ((equal k 11) (ex-vwf0 :m (ex-kid-of e n2) 0 cm lp defs))
+                       ((and (equal k 12) (ex-lind e 1))
+                        (let ((ls (ex-slots (ex-s2 e) n2)))
+                          (ex-vwf0 :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls) (cons (ex-s2 e) n2) defs)))
                        ((equal k 12)
                         (let ((ls (ex-slots (ex-s2 e) n2)))
                           (and (subsetp-equal ls cm)
@@ -131,18 +140,9 @@
 (defthm ex-bl-nomem-ls (implies (and (ex-bl B cm cm2) (ex-nomem ls cm)) (ex-nomem ls cm2)))
 
 ; a loop's slots, each init's appended, stay in scope when no init clears one
-(defthm ex-slots-snoc-n
-  (implies (and (natp s) (natp i)) (equal (ex-slots s (1+ i)) (append (ex-slots s i) (list (+ s i)))))
-  :hints (("Goal" :induct (ex-slots s i) :in-theory (enable ex-slots) :expand ((ex-slots s (1+ i)) (ex-slots s 1)))))
-(defthm ex-slots-snoc
-  (implies (natp s) (equal (ex-slots s (1+ (nfix i))) (append (ex-slots s (nfix i)) (list (+ s (nfix i))))))
-  :hints (("Goal" :use ((:instance ex-slots-snoc-n (i (nfix i)))) :in-theory (disable ex-slots-snoc-n))))
 (defthm ex-mem-blank (implies (and (member-equal x cm) (not (member-equal x c))) (member-equal x (ex-blank c cm))))
 (defthm ex-sub-blank (implies (and (subsetp-equal a cm) (not (intersectp-equal c a))) (subsetp-equal a (ex-blank c cm))))
 (defthm ex-sub-snoc (equal (subsetp-equal (append a (list x)) l) (and (subsetp-equal a l) (member-equal x l) t)))
-(defthm ex-mem-slots-iff
-  (iff (member-equal x (ex-slots s n)) (and (natp x) (<= (nfix s) x) (< x (+ (nfix s) (nfix n)))))
-  :hints (("Goal" :induct (ex-slots s n) :in-theory (enable ex-slots))))
 (defthm ex-int-slots-less
   (implies (and (natp s) (natp i) (natp n) (<= i n) (not (intersectp-equal c (ex-slots s n))))
            (not (intersectp-equal c (ex-slots s i))))
@@ -183,7 +183,12 @@
                    ((< i (- nk 1)) (list (ex-cmpind :m (ex-kid-of e i) 0 cm cm2 B nil)
                                          (ex-cmpind :do e (1+ i) (append cm (list nil)) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) (list nil)) (append (ex-clr :m (ex-kid-of e i) 0) B) lp)))
                    (t (ex-cmpind :m (ex-kid-of e (- nk 1)) 0 cm cm2 B lp))))
-        (:let (cond ((< i n2) (let ((s (+ (ex-s2 e) i)) (c (ex-clr :m (ex-kid-of e i) 0)))
+        (:let (cond ((and (< i n2) (equal k 12) (ex-lind e 1))
+                     (let ((c (ex-clr :m (ex-kid-of e i) 0)) (sl (ex-slots (ex-s2 e) i)))
+                       (list (ex-cmpind :m (ex-kid-of e i) 0 cm cm2 B nil)
+                             (ex-cmpind :m (ex-kid-of e i) 0 (append cm sl) (append cm2 sl) B nil)
+                             (ex-cmpind :let e (1+ i) cm (ex-blank c cm2) (append c B) lp))))
+                    ((< i n2) (let ((s (+ (ex-s2 e) i)) (c (ex-clr :m (ex-kid-of e i) 0)))
                                 (list (ex-cmpind :m (ex-kid-of e i) 0 cm cm2 B nil)
                                       (ex-cmpind :let e (1+ i) (append cm (list s)) (append (ex-blank c cm2) (list s)) (append c B) lp))))
                     ((equal k 11) (ex-cmpind :m (ex-kid-of e n2) 0 cm cm2 B lp))
@@ -220,9 +225,15 @@
                                     (ex-cmpind :call e 1 (append cm (list nil)) (append (ex-blank c0 cm2) (list nil)) (append c0 B) lp)))
                  (t t))))))))
 
+; an independent-inits loop's walk is its :lin walk too (ex-vwf's k 12 asks both)
+(defthm ex-vwf-let-lin
+  (implies (and (ex-vwf :let e i cm lp defs) (consp e) (equal (ex-kind e) 12) (ex-lind e 1)) (ex-vwf :lin e i cm lp defs))
+  :hints (("Goal" :induct (ex-lindc e i cm) :in-theory (disable ex-kid-of ex-clr ex-lind) :expand ((ex-vwf :let e i cm lp defs) (ex-vwf :lin e i cm lp defs)))))
+(defthm ex-nomem-int (implies (not (intersectp-equal a b)) (ex-nomem a b)))
+
 (defthm ex-vwf-cwf
-  (implies (and (ex-vwf0 flg e i cm lp defs) (ex-cwf flg e i B) (ex-bl B cm cm2)
-                (implies (and (equal flg :let) (equal (ex-kind e) 12)) (subsetp-equal (ex-slots (ex-s2 e) (nfix i)) cm2)))
+  (implies (and (ex-vwf0 flg e i cm lp defs) (ex-cwf flg e i B) (ex-bl B cm cm2) (not (equal flg :lin))
+                (implies (and (equal flg :let) (equal (ex-kind e) 12) (not (ex-lind e 1))) (subsetp-equal (ex-slots (ex-s2 e) (nfix i)) cm2)))
            (ex-vwf flg e i cm2 lp defs))
   :hints (("Goal" :induct (ex-cmpind flg e i cm cm2 B lp)
            :in-theory (disable (:definition ex-vwf) (:definition ex-vwf0) (:definition ex-cwf) ex-kid-of ex-clr ex-astf ex-ast-open
