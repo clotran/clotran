@@ -1798,6 +1798,11 @@ markers against its opts, as before. `#uuid` reads because
 `clojure.uuid` now runs verbatim (DEVIATIONS 12); `#inst` still wants a
 date type.
 
+A marker named in a message (a reader conditional's feature) prints as Object's
+toString, `clotran.host.tagged_literal@<hash>`, as clj's TaggedLiteral does;
+the hash is the host's, so scripts/fuzz-read compares it as `@H`. A
+marker `#uuid "x"` as a duplicate key is named `x`, as the UUID it becomes.
+
 ## 47. RESOLVED -- `all-ns` answers clotran's own libraries beside clj's, not host class names
 
 **RESOLVED (measured 2026-10-10).** `(count (all-ns))` is 17 here

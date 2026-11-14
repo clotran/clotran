@@ -155,6 +155,8 @@
         ;; the host's words for a bad digit under a radix, and for #:{
         (str/replace #"^(!error clotran\.host\.number_format_exception): For input string: .*" "$1: Invalid number")
         (str/replace #"^(!error clotran\.host\.number_format_exception): Invalid number: [+-]?\d+r.*" "$1: Invalid number")
+        ;; Object.toString's identity hash, a tagged literal's in a message
+        (str/replace #"(clotran\.host\.tagged_literal)@[0-9a-f]+" "$1@H")
         (str/replace "must specify a valid namespace: null" "must specify a namespace")
         ;; what the host names when a class is not found
         (str/replace #"^(!error clotran\.host\.class_not_found_exception):.*" "$1"))))

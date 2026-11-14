@@ -347,4 +347,10 @@
  ;; boundedLength realises through position req + 1 (model/exec.lisp ex-aplook,
  ;; model/exec-PLAN.md 2c-iv)
  (let [n (atom 0) s (fn s [i] (lazy-seq (swap! n inc) (cons i (s (inc i))))) c (fn [f] (reset! n 0) (f) @n)] [(c #(apply (fn [& r] 1) (s 0))) (c #(apply (fn [a b & r] 1) (s 0))) (c #(apply (fn [a b & r] 1) 9 8 7 (s 0))) (c #(apply (fn [a b c d & r] 1) (s 0)))])
+ ;; a tagged literal as a reader conditional's feature is named as Object's
+ ;; toString names it, class@hash; the hash is the host's (scripts/fuzz-read, seed 2897668113)
+ (mapv (fn [t] (try (read-string {:read-cond :allow} t) (catch clotran.host.exception e (clojure.string/replace (ex-message e) #"@[0-9a-f]+" "@H"))))
+       ["#?(#js {} 1)" "#?(#foo [1] 1)"])
+ ;; a duplicated #uuid key is named as its toString, the bare uuid
+ (try (read-string "{#uuid \"6a2f41a3-c54c-fce8-32d2-0324e1c32e22\" 1 #uuid \"6a2f41a3-c54c-fce8-32d2-0324e1c32e22\" 2}") (catch clotran.host.exception e (ex-message e)))
 ]

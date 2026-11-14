@@ -19991,7 +19991,7 @@ contains
           call gcp_str(inner, .false., s=dlt_1)
           s = dlt_1
        end block
-    else if (is_lazy_seq_class(v)) then
+    else if (is_lazy_seq_class(v) .or. is_tag_marker(strip_meta(v))) then
        ! LazySeq has no toString of its own in clj -- it is not an
        ! ASeq -- so (str (map inc [1 2])) is "clotran.host.lazy_seq@402"
        ! there, Object's, with the identity hash in hex. A Cons, a range
@@ -20001,7 +20001,12 @@ contains
          write(hb, '(Z0)') iand(int(gc_hash(v), gc_ip), 4294967295_gc_ip)
          dlt_1 = trim(hb)
          call downcase_in_place(dlt_1)
-         s = "clotran.host.lazy_seq@" // dlt_1
+         ! a tagged literal (a marker here) has none either: Object's too
+         if (is_tag_marker(strip_meta(v))) then
+            s = "clotran.host.tagged_literal@" // dlt_1
+         else
+            s = "clotran.host.lazy_seq@" // dlt_1
+         end if
        end block
     else if (sequential_p(v) .or. gca_is(strip_meta(v)) .or. gc_kind(strip_meta(v)) == OBJ_SET) then
        ! a collection's toString is its READABLE form -- RT.printString

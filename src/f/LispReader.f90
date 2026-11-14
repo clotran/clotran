@@ -1194,11 +1194,33 @@ contains
     case default
        ! printed, as toString prints it: a BigInt without its N, a
        ! BigDecimal without its M
-       call coll_text(k, t)
+       call uuid_marker_text(k, t)
+       if (.not. allocated(t)) call coll_text(k, t)
        if ((k%tag == GCT_BIG .or. k%tag == GCT_DEC) .and. len(t) > 1) t = t(1:len(t) - 1)
        if (len(t) == 0) t = trim(adjustl(src))
     end select
   end subroutine key_text
+
+  ! A #uuid "..." still unresolved (resolve-tags runs after the read) is
+  ! clj's UUID here, whose toString is the bare text; t stays unallocated
+  ! for anything else.
+  subroutine uuid_marker_text(k, t)
+    type(gc_value), intent(in) :: k
+    character(len=:), allocatable, intent(out) :: t
+    type(gc_value) :: tg, fm
+    if (.not. gca_is(k)) return
+    tg = gca_get(k, gc_key("clotran/tagged-literal", [k]))
+    if (tg%tag == GCT_NIL) return
+    tg = gca_get(k, gc_key("tag", [k]))
+    fm = gca_get(k, gc_key("form", [k]))
+    if (tg%tag /= GCT_SYM .or. fm%tag /= GCT_STR) return
+    call gc_ref_text(tg%ref, s=t)
+    if (t == "uuid") then
+       call gc_ref_text(fm%ref, s=t)
+    else
+       deallocate(t)
+    end if
+  end subroutine uuid_marker_text
 
   ! #{...} -- elements read like a vector's, then each maps to
   ! itself; an element twice is an error, as in clj.
