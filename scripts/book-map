@@ -9,6 +9,6 @@
                 :let [[_ n] (re-find #"^\((?:defun|defthm|defun-sk|defmacro|defconst)\s+(\S+)" l)]
                 :when n]
             (str b ":" (inc i) " " n))]
-  (.mkdirs (java.io.File. "build"))
+  (babashka.fs/create-dirs "build")
   (spit "build/book-map.txt" (str (str/join "\n" out) "\n"))
   (println (count out) "events in" (count books) "books -> build/book-map.txt"))
