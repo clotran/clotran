@@ -13,8 +13,18 @@
 ; NAMED, not exact (exec-PLAN Lane 3 item 2): vtg_self pushes vm.inc's
 ; (:capt m) -- the runtime's closure, which holds itself past its captures
 ; (VmRuntime rt_capt) -- where the model remakes it, (:mkclo tm (:capt 0)
-; ..); and vm.inc passes sl 0, no let, when the body reads no self slot
-; (its scope then has no self position). vtg-clause-ex-clause is at sl 1.
+; ..). vtg-clause-ex-clause is at sl 1.
+; Gap B closed (the sl-0 clause, no self let, the scope ex-fbcm0 with no
+; self position): vtg-clause-ex-clause0, vtg_clause at sl 0 builds
+; ex-clause0; ex-fbtc0-mx, ex-clause0's body answers as ex-clause's
+; (ex-fbtc) at every args env, by vmshift's x2-drop-mx, ex-cs-sh and
+; ex-fbody-drop/ex-floop-drop.
+; NAMED, not proved (the sl decision): ex-fbtc0-mx's hypothesis (not (x2-rd
+; (ex-fnp tm ar) (ex-fbinr tm ar))) -- the body's translation never reads
+; the self slot's position -- is what vm_clause's choice of sl 0 (self_slot
+; < 0, or vm_scan's c%reads(self_slot) false) is taken to establish:
+; vm_scan is hand Fortran over the source tree, and no model predicate of
+; it is proved to imply the hypothesis.
 ;
 ; vtg-arcl: the last clause, a call of no arity the fn has --
 ; (0 (:prim :clotran.vm/arity (:const name) (:local 0)) :rest), ex-arcl.
@@ -23,7 +33,8 @@
 ; exec-vmcall's ex-mxcl throws :arity -- clj's ArityException, the host's
 ; (vm_arity_hook), under the named hypothesis that the prim throws.
 ;
-; Cost: vtg-clause-steps-bound, vtg-arcl-steps-bound (11).
+; Cost: vtg-clause-steps-bound (at sl 0 two less, vtg-clause-steps-sl0),
+; vtg-arcl-steps-bound (11).
 
 (in-package "ACL2")
 
@@ -171,3 +182,88 @@
 ; vtg-arcl's: its ten shims and the call, whatever the name
 (defun vtg-arcl-steps (name) (declare (ignore name)) 11)
 (defthm vtg-arcl-steps-bound (<= (vtg-arcl-steps name) 11) :rule-classes :linear)
+
+; ---- GAP B: THE SL-0 CLAUSE -------------------------------------------------------------------
+;
+; vm_clause passes sl 0 -- no self let, and no self position in the scope
+; (ex-fbcm0) -- when the body never reads the self slot. ex-clause0 is that
+; clause; vtg-clause-ex-clause0 the generated vtg_clause at sl 0 builds it,
+; and ex-fbtc0-mx: its body answers as ex-clause's (ex-fbtc), the self let
+; dropped, when the body's translation never reads the self slot's position
+; (ex-fnp) -- vmshift's lemmas (2) ex-fbody-drop/ex-floop-drop, (a) ex-cs-sh
+; and (1) x2-drop-mx.
+
+(include-book "vmshift")
+
+(defun ex-fbinr (tm ar)
+  (if (ex-tlr :m (ex-abody ar) 0)
+      (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar)) (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))
+    (ex-tr :m (ex-abody ar) 0 (ex-fbcm tm ar))))
+(defun ex-fbin0 (tm ar)
+  (if (ex-tlr :m (ex-abody ar) 0)
+      (list :loop (ex-locals (ex-fparams ar) (ex-fbcm0 tm ar)) (ex-tr :m (ex-abody ar) 0 (ex-fcmb0 tm ar)))
+    (ex-tr :m (ex-abody ar) 0 (ex-fbcm0 tm ar))))
+(defun ex-fbtc0 (tm ar) (ex-cs nil (ex-fbin0 tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm)))))
+(defun ex-clause0 (tm ar)
+  (if (ex-avar ar) (list (ex-anf ar) (ex-fbtc0 tm ar) :rest) (list (ex-anf ar) (ex-fbtc0 tm ar))))
+
+(defthm ex-fbin-body
+  (equal (ex-fbin tm ar) (list :let (list* :mkclo tm (ex-capts 0 (len (ex-inners (nth 2 tm))))) (ex-fbinr tm ar)))
+  :hints (("Goal" :in-theory (enable ex-fbin))))
+(defthm ex-fbin0-sh
+  (implies (not (x2-rd (ex-fnp tm ar) (ex-fbinr tm ar)))
+           (equal (x2-sh (ex-fnp tm ar) (ex-fbinr tm ar)) (ex-fbin0 tm ar)))
+  :hints (("Goal" :in-theory (e/d () (ex-fnp ex-fbcm ex-fbcm0 ex-fcmb ex-fcmb0 ex-tr ex-locals ex-fparams ex-tlr ex-abody))
+                  :expand ((:free (np) (x2-sh np (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
+                                                       (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))))
+                           (:free (np) (x2-rd np (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
+                                                       (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))))))))
+
+(defthm vtcl-capts-mx
+  (equal (mx2-args (ex-capts j m) env caps defs fuel) (cons :val (ex-nths j m caps)))
+  :hints (("Goal" :induct (ex-capts j m) :expand ((:free (j) (mx2 (list :capt j) env caps defs fuel))))))
+
+; THE SL-0 BODY ANSWERS AS THE SL-1 BODY: the args env, the self let dropped
+(defthm ex-fbtc0-sh
+  (implies (not (x2-rd (ex-fnp tm ar) (ex-fbinr tm ar)))
+           (and (equal (ex-fbtc0 tm ar) (x2-sh (ex-anp ar) (ex-cs nil (ex-fbinr tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm))))))
+                (not (x2-rd (ex-anp ar) (ex-cs nil (ex-fbinr tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm))))))))
+  :hints (("Goal" :in-theory (e/d (ex-fnp) (ex-fbinr ex-fbin0 ex-fbin0-sh ex-cs-sh ex-anp))
+                  :use (ex-fbin0-sh (:instance ex-cs-sh (np (ex-anp ar)) (m (len (ex-inners (nth 2 tm)))) (e (ex-fbinr tm ar)))))))
+(defthm ex-fbtc0-mx
+  (implies (and (not (x2-rd (ex-fnp tm ar) (ex-fbinr tm ar))) (equal (len env) (ex-anp ar)) (true-listp env))
+           (equal (mx2 (ex-fbtc0 tm ar) env caps defs fuel) (mx2 (ex-fbtc tm ar) env caps defs fuel)))
+  :hints (("Goal" :in-theory (e/d (ex-fbtc) (ex-fbtc0 ex-fbinr ex-fnp ex-anp x2-drop-mx mx2 ex-cs-sh ex-fbin0-sh))
+                  :expand ((:free (x y) (mx2 (list :let x y) env caps defs fuel))
+                           (:free (x) (mx2 (list* :mkclo tm x) env caps defs fuel)))
+                  :use ((:instance x2-drop-mx (a env) (b nil) (np (ex-anp ar))
+                                   (x (clo tm (ex-nths 0 (len (ex-inners (nth 2 tm))) caps)))
+                                   (e (ex-cs nil (ex-fbinr tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm))))))))))
+
+; THE GENERATED CLAUSE AT SL 0 IS EX-CLAUSE0: vm_clause's scope then ex-fbcm0
+(defthm vtcl-true-fbcm0 (true-listp (ex-fbcm0 tm ar)))
+(defthm vtg-clause-st0
+  (implies (and (vtg-frag 0 (ex-abody ar) 0) (vtg-tlr-ok (ex-abody ar)) (natp (ex-astart ar))
+                (equal c (ex-fbcm0 tm ar)) (equal cs (cons (ex-anp ar) (len (ex-inners (nth 2 tm))))))
+           (equal (vtg-clause (ex-anf ar) (if (ex-avar ar) 1 0) (ex-astart ar) (ex-abody ar) tm 0 (len (ex-inners (nth 2 tm)))
+                              (vtg-st s c sv cs))
+                  (vtg-st (cons (ex-clause0 tm ar) s) c sv cs)))
+  :hints (("Goal" :in-theory (e/d (ex-anp ex-clause0 ex-fbtc0 ex-fbin0 ex-fparams ex-fcmb0 ex-flp ex-lsl vtg-np vtg-nm vtg-kw)
+                                  (vtg-tr ex-tr ex-abody ex-astart ex-anf ex-avar ex-locals ex-slots ex-blank ex-capts ex-fbcm0))
+                  :use ((:instance vtg-node-rev (op 0) (n (ex-anp ar)) (c (ex-fbcm0 tm ar))
+                                   (l (ex-cs t (ex-locals (ex-slots (ex-astart ar) (ex-anp ar)) (ex-fbcm0 tm ar))
+                                             (ex-anp ar) (len (ex-inners (nth 2 tm)))))
+                                   (s (cons (ex-anf ar) s))
+                                   (sv sv) (cs cs))))))
+(defthm vtg-clause-ex-clause0
+  (implies (and (vtg-frag 0 (ex-abody ar) 0) (vtg-tlr-ok (ex-abody ar)) (natp (ex-astart ar)) (vtbp vtb)
+                (equal (vtb-cm vtb) (ex-fbcm0 tm ar)) (equal (vtb-cs vtb) (cons (ex-anp ar) (len (ex-inners (nth 2 tm))))))
+           (let ((vtb2 (vtg-clause (ex-anf ar) (if (ex-avar ar) 1 0) (ex-astart ar) (ex-abody ar) tm 0 (len (ex-inners (nth 2 tm))) vtb)))
+             (and (equal (vtb-stk vtb2) (cons (ex-clause0 tm ar) (vtb-stk vtb)))
+                  (equal (vtb-cm vtb2) (vtb-cm vtb)) (equal (vtb-sv vtb2) (vtb-sv vtb)) (equal (vtb-cs vtb2) (vtb-cs vtb)))))
+  :hints (("Goal" :use ((:instance vtg-clause-st0 (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb)) (cs (vtb-cs vtb))))
+                  :in-theory (disable vtg-clause-st0 vtg-clause vtb-stk vtb-cm vtb-sv vtb-cs vtbp))))
+
+; its cost: vtg-clause-steps at sl 1 less the self shim and its let node
+(defthm vtg-clause-steps-sl0
+  (equal (vtg-clause-steps nf var body 0) (- (vtg-clause-steps nf var body 1) 2)))

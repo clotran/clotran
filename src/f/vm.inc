@@ -896,7 +896,8 @@
     if (sl == 1) c%map(self_slot) = nl
     c%depth = nl + sl
     ! the clause, (n body) or (n body :rest), by vtg_clause (generated:
-    ! vmtrcl.lisp's vtg-clause-ex-clause, ex-clause): the self slot's let
+    ! vmtrcl.lisp's vtg-clause-ex-clause, ex-clause; at sl 0 vtg-clause-ex-clause0,
+    ! ex-clause0, which answers as ex-clause, ex-fbtc0-mx): the self slot's let
     ! when sl, the loop only when the body recurs to the fn (vtg_tlr); the
     ! caller's roots kept on the value stack while it runs
     base = vs_enter(vst, size(roots) + 1)

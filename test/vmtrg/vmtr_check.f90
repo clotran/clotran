@@ -10,7 +10,8 @@
 ! the wrong order on purpose: the negative control. With `tlr` it prints
 ! vtg_tlr of the root instead (t or nil), against ACL2's ex-tlr. With
 ! `clause` vtg_clause of an arity whose body is the root (a line `nf var
-! start` after the case's first; its scope ex-fbcm), against ex-clause;
+! start sl` after the case's first; its scope ex-fbcm, or at sl 0
+! ex-fbcm0), against ex-clause (at sl 0 ex-clause0);
 ! with `arcl` vtg_arcl of the root's constant, against ex-arcl.
 !
 !   vmtr_check CASEFILE [tlr|clause|arcl] [broken]
@@ -301,7 +302,7 @@ program vmtr_check
   implicit none
   character(len=4096) :: arg
   integer :: u, ios, nn, ncm, j, k, nk, tot
-  integer(int64) :: nf, var, st
+  integer(int64) :: nf, var, st, sl
   integer, allocatable :: row(:)
   type(vtg_state) :: tb
   type(gc_value) :: root
@@ -321,7 +322,7 @@ program vmtr_check
      backspace (u)
      allocate (tb%cm(ncm))
      read (u, *) nn, tb%np, tb%m, ncm, tb%cm
-     if (clause) read (u, *) nf, var, st
+     if (clause) read (u, *) nf, var, st, sl
      allocate (nkind(nn), ni2(nn), ns2(nn), nc(nn), nmark(nn), nnk(nn), noff(nn), kids(64 * nn + 64))
      tot = 1
      do j = 1, nn
@@ -341,7 +342,7 @@ program vmtr_check
      tb%nsv = 0
      root%id = 1
      if (clause) then
-        call vtg_clause(tb, nf, var, st, root, root, 1_int64, tb%m)
+        call vtg_clause(tb, nf, var, st, root, root, sl, tb%m)
         write (*, '(a)') tb%stk(tb%top)%s
      else if (arcl) then
         call vtg_arcl(tb, root)

@@ -65,13 +65,14 @@
 (def tcases (vec (repeatedly n #(gen (pick [1 2 3 3 4 5])))))
 ;; a fn's clause: an arity (nf, variadic, its parameters' first slot) whose
 ;; body is a tree with recur and loop (vtg_tlr's two ways), m captures, a
-;; self slot or none; the scope the host makes, ex-fbcm
+;; self slot or none, sl 1 or 0 (no self let); the scope the host makes,
+;; ex-fbcm, at sl 0 ex-fbcm0 (no self position)
 (reset! tlr-kinds [16 16 16 12])
 (defn gen-clause []
   (let [nf (rnd 3) var (pick [false false true]) start (pick [0 1 2 3]) np (+ nf (if var 1 0)) m (rnd 3)
-        inners (vec (take m (drop (rnd 3) [5 6 7 8 9]))) self (pick [4 4 nil])]
-    {:t (gen (pick [1 2 3 3 4])) :nf nf :var var :start start :np np :m m
-     :cm (vec (concat (range start (+ start np)) inners [self]))
+        inners (vec (take m (drop (rnd 3) [5 6 7 8 9]))) self (pick [4 4 nil]) sl (pick [1 0])]
+    {:t (gen (pick [1 2 3 3 4])) :nf nf :var var :start start :np np :m m :sl sl
+     :cm (vec (concat (range start (+ start np)) inners (if (= sl 1) [self] [])))
      :tm (str "(777 nil " (if (seq inners) (str "(" (str/join " " (mapcat (fn [i] [100 i]) inners)) ")") "nil") " nil " (if self self "nil") ")")}))
 (def ccases (vec (repeatedly n gen-clause)))
 (def anames [nil 0 1 7 42])
@@ -101,7 +102,7 @@
   (str "(include-book \"vmtrcl\")\n(set-print-case :downcase state)\n(set-iprint nil)\n"
        (str/join (map-indexed (fn [j c] (str "(cw \"~%CASE " j " ~f0 END~%\" (ex-cs nil (ex-tr :m '" (acl2-tree (:t c)) " 0 '" (acl2-cm (:cm c)) ") " (:np c) " " (:m c) "))\n")) cases))
        (str/join (map-indexed (fn [j t] (str "(cw \"~%TLR " j " ~x0 END~%\" (ex-tlr :m '" (acl2-tree t) " 0))\n")) tcases))
-       (str/join (map-indexed (fn [j c] (str "(cw \"~%CL " j " ~f0 END~%\" (ex-clause '" (:tm c) " '(" (:nf c) " " (if (:var c) "t" "nil") " " (:start c) " " (acl2-tree (:t c)) ")))\n")) ccases))
+       (str/join (map-indexed (fn [j c] (str "(cw \"~%CL " j " ~f0 END~%\" (ex-clause" (if (= (:sl c) 1) "" "0") " '" (:tm c) " '(" (:nf c) " " (if (:var c) "t" "nil") " " (:start c) " " (acl2-tree (:t c)) ")))\n")) ccases))
        (str/join (map-indexed (fn [j a] (str "(cw \"~%AR " j " ~f0 END~%\" (ex-arcl '" (if (nil? a) "nil" a) "))\n")) anames))
        "(good-bye)\n"))
 (def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
@@ -142,7 +143,7 @@
 (def ccase-file (str work "/ccases.txt"))
 (spit ccase-file (str/join (for [c ccases]
                              (let [[h & rows] (str/split-lines (ftn-case c))]
-                               (str h "\n" (:nf c) " " (if (:var c) 1 0) " " (:start c) "\n" (str/join "\n" rows) "\n")))))
+                               (str h "\n" (:nf c) " " (if (:var c) 1 0) " " (:start c) " " (:sl c) "\n" (str/join "\n" rows) "\n")))))
 (def cgot (let [r (apply p/shell {:continue true :out :string :err :string} exe ccase-file "clause" (when broken ["broken"]))] (mapv norm (str/split-lines (str/trim (:out r))))))
 (def cbad (vec (for [k (range n) :when (not= (get cgot k) (cexpected k))] k)))
 (def acase-file (str work "/acases.txt"))
@@ -162,7 +163,7 @@
 (doseq [k (take 3 tbad)] (println "  case" k (acl2-tree (nth tcases k)) "ACL2" (texpected k) "generated" (get tgot k)))
 (println (str "generated clause vtg_clause against ACL2's ex-clause: " (count cbad) " of " n " differ ("
               (count (filter #(str/includes? % "(:loop") (vals cexpected))) " with a loop, "
-              (count (filter :var ccases)) " variadic)"))
+              (count (filter :var ccases)) " variadic, " (count (filter #(zero? (:sl %)) ccases)) " at sl 0)"))
 (doseq [k (take 3 cbad)] (println "  case" k (acl2-tree (:t (nth ccases k))) (dissoc (nth ccases k) :t)) (println "    ACL2     " (cexpected k)) (println "    generated" (get cgot k)))
 (println (str "generated arity clause vtg_arcl against ACL2's ex-arcl: " (count abad) " of " (count anames) " differ"))
 (doseq [k (take 3 abad)] (println "  name" (nth anames k) "ACL2" (aexpected k) "generated" (get agot k)))
