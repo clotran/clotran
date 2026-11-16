@@ -8,7 +8,8 @@
 ;; Random trees of the generated kinds -- a constant, a local (marked for
 ;; clearing or not, in scope or not), if (two children or three), do (none,
 ;; one, several: each value but the last a dead local), let* (its
-;; slots new or shadowing, too few children), throw -- with a Var and a
+;; slots new or shadowing, too few children), loop (its inits reading the
+;; slots before them or not: ex-lind's two shapes), recur, throw -- with a Var and a
 ;; kind ex-tr does not know among them (vtg_other's), under a scope of
 ;; slots and blanks, np parameters and m captures (vtb-cs). ACL2 prints
 ;; ex-tr :m of the tree in the scope, its captures read in place (ex-cs);
@@ -42,14 +43,14 @@
   {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids})
 (def tlr-kinds (atom []))
 (defn gen [d]
-  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 11 11 11 17 17 99] @tlr-kinds)))
+  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 11 11 11 12 12 12 16 16 17 17 99] @tlr-kinds)))
         sub #(gen (dec d))]
     (case k
       1 (node 1 :c (pick [nil 0 1 7 42]))
       3 (node 3 :c (pick [nil 5 9]))
       2 (node 2 :i2 (rnd 10) :mark (pick [0 0 1]))
       4 (node 4 :kids (vec (repeatedly (pick [2 3 3 1]) sub)))
-      16 (node 16 :kids (vec (repeatedly (rnd 3) #(gen 0))))
+      16 (node 16 :kids (vec (repeatedly (rnd 3) #(gen (max 0 (dec d))))))
       (11 12 13) (let [nb (pick [0 1 1 2 3])]
            (node k :i2 nb :s2 (pick [2 4 6 8]) :kids (vec (repeatedly (+ nb (pick [1 1 1 1 0])) sub))))
       5 (node 5 :kids (vec (repeatedly (pick [0 1 2 2 3 4]) sub)))

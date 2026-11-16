@@ -796,14 +796,14 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)); the arity-error clause is not in ex-def |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
-**Generated now**: model/vmtrg.lisp, `vtg-tr` and `vtg-tlr` (vm_clause's loop test),
+**Generated now**: model/vmtrg.lisp, `vtg-tr` (with loop/recur: item 3), `vtg-lind` and `vtg-tlr` (vm_clause's loop test),
 guard-verified, generated to src/f/gen/vm_tr_gen.inc (`make gen-vm`;
 check-vm-gen compares it). It builds on the value stack as anbuild does
 and keeps the scope through shims (`vtg_bind`, `vtg_save`,
 `vtg_restore`, `vtg_blank`, `vtg_local`, the reads, `vtg_other` for
 every other kind -- vm_tr, which calls back). vtg-tr-ex-tr: on a tree of
-the six kinds it pushes exactly ex-tr's and leaves the scope as it
-found it. vtg-steps-bound: its work at most 9 steps a node it reaches
+the eight kinds it pushes exactly ex-tr's and leaves the scope as it
+found it. vtg-steps-bound: its work at most 16 steps a node it reaches
 (vtg-size), each node's shims a constant. `scripts/fuzz-vmtr-gen` (in
 check-vm-gen) runs the generated vtg_tr, through shims that are
 vmtrg.lisp's exactly (test/vmtrg/vmtr_check.f90), against ACL2's ex-tr
@@ -947,8 +947,19 @@ position.
    refuses case), cost vtg-tlr-steps-bound (5 steps a node it reaches);
    vm_clause's loop test is vtg_tlr(body), c%fn_recur (rinfo's) gone.
    scripts/fuzz-vmtr-gen also runs vtg_tlr against ex-tlr on trees with
-   recur, loop and letfn. **Left:** vtg-tr's loop/recur (kinds 12, 16),
-   then vm_clause itself; until then vm_tr keeps N_LOOP/N_RECUR.
+   recur, loop and letfn.
+   **(a)+(b) generated (vtg-tr's kinds 12, 16):** vmtrg's `vtg-rd` / `vtg-lind`
+   (ex-rd / ex-lind on a tree in the reads' range, vtg-okt: vtg-rd-ex,
+   vtg-lind-ex; a fn's captures through the read `vtg_rdcap`), vtg-tr flg 3
+   (a loop's inits / a recur's args, each pushed, ex-tr :lin / :rec), flg 5
+   (an independent loop's body, its inits blanked, `vtg_binds`), flg 1 at n2
+   for a dependent loop (`vtg-locs` then `(:loop ((:local p)..) body)`),
+   `vtg-node 0` (a plain list), ops 4 :loop 5 :recur. vtg-tr-ex-tr now
+   states the stack as vtg-out (flg 3 a revappend). Cost: vtg-steps-bound
+   16 a node; vtg-lind-steps-bound 6 a node the test walks. vm_tr's
+   N_LOOP / N_RECUR cases, vm_loop_indep, vm_reads_in, vm_wrap_lets and
+   vm_head_list are gone; fuzz-vmtr-gen draws loops and recurs.
+   **Left:** vm_clause itself (item 2's Left).
 4. calls and Vars: vm.inc's builtin prim and callw as ex-trcall's cases
    (the head a known builtin: a prim; else :ifn/:applyv), the deref as a
    host prim under ex-collok's hypothesis; collections' op as the node.

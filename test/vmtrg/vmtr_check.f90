@@ -139,8 +139,11 @@ contains
     character(len=:), allocatable :: s
     integer :: j
     select case (op)
+    case (0); s = '('
     case (1); s = '(:if'
     case (2); s = '(:let'
+    case (4); s = '(:loop'
+    case (5); s = '(:recur'
     case default; s = '(:throw'
     end select
     if (broken) then
@@ -153,13 +156,37 @@ contains
        end do
     end if
     tb%top = tb%top - int(n)
-    call push(tb, s // ')')
+    if (op == 0 .and. n == 0) then
+       call push(tb, 'nil')
+    else if (op == 0) then
+       call push(tb, '(' // s(3:) // ')')
+    else
+       call push(tb, s // ')')
+    end if
   end subroutine vtg_node
   subroutine vtg_bind(tb, s)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: s
     tb%cm = [tb%cm, s]
   end subroutine vtg_bind
+  ! vmtrg's vtg-binds: the loop's slots blanked, then each a new position
+  subroutine vtg_binds(tb, s, n)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s, n
+    integer(int64) :: j
+    do j = 1, size(tb%cm)
+       if (tb%cm(j) >= s .and. tb%cm(j) < s + n) tb%cm(j) = -1
+    end do
+    do j = 0, n - 1
+       tb%cm = [tb%cm, s + j]
+    end do
+  end subroutine vtg_binds
+  ! no fn in the cases: no capture
+  logical function vtg_rdcap(x, lo, hi)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: lo, hi
+    vtg_rdcap = .false.
+  end function vtg_rdcap
   subroutine vtg_dead(tb)
     type(vtg_state), intent(inout) :: tb
     tb%cm = [tb%cm, -1_int64]
@@ -177,8 +204,10 @@ contains
        m = 2
     case (5)
        m = nnk(x%id) - 1
-    case (11)
+    case (11, 12)
        m = ni2(x%id)
+    case (16)
+       m = nnk(x%id) - 1
     case (17)
        m = 0
     case default
