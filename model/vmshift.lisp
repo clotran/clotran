@@ -183,3 +183,71 @@
 (defthm x2-walk-steps-bound (<= (x2-walk-steps flg e) (+ 1 (* 4 (acl2-count e)))) :rule-classes :linear)
 (defun ex-drop-steps (n l) (if (or (atom l) (zp n)) 1 (1+ (ex-drop-steps (1- n) (cdr l)))))
 (defthm ex-drop-steps-bound (<= (ex-drop-steps n l) (1+ (nfix n))) :rule-classes :linear)
+
+; ---- LEMMA (1): the frame without position np ---------------------------
+; mx2 answers the same of a term that never reads np under a ++ (x) ++ b
+; as of its shifted form under a ++ b, np = (len a): the self slot's value
+; x is never asked, and every other position moves down past it.
+(local (include-book "arithmetic-5/top" :dir :system))
+(defthm x2-sh-nth
+  (implies (and (natp p) (not (equal p (len a))))
+           (equal (nth (x2-shp (len a) p) (append a b)) (nth p (append a (cons x b))))))
+(set-irrelevant-formals-ok t)
+(defun x2-dp-ind (flg e a x b vs caps defs fuel)
+  (declare (xargs :measure (make-ord 2 (1+ (nfix fuel)) (make-ord 1 (1+ (acl2-count e)) (if (equal flg :loop) 0 1)))
+                  :well-founded-relation o< :verify-guards nil))
+  (let ((env (append a (cons x b))))
+    (case flg
+      (:args (if (atom e) nil (list (x2-dp-ind :m (car e) a x b vs caps defs fuel) (x2-dp-ind :args (cdr e) a x b vs caps defs fuel))))
+      (:loop (if (not (consp e))
+                 nil
+               (let ((r (mx2 (caddr e) (append env vs) caps defs fuel)))
+                 (if (zp fuel)
+                     (x2-dp-ind :m (caddr e) a x (append b vs) nil caps defs fuel)
+                   (list (x2-dp-ind :m (caddr e) a x (append b vs) nil caps defs fuel)
+                         (x2-dp-ind :loop e a x b (cdr r) caps defs (1- fuel)))))))
+      (otherwise
+       (if (atom e)
+           nil
+         (case (car e)
+           (:if (list (x2-dp-ind :m (cadr e) a x b vs caps defs fuel) (x2-dp-ind :m (caddr e) a x b vs caps defs fuel) (x2-dp-ind :m (cadddr e) a x b vs caps defs fuel)))
+           ((:add :lt) (list (x2-dp-ind :m (cadr e) a x b vs caps defs fuel) (x2-dp-ind :m (caddr e) a x b vs caps defs fuel)))
+           (:throw (x2-dp-ind :m (cadr e) a x b vs caps defs fuel))
+           ((:callv :applyv) (list (x2-dp-ind :m (cadr e) a x b vs caps defs fuel) (x2-dp-ind :args (cddr e) a x b vs caps defs fuel)))
+           (:recur (x2-dp-ind :args (cdr e) a x b vs caps defs fuel))
+           ((:mkclo :mkgrp :prim) (x2-dp-ind :args (cddr e) a x b vs caps defs fuel))
+           ((:let :try) (let ((r (mx2 (cadr e) env caps defs fuel)))
+                          (list (x2-dp-ind :m (cadr e) a x b vs caps defs fuel)
+                                (x2-dp-ind :m (caddr e) a x (append b (list (cdr r))) vs caps defs fuel))))
+           (:loop (let ((ri (mx2-args (cadr e) env caps defs fuel)))
+                    (list (x2-dp-ind :args (cadr e) a x b vs caps defs fuel)
+                          (x2-dp-ind :loop e a x b (cdr ri) caps defs fuel))))
+           (otherwise nil)))))))
+(defun x2-dp (flg e a x b vs caps defs fuel)
+  (let ((env (append a (cons x b))) (env0 (append a b)) (np (len a)))
+    (case flg
+      (:args (implies (not (x2-rd-args np e))
+                      (equal (mx2-args (x2-sh-args np e) env0 caps defs fuel) (mx2-args e env caps defs fuel))))
+      (:loop (implies (and (equal (car e) :loop) (not (x2-rd np e)))
+                      (equal (mx2-loop (x2-sh np e) env0 vs caps defs fuel) (mx2-loop e env vs caps defs fuel))))
+      (otherwise (implies (not (x2-rd np e))
+                          (equal (mx2 (x2-sh np e) env0 caps defs fuel) (mx2 e env caps defs fuel)))))))
+(defthm x2-dp-app-assoc (equal (append (append a b) c) (append a (append b c))))
+(defthm x2-dp-flag
+  (x2-dp flg e a x b vs caps defs fuel)
+  :rule-classes nil
+  :hints (("Goal" :induct (x2-dp-ind flg e a x b vs caps defs fuel)
+                  :in-theory (disable mx2 mx2-args mx2-loop x2-sh x2-sh-args x2-rd x2-rd-args x2-fn x2-vals x2-cls pick-arity clop clo-caps clo-f split-rest restp x2-seal clo)
+                  :expand ((:free (env) (mx2 e env caps defs fuel)) (:free (env) (mx2-args e env caps defs fuel))
+                           (:free (env vs) (mx2-loop e env vs caps defs fuel))
+                           (:free (k y env) (mx2 (cons k y) env caps defs fuel))
+                           (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
+                           (:free (k y env vs) (mx2-loop (cons k y) env vs caps defs fuel))
+                           (:free (np) (x2-sh np e)) (:free (np) (x2-sh-args np e))
+                           (:free (np) (x2-rd np e)) (:free (np) (x2-rd-args np e))))))
+
+; THE SELF SLOT DROPPED: the same answer
+(defthm x2-drop-mx
+  (implies (and (equal (len a) np) (not (x2-rd np e)))
+           (equal (mx2 (x2-sh np e) (append a b) caps defs fuel) (mx2 e (append a (cons x b)) caps defs fuel)))
+  :hints (("Goal" :use ((:instance x2-dp-flag (flg :m) (vs nil))))))
