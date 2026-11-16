@@ -251,3 +251,38 @@
   (implies (and (equal (len a) np) (not (x2-rd np e)))
            (equal (mx2 (x2-sh np e) (append a b) caps defs fuel) (mx2 e (append a (cons x b)) caps defs fuel)))
   :hints (("Goal" :use ((:instance x2-dp-flag (flg :m) (vs nil))))))
+
+; ---- (a) EX-CS AND X2-SH COMMUTE --------------------------------------------
+; ex-fbtc reads the captures in place (ex-cs np m) after the body is
+; translated, which moves the self slot from position np + m to np: a term
+; that never reads np + m, shifted there and then ex-cs'd, is ex-cs'd and
+; then shifted at np, and the ex-cs'd term never reads np.
+(defun ex-shf (flg np e) (if flg (x2-sh-args np e) (x2-sh np e)))
+(defun ex-rdf (flg np e) (if flg (x2-rd-args np e) (x2-rd np e)))
+(defun ex-csh-ind (flg e)
+  (declare (xargs :measure (acl2-count e)))
+  (cond ((atom e) e)
+        (flg (list (ex-csh-ind nil (car e)) (ex-csh-ind t (cdr e))))
+        (t (case (car e)
+             (:if (list (ex-csh-ind nil (cadr e)) (ex-csh-ind nil (caddr e)) (ex-csh-ind nil (cadddr e))))
+             ((:let :add :lt :try) (list (ex-csh-ind nil (cadr e)) (ex-csh-ind nil (caddr e))))
+             ((:mkclo :mkgrp :prim) (ex-csh-ind t (cddr e)))
+             ((:callv :applyv) (list (ex-csh-ind nil (cadr e)) (ex-csh-ind t (cddr e))))
+             (:loop (list (ex-csh-ind t (cadr e)) (ex-csh-ind nil (caddr e))))
+             (:recur (ex-csh-ind t (cdr e)))
+             (:throw (ex-csh-ind nil (cadr e)))
+             (otherwise e)))))
+(defthm ex-cs-sh-flag
+  (implies (and (natp np) (natp m) (not (ex-rdf flg (+ np m) e)))
+           (and (equal (ex-cs flg (ex-shf flg (+ np m) e) np m) (ex-shf flg np (ex-cs flg e np m)))
+                (not (ex-rdf flg np (ex-cs flg e np m)))))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-csh-ind flg e) :in-theory (enable ex-cs)
+                  :expand ((:free (np m) (ex-cs flg e np m))
+                           (:free (np) (x2-sh np e)) (:free (np) (x2-sh-args np e))
+                           (:free (np) (x2-rd np e)) (:free (np) (x2-rd-args np e))))))
+(defthm ex-cs-sh
+  (implies (and (natp np) (natp m) (not (x2-rd (+ np m) e)))
+           (and (equal (ex-cs nil (x2-sh (+ np m) e) np m) (x2-sh np (ex-cs nil e np m)))
+                (not (x2-rd np (ex-cs nil e np m)))))
+  :hints (("Goal" :use ((:instance ex-cs-sh-flag (flg nil))))))
