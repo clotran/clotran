@@ -16,18 +16,21 @@ model/exec-PLAN.md (cited by heading, never copied) and docs/model-coverage.md.
 Milestones 1, 1b, 2a-2c, 3a.., 5 (def, letfn, deftype, new, set!, dot) of
 exec-PLAN.md "Milestones" are proved and generated; the analyzer, heap, VM,
 compiler, and runtime rows of docs/model-coverage.md are Generated or
-Modeled. Lane 3 (vmtrg): vm_tr's const/local/if/do/let*/loop/recur/throw generated;
-captures in place, do's dead-local encoding done.
+Modeled. Lane 3 (vmtrg, vmtrcl): vm_tr's const/local/if/do/let*/loop/recur/throw generated;
+captures in place, do's dead-local encoding done; vm_clause's clause (vtg_clause =
+ex-clause) and the arity-error clause (vtg_arcl = ex-arcl, ex-arcl-mxcl) generated.
 
 ## Next lanes, in order (exec-PLAN.md "Lane 3: vm.inc's translation generated", "Next")
-1. Entry: generate `vm_clause` from ex-fbtc/ex-clause (needs item 3 first).
+1. Entry: DONE. vmtrcl's vtg-clause (vtg-clause-ex-clause: ex-clause at sl 1,
+   the scope ex-fbcm the host's) and vtg-arcl (ex-arcl; ex-arcl-mxcl: ex-mxcl's
+   :arity throw is the appended clause's prim's) generated into vm_tr_gen.inc,
+   fuzzed (fuzz-vmtr-gen, -x); vm_clause's and vm_compile_fn's hand clause code gone.
+   Named: vtg_self's value `(:capt m)`, sl 0 when the body reads no self slot.
 2. loop/recur: DONE. ex-tr's two loop shapes (ex-lind) and recur proved
    (exec-vmtr..exec-vmok) and generated: vmtrg's vtg-tr kinds 12, 16,
    vtg-lind (vtg-lind-ex), vtg-tlr (vm_clause's loop test); vm_tr's
    hand-written loop/recur gone.
-   NEXT STEP: vm_clause itself from ex-fbtc/ex-clause (exec-PLAN Lane 3
-   item 2 "Left": the self let's value named; the arity clause needs
-   ex-mxcl's :arity throw as vm.inc's `(:prim :clotran.vm/arity ..)`).
+NEXT STEP: item 3 (exec-PLAN Lane 3 "Next" 3/4 and the map's N_CALL row).
 3. Calls and Vars: builtin prim / callw as ex-trcall's cases; deref as host prim.
 4. try, letfn, case: vm_scan refuses them today.
 Cost theorem and fuzz-vmtr-gen are done.

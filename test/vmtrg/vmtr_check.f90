@@ -8,9 +8,12 @@
 ! scripts/fuzz-vmtr-gen writes the cases and compares the answers with
 ! ACL2's ex-tr. With the argument `broken`, a node's items are taken in
 ! the wrong order on purpose: the negative control. With `tlr` it prints
-! vtg_tlr of the root instead (t or nil), against ACL2's ex-tlr.
+! vtg_tlr of the root instead (t or nil), against ACL2's ex-tlr. With
+! `clause` vtg_clause of an arity whose body is the root (a line `nf var
+! start` after the case's first; its scope ex-fbcm), against ex-clause;
+! with `arcl` vtg_arcl of the root's constant, against ex-arcl.
 !
-!   vmtr_check CASEFILE [broken]
+!   vmtr_check CASEFILE [tlr|clause|arcl] [broken]
 !
 ! CASEFILE: per case a line `nnodes np m ncm cm..` (np, m vtb-cs: the
 ! clause's parameters and captures, a capture read in place), then a line a node, 1..nnodes,
@@ -37,7 +40,7 @@ module vmtr_mock
      integer(int64) :: np = 0, m = 0
   end type vtg_state
   integer, allocatable :: nkind(:), ni2(:), ns2(:), nc(:), nmark(:), nnk(:), noff(:), kids(:)
-  logical :: broken = .false., tlr = .false.
+  logical :: broken = .false., tlr = .false., clause = .false., arcl = .false.
 contains
   logical function ok(x)
     type(gc_value), intent(in) :: x
@@ -261,6 +264,35 @@ contains
     end if
   end subroutine vtg_other
 
+  ! vmtrcl's: a number, a keyword, the self let's value (:mkclo tm (:capt 0) ..),
+  ! the template printed `tm` (the fuzzer writes ACL2's so)
+  subroutine vtg_num(tb, n)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: n
+    call push(tb, itoa(n))
+  end subroutine vtg_num
+  subroutine vtg_key(tb, j)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: j
+    select case (j)
+    case (0); call push(tb, ':rest')
+    case (1); call push(tb, ':clotran.vm/arity')
+    case (2); call push(tb, ':prim')
+    case default; call push(tb, ':local')
+    end select
+  end subroutine vtg_key
+  subroutine vtg_self(tb, tm, m)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: tm
+    integer(int64), value :: m
+    character(len=:), allocatable :: s
+    integer(int64) :: j
+    s = '(:mkclo tm'
+    do j = 0, m - 1
+       s = s // ' (:capt ' // itoa(j) // ')'
+    end do
+    call push(tb, s // ')')
+  end subroutine vtg_self
   include 'vm_tr_gen.inc'
 end module vmtr_mock
 
@@ -269,15 +301,18 @@ program vmtr_check
   implicit none
   character(len=4096) :: arg
   integer :: u, ios, nn, ncm, j, k, nk, tot
+  integer(int64) :: nf, var, st
   integer, allocatable :: row(:)
   type(vtg_state) :: tb
   type(gc_value) :: root
   call get_command_argument(1, arg)
-  if (command_argument_count() > 1) then
-     call get_command_argument(2, arg(2048:))
-     broken = trim(arg(2048:)) == 'broken'
-     tlr = trim(arg(2048:)) == 'tlr'
-  end if
+  do j = 2, command_argument_count()
+     call get_command_argument(j, arg(2048:))
+     if (trim(arg(2048:)) == 'broken') broken = .true.
+     if (trim(arg(2048:)) == 'tlr') tlr = .true.
+     if (trim(arg(2048:)) == 'clause') clause = .true.
+     if (trim(arg(2048:)) == 'arcl') arcl = .true.
+  end do
   open (newunit=u, file=trim(arg(1:2047)), status='old', action='read')
   allocate (row(4096))
   do
@@ -286,6 +321,7 @@ program vmtr_check
      backspace (u)
      allocate (tb%cm(ncm))
      read (u, *) nn, tb%np, tb%m, ncm, tb%cm
+     if (clause) read (u, *) nf, var, st
      allocate (nkind(nn), ni2(nn), ns2(nn), nc(nn), nmark(nn), nnk(nn), noff(nn), kids(64 * nn + 64))
      tot = 1
      do j = 1, nn
@@ -304,7 +340,13 @@ program vmtr_check
      tb%top = 0
      tb%nsv = 0
      root%id = 1
-     if (tlr) then
+     if (clause) then
+        call vtg_clause(tb, nf, var, st, root, root, 1_int64, tb%m)
+        write (*, '(a)') tb%stk(tb%top)%s
+     else if (arcl) then
+        call vtg_arcl(tb, root)
+        write (*, '(a)') tb%stk(tb%top)%s
+     else if (tlr) then
         if (vtg_tlr(root)) then
            write (*, '(a)') 't'
         else

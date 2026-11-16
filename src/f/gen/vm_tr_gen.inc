@@ -7,7 +7,9 @@
   ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds
   ! (vtg-tr-ex-tr); vtg_lind: whether a loop's inits read none before them
   ! (ex-lind). vtg_tlr: whether a clause's body recurs to the fn (its
-  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr).
+  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr). vtg_clause:
+  ! vm_clause's clause of one arity, exec-vmtr's ex-clause (vmtrcl.lisp's
+  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl).
   recursive function vtg_rd(flg_, e_, i_, lo_, hi_) result(r)
     integer(int64), value :: flg_
     type(gc_value), value :: e_
@@ -456,3 +458,63 @@
     r = t_10
     return
   end function vtg_tlr
+
+  subroutine vtg_clause(tb, nf_, var_, s_, body_, tm_, sl_, m_)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: nf_
+    integer(int64), value :: var_
+    integer(int64), value :: s_
+    type(gc_value), value :: body_
+    type(gc_value), value :: tm_
+    integer(int64), value :: sl_
+    integer(int64), value :: m_
+    integer(int64) :: np_2
+    integer(int64) :: t_1
+    if ((var_ == 0_int64)) then
+      t_1 = nf_
+    else
+      t_1 = (1_int64 + nf_)
+    end if
+    np_2 = t_1
+    call vtg_num(tb, nf_)
+    if ((sl_ == 0_int64)) then
+    else
+      call vtg_self(tb, tm_, m_)
+    end if
+    if (vtg_tlr(body_)) then
+      call vtg_locs(tb, s_, 0_int64, np_2)
+      call vtg_node(tb, 0_int64, np_2)
+      call vtg_save(tb)
+      call vtg_binds(tb, s_, np_2)
+      call vtg_tr(tb, 0_int64, body_, 0_int64)
+      call vtg_restore(tb)
+      call vtg_node(tb, 4_int64, 2_int64)
+    else
+      call vtg_tr(tb, 0_int64, body_, 0_int64)
+    end if
+    if ((sl_ == 0_int64)) then
+    else
+      call vtg_node(tb, 2_int64, 2_int64)
+    end if
+    if ((var_ == 0_int64)) then
+      call vtg_node(tb, 0_int64, 2_int64)
+    else
+      call vtg_key(tb, 0_int64)
+      call vtg_node(tb, 0_int64, 3_int64)
+    end if
+  end subroutine vtg_clause
+
+  subroutine vtg_arcl(tb, name_)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: name_
+    call vtg_num(tb, 0_int64)
+    call vtg_key(tb, 2_int64)
+    call vtg_key(tb, 1_int64)
+    call vtg_const(tb, name_)
+    call vtg_key(tb, 3_int64)
+    call vtg_num(tb, 0_int64)
+    call vtg_node(tb, 0_int64, 2_int64)
+    call vtg_node(tb, 0_int64, 4_int64)
+    call vtg_key(tb, 0_int64)
+    call vtg_node(tb, 0_int64, 3_int64)
+  end subroutine vtg_arcl

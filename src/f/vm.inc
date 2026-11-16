@@ -676,6 +676,33 @@
     tb%c%nsv = tb%c%nsv - 1
   end subroutine vtg_restore
   ! every other kind: vm_tr's own (which calls back for the kinds above)
+  ! a number (gc_int), a keyword (0 :rest, 1 :clotran.vm/arity, 2 :prim, else
+  ! :local), the self let's value: (:capt m), the runtime's closure, which
+  ! holds itself past its m captures (VmRuntime rt_capt) -- NAMED: the model's
+  ! (:mkclo tm (:capt 0) ..) remakes it (vmtrcl.lisp; tm unread here)
+  subroutine vtg_num(tb, n)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: n
+    call anb_push(gc_int(int(n, gc_ip)))
+  end subroutine vtg_num
+  subroutine vtg_key(tb, j)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: j
+    select case (j)
+    case (0); call anb_push(vm_kw("rest"))
+    case (1); call anb_push(vm_kw("clotran.vm/arity"))
+    case (2); call anb_push(vm_kw("prim"))
+    case default; call anb_push(vm_kw("local"))
+    end select
+  end subroutine vtg_key
+  subroutine vtg_self(tb, tm, m)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: tm
+    integer(int64), value :: m
+    type(gc_value) :: k
+    k = vm_kw("capt")
+    call anb_push(vm_l([k, gc_int(int(m, gc_ip))], [k]))
+  end subroutine vtg_self
   recursive subroutine vtg_other(tb, x)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
@@ -822,9 +849,11 @@
   function vm_clause(ar, nslots, capv, self_slot, roots) result(cl)
     type(gc_value), intent(in) :: ar, capv, roots(:)
     integer, intent(in) :: nslots, self_slot
-    type(gc_value) :: cl, x, body
+    type(gc_value) :: cl, body
     type(gc_stack), pointer :: vst
     type(vm_tr_ctx), allocatable, target :: c
+    type(vtg_state) :: tb
+    integer(int64) :: vari
     integer :: base, i, nfixed, start, nl, ncap, s, sl
     logical :: variadic
     cl = gc_nil()
@@ -866,51 +895,20 @@
     end do
     if (sl == 1) c%map(self_slot) = nl
     c%depth = nl + sl
-    base = vs_enter(vst, 6)
-    call vs_set(vst, base + 1, body)
-    ! the loop only when the body recurs to the fn (vtg_tlr, generated: exec-vmtr's ex-tlr)
-    if (vtg_tlr(body)) then
-       ! (:loop ((:local 0) .. (:local nl-1)) body): the parameters the loop's
-       call vs_set(vst, base + 3, gcv_empty(roots))
-       call vs_set(vst, base + 5, vm_kw("local"))
-       do i = 0, nl - 1
-          x = vm_l([vs_get(vst, base + 5), gc_int(int(i, gc_ip))], [roots, vs_get(vst, base + 3)])
-          call vs_set(vst, base + 4, x)
-          x = gcv_conj(vs_get(vst, base + 3), vs_get(vst, base + 4), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
-          call vs_set(vst, base + 3, x)
-          c%map(start + i) = nl + sl + i
-       end do
-       c%depth = 2 * nl + sl
-       x = vm_tr(c, vs_get(vst, base + 1), [roots, vs_get(vst, base + 3)])
-       call vs_set(vst, base + 2, x)
-       if (c%ok) then
-          x = vec_to_list(vs_get(vst, base + 3), [roots, vs_get(vst, base + 2)])
-          call vs_set(vst, base + 3, x)
-          call vs_set(vst, base + 5, vm_kw("loop"))
-          x = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 3), vs_get(vst, base + 2)], roots)
-          call vs_set(vst, base + 2, x)
-       end if
-    else
-       x = vm_tr(c, vs_get(vst, base + 1), roots)
-       call vs_set(vst, base + 2, x)
-    end if
-    if (c%ok .and. sl == 1) then
-       ! (:let (:capt ncap) body): the self slot's let
-       call vs_set(vst, base + 5, vm_kw("capt"))
-       x = vm_l([vs_get(vst, base + 5), gc_int(int(ncap, gc_ip))], [roots, vs_get(vst, base + 2)])
-       call vs_set(vst, base + 4, x)
-       call vs_set(vst, base + 5, vm_kw("let"))
-       x = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 4), vs_get(vst, base + 2)], roots)
-       call vs_set(vst, base + 2, x)
-    end if
-    if (c%ok) then
-       if (variadic) then
-          call vs_set(vst, base + 5, vm_kw("rest"))
-          cl = vm_l([gc_int(int(nfixed, gc_ip)), vs_get(vst, base + 2), vs_get(vst, base + 5)], roots)
-       else
-          cl = vm_l([gc_int(int(nfixed, gc_ip)), vs_get(vst, base + 2)], roots)
-       end if
-    end if
+    ! the clause, (n body) or (n body :rest), by vtg_clause (generated:
+    ! vmtrcl.lisp's vtg-clause-ex-clause, ex-clause): the self slot's let
+    ! when sl, the loop only when the body recurs to the fn (vtg_tlr); the
+    ! caller's roots kept on the value stack while it runs
+    base = vs_enter(vst, size(roots) + 1)
+    do i = 1, size(roots)
+       call vs_set(vst, base + i, roots(i))
+    end do
+    call vs_set(vst, base + size(roots) + 1, body)
+    tb%c => c
+    vari = 0
+    if (variadic) vari = 1
+    call vtg_clause(tb, int(nfixed, int64), vari, int(start, int64), body, gc_nil(), int(sl, int64), int(ncap, int64))
+    if (c%ok) cl = vs_get(vst, vst%vs_top)
     call vs_leave(vst, base)
   end function vm_clause
 
@@ -928,6 +926,7 @@
     type(gc_stack), pointer :: vst
     type(vm_state) :: t
     type(vc_state) :: cce
+    type(vtg_state) :: tb
     integer :: base, i, na, p0, c0
     integer(gc_ip) :: sz, pend, j
     f = -1
@@ -949,21 +948,12 @@
        x = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
        call vs_set(vst, base + 1, x)
     end do
-    ! the last clause: a call of no arity the fn has, clj's ArityException
+    ! the last clause: a call of no arity the fn has, clj's ArityException,
+    ! by vtg_arcl (generated: vmtrcl.lisp's ex-arcl, ex-arcl-mxcl)
     ! (0 (:prim :clotran.vm/arity (:const name) (:local 0)) :rest)
-    call vs_set(vst, base + 4, vm_kw("const"))
-    x = vm_l([vs_get(vst, base + 4), display], [roots, vs_get(vst, base + 1), display])
-    call vs_set(vst, base + 2, x)
-    call vs_set(vst, base + 4, vm_kw("local"))
-    x = vm_l([vs_get(vst, base + 4), gc_int(0_gc_ip)], [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 3, x)
-    call vs_set(vst, base + 4, vm_kw("clotran.vm/arity"))
-    call vs_set(vst, base + 5, vm_kw("prim"))
-    x = vm_l([vs_get(vst, base + 5), vs_get(vst, base + 4), vs_get(vst, base + 2), vs_get(vst, base + 3)], &
-         [roots, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 2, x)
-    call vs_set(vst, base + 4, vm_kw("rest"))
-    x = vm_l([gc_int(0_gc_ip), vs_get(vst, base + 2), vs_get(vst, base + 4)], [roots, vs_get(vst, base + 1)])
+    call vtg_arcl(tb, display)
+    x = vs_get(vst, vst%vs_top)
+    call vs_leave(vst, base + 5)
     call vs_set(vst, base + 2, x)
     x = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
     call vs_set(vst, base + 1, x)

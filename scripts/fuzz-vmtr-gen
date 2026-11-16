@@ -19,9 +19,12 @@
 ;;
 ;; Then the loop's test, vtg_tlr, against ex-tlr :m: trees with recur,
 ;; loop and letfn besides (kinds 16, 12, 13), the generated answer t or nil.
+;; Then a fn's clause, vtg_clause, against ex-clause (vmtrcl.lisp): random
+;; arities (fixed or variadic), captures and self slot, bodies with recur
+;; and loop, the scope ex-fbcm; and the arity clause, vtg_arcl, against ex-arcl.
 ;;
 ;; -x is the NEGATIVE CONTROL: the Fortran side takes a node's items in the
-;; wrong order, and the answers must part.
+;; wrong order, and the answers must part (the translation's, the clauses').
 (require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -60,6 +63,18 @@
 (def cases (vec (repeatedly n gen-case)))
 (reset! tlr-kinds [16 16 16 12 13])
 (def tcases (vec (repeatedly n #(gen (pick [1 2 3 3 4 5])))))
+;; a fn's clause: an arity (nf, variadic, its parameters' first slot) whose
+;; body is a tree with recur and loop (vtg_tlr's two ways), m captures, a
+;; self slot or none; the scope the host makes, ex-fbcm
+(reset! tlr-kinds [16 16 16 12])
+(defn gen-clause []
+  (let [nf (rnd 3) var (pick [false false true]) start (pick [0 1 2 3]) np (+ nf (if var 1 0)) m (rnd 3)
+        inners (vec (take m (drop (rnd 3) [5 6 7 8 9]))) self (pick [4 4 nil])]
+    {:t (gen (pick [1 2 3 3 4])) :nf nf :var var :start start :np np :m m
+     :cm (vec (concat (range start (+ start np)) inners [self]))
+     :tm (str "(777 nil " (if (seq inners) (str "(" (str/join " " (mapcat (fn [i] [100 i]) inners)) ")") "nil") " nil " (if self self "nil") ")")}))
+(def ccases (vec (repeatedly n gen-clause)))
+(def anames [nil 0 1 7 42])
 
 (defn acl2-tree [{:keys [k i2 s2 c mark kids]}]
   (str "(" k " " i2 " (" (str/join " " (map acl2-tree kids)) ") " (if (nil? c) "nil" c) " " s2 " " (if (= mark 1) "t" "nil") ")"))
@@ -83,9 +98,11 @@
 ;; ---- what ACL2 answers -------------------------------------------------------------------
 
 (def driver
-  (str "(include-book \"exec-vmtr\")\n(set-print-case :downcase state)\n(set-iprint nil)\n"
+  (str "(include-book \"vmtrcl\")\n(set-print-case :downcase state)\n(set-iprint nil)\n"
        (str/join (map-indexed (fn [j c] (str "(cw \"~%CASE " j " ~f0 END~%\" (ex-cs nil (ex-tr :m '" (acl2-tree (:t c)) " 0 '" (acl2-cm (:cm c)) ") " (:np c) " " (:m c) "))\n")) cases))
        (str/join (map-indexed (fn [j t] (str "(cw \"~%TLR " j " ~x0 END~%\" (ex-tlr :m '" (acl2-tree t) " 0))\n")) tcases))
+       (str/join (map-indexed (fn [j c] (str "(cw \"~%CL " j " ~f0 END~%\" (ex-clause '" (:tm c) " '(" (:nf c) " " (if (:var c) "t" "nil") " " (:start c) " " (acl2-tree (:t c)) ")))\n")) ccases))
+       (str/join (map-indexed (fn [j a] (str "(cw \"~%AR " j " ~f0 END~%\" (ex-arcl '" (if (nil? a) "nil" a) "))\n")) anames))
        "(good-bye)\n"))
 (def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
             (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
@@ -93,7 +110,10 @@
 (def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
 (def expected (into {} (for [[_ c l] (re-seq #"CASE (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
 (def texpected (into {} (for [[_ c l] (re-seq #"TLR (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
-(when (or (not= (count expected) n) (not= (count texpected) n))
+(def cexpected (into {} (for [[_ c l] (re-seq #"CL (\d+) (.*?) END" (norm out))]
+                          [(parse-long c) (str/replace l (norm (:tm (nth ccases (parse-long c)))) "tm")])))
+(def aexpected (into {} (for [[_ c l] (re-seq #"AR (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
+(when (or (not= (count expected) n) (not= (count texpected) n) (not= (count cexpected) n) (not= (count aexpected) (count anames)))
   (println (str "fuzz-vmtr-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
   (println (subs out (max 0 (- (count out) 3000))))
   (System/exit 1))
@@ -119,6 +139,16 @@
 (def tgot (let [r (p/shell {:continue true :out :string :err :string} exe tcase-file "tlr")] (mapv norm (str/split-lines (str/trim (:out r))))))
 (def tbad (vec (for [k (range n) :when (not= (get tgot k) (texpected k))] k)))
 (def bad (remove :ok results))
+(def ccase-file (str work "/ccases.txt"))
+(spit ccase-file (str/join (for [c ccases]
+                             (let [[h & rows] (str/split-lines (ftn-case c))]
+                               (str h "\n" (:nf c) " " (if (:var c) 1 0) " " (:start c) "\n" (str/join "\n" rows) "\n")))))
+(def cgot (let [r (apply p/shell {:continue true :out :string :err :string} exe ccase-file "clause" (when broken ["broken"]))] (mapv norm (str/split-lines (str/trim (:out r))))))
+(def cbad (vec (for [k (range n) :when (not= (get cgot k) (cexpected k))] k)))
+(def acase-file (str work "/acases.txt"))
+(spit acase-file (str/join (map #(ftn-case {:t (node 1 :c %) :cm [] :np 0 :m 0}) anames)))
+(def agot (let [r (apply p/shell {:continue true :out :string :err :string} exe acase-file "arcl" (when broken ["broken"]))] (mapv norm (str/split-lines (str/trim (:out r))))))
+(def abad (vec (for [k (range (count anames)) :when (not= (get agot k) (aexpected k))] k)))
 (defn kinds [t] (cons (:k t) (mapcat kinds (:kids t))))
 (println (str n " cases, seed " seed (when broken " (negative control: a node's items reversed)")))
 (println (str "  nodes by kind: " (str/join ", " (for [[k c] (sort (frequencies (mapcat (comp kinds :t) cases)))] (str k ":" c)))
@@ -130,4 +160,10 @@
   (println "    generated" (:got b)))
 (println (str "generated loop test vtg_tlr against ACL2's ex-tlr: " (count tbad) " of " n " differ (" (count (filter #{"t"} (vals texpected))) " recur to the fn)"))
 (doseq [k (take 3 tbad)] (println "  case" k (acl2-tree (nth tcases k)) "ACL2" (texpected k) "generated" (get tgot k)))
-(System/exit (if (or (if broken (empty? bad) (seq bad)) (seq tbad)) 1 0))
+(println (str "generated clause vtg_clause against ACL2's ex-clause: " (count cbad) " of " n " differ ("
+              (count (filter #(str/includes? % "(:loop") (vals cexpected))) " with a loop, "
+              (count (filter :var ccases)) " variadic)"))
+(doseq [k (take 3 cbad)] (println "  case" k (acl2-tree (:t (nth ccases k))) (dissoc (nth ccases k) :t)) (println "    ACL2     " (cexpected k)) (println "    generated" (get cgot k)))
+(println (str "generated arity clause vtg_arcl against ACL2's ex-arcl: " (count abad) " of " (count anames) " differ"))
+(doseq [k (take 3 abad)] (println "  name" (nth anames k) "ACL2" (aexpected k) "generated" (get agot k)))
+(System/exit (if (or (seq tbad) (if broken (or (empty? bad) (empty? cbad) (empty? abad)) (or (seq bad) (seq cbad) (seq abad)))) 1 0))

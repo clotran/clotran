@@ -793,7 +793,7 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_VAR | `(:const value)` | no: vm.inc derefs (`:clotran.vm/deref`, the link epoch) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
-| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)); the arity-error clause is not in ex-def |
+| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)). **Generated now** (vmtrcl): the clause vtg_clause (vtg-clause-ex-clause: ex-clause, sl 1), the arity-error clause vtg_arcl (ex-arcl; ex-arcl-mxcl: appended to a callee's clauses it answers ex-mxcl's, its prim's throw for :arity); the scope setup, the arities' loop and the program's reservation stay vm_compile_fn's |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
 **Generated now**: model/vmtrg.lisp, `vtg-tr` (with loop/recur: item 3), `vtg-lind` and `vtg-tlr` (vm_clause's loop test),
@@ -855,12 +855,20 @@ position.
    itself, against (b)'s re-proof of vmx2,
    vmx2-proof, -cost, -time, vmi and vmg (~1940 s alone) to make mx2's call
    append the closure to caps.
-   **Left:** generating `vm_clause` from ex-fbtc/ex-clause. It differs
-   from the model still in the
-   self let (its value, and vm.inc's only when read: above), and ex-def has no arity-error clause
-   (vm_compile_fn's `(0 (:prim :clotran.vm/arity ..) :rest)`, which needs
-   ex-mxcl's :arity throw to be that prim's). Take it with item 3: once
-   the loop's encoding is one, vm_clause is ex-fbtc's shape.
+   **Generated (vmtrcl.lisp):** `vtg-clause` builds the clause on the
+   scope the host made (ex-fbcm; vtb-cs the counts) -- vtg-clause-ex-clause:
+   at sl 1 it pushes exactly ex-clause, the scope as it was; three shims
+   (vtg_num, vtg_key, vtg_self). Named: vtg_self pushes `(:capt m)` (above),
+   and vm.inc passes sl 0 (no let, no self position) when the body reads no
+   self slot. `vtg-arcl` pushes ex-arcl, `(0 (:prim :clotran.vm/arity
+   (:const name) (:local 0)) :rest)`; ex-arcl-mxcl: a callee's clauses with
+   it appended answer ex-mxcl's for a count some clause takes, and else the
+   prim's throw where ex-mxcl throws :arity (hypothesis: the prim throws --
+   vm_arity_hook, clj's ArityException). Cost: vtg-clause-steps-bound
+   (linear in body and arity), vtg-arcl-steps-bound (11). fuzz-vmtr-gen
+   runs both against ACL2 (clause/arcl modes, -x parts them). ex-def
+   itself keeps no arity clause: ex-vm-agree is over ex-mxcl, which ex-arcl-mxcl
+   relates.
 3. loop/recur. **The dummy: dropped.** x2wf no longer asks a loop bind at
    least one: `(:loop () body)` is well formed, a recur to it `(:recur)`
    -- what vm.inc already emitted for a zero-binding loop. Weighed: the

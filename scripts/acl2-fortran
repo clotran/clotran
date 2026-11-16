@@ -358,13 +358,15 @@
               "  ! machine they drive answers each node's meaning, exec-vm.lisp that the"
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
     "vmtrg"
-    {:out "src/f/gen/vm_tr_gen.inc" :include true
-     :fns [vtg-rd vtg-lind vtg-locs vtg-tr vtg-tlr]
+    {:out "src/f/gen/vm_tr_gen.inc" :include true :book "vmtrcl"
+     :fns [vtg-rd vtg-lind vtg-locs vtg-tr vtg-tlr vtg-clause vtg-arcl]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
-     :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other]
+     :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other
+            vtg-num vtg-key vtg-self]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
-     :value-formals {vtg-tr #{e} vtg-tlr #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}}
+     :value-formals {vtg-tr #{e} vtg-tlr #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}
+                     vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm}}
      :value-fns #{}
      :reentrant #{vtg-tr}
      :bool-fns #{vtg-tlr vtg-rd vtg-lind}
@@ -382,7 +384,9 @@
               "  ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds"
               "  ! (vtg-tr-ex-tr); vtg_lind: whether a loop's inits read none before them"
               "  ! (ex-lind). vtg_tlr: whether a clause's body recurs to the fn (its"
-              "  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr)."]}
+              "  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr). vtg_clause:"
+              "  ! vm_clause's clause of one arity, exec-vmtr's ex-clause (vmtrcl.lisp's"
+              "  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl)."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn
