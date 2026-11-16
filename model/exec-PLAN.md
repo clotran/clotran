@@ -793,10 +793,10 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_VAR | `(:const value)` | no: vm.inc derefs (`:clotran.vm/deref`, the link epoch) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
-| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop always round the body (vm.inc only on a fn recur; the dummy gone from both); the arity-error clause is not in ex-def |
+| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)); the arity-error clause is not in ex-def |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
-**Generated now**: model/vmtrg.lisp, `vtg-tr`,
+**Generated now**: model/vmtrg.lisp, `vtg-tr` and `vtg-tlr` (vm_clause's loop test),
 guard-verified, generated to src/f/gen/vm_tr_gen.inc (`make gen-vm`;
 check-vm-gen compares it). It builds on the value stack as anbuild does
 and keeps the scope through shims (`vtg_bind`, `vtg_save`,
@@ -856,8 +856,7 @@ position.
    vmx2-proof, -cost, -time, vmi and vmg (~1940 s alone) to make mx2's call
    append the closure to caps.
    **Left:** generating `vm_clause` from ex-fbtc/ex-clause. It differs
-   from the model still in the loop (ex-fbtc's is always round the body,
-   vm.inc's only on a fn recur: item 3 (b)), the
+   from the model still in the
    self let (its value, and vm.inc's only when read: above), and ex-def has no arity-error clause
    (vm_compile_fn's `(0 (:prim :clotran.vm/arity ..) :rest)`, which needs
    ex-mxcl's :arity throw to be that prim's). Take it with item 3: once
@@ -932,7 +931,24 @@ position.
    fn's loop only on a recur to the fn (vm.inc's c%fn_recur): ex-fbin
    without the loop is the body in ex-fbcm, the parameters not copied, a
    second entry path (:m, not :iter) through exec-vmcall's ex-enter-*.
-   Until both, vm_tr keeps N_LOOP/N_RECUR and vtg-tr does not take them.
+   **(b) model done:** exec-vmtr's `ex-tlr` (a recur in a tail place lp
+   reaches, no loop round it: the fn's) picks ex-fbtr/ex-fbin's shape --
+   the loop when it holds, else `(ex-tr :m body 0 (ex-fbcm tm ar))`.
+   exec-vmcall: ex-vwf-tlr-nil (no tail recur: well formed with lp nil),
+   ex-vwf-sb (ex-vwf reads its scope only through the entries but nil, so
+   ex-fcmb's well-formedness is ex-fbcm's: ex-fcmb-sb), ex-fbtr-mx-m,
+   ex-enter-mx-m / -vwf-m, ex-call-mx-m / -vwf-m / -agree-fbcm (ex-enter-mx
+   and ex-fbtr-mx now ask ex-tlr); exec-vmlf ex-arwf-vwf-m, ex-fbtr-xwf
+   both shapes; exec-vm ex-vind's call entry takes both IHs (:iter in
+   ex-fcm, :m in ex-fbcm with lp nil); exec-vmok ex-vgood-call-enter-m
+   beside -enter, joined as -enter2. ex-vm-agree / ex-vm-runs unchanged
+   in statement. **Generated:** vmtrg's `vtg-tlr` (guard t), ex-tlr on
+   a tree in the reads' range with no case (vtg-tlr-ex-tlr; vm_scan
+   refuses case), cost vtg-tlr-steps-bound (5 steps a node it reaches);
+   vm_clause's loop test is vtg_tlr(body), c%fn_recur (rinfo's) gone.
+   scripts/fuzz-vmtr-gen also runs vtg_tlr against ex-tlr on trees with
+   recur, loop and letfn. **Left:** vtg-tr's loop/recur (kinds 12, 16),
+   then vm_clause itself; until then vm_tr keeps N_LOOP/N_RECUR.
 4. calls and Vars: vm.inc's builtin prim and callw as ex-trcall's cases
    (the head a known builtin: a prim; else :ifn/:applyv), the deref as a
    host prim under ex-collok's hypothesis; collections' op as the node.

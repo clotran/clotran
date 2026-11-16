@@ -5,7 +5,8 @@
   ! guard-verified, reading the tree through vm.inc's vtg_* reads and building
   ! the expression on the value stack through its vtg_* shims. vmtrg.lisp
   ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds
-  ! (vtg-tr-ex-tr).
+  ! (vtg-tr-ex-tr). vtg_tlr: whether a clause's body recurs to the fn (its
+  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr).
   recursive subroutine vtg_tr(tb, flg_, e_, i_)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: flg_
@@ -126,3 +127,62 @@
       exit
     end do
   end subroutine vtg_tr
+
+  recursive function vtg_tlr(e_) result(r)
+    type(gc_value), value :: e_
+    logical :: r
+    integer(int64) :: k_1
+    integer(int64) :: nk_2
+    logical :: t_10
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    logical :: t_9
+    k_1 = vtg_kind(e_)
+    nk_2 = vtg_nk(e_)
+    if ((k_1 == 16_int64)) then
+      t_10 = .true.
+    else
+      if ((k_1 == 4_int64)) then
+        if (vtg_tlr(vtg_kid(e_, 1_int64))) then
+          t_4 = .true.
+        else
+          if ((2_int64 < nk_2)) then
+            t_3 = vtg_tlr(vtg_kid(e_, 2_int64))
+          else
+            t_3 = .false.
+          end if
+          t_4 = t_3
+        end if
+        t_9 = t_4
+      else
+        if ((k_1 == 5_int64)) then
+          if ((nk_2 <= 0_int64)) then
+            t_5 = .false.
+          else
+            t_5 = vtg_tlr(vtg_kid(e_, ((-1_int64) + nk_2)))
+          end if
+          t_8 = t_5
+        else
+          if ((k_1 == 11_int64)) then
+            t_6 = (k_1 == 11_int64)
+          else
+            t_6 = (k_1 == 13_int64)
+          end if
+          if (t_6) then
+            t_7 = vtg_tlr(vtg_kid(e_, vtg_i2(e_)))
+          else
+            t_7 = .false.
+          end if
+          t_8 = t_7
+        end if
+        t_9 = t_8
+      end if
+      t_10 = t_9
+    end if
+    r = t_10
+    return
+  end function vtg_tlr

@@ -24,7 +24,13 @@ captures in place, do's dead-local encoding done.
 2. loop/recur: (a) independent-inits loop (vm_loop_indep): ex-tr's `(:loop (inits..)
    body)` proved (ex-lind; ex-vm-agree/ex-vm-runs/ex-anp-runs unchanged); vtg-tr
    still takes no loop (exec-PLAN item 3), (b) fn's loop only
-   on a recur to the fn (c%fn_recur).
+   on a recur to the fn: MODEL DONE (exec-vmtr ex-tlr picks ex-fbtr/ex-fbin's
+   shape; exec-vmcall ex-vwf-tlr-nil, ex-vwf-sb, ex-enter-mx-m; exec-vm
+   ex-vind's call entry both IHs; exec-vmok ex-vgood-call-enter2).
+   vmtrg `vtg-tlr` generated, vm_clause's loop test (c%fn_recur gone).
+   NEXT STEP: vtg-tr's loop/recur (kinds 12, 16: ex-tr's :loop/:recur,
+   vm_loop_indep's (:loop (inits..) body) shape), then vm_clause itself
+   (+ the arity clause, ex-mxcl's :arity throw as vm.inc's prim).
 3. Calls and Vars: builtin prim / callw as ex-trcall's cases; deref as host prim.
 4. try, letfn, case: vm_scan refuses them today.
 Cost theorem and fuzz-vmtr-gen are done.

@@ -359,15 +359,15 @@
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
     "vmtrg"
     {:out "src/f/gen/vm_tr_gen.inc" :include true
-     :fns [vtg-tr]
+     :fns [vtg-tr vtg-tlr]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
      :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-dead vtg-blank vtg-save vtg-restore vtg-other]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
-     :value-formals {vtg-tr #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}}
+     :value-formals {vtg-tr #{e} vtg-tlr #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}}
      :value-fns #{}
      :reentrant #{vtg-tr}
-     :bool-fns #{}
+     :bool-fns #{vtg-tlr}
      ;; a node is a value of clotran's heap, read by vm.inc's shims
      :val-type "gc_value"
      :rt {vtg-kind ["vtg_kind" [:val] :int] vtg-i2 ["vtg_i2" [:val] :int] vtg-s2 ["vtg_s2" [:val] :int]
@@ -379,7 +379,8 @@
               "  ! guard-verified, reading the tree through vm.inc's vtg_* reads and building"
               "  ! the expression on the value stack through its vtg_* shims. vmtrg.lisp"
               "  ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds"
-              "  ! (vtg-tr-ex-tr)."]}
+              "  ! (vtg-tr-ex-tr). vtg_tlr: whether a clause's body recurs to the fn (its"
+              "  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr)."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn

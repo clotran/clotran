@@ -351,19 +351,47 @@
 (defun ex-fcmb (tm ar) (append (ex-fcm tm ar) (ex-lsl (ex-flp ar))))
 (defun ex-capts (j m) (if (zp m) nil (cons (list :capt (nfix j)) (ex-capts (1+ (nfix j)) (1- m)))))
 (defun ex-clets (j m x) (if (zp m) x (list :let (list :capt (nfix j)) (ex-clets (1+ (nfix j)) (1- m) x))))
+; a recur in a tail place lp reaches (ex-vwf's): the fn's when no loop is
+; round it -- vm.inc's c%fn_recur (a recur whose rinfo is the fn's)
+(defun ex-tlr (flg e i)
+  (declare (xargs :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i)))
+                  :well-founded-relation o<
+                  :hints (("Goal" :in-theory (disable ex-kid-of)))))
+  (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
+    (and (consp e)
+         (case flg
+           (:do (cond ((zp nk) nil) ((< i (- nk 1)) (ex-tlr :do e (1+ i))) (t (ex-tlr :m (ex-kid-of e (- nk 1)) 0))))
+           (:let (if (< i n2) (ex-tlr :let e (1+ i)) (and (equal k 11) (ex-tlr :m (ex-kid-of e n2) 0))))
+           (:ct (and (< i (len (ex-c e))) (or (ex-tlr :m (ex-cthen e i) 0) (ex-tlr :ct e (1+ i)))))
+           (:rec t)
+           ((:lin :call :coll :cs :fin) nil)
+           (otherwise
+            (cond ((equal k 16) t)
+                  ((equal k 4) (or (ex-tlr :m (ex-kid-of e 1) 0) (and (< 2 nk) (ex-tlr :m (ex-kid-of e 2) 0))))
+                  ((equal k 5) (ex-tlr :do e 0))
+                  ((equal k 11) (ex-tlr :let e 0))
+                  ((equal k 13) (ex-tlr :m (ex-kid-of e n2) 0))
+                  ((equal k 19) (or (ex-tlr :m (ex-kid-of e 1) 0) (ex-tlr :ct e 0)))
+                  (t nil)))))))
+; the loop round the body only when it recurs to the fn (vm.inc's): else
+; the body in ex-fbcm, the parameters where the call put them
 (defun ex-fbtr (tm ar)
   (let ((m (len (ex-inners (nth 2 tm)))))
     (ex-clets 0 m (list :let (list* :mkclo tm (ex-capts 0 m))
-                        (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
-                              (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))))))
+                        (if (ex-tlr :m (ex-abody ar) 0)
+                            (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
+                                  (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))
+                          (ex-tr :m (ex-abody ar) 0 (ex-fbcm tm ar)))))))
 ; the clause's body: ex-fbtr's with the captures read in place (exec-vmcs's
 ; ex-cs) -- no lets of them: the parameters, then the self slot's let and
 ; the loop -- so a capture's read is (:capt j), as vm.inc's
 (defun ex-fbin (tm ar)
   (let ((m (len (ex-inners (nth 2 tm)))))
     (list :let (list* :mkclo tm (ex-capts 0 m))
-          (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
-                (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar))))))
+          (if (ex-tlr :m (ex-abody ar) 0)
+              (list :loop (ex-locals (ex-fparams ar) (ex-fbcm tm ar))
+                    (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))
+            (ex-tr :m (ex-abody ar) 0 (ex-fbcm tm ar))))))
 (defun ex-fbtc (tm ar) (ex-cs nil (ex-fbin tm ar) (ex-anp ar) (len (ex-inners (nth 2 tm)))))
 (defthm ex-fbtr-fbin (equal (ex-fbtr tm ar) (ex-clets 0 (len (ex-inners (nth 2 tm))) (ex-fbin tm ar))) :rule-classes nil)
 (in-theory (disable ex-fbin))

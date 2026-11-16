@@ -532,7 +532,7 @@ module Eval
        PK_FLOAT = 5, PK_SHORT = 6, PK_BYTE = 7, PK_CHAR = 8
   ! vm.inc's: a translation's state
   type :: vm_tr_ctx
-     logical :: ok = .true., fn_recur = .false.
+     logical :: ok = .true.
      integer :: depth = 0
      logical, allocatable :: reads(:), binds(:)
      integer, allocatable :: map(:), capt(:)

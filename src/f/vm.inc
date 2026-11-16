@@ -329,7 +329,7 @@
   recursive subroutine vm_scan(c, nd)
     type(vm_tr_ctx), intent(inout) :: c
     type(gc_value), intent(in) :: nd
-    type(gc_value) :: kids, rinfo, head
+    type(gc_value) :: kids, head
     integer :: i, n, start
     if (.not. c%ok) return
     if (gc_kind(nd) /= OBJ_AST) then
@@ -373,8 +373,6 @@
           call vm_scan(c, gcv_nth(kids, i))
        end do
     case (N_RECUR)
-       rinfo = gc_slot(nd, 2)
-       if (int_of(gcv_nth(rinfo, 0)) /= 0) c%fn_recur = .true.
        do i = 0, gcv_count(kids) - 1
           call vm_scan(c, gcv_nth(kids, i))
        end do
@@ -1006,7 +1004,8 @@
     c%depth = nl + sl
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, body)
-    if (c%fn_recur) then
+    ! the loop only when the body recurs to the fn (vtg_tlr, generated: exec-vmtr's ex-tlr)
+    if (vtg_tlr(body)) then
        ! (:loop ((:local 0) .. (:local nl-1)) body): the parameters the loop's
        call vs_set(vst, base + 3, gcv_empty(roots))
        call vs_set(vst, base + 5, vm_kw("local"))

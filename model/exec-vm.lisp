@@ -472,10 +472,13 @@
                         (list (ex-vind :m (ex-kid-of e i) 0 nil cm env fr fuel caps defs nil)
                               (ex-vind :call e (1+ i) (append tmp (list (val (car r)))) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) env (cadr r) fuel caps defs lp))))
                      ((zp fuel) nil)
+                     ; the callee's body: round the fn's loop, or (no recur to the fn) once in ex-fbcm
                      (t (let* ((f (car (ex-callee tmp))) (args (cdr (ex-callee tmp))) (ar (ex-car f args)))
-                          (ex-vind :iter (ex-fbody f (len args)) 0 (ex-fvs f args) (ex-fcm (ex-ftm f) ar)
-                                   (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
-                                   (cons (ex-astart ar) (ex-anp ar)))))))
+                          (list (ex-vind :iter (ex-fbody f (len args)) 0 (ex-fvs f args) (ex-fcm (ex-ftm f) ar)
+                                         (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs
+                                         (cons (ex-astart ar) (ex-anp ar)))
+                                (ex-vind :m (ex-fbody f (len args)) 0 nil (ex-fbcm (ex-ftm f) ar)
+                                         (ex-fenv f args) (ex-bind f args) (1- fuel) (caddr f) defs nil))))))
         (:coll (if (< i nk)
                    (let ((r (ex-ev :m (ex-kid-of e i) 0 nil fr fuel)))
                      (list (ex-vind :m (ex-kid-of e i) 0 nil cm env fr fuel caps defs nil)

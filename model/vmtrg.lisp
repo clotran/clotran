@@ -28,6 +28,8 @@
 ; (ex-cs), leaving the scope as it found it.
 ; vtg-steps-bound -- its work at most 9 steps a node it reaches (vtg-size):
 ; each node's shims a constant number.
+; vtg-tlr-ex-tlr -- vtg-tlr, vm_clause's loop test, is exec-vmtr's ex-tlr
+; (a recur to the fn); vtg-tlr-steps-bound -- 5 steps a node it reaches.
 
 (in-package "ACL2")
 
@@ -163,6 +165,18 @@
             (t (vtg-other e vtb)))))))
 
 (verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-nil))))
+
+; whether the clause's body recurs to the fn -- exec-vmtr's ex-tlr, a recur
+; in a tail place no loop is round: vm_clause's loop round the body only
+; then (ex-fbtc). A let's bindings and a do's all but last are no tail.
+(defun vtg-tlr (e)
+  (declare (xargs :guard t :measure (acl2-count e)))
+  (let ((k (vtg-kind e)) (nk (vtg-nk e)))
+    (cond ((equal k 16) t)
+          ((equal k 4) (if (vtg-tlr (vtg-kid e 1)) t (if (< 2 nk) (vtg-tlr (vtg-kid e 2)) nil)))
+          ((equal k 5) (if (zp nk) nil (vtg-tlr (vtg-kid e (- nk 1)))))
+          ((or (equal k 11) (equal k 13)) (vtg-tlr (vtg-kid e (vtg-i2 e))))
+          (t nil))))
 
 ; ---- IT IS EX-TR ------------------------------------------------------------------------------
 
@@ -338,6 +352,28 @@
   :hints (("Goal" :use ((:instance vtg-tr-st (s (vtb-stk vtb)) (c (vtb-cm vtb)) (sv (vtb-sv vtb)) (cs (vtb-cs vtb))))
                   :in-theory (disable vtg-tr-st vtg-tr vtb-stk vtb-cm vtb-sv vtb-cs vtbp))))
 
+; vtg-tlr is ex-tlr on a tree whose nodes it reaches are in the reads'
+; range and no case (vm_scan refuses case: the fn runs on the tree)
+(defun vtg-tlr-ok (e)
+  (declare (xargs :measure (acl2-count e) :hints (("Goal" :in-theory (disable vtg-kid-ex vtg-reads-ex)))))
+  (and (vtg-ok e) (not (equal (vtg-kind e) 19))
+       (let ((k (vtg-kind e)) (nk (vtg-nk e)))
+         (cond ((equal k 4) (and (vtg-tlr-ok (vtg-kid e 1)) (or (<= nk 2) (vtg-tlr-ok (vtg-kid e 2)))))
+               ((equal k 5) (or (zp nk) (vtg-tlr-ok (vtg-kid e (- nk 1)))))
+               ((or (equal k 11) (equal k 13)) (vtg-tlr-ok (vtg-kid e (vtg-i2 e))))
+               (t t)))))
+(defun vtg-tli (i n) (declare (xargs :measure (nfix (- (nfix n) (nfix i))))) (if (< (nfix i) (nfix n)) (vtg-tli (1+ (nfix i)) n) t))
+(defthm ex-tlr-let-at
+  (implies (consp e) (equal (ex-tlr :let e i) (and (equal (ex-kind e) 11) (ex-tlr :m (ex-kid-of e (ex-i2 e)) 0))))
+  :hints (("Goal" :induct (vtg-tli i (ex-i2 e)) :in-theory (disable ex-kid-of) :expand ((ex-tlr :let e i)))))
+(defthm ex-tlr-do-at
+  (implies (consp e) (equal (ex-tlr :do e i) (if (zp (ex-nk e)) nil (ex-tlr :m (ex-kid-of e (- (ex-nk e) 1)) 0))))
+  :hints (("Goal" :induct (vtg-tli i (- (ex-nk e) 1)) :in-theory (disable ex-kid-of) :expand ((ex-tlr :do e i)))))
+(defthm vtg-tlr-ex-tlr
+  (implies (vtg-tlr-ok e) (equal (vtg-tlr e) (ex-tlr :m e 0)))
+  :hints (("Goal" :induct (vtg-tlr e) :in-theory (disable ex-kid-of)
+                  :expand ((ex-tlr :m e 0) (vtg-tlr-ok e) (vtg-tlr e)))))
+
 ; ---- THE COST ---------------------------------------------------------------------------------
 ;
 ; vtg-steps: vtg-tr's work as the generated code does it -- a step a call
@@ -393,3 +429,24 @@
                   :expand ((:free (flg) (vtg-steps flg e i)) (:free (flg) (vtg-size flg e i))))))
 (defthm vtg-steps-bound (<= (vtg-steps 0 e 0) (* 9 (vtg-size 0 e 0)))
   :rule-classes :linear :hints (("Goal" :use ((:instance vtg-steps-bound-flag (flg 0) (i 0))))))
+
+; vtg-tlr's work: a node it reaches its reads (kind, count, a kid, i2) and
+; the call, 5 steps; the nodes it reaches vtg-tlr-size. vtg-tlr-steps-bound.
+(defun vtg-tlr-size (e)
+  (declare (xargs :measure (acl2-count e) :hints (("Goal" :in-theory (disable vtg-kid-ex vtg-reads-ex)))))
+  (let ((k (vtg-kind e)) (nk (vtg-nk e)))
+    (cond ((equal k 4) (+ 1 (vtg-tlr-size (vtg-kid e 1)) (if (< 2 nk) (vtg-tlr-size (vtg-kid e 2)) 0)))
+          ((equal k 5) (if (zp nk) 1 (+ 1 (vtg-tlr-size (vtg-kid e (- nk 1))))))
+          ((or (equal k 11) (equal k 13)) (+ 1 (vtg-tlr-size (vtg-kid e (vtg-i2 e)))))
+          (t 1))))
+(defun vtg-tlr-steps (e)
+  (declare (xargs :measure (acl2-count e) :hints (("Goal" :in-theory (disable vtg-kid-ex vtg-reads-ex)))))
+  (let ((k (vtg-kind e)) (nk (vtg-nk e)))
+    (cond ((equal k 16) 2)
+          ((equal k 4) (+ 5 (if (vtg-tlr (vtg-kid e 1)) (vtg-tlr-steps (vtg-kid e 1))
+                              (+ (vtg-tlr-steps (vtg-kid e 1)) (if (< 2 nk) (vtg-tlr-steps (vtg-kid e 2)) 0)))))
+          ((equal k 5) (if (zp nk) 3 (+ 4 (vtg-tlr-steps (vtg-kid e (- nk 1))))))
+          ((or (equal k 11) (equal k 13)) (+ 4 (vtg-tlr-steps (vtg-kid e (vtg-i2 e)))))
+          (t 3))))
+(defthm vtg-tlr-steps-bound (<= (vtg-tlr-steps e) (* 5 (vtg-tlr-size e)))
+  :rule-classes :linear :hints (("Goal" :induct (vtg-tlr-steps e) :in-theory (disable vtg-kid-ex))))

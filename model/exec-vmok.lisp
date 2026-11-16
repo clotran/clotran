@@ -131,7 +131,8 @@
         ((ex-vgood :m (ex-kid-of e (nfix i)) 0 nil cm env fr fuel caps defs nil)
          (ex-vgood :call e (1+ (nfix i)) (append tmp (list (val (car (ex-r0))))) (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) cm) env (cadr (ex-r0)) fuel caps defs lp)))
 (ex-old ex-vgood-call-zp ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (zp fuel)) ())
-(ex-old ex-vgood-call-enter ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (not (zp fuel)))
+(ex-old ex-vgood-call-enter ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (not (zp fuel))
+                              (ex-tlr :m (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0))
         ((ex-vgood :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0
                    (ex-fvs (car (ex-callee tmp)) (cdr (ex-callee tmp)))
                    (ex-fcm (ex-ftm (car (ex-callee tmp))) (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
@@ -140,6 +141,30 @@
                    (cons (ex-astart (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
                          (ex-anp (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp)))))))
         ((:instance ex-call-iterok (tmp (ex-callee tmp)))))
+; no recur to the fn: the callee's body once, in ex-fbcm (exec-PLAN Lane 3 item 3(b))
+(ex-old ex-vgood-call-enter-m ((consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (not (zp fuel))
+                                (not (ex-tlr :m (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0)))
+        ((ex-vgood :m (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0 nil
+                   (ex-fbcm (ex-ftm (car (ex-callee tmp))) (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                   (ex-fenv (car (ex-callee tmp)) (cdr (ex-callee tmp))) (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp)))
+                   (1- fuel) (caddr (car (ex-callee tmp))) defs nil)))
+(defthm ex-vgood-call-enter2
+  (implies (and (consp e) (equal flg :call) (not (< (nfix i) (ex-nk e))) (not (zp fuel))
+                (ex-vgood :iter (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0
+                          (ex-fvs (car (ex-callee tmp)) (cdr (ex-callee tmp)))
+                          (ex-fcm (ex-ftm (car (ex-callee tmp))) (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                          (ex-fenv (car (ex-callee tmp)) (cdr (ex-callee tmp))) (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp)))
+                          (1- fuel) (caddr (car (ex-callee tmp))) defs
+                          (cons (ex-astart (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                                (ex-anp (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))))
+                (ex-vgood :m (ex-fbody (car (ex-callee tmp)) (len (cdr (ex-callee tmp)))) 0 nil
+                          (ex-fbcm (ex-ftm (car (ex-callee tmp))) (ex-car (car (ex-callee tmp)) (cdr (ex-callee tmp))))
+                          (ex-fenv (car (ex-callee tmp)) (cdr (ex-callee tmp))) (ex-bind (car (ex-callee tmp)) (cdr (ex-callee tmp)))
+                          (1- fuel) (caddr (car (ex-callee tmp))) defs nil))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t :in-theory (disable ex-vgood ex-kid-of ex-tlr ex-vgood-call-enter ex-vgood-call-enter-m)
+                  :use (ex-vgood-call-enter ex-vgood-call-enter-m))))
+(in-theory (disable ex-vgood-call-enter2))
 (ex-old ex-vgood-fin ((consp e) (equal flg :fin) (< 1 (ex-nk e)))
         ((ex-vgood :m (ex-kid-of e 1) 0 nil (append cm (list nil)) (append env (list (val (car tmp)))) fr fuel caps defs nil)))
 (ex-old ex-vgood-fin-end ((consp e) (equal flg :fin) (not (< 1 (ex-nk e)))) ())
@@ -185,7 +210,7 @@
 (in-theory (disable ex-vgood-m-leaf))
 (in-theory (enable ex-vgood-atom ex-vgood-iter-zp ex-vgood-iter ex-vgood-do-none ex-vgood-do-mid ex-vgood-do-last
                    ex-vgood-let-mid ex-vgood-let-loop ex-vgood-let-imid ex-vgood-let-iend ex-vgood-let-body ex-vgood-rec-mid ex-vgood-rec-end
-                   ex-vgood-call-mid ex-vgood-call-zp ex-vgood-call-enter ex-vgood-fin ex-vgood-fin-end
+                   ex-vgood-call-mid ex-vgood-call-zp ex-vgood-call-enter2 ex-vgood-fin ex-vgood-fin-end
                    ex-vgood-m-if ex-vgood-m-lazy ex-vgood-m-top ex-vgood-m-do ex-vgood-m-let ex-vgood-m-rec ex-vgood-m-throw ex-vgood-m-call ex-vgood-m-leaf
                    ex-vgood-m-mark))
 

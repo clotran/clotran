@@ -7,7 +7,8 @@
 ! cases hold (a Var, kind 3: (:const c); anything else, (:const nil)).
 ! scripts/fuzz-vmtr-gen writes the cases and compares the answers with
 ! ACL2's ex-tr. With the argument `broken`, a node's items are taken in
-! the wrong order on purpose: the negative control.
+! the wrong order on purpose: the negative control. With `tlr` it prints
+! vtg_tlr of the root instead (t or nil), against ACL2's ex-tlr.
 !
 !   vmtr_check CASEFILE [broken]
 !
@@ -36,7 +37,7 @@ module vmtr_mock
      integer(int64) :: np = 0, m = 0
   end type vtg_state
   integer, allocatable :: nkind(:), ni2(:), ns2(:), nc(:), nmark(:), nnk(:), noff(:), kids(:)
-  logical :: broken = .false.
+  logical :: broken = .false., tlr = .false.
 contains
   logical function ok(x)
     type(gc_value), intent(in) :: x
@@ -246,6 +247,7 @@ program vmtr_check
   if (command_argument_count() > 1) then
      call get_command_argument(2, arg(2048:))
      broken = trim(arg(2048:)) == 'broken'
+     tlr = trim(arg(2048:)) == 'tlr'
   end if
   open (newunit=u, file=trim(arg(1:2047)), status='old', action='read')
   allocate (row(4096))
@@ -273,8 +275,16 @@ program vmtr_check
      tb%top = 0
      tb%nsv = 0
      root%id = 1
-     call vtg_tr(tb, 0_int64, root, 0_int64)
-     write (*, '(a)') tb%stk(tb%top)%s
+     if (tlr) then
+        if (vtg_tlr(root)) then
+           write (*, '(a)') 't'
+        else
+           write (*, '(a)') 'nil'
+        end if
+     else
+        call vtg_tr(tb, 0_int64, root, 0_int64)
+        write (*, '(a)') tb%stk(tb%top)%s
+     end if
      deallocate (nkind, ni2, ns2, nc, nmark, nnk, noff, kids, tb%stk, tb%sv, tb%cm)
   end do
 end program vmtr_check

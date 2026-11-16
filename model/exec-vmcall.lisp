@@ -354,6 +354,63 @@
   :hints (("Goal" :use ex-ehyp-facts :in-theory (disable ex-ehyp ex-ftm))))
 (in-theory (disable ex-ftm))
 
+; ---- A BODY WITH NO RECUR TO THE FN (exec-PLAN Lane 3 item 3(b)) ------------------------------
+;
+; ex-fbtr's loop is round the body only when it recurs to the fn (ex-tlr):
+; else the body runs in ex-fbcm, no recur in its tail (ex-vwf-tlr-nil), and
+; ex-vwf reads a scope only through its entries but nil (ex-vwf-sb), so
+; ex-fcmb's well-formedness is ex-fbcm's.
+(defun ex-tli (e i) (declare (xargs :measure (nfix (- (ex-i2 e) (nfix i))))) (if (< (nfix i) (ex-i2 e)) (ex-tli e (1+ (nfix i))) t))
+(defthm ex-tlr-loop (implies (equal (ex-kind e) 12) (not (ex-tlr :let e i)))
+  :hints (("Goal" :induct (ex-tli e i) :in-theory (disable ex-kid-of) :expand ((ex-tlr :let e i)))))
+(defthm ex-vwf-tlr-nil
+  (implies (and (ex-vwf flg e i cm lp defs) (not (ex-tlr flg e i))) (ex-vwf flg e i cm nil defs))
+  :hints (("Goal" :induct (ex-vwf flg e i cm lp defs) :in-theory (disable ex-kid-of ex-clr ex-lind)
+                  :expand ((:free (flg lp) (ex-vwf flg e i cm lp defs)) (:free (flg) (ex-tlr flg e i))))))
+; every entry of a but nil is in b
+(defun ex-sb (a b) (if (atom a) t (and (or (null (car a)) (member-equal (car a) b)) (ex-sb (cdr a) b))))
+(defthm ex-sb-mem (implies (and (ex-sb a b) (member-equal x a) x) (member-equal x b)))
+(defthm ex-sb-nmem (implies (and (ex-sb a b) x (not (member-equal x b))) (not (member-equal x a))))
+(defthm ex-subsetp-sb (implies (subsetp-equal a b) (ex-sb a b)))
+(defthm ex-sb-cons (implies (ex-sb a b) (ex-sb a (cons x b))))
+(defthm ex-sb-app-r (implies (ex-sb a b) (ex-sb a (append b l))))
+(defthm ex-sb-app-l (implies (ex-sb a b) (ex-sb a (append l b))))
+(defthm ex-sb-refl (ex-sb a a) :hints (("Goal" :use ((:instance ex-subsetp-sb (b a))))))
+(defthm ex-sb-append (implies (and (ex-sb a b) (ex-sb c d)) (ex-sb (append a c) (append b d))))
+(defthm ex-blank-mem (implies (and x (member-equal x b) (not (member-equal x ls))) (member-equal x (ex-blank ls b))))
+(defthm ex-sb-blank (implies (ex-sb a b) (ex-sb (ex-blank ls a) (ex-blank ls b))))
+(defthm ex-sb-blank-all (implies (subsetp-equal c ls) (ex-sb (ex-blank ls c) b)))
+(defthm ex-sb-blank-self (ex-sb (ex-blank c c) b) :hints (("Goal" :use ((:instance ex-sb-blank-all (ls c))))))
+(defthm ex-sb-nomem (implies (and (ex-sb a b) (ex-nomem ls b)) (ex-nomem ls a)))
+(defthm ex-sb-nomem-blank (implies (and (ex-sb a b) (ex-nomem x (ex-blank ls b))) (ex-nomem x (ex-blank ls a)))
+  :hints (("Goal" :use ((:instance ex-sb-nomem (a (ex-blank ls a)) (b (ex-blank ls b)) (ls x))) :in-theory (disable ex-sb-nomem))))
+(defthm ex-sb-nmem-blank (implies (and (ex-sb a b) x (not (member-equal x (ex-blank ls b)))) (not (member-equal x (ex-blank ls a))))
+  :hints (("Goal" :use ((:instance ex-sb-nmem (a (ex-blank ls a)) (b (ex-blank ls b)))) :in-theory (disable ex-sb-nmem))))
+(defthm ex-sb-subsetp
+  (implies (and (subsetp-equal l a) (ex-sb a b) (not (member-equal nil l))) (subsetp-equal l b)))
+(defthm ex-nat-list-nonil (implies (nat-listp l) (not (member-equal nil l))))
+(defthm ex-slots-nonil (not (member-equal nil (ex-slots s n))))
+(defthm ex-sb-lfin (implies (and (ex-lfin os s n a) (ex-sb a b)) (ex-lfin os s n b)))
+(defthm ex-sb-lfok (implies (and (ex-lfok e j a defs) (ex-sb a b)) (ex-lfok e j b defs)))
+; ex-vwf's walk on two scopes side by side
+(set-irrelevant-formals-ok t)
+(defun ex-v2 (flg e i cm cm2 lp) (declare (xargs :ruler-extenders :all :measure (make-ord 2 (1+ (acl2-count e)) (make-ord 1 (1+ (ex-vrank flg)) (ex-vleft flg e i))) :well-founded-relation o< :hints (("Goal" :in-theory (e/d (ex-c ex-kind ex-nk ex-kids ex-i2 ex-vrank ex-vleft) (ex-kid-of)))))) (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i))) (if (consp e) (list (case flg (:do (cond ((zp nk) nil) ((< i (- nk 1)) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :do e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list nil)) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) (list nil)) lp))) (t (list (ex-v2 :m (ex-kid-of e (- nk 1)) 0 cm cm2 lp))))) (:let (cond ((and (< i n2) (equal k 12) (ex-lind e 1)) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :m (ex-kid-of e i) 0 (append cm (ex-slots (ex-s2 e) i)) (append cm2 (ex-slots (ex-s2 e) i)) nil) (ex-v2 :let e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) lp))) ((< i n2) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :let e (1+ i) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (list (+ (ex-s2 e) i))) (append (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) (list (+ (ex-s2 e) i))) lp))) ((equal k 11) (list (ex-v2 :m (ex-kid-of e n2) 0 cm cm2 lp))) ((and (equal k 12) (ex-lind e 1)) (let ((ls (ex-slots (ex-s2 e) n2))) (list (ex-v2 :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls) (append (ex-blank ls cm2) ls) (cons (ex-s2 e) n2))))) ((equal k 12) (let ((ls (ex-slots (ex-s2 e) n2))) (list (ex-v2 :m (ex-kid-of e n2) 0 (append (ex-blank ls cm) ls) (append (ex-blank ls cm2) ls) (cons (ex-s2 e) n2))))) (t nil))) (:lin (if (< i n2) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :lin e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) lp)) nil)) (:rec (list (if (< i nk) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :rec e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) lp)) nil))) (:call (list (if (< i nk) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :call e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) lp)) nil))) (:cs (list (if (< i (len (ex-c e))) (list (ex-v2 :m (ex-cbody e i) 0 (append cm (list (ex-cslot e i))) (append cm2 (list (ex-cslot e i))) nil) (ex-v2 :cs e (1+ i) cm cm2 lp)) nil))) (:fin (list (ex-v2 :m (ex-kid-of e 1) 0 (append cm (list nil)) (append cm2 (list nil)) nil))) (:coll (list (if (< i nk) (list (ex-v2 :m (ex-kid-of e i) 0 cm cm2 nil) (ex-v2 :coll e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm2) lp)) nil))) (:ct (list (if (< i (len (ex-c e))) (list (ex-v2 :m (ex-cthen e i) 0 cm cm2 lp) (ex-v2 :ct e (1+ i) cm cm2 lp)) nil))) (otherwise (cond ((or (equal k 1) (equal k 3)) nil) ((equal k 2) nil) ((equal k 26) (list (ex-v2 :m (ex-c e) 0 (ex-blank cm cm) (ex-blank cm2 cm2) nil))) ((or (equal k 14) (equal k 15)) nil) ((equal k 6) (list (ex-v2 :m (ex-kid-of e 0) 0 cm cm2 nil) (ex-v2 :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm2) (list nil)) lp))) ((equal k 4) (list (ex-v2 :m (ex-kid-of e 0) 0 cm cm2 nil) (ex-v2 :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm2) lp) (ex-v2 :m (ex-kid-of e 2) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm2) lp))) ((equal k 5) (list (ex-v2 :do e 0 cm cm2 lp))) ((equal k 11) (list (ex-v2 :let e 0 cm cm2 lp))) ((equal k 12) (list (ex-v2 :let e 0 cm cm2 lp) (ex-v2 :lin e 0 cm cm2 lp))) ((equal k 13) (list (ex-v2 :m (ex-kid-of e n2) 0 (append cm (ex-slots (ex-s2 e) n2)) (append cm2 (ex-slots (ex-s2 e) n2)) lp))) ((equal k 16) (list (ex-v2 :rec e 0 cm cm2 lp))) ((equal k 17) (list (ex-v2 :m (ex-kid-of e 0) 0 cm cm2 nil))) ((equal k 18) (list (ex-v2 :m (ex-kid-of e 0) 0 cm cm2 nil) (ex-v2 :cs e 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm2) nil) (ex-v2 :fin e 0 (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm) (ex-blank (append (ex-clr :m (ex-kid-of e 0) 0) (ex-clr :cs e 0)) cm2) nil))) ((member k '(7 8 9 22 23 10 20 24 21)) (list (ex-v2 :coll e 0 cm cm2 nil))) ((equal k 19) (list (ex-v2 :m (ex-kid-of e 0) 0 cm cm2 nil) (ex-v2 :m (ex-kid-of e 1) 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm2) (list nil)) lp) (ex-v2 :ct e 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm2) (list nil)) lp))) (t nil))))) nil)))
+(defthm ex-vwf-sb
+  (implies (and (ex-vwf flg e i cm lp defs) (ex-sb cm cm2) (ex-sb cm2 cm)) (ex-vwf flg e i cm2 lp defs))
+  :hints (("Goal" :induct (ex-v2 flg e i cm cm2 lp) :in-theory (disable ex-kid-of ex-clr ex-lind)
+                  :expand ((:free (flg) (ex-vwf flg e i cm lp defs)) (:free (flg) (ex-vwf flg e i cm2 lp defs))))))
+(defthm ex-sb-blank-back (ex-sb c (append (ex-blank x c) x)))
+(defthm ex-sb-blank-in (ex-sb (ex-blank x c) c))
+(defthm ex-sb-app2 (implies (and (ex-sb a c) (ex-sb b c)) (ex-sb (append a b) c)))
+(defthm ex-sb-blank-fwd (implies (subsetp-equal x c) (ex-sb (append (ex-blank x c) x) c)))
+(defthm ex-fparams-fbcm (subsetp-equal (ex-fparams ar) (ex-fbcm tm ar)) :hints (("Goal" :in-theory (enable ex-fbcm))))
+(defthm ex-fcmb-sb (and (ex-sb (ex-fcmb tm ar) (ex-fbcm tm ar)) (ex-sb (ex-fbcm tm ar) (ex-fcmb tm ar)))
+  :hints (("Goal" :in-theory (e/d (ex-fcmb ex-fcm ex-flp ex-lsl) (ex-fbcm ex-sb ex-fparams-fbcm ex-sb-blank-fwd ex-sb-blank-back))
+                  :use (ex-fparams-fbcm
+                        (:instance ex-sb-blank-fwd (x (ex-fparams ar)) (c (ex-fbcm tm ar)))
+                        (:instance ex-sb-blank-back (x (ex-fparams ar)) (c (ex-fbcm tm ar))))
+                  :expand ((ex-fparams ar)))))
+
 (defthm ex-fbcm-agree
   (implies (ex-ehyp f args defs)
            (ex-agree (ex-fbcm (ex-ftm f) (ex-car f args)) (ex-fenv f args) (ex-bind f args)))
@@ -422,7 +479,7 @@
                                   (ex-fbtr ex-arwf ex-defs-ok ex-arity ex-pick-arity ex-ehyp ex-arswf ex-rest-args ex-mxcls ex-self
                                    ex-clauses ex-tmwf)))))
 (defthm ex-fbtr-mx
-  (implies (and (true-listp args) (true-listp caps) (equal (len caps) (len (ex-inners (nth 2 tm)))))
+  (implies (and (true-listp args) (true-listp caps) (equal (len caps) (len (ex-inners (nth 2 tm)))) (ex-tlr :m (ex-abody ar) 0))
            (equal (mx2 (ex-fbtr tm ar) args caps defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody ar) 0 (ex-fcmb tm ar)))
                             (append args (ex-resl caps) (list (clo tm (ex-resl caps))))
@@ -440,8 +497,15 @@
                            (:free (y env) (mx2 (cons :loop y) env caps defs fuel))
                            (:free (x y env) (mx2-args (cons x y) env caps defs fuel))
                            (:free (env) (mx2 '(:const nil) env caps defs fuel))))))
+; no recur to the fn: no loop, the body in ex-fbcm
+(defthm ex-fbtr-mx-m
+  (implies (and (true-listp args) (true-listp caps) (equal (len caps) (len (ex-inners (nth 2 tm)))) (not (ex-tlr :m (ex-abody ar) 0)))
+           (equal (mx2 (ex-fbtr tm ar) args caps defs fuel)
+                  (mx2 (ex-tr :m (ex-abody ar) 0 (ex-fbcm tm ar)) (append args (ex-resl caps) (list (clo tm (ex-resl caps)))) caps defs fuel)))
+  :hints (("Goal" :in-theory (e/d (ex-fbtr) (ex-fbcm ex-fparams ex-fcm ex-fcmb ex-abody clo))
+                  :expand ((:free (y env) (mx2 (cons :let y) env caps defs fuel))))))
 (defthm ex-enter-mx
-  (implies (and (ex-ehyp f args defs) (not (zp fuel)))
+  (implies (and (ex-ehyp f args defs) (not (zp fuel)) (ex-tlr :m (ex-abody (ex-car f args)) 0))
            (equal (ex-mxcall0 f args defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody (ex-car f args)) 0
                                                    (append (ex-fcm (ex-ftm f) (ex-car f args))
@@ -452,6 +516,26 @@
                                                             ex-mxcall0)))))
 
 ; the callee a good call record's apply makes, as an entered call's
+(defthm ex-enter-mx-m
+  (implies (and (ex-ehyp f args defs) (not (zp fuel)) (not (ex-tlr :m (ex-abody (ex-car f args)) 0)))
+           (equal (ex-mxcall0 f args defs fuel)
+                  (mx2 (ex-tr :m (ex-abody (ex-car f args)) 0 (ex-fbcm (ex-ftm f) (ex-car f args)))
+                       (ex-fenv f args) (caddr f) defs (+ -1 fuel))))
+  :hints (("Goal" :use (ex-ehyp-facts ex-enter-mx1
+                        (:instance ex-fbtr-mx-m (tm (ex-ftm f)) (ar (ex-car f args)) (args (ex-bargs (ex-car f args) args))
+                                   (caps (caddr f)) (fuel (+ -1 fuel))))
+                  :in-theory (e/d (ex-fenv) (ex-enter-mx1 ex-fbtr-mx-m ex-fbtr-mx ex-enter-mx ex-ehyp ex-fbtr ex-fbcm ex-fparams ex-fcm
+                                             ex-abody ex-car ex-bargs ex-mxcall0 ex-tr mx2)))))
+(defthm ex-enter-vwf-m
+  (implies (and (ex-ehyp f args defs) (not (ex-tlr :m (ex-abody (ex-car f args)) 0)))
+           (ex-vwf :m (ex-abody (ex-car f args)) 0 (ex-fbcm (ex-ftm f) (ex-car f args)) nil defs))
+  :hints (("Goal" :use (ex-enter-vwf
+                        (:instance ex-vwf-tlr-nil (flg :m) (e (ex-abody (ex-car f args))) (i 0)
+                                   (cm (ex-fcmb (ex-ftm f) (ex-car f args))) (lp (cons (ex-astart (ex-car f args)) (ex-anp (ex-car f args)))))
+                        (:instance ex-vwf-sb (flg :m) (e (ex-abody (ex-car f args))) (i 0) (lp nil)
+                                   (cm (ex-fcmb (ex-ftm f) (ex-car f args))) (cm2 (ex-fbcm (ex-ftm f) (ex-car f args)))))
+                  :in-theory (e/d (ex-fcmb) (ex-ehyp ex-enter-vwf ex-vwf-tlr-nil ex-vwf-sb ex-vwf ex-tlr ex-car ex-fcm ex-fbcm ex-abody ex-astart ex-anp)))))
+
 (defthm ex-apsp-good
   (implies (and (equal (ex-apway tmp) 1) (ex-xvs defs tmp) (ex-lzok defs))
            (and (ex-xvs defs (cadr (ex-apsp tmp))) (true-listp (cadr (ex-apsp tmp)))))
@@ -519,13 +603,27 @@
   (implies (ex-chyp) (ex-xvs defs (ex-fvs (car tmp) (cdr tmp))))
   :hints (("Goal" :by (:instance ex-enter-xvs-vs (f (car tmp)) (args (cdr tmp))))))
 (defthm ex-call-mx
-  (implies (and (ex-chyp) (not (zp fuel)))
+  (implies (and (ex-chyp) (not (zp fuel)) (ex-tlr :m (ex-abody (ex-cr)) 0))
            (equal (ex-mxcall0 (car tmp) (cdr tmp) defs fuel)
                   (mx2-loop (list :loop nil (ex-tr :m (ex-abody (ex-cr)) 0
                                                    (append (ex-fcm (ex-ftm (car tmp)) (ex-cr))
                                                            (ex-slots (ex-astart (ex-cr)) (ex-anp (ex-cr))))))
                             (ex-fenv (car tmp) (cdr tmp)) (ex-fvs (car tmp) (cdr tmp)) (caddr (car tmp)) defs (+ -1 fuel))))
   :hints (("Goal" :by (:instance ex-enter-mx (f (car tmp)) (args (cdr tmp))))))
+
+(defthm ex-call-mx-m
+  (implies (and (ex-chyp) (not (zp fuel)) (not (ex-tlr :m (ex-abody (ex-cr)) 0)))
+           (equal (ex-mxcall0 (car tmp) (cdr tmp) defs fuel)
+                  (mx2 (ex-tr :m (ex-abody (ex-cr)) 0 (ex-fbcm (ex-ftm (car tmp)) (ex-cr)))
+                       (ex-fenv (car tmp) (cdr tmp)) (caddr (car tmp)) defs (+ -1 fuel))))
+  :hints (("Goal" :by (:instance ex-enter-mx-m (f (car tmp)) (args (cdr tmp))))))
+(defthm ex-call-vwf-m
+  (implies (and (ex-chyp) (not (ex-tlr :m (ex-abody (ex-cr)) 0)))
+           (ex-vwf :m (ex-abody (ex-cr)) 0 (ex-fbcm (ex-ftm (car tmp)) (ex-cr)) nil defs))
+  :hints (("Goal" :by (:instance ex-enter-vwf-m (f (car tmp)) (args (cdr tmp))))))
+(defthm ex-call-agree-fbcm
+  (implies (ex-chyp) (ex-agree (ex-fbcm (ex-ftm (car tmp)) (ex-cr)) (ex-fenv (car tmp) (cdr tmp)) (ex-bind (car tmp) (cdr tmp))))
+  :hints (("Goal" :by (:instance ex-fbcm-agree (f (car tmp)) (args (cdr tmp))))))
 
 (defthm ex-linked-ev
   (implies (ex-linked h) (equal (ex-ev :m h 0 tmp fr fuel) (list (cons :val (ex-c h)) fr 1)))

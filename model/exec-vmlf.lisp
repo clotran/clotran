@@ -289,10 +289,18 @@
 (defthm ex-arwf-vwf
   (implies (ex-arwf tm ar defs) (ex-vwf :m (ex-abody ar) 0 (ex-fcmb tm ar) (ex-flp ar) defs))
   :hints (("Goal" :in-theory (enable ex-arwf))))
+; no recur to the fn: the body well formed in ex-fbcm, no loop target
+(defthm ex-arwf-vwf-m
+  (implies (and (ex-arwf tm ar defs) (not (ex-tlr :m (ex-abody ar) 0))) (ex-vwf :m (ex-abody ar) 0 (ex-fbcm tm ar) nil defs))
+  :hints (("Goal" :use (ex-arwf-vwf ex-fcmb-sb
+                        (:instance ex-vwf-tlr-nil (flg :m) (e (ex-abody ar)) (i 0) (cm (ex-fcmb tm ar)) (lp (ex-flp ar)))
+                        (:instance ex-vwf-sb (flg :m) (e (ex-abody ar)) (i 0) (lp nil) (cm (ex-fcmb tm ar)) (cm2 (ex-fbcm tm ar))))
+                  :in-theory (disable ex-arwf-vwf ex-fcmb-sb ex-vwf-tlr-nil ex-vwf-sb ex-vwf ex-tlr ex-arwf ex-fcmb ex-fbcm ex-flp ex-abody))))
 (defthm ex-fbtr-xwf
   (implies (ex-arwf tm ar defs) (x2wf (ex-fbtr tm ar) (ex-anp ar) nil))
-  :hints (("Goal" :in-theory (e/d (ex-fbtr) (ex-tr-xwf ex-fparams ex-arwf-vwf))
+  :hints (("Goal" :in-theory (e/d (ex-fbtr) (ex-tr-xwf ex-fparams ex-arwf-vwf ex-arwf-vwf-m))
                   :use ((:instance ex-tr-xwf (e (ex-abody ar)) (cm (ex-fcmb tm ar)) (lp (ex-flp ar))) ex-arwf-vwf
+                        (:instance ex-tr-xwf (e (ex-abody ar)) (cm (ex-fbcm tm ar)) (lp nil)) ex-arwf-vwf-m
                         (:instance ex-locals-xwf (ls (ex-fparams ar)) (cm (ex-fbcm tm ar))))
                   :expand ((:free (y n) (x2wf (cons :let y) n nil)) (:free (y n k) (x2wf (cons :loop y) n k))
                            (:free (y n) (x2wf (cons :mkclo y) n nil)) (:free (x y n) (x2wf-args (cons x y) n))))))
