@@ -353,4 +353,7 @@
        ["#?(#js {} 1)" "#?(#foo [1] 1)"])
  ;; a duplicated #uuid key is named as its toString, the bare uuid
  (try (read-string "{#uuid \"6a2f41a3-c54c-fce8-32d2-0324e1c32e22\" 1 #uuid \"6a2f41a3-c54c-fce8-32d2-0324e1c32e22\" 2}") (catch clotran.host.exception e (ex-message e)))
+ ;; long of NaN is 0 (RT.longCast's range test is false for NaN); the compiled
+ ;; cl_long_of threw "out of range" (make crosscheck SEED=2741495394)
+ (long ##NaN) (int ##NaN) (let [d (- ##Inf ##Inf)] (long d))
 ]

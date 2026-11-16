@@ -197,7 +197,7 @@
 " ED "    integer(int64) :: r
 " (when-not lib? "    character(len=32) :: buf\n") "    ! 2^63 itself is in range: RT's comparison promotes Long.MAX_VALUE to
     ! it, and the host's cast then saturates (the interpreter's long_of_double)
-    if (.not. (x >= -9.223372036854775808d18 .and. x <= 9.223372036854775808d18)) then
+    if (x < -9.223372036854775808d18 .or. x > 9.223372036854775808d18) then
 " (if lib?
     "       ! the runtime writes the double, as clj does
        err%has_x = .true.
@@ -209,7 +209,9 @@
        write(buf, '(es24.16e3)') x
        " (fail "'Value out of range for long: ' // trim(adjustl(buf))" 3))) "
     end if
-    if (x >= 9.223372036854775808d18) then
+    if (x /= x) then
+       r = 0_int64   ! (long ##NaN) is 0: the cast, not a range error
+    else if (x >= 9.223372036854775808d18) then
        r = huge(r)
     else
        r = int(x, int64)
