@@ -231,6 +231,7 @@
     integer(int64) :: t_15
     logical :: t_27
     logical :: t_28
+    logical :: t_29
     do
       select case (flg_)
       case (1_int64)
@@ -410,26 +411,37 @@
           call vtg_node(tb, 5_int64, vtg_nk(e_))
         case default
           if ((k_17 == 6_int64)) then
-            t_27 = (vtg_pk(e_) == 3_int64)
+            t_27 = (vtg_pk(e_) == 4_int64)
           else
             t_27 = .false.
           end if
           if (t_27) then
             call vtg_hd(tb, e_)
             call vtg_tr(tb, 3_int64, e_, 1_int64)
-            call vtg_node(tb, 6_int64, (1_int64 + vtg_nk(e_)))
+            call vtg_node(tb, 7_int64, vtg_nk(e_))
           else
             if ((k_17 == 6_int64)) then
-              t_28 = (.not. (vtg_pk(e_) == 0_int64))
+              t_28 = (vtg_pk(e_) == 3_int64)
             else
               t_28 = .false.
             end if
             if (t_28) then
               call vtg_hd(tb, e_)
               call vtg_tr(tb, 3_int64, e_, 1_int64)
-              call vtg_node(tb, 6_int64, vtg_nk(e_))
+              call vtg_node(tb, 6_int64, (1_int64 + vtg_nk(e_)))
             else
-              call vtg_other(tb, e_)
+              if ((k_17 == 6_int64)) then
+                t_29 = (.not. (vtg_pk(e_) == 0_int64))
+              else
+                t_29 = .false.
+              end if
+              if (t_29) then
+                call vtg_hd(tb, e_)
+                call vtg_tr(tb, 3_int64, e_, 1_int64)
+                call vtg_node(tb, 6_int64, vtg_nk(e_))
+              else
+                call vtg_other(tb, e_)
+              end if
             end if
           end if
         end select

@@ -196,16 +196,16 @@
 (ex-old ex-vgood-m-rec ((consp e) (ex-mflg) (equal (ex-kind e) 16)) ((ex-vgood :rec e 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-m-throw ((consp e) (ex-mflg) (equal (ex-kind e) 17)) ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)))
 ; a call whose head is read at translation (exec-vmtr's ex-pcall: a constant
-; builtin's, a Var's wrapping one): its items and arguments in the call's
-; scope, the head's call on them (exec-vm's ex-mx-pcall, under ex-bipok,
-; ex-wrapok and ex-callwok)
+; builtin's, a Var's wrapping one, an IFn constant's or Var's): its items
+; and arguments in the call's scope, the head's call on them (exec-vm's
+; ex-mx-pcall, under ex-bipok, ex-wrapok, ex-callwok and ex-derefok)
 (defthm ex-vgood-m-callp
   (implies (and (consp e) (ex-mflg) (equal (ex-kind e) 6) (ex-pcall e)
                 (ex-vgood :call e 1 (list (ex-c (ex-kid-of e 0))) cm env fr fuel caps defs lp))
            (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
   :hints (("Goal" :do-not-induct t :cases ((equal flg :m))
                   :in-theory (e/d (ex-vgood ex-ev-pcall ex-pcall-parts) (ex-kid-of ex-xvs ex-catchw ex-clr ex-csbr ex-cbuild ex-mxcall ex-mx-pcall ex-tr ex-vwf ex-ev ex-pcall))
-                  :use (ex-pcall-ifn (:instance ex-mx-pcall (args (ex-tr :call e 1 cm))) (:instance ex-len-call (i 1) (c cm))))))
+                  :use (ex-pcall-ifn (:instance ex-pcall-nothrow (lp nil)) (:instance ex-mx-pcall (args (ex-tr :call e 1 cm))) (:instance ex-len-call (i 1) (c cm))))))
 (in-theory (disable ex-vgood-m-callp))
 (ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6) (not (ex-pcall e)))
         ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)

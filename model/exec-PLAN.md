@@ -789,7 +789,7 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_DO, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 5, 17, 11 | yes -- **generated now** (vmtrg) |
 | N_LOCAL of a capture | ex-fbtc reads it in place, `(:capt j)` (exec-vmcs's ex-cs) | yes -- vtg_local exact |
 | N_LOOP, N_RECUR | lets, then `(:loop (locals..) body)`, `(:recur ..)` -- no dummy (item 3) | partly: the same when an init reads an earlier binding; vm.inc's independent-inits loop `(:loop (inits..) body)` (PLAN 34, no let keeps a walked seq's head) is not ex-tr's yet |
-| N_CALL | a call whose head is read at translation (exec-vmtr's ex-pcall / ex-pk): a constant builtin's `(:prim f args..)`, a direct-linked Var's whose fn wraps builtin f `(:prim f args..)` (item 4); else ex-trcall: `:ifn` then `:applyv` | partly: both **generated now** (vtg_pk, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn), ex-wrapok (a fn the runtime says wraps f at n is an IFn, and its call on n values answers prim f's, unless out of fuel); vtg_pk's tests (vm.inc's OBJ_BUILTIN not B_APPLY, and vm_linked_builtin / wrapper_of, where the model asks prim :clotran.vm/builtin, and i2 1 with prim :clotran.vm/wraps); apply's constant :callv. Also generated now (item 4(b)): a Var not direct-linked wrapping f, `(:prim :clotran.vm/callw (:const v) args..)` (vtg_pk 3, vtg_hd pushing callw and the Var's constant), under named ex-callwok (the runtime's callw of v on n values is prim f's) and vtg_pk's test (vm_wraps where the model asks prim :clotran.vm/wraps; vm_var_ref's constant where the model's is v). Not yet: `:callv` (vm.inc evaluates the args before the head and asks no :ifn; the model's head is first) |
+| N_CALL | a call whose head is read at translation (exec-vmtr's ex-pcall / ex-pk): a constant builtin's `(:prim f args..)`, a direct-linked Var's whose fn wraps builtin f `(:prim f args..)` (item 4); else ex-trcall: `:ifn` then `:applyv` | partly: both **generated now** (vtg_pk, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn), ex-wrapok (a fn the runtime says wraps f at n is an IFn, and its call on n values answers prim f's, unless out of fuel); vtg_pk's tests (vm.inc's OBJ_BUILTIN not B_APPLY, and vm_linked_builtin / wrapper_of, where the model asks prim :clotran.vm/builtin, and i2 1 with prim :clotran.vm/wraps); apply's constant :callv. Also generated now (item 4(b)): a Var not direct-linked wrapping f, `(:prim :clotran.vm/callw (:const v) args..)` (vtg_pk 3, vtg_hd pushing callw and the Var's constant), under named ex-callwok (the runtime's callw of v on n values is prim f's) and vtg_pk's test (vm_wraps where the model asks prim :clotran.vm/wraps; vm_var_ref's constant where the model's is v). Also generated now (item 4(c)): an IFn constant's or Var's call, not apply, `(:callv h args..)` (vtg_pk 4, vtg_node 7), no new semantic hypothesis (the head answers v whenever the args do; v an IFn so the cast passes; not apply so no spread), named: vtg_pk's is_ifn (of the Var's value at translation) where the model asks prim :ifn. Not yet: `:callv` of a local's or other expression's head, a non-IFn's, apply's (vm.inc runs the args before the head and asks no :ifn; the model's ex-trcall is head first and cast: they part when the head is no IFn and an argument throws or runs out) |
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
@@ -995,10 +995,27 @@ position.
    ex-mx-pcallw; the top theorems gain (ex-callwok); vmtrg's vtg_hd pushes
    ex-phd's items (vtg-node-rev2, vtg-cs-pcall), vtg_node 6 of nk + 1 at
    ex-pk 3; vm_tr's callw branch gone; fuzz-vmtr-gen draws Vars of i2 0 and 1.
-   **Left, its own named hypotheses**: (c) `:callv` -- vm.inc translates and runs the args before the head and
+   **(c) :callv of an IFn constant or Var, not apply: done** -- ex-pk 4
+   (head kind 1 or 3, ex-ifn of v, v not :apply), ex-phd (h) the head's own
+   translation, ex-pop :callv; exec-vm's ex-mx-pcallv (no new semantic
+   hypothesis: ex-derefok gives the head's v after the args, ex-ifn the
+   cast, not :apply no spread, so :callv is :applyv's), ex-pcall-nothrow;
+   vmtrg's vtg_node 7; fuzz-vmtr-gen draws constants and Vars fz-prim
+   calls IFns. Named: vtg_pk's is_ifn / vtg_hv (a non-linked Var's value
+   read at translation) where the model asks prim :ifn of the tree's v.
+   **Left** (vm_tr's hand-written :callv, unproved): a call whose head is a
+   local or any other expression, a non-IFn constant or Var, or apply's.
+   ex-tr's is ex-trcall (head first, cast, :applyv); vm.inc's runs the
+   args first, asks no cast, and leaves apply's spread to the runtime. To
+   take it: either emit ex-trcall's shape (vm.inc's runtime has no :applyv
+   and no prim :ifn today, VmRuntime.f90's opcode 17 unwired), or a named
+   hypothesis that the runtime's :invoke of a non-IFn throws :not-fn PLUS
+   a model restriction that the args cannot throw or run out (they can, so
+   that alone would be unsound) -- i.e. the first.
+   (Earlier note, kept: (c) `:callv` -- vm.inc translates and runs the args before the head and
    asks no :ifn, and does no apply spread (:applyv): needs the head pure
    (a local, a constant, a deref) or ex-tr reordered, and :invoke of a
-   non-IFn throwing :not-fn. Collections' op as the node.
+   non-IFn throwing :not-fn.) Collections' op as the node: not yet.
 5. try, letfn, case: vm_scan refuses them; take them once 1-4 land.
 6. (the cost theorem and fuzz-vmtr-gen: done, above.)
 The hooks stay host actions; the gap to the analyzer's tree is the

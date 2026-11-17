@@ -77,8 +77,22 @@
 ; ex-callwok -- the runtime's callw of v on n values is its prim of the
 ; builtin v wraps at n; vtg_pk's test is vm_wraps where the model asks prim
 ; :clotran.vm/wraps; vm.inc's constant is vm_var_ref's (the Var, or the
-; linked node) where the model's is v. :callv stays vm_tr's (vtg-other).
-; Cost: 4 steps and the args' (vtg-steps), each case.
+; linked node) where the model's is v.
+;
+; A CALL OF AN IFn CONSTANT OR VAR, NOT APPLY (item 4(c)): ex-pk 4 is
+; vm.inc's (:callv h args..), h the head's own translation ((:const v) or the
+; deref), the arguments first as mx2's :callv runs them; vtg_hd pushes h,
+; vtg_node 7. No new semantic hypothesis: the head answers v whenever the
+; args do (ex-derefok), v is an IFn so the tree's cast passes, and not apply
+; so no spread -- :applyv's call (exec-vm's ex-mx-pcallv). Named, not
+; proved: vtg_pk's test is vm.inc's is_ifn of the constant, or of the Var's
+; value or linked fn at translation (vtg_hv), not B_APPLY, where the model
+; asks prim :ifn of v and v not :apply. Every other call -- a local's or any
+; other expression's head, a non-IFn's, apply's -- stays vm_tr's :callv
+; (vtg-other): ex-tr's is ex-trcall, head first and cast, and vm.inc runs
+; the args first with no cast, so the two part when the head is no IFn and
+; an argument throws (named in exec-PLAN). Cost: 4 steps and the args'
+; (vtg-steps), each case.
 
 (in-package "ACL2")
 
@@ -126,7 +140,7 @@
 (defun vtg-popn (n l acc)
   (declare (xargs :guard (natp n)))
   (if (or (zp n) (atom l)) (mv acc l) (vtg-popn (- n 1) (cdr l) (cons (car l) acc))))
-(defun vtg-op (op) (declare (xargs :guard t)) (case op (1 :if) (2 :let) (4 :loop) (5 :recur) (6 :prim) (otherwise :throw)))
+(defun vtg-op (op) (declare (xargs :guard t)) (case op (1 :if) (2 :let) (4 :loop) (5 :recur) (6 :prim) (7 :callv) (otherwise :throw)))
 
 ; (:const v), (:const nil) (vtg_const, vtg_nil)
 (defun vtg-const (v vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :const v) vtb))
@@ -143,9 +157,13 @@
 ; at the call's count (NAMED: vm.inc's vm_linked_builtin -- i2 1 and the link
 ; epoch, wrapper_of -- where the model asks i2 1 and prim
 ; :clotran.vm/wraps), 3 any other Var's whose fn wraps one (NAMED: vm.inc's
-; vm_wraps), 0 any other; vtg_hd pushes ex-phd's items -- the builtin, or
+; vm_wraps), 4 any other constant or Var whose value is an IFn, not apply
+; (NAMED: vm.inc's is_ifn of the constant, or of the Var's value or linked fn
+; now, where the model asks prim :ifn of v), 0 any other; vtg_hd pushes
+; ex-phd's items -- the builtin, the head's own (:const v) or deref, or
 ; :clotran.vm/callw and the Var's (:const var) (NAMED: vm_var_ref's, the Var or
-; the linked node, where the model's is v) -- then (:prim items.. args..) (vtg_node 6)
+; the linked node, where the model's is v) -- then (:prim items.. args..)
+; (vtg_node 6), at 4 (:callv head args..) (vtg_node 7)
 (defun vtg-pk (e) (declare (xargs :guard t)) (ec-call (ex-pk e)))
 (defun vtg-hd (e vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-stk (ec-call (revappend (ec-call (ex-phd e)) (vtb-stk vtb))) vtb))
 ; a slot's read: its position in the scope, the fn's captures read in
@@ -326,6 +344,7 @@
                (vtg-tr 1 e 0 vtb)))
             ((equal k 16) (let ((vtb (vtg-tr 3 e 0 vtb))) (vtg-node 5 (vtg-nk e) vtb)))
             ; a builtin's call: (:prim f args..), the args in the call's scope
+            ((and (equal k 6) (equal (vtg-pk e) 4)) (let* ((vtb (vtg-hd e vtb)) (vtb (vtg-tr 3 e 1 vtb))) (vtg-node 7 (vtg-nk e) vtb)))
             ((and (equal k 6) (equal (vtg-pk e) 3)) (let* ((vtb (vtg-hd e vtb)) (vtb (vtg-tr 3 e 1 vtb))) (vtg-node 6 (+ 1 (vtg-nk e)) vtb)))
             ((and (equal k 6) (not (equal (vtg-pk e) 0))) (let* ((vtb (vtg-hd e vtb)) (vtb (vtg-tr 3 e 1 vtb))) (vtg-node 6 (vtg-nk e) vtb)))
             (t (vtg-other e vtb)))))))
@@ -402,7 +421,8 @@
 (defthm ex-pcall-nk (implies (ex-pcall e) (< 0 (ex-nk e))) :rule-classes :forward-chaining
   :hints (("Goal" :use ex-pcall-head :in-theory (e/d (ex-nk ex-kid-of ex-kids) (ex-pcall-head)))))
 ; its translation (:prim items.. args..): one item, or two (callw's)
-(defthm ex-pop-prim (equal (ex-pop e) :prim) :hints (("Goal" :in-theory (enable ex-pop))))
+(defthm ex-pop-is (and (implies (equal (ex-pk e) 4) (equal (ex-pop e) :callv)) (implies (not (equal (ex-pk e) 4)) (equal (ex-pop e) :prim)))
+  :hints (("Goal" :in-theory (enable ex-pop))))
 (defthm ex-phd-len
   (implies (ex-pcall e) (and (true-listp (ex-phd e)) (equal (len (ex-phd e)) (if (equal (ex-pk e) 3) 2 1))))
   :hints (("Goal" :in-theory (enable ex-pcall ex-pk ex-phd))))
@@ -441,7 +461,7 @@
                                 (list :if (ex-tr :m (ex-kid-of e 0) 0 cm)
                                       (ex-tr :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
                                       (if (< 2 (ex-nk e)) (ex-tr :m (ex-kid-of e 2) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm)) '(:const nil)))))
-                (implies (and (equal (ex-kind e) 6) (ex-pcall e)) (equal (ex-tr :m e 0 cm) (cons :prim (append (ex-phd e) (ex-tr :call e 1 cm)))))
+                (implies (and (equal (ex-kind e) 6) (ex-pcall e)) (equal (ex-tr :m e 0 cm) (cons (ex-pop e) (append (ex-phd e) (ex-tr :call e 1 cm)))))
                 (implies (equal (ex-kind e) 17) (equal (ex-tr :m e 0 cm) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm))))
                 (implies (equal (ex-kind e) 11) (equal (ex-tr :m e 0 cm) (ex-tr :let e 0 cm)))
                 (implies (and (or (equal (ex-kind e) 11) (and (equal (ex-kind e) 12) (not (ex-lind e 1)))) (natp i) (< i (ex-i2 e)))
@@ -567,8 +587,11 @@
        (equal (ex-cs nil (list :throw x) np m) (list :throw (ex-cs nil x np m)))))
 ; a call's items read no slot: its args' captures read in place
 (defthm vtg-cs-pcall
-  (implies (ex-pcall e) (equal (ex-cs nil (cons :prim (append (ex-phd e) x)) np m) (cons :prim (append (ex-phd e) (ex-cs t x np m)))))
-  :hints (("Goal" :in-theory (enable ex-pcall ex-pk ex-phd) :expand ((:free (y) (ex-cs t (cons (list :const y) x) np m))))))
+  (and (implies (and (ex-pcall e) (not (equal (ex-pk e) 4)))
+                (equal (ex-cs nil (cons :prim (append (ex-phd e) x)) np m) (cons :prim (append (ex-phd e) (ex-cs t x np m)))))
+       (implies (equal (ex-pk e) 4)
+                (equal (ex-cs nil (cons :callv (append (ex-phd e) x)) np m) (cons :callv (append (ex-phd e) (ex-cs t x np m))))))
+  :hints (("Goal" :in-theory (enable ex-pcall ex-pk ex-phd) :expand ((:free (y z) (ex-cs t (cons y z) np m))))))
 (in-theory (disable ex-cs vtg-np vtg-nm ex-lind ex-rd vtg-rd))
 (in-theory (disable ex-tr vtg-st vtg-const vtg-deref vtg-hd vtg-pk vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-binds vtg-dead vtg-node vtg-frag vtg-ok
                     vtg-locs vtg-lind vtg-okt))

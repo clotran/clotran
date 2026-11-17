@@ -66,8 +66,15 @@
 ; and the values is prim of the builtin v wraps on them.
 (defun ex-wrapf (v n) (prim :clotran.vm/wraps (list v n)))
 ; THE CALLS WHOSE HEAD IS READ AT TRANSLATION (ex-pcall): ex-pk 1 a constant
-; builtin, 2 a direct-linked Var wrapping one, 3 any other Var wrapping one;
-; 0 every other call (ex-trcall).
+; builtin, 2 a direct-linked Var wrapping one, 3 any other Var wrapping one,
+; 4 any other constant or Var whose value v the runtime says is an IFn
+; (ex-ifn) and is not apply (exec-PLAN Lane 3 item 4(c)): vm.inc's (:callv
+; h args..), h the head's own translation -- the arguments run before the
+; head, as mx2's :callv runs them, and the head, a constant or a deref,
+; answers v whenever they do; no cast (v is an IFn) and no spread (not
+; apply), so it is :applyv's call (exec-vm's ex-mx-pcallv, no new
+; hypothesis); 0 every other call (ex-trcall: a local's or any other
+; expression's head, a non-IFn's, apply's).
 ; Their translation is (op items.. args..), ex-pop the op, ex-phd the items
 ; before the arguments, the arguments in the call's scope cm, no head let.
 (defun ex-pk (e)
@@ -75,12 +82,15 @@
     (cond ((ex-bipe e) 1)
           ((and (consp h) (equal (ex-kind h) 3) (equal (ex-i2 h) 1) (ex-wrapf (ex-c h) (- (ex-nk e) 1))) 2)
           ((and (consp h) (equal (ex-kind h) 3) (ex-wrapf (ex-c h) (- (ex-nk e) 1))) 3)
+          ((and (consp h) (or (equal (ex-kind h) 1) (equal (ex-kind h) 3)) (ex-ifn (ex-c h)) (not (equal (ex-c h) :apply))) 4)
           (t 0))))
 (defun ex-pcall (e) (not (equal (ex-pk e) 0)))
-(defun ex-pop (e) (declare (ignore e)) :prim)
+(defun ex-pop (e) (if (equal (ex-pk e) 4) :callv :prim))
 (defun ex-phd (e)
   (let ((v (ex-c (ex-kid-of e 0))))
-    (case (ex-pk e) (1 (list v)) (2 (list (ex-wrapf v (- (ex-nk e) 1)))) (3 (list :clotran.vm/callw (list :const v))) (otherwise nil))))
+    (case (ex-pk e) (1 (list v)) (2 (list (ex-wrapf v (- (ex-nk e) 1)))) (3 (list :clotran.vm/callw (list :const v)))
+      (4 (list (if (equal (ex-kind (ex-kid-of e 0)) 1) (list :const v) (list :prim :clotran.vm/deref (list :const v)))))
+      (otherwise nil))))
 (defthm ex-pcall-head
   (implies (ex-pcall e) (and (consp (ex-kid-of e 0)) (member-equal (ex-kind (ex-kid-of e 0)) '(1 3))))
   :rule-classes :forward-chaining :hints (("Goal" :use ex-bipe-head :in-theory (disable ex-bipe-head))))
@@ -687,8 +697,9 @@
 (defthm ex-pcall-x2wf
   (implies (and (ex-pcall e) (x2wf-args args n) (x2wf (ex-tr :m (ex-kid-of e 0) 0 cm) n nil))
            (x2wf (cons (ex-pop e) (append (ex-phd e) args)) n k))
-  :hints (("Goal" :in-theory (enable ex-pop ex-phd)
-                  :expand ((:free (x) (x2wf (cons :prim x) n k)) (:free (x y) (x2wf-args (cons x y) n)) (:free (x) (x2wf (cons :const x) n nil))))))
+  :hints (("Goal" :in-theory (enable ex-pop ex-phd ex-pcall)
+                  :expand ((:free (x) (x2wf (cons :prim x) n k)) (:free (x) (x2wf (cons :callv x) n k)) (:free (x) (x2wf (cons :prim x) n nil))
+                           (:free (x y) (x2wf-args (cons x y) n)) (:free (x) (x2wf (cons :const x) n nil))))))
 
 (defthm ex-tr-xwf-flag
   (ex-xgood flg e i cm lp defs)

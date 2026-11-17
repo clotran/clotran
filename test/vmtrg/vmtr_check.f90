@@ -124,23 +124,31 @@ contains
   ! :clotran.vm/wraps of a Var's v of 200 or more at n arguments answers
   ! 1000 + v + n): 1 a constant builtin, 2 a direct-linked (i2 1) Var
   ! wrapping one, 3 any other Var wrapping one; vtg_hd the builtin's
-  ! number, or :clotran.vm/callw and the Var's constant
+  ! number, or :clotran.vm/callw and the Var's constant; 4 a constant or Var
+  ! of 300 or more (prim :ifn says an IFn of those): (:callv head args..)
   integer(int64) function vtg_pk(x)
     type(gc_value), intent(in) :: x
     type(gc_value) :: h
     h = vtg_kid(x, 0_int64)
     vtg_pk = 0
     if (.not. ok(h)) return
-    if (nkind(h%id) == 1 .and. nc(h%id) >= 100) vtg_pk = 1
-    if (nkind(h%id) == 3 .and. nc(h%id) >= 200) vtg_pk = 3
-    if (nkind(h%id) == 3 .and. ni2(h%id) == 1 .and. nc(h%id) >= 200) vtg_pk = 2
+    if (nkind(h%id) == 1 .and. nc(h%id) >= 100 .and. nc(h%id) < 200) vtg_pk = 1
+    if (nkind(h%id) == 3 .and. nc(h%id) >= 200 .and. nc(h%id) < 300) vtg_pk = 3
+    if (nkind(h%id) == 3 .and. ni2(h%id) == 1 .and. nc(h%id) >= 200 .and. nc(h%id) < 300) vtg_pk = 2
+    if ((nkind(h%id) == 1 .or. nkind(h%id) == 3) .and. nc(h%id) >= 300) vtg_pk = 4
   end function vtg_pk
   subroutine vtg_hd(tb, x)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
     type(gc_value) :: h
     h = vtg_kid(x, 0_int64)
-    if (vtg_pk(x) == 2) then
+    if (vtg_pk(x) == 4) then
+       if (nkind(h%id) == 1) then
+          call push(tb, cstr(h))
+       else
+          call push(tb, '(:prim :clotran.vm/deref ' // cstr(h) // ')')
+       end if
+    else if (vtg_pk(x) == 2) then
        call push(tb, itoa(int(1000 + nc(h%id) + nnk(x%id) - 1, int64)))
     else if (vtg_pk(x) == 3) then
        call push(tb, ':clotran.vm/callw')
@@ -184,6 +192,7 @@ contains
     case (4); s = '(:loop'
     case (5); s = '(:recur'
     case (6); s = '(:prim'
+    case (7); s = '(:callv'
     case default; s = '(:throw'
     end select
     if (broken) then

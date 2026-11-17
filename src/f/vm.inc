@@ -439,9 +439,11 @@
        head = gcv_nth(kids, 0)
        call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
        if (c%ok) then
-          ! (A constant builtin's call and a Var's whose fn wraps a builtin
-          ! are vtg_tr's, generated: vtg_pk, model/vmtrg.lisp; apply's,
-          ! B_APPLY, falls to :callv below.)
+          ! (A constant builtin's call, a Var's whose fn wraps a builtin, and
+          ! an IFn constant's or Var's, not apply, are vtg_tr's, generated:
+          ! vtg_pk, model/vmtrg.lisp.) Left here, unproved: a local's or any
+          ! other expression's head, a non-IFn's, apply's -- the model's is
+          ! ex-trcall, head first and cast; this runs the args first, no cast.
           ! anything else: the machine's call, (:callv f args ..) -- its
           ! own when f is one of its closures, the runtime's otherwise
           x = vm_tr(c, head, [roots, vs_get(vst, base + 2)])
@@ -561,7 +563,10 @@
   ! no look-up of the wrapper each time) -- NAMED: vm_linked_builtin where
   ! the model asks i2 1 and prim :clotran.vm/wraps; 3 any other Var whose fn
   ! now only wraps a builtin at this arity, as core's first and next do --
-  ! NAMED: vm_wraps where the model asks prim :clotran.vm/wraps; 0 any other.
+  ! NAMED: vm_wraps where the model asks prim :clotran.vm/wraps; 4 any other
+  ! constant or Var whose value is an IFn and not apply, (:callv head args..)
+  ! -- NAMED: is_ifn of the constant, or of the Var's value or linked fn
+  ! now (vtg_hv), where the model asks prim :ifn of v; 0 any other.
   ! vtg_hd pushes (:prim items.. args..)'s items: the constant, the wrapped
   ! builtin, or :clotran.vm/callw and (:const var), the runtime's call of
   ! what the Var holds then (the Var's node when it is direct-linked: the
@@ -574,19 +579,52 @@
     h = ast_kid(nd, 0_int64)
     if (ast_kind(h) == N_CONST) then
        f = strip_meta(gc_slot(h, 2))
-       if (gc_kind(f) == OBJ_BUILTIN .and. gc_i1(f) /= B_APPLY) vtg_pk = 1
+       if (gc_kind(f) == OBJ_BUILTIN .and. gc_i1(f) /= B_APPLY) then
+          vtg_pk = 1
+       else if (vtg_ifn(f)) then
+          vtg_pk = 4
+       end if
     else if (vm_linked_builtin(h, int(ast_nkids(nd)) - 1)) then
        vtg_pk = 2
     else if (ast_kind(h) == N_VAR) then
-       if (vm_wraps(h, int(ast_nkids(nd)) - 1)) vtg_pk = 3
+       if (vm_wraps(h, int(ast_nkids(nd)) - 1)) then
+          vtg_pk = 3
+       else if (vtg_ifn(vtg_hv(h))) then
+          vtg_pk = 4
+       end if
     end if
   end function vtg_pk
+  ! an IFn, not apply (vtg_pk 4's test)
+  logical function vtg_ifn(f)
+    type(gc_value), intent(in) :: f
+    vtg_ifn = is_ifn(f)
+    if (gc_kind(f) == OBJ_BUILTIN) vtg_ifn = vtg_ifn .and. gc_i1(f) /= B_APPLY
+  end function vtg_ifn
+  ! a Var node's value now: its linked fn, or its Var's value (vm_wraps')
+  function vtg_hv(h) result(v)
+    type(gc_value), intent(in) :: h
+    type(gc_value) :: v
+    v = gc_nil()
+    if (.not. gcn_is_var(gc_slot(h, 2))) return
+    v = vm_var_ref(h)
+    if (gc_kind(v) == OBJ_AST) then
+       v = strip_meta(gc_slot(h, 3))
+    else
+       v = strip_meta(gcn_var_value(v))
+    end if
+  end function vtg_hv
   subroutine vtg_hd(tb, nd)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: nd
     type(gc_value) :: h
     h = ast_kid(nd, 0_int64)
-    if (ast_kind(h) == N_CONST) then
+    if (vtg_pk(nd) == 4) then
+       if (ast_kind(h) == N_CONST) then
+          call vtg_const(tb, vtg_c(h))
+       else
+          call vtg_deref(tb, h)
+       end if
+    else if (ast_kind(h) == N_CONST) then
        call anb_push(gc_slot(h, 2))
     else if (vtg_pk(nd) == 2) then
        call anb_push(wrapper_of(strip_meta(gc_slot(h, 3)), int(ast_nkids(nd)) - 1))
@@ -624,6 +662,7 @@
        case (4); k = vm_kw("loop")
        case (5); k = vm_kw("recur")
        case (6); k = vm_kw("prim")
+       case (7); k = vm_kw("callv")
        case default; k = vm_kw("throw")
        end select
        l = gcl_cons(k, l, [l, k])

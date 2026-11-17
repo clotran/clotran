@@ -123,7 +123,9 @@
            (and (equal (x2-sh np (cons (ex-pop e) (append (ex-phd e) x))) (cons (ex-pop e) (append (ex-phd e) (x2-sh-args np x))))
                 (equal (x2-rd np (cons (ex-pop e) (append (ex-phd e) x))) (x2-rd-args np x))))
   :hints (("Goal" :in-theory (enable ex-pcall ex-pk ex-pop ex-phd)
-                  :expand ((:free (x y) (x2-sh-args np (cons x y))) (:free (x y) (x2-rd-args np (cons x y)))))))
+                  :expand ((:free (x y) (x2-sh-args np (cons x y))) (:free (x y) (x2-rd-args np (cons x y)))
+                           (:free (x) (x2-sh np (cons :callv x))) (:free (x) (x2-rd np (cons :callv x)))
+                           (:free (x) (x2-sh np (cons :prim x))) (:free (x) (x2-rd np (cons :prim x)))))))
 (defthm ex-tr-drop-flag
   (implies (and (natp np) (< np (len cm)) (not (ex-trrd flg np (ex-tr flg e i cm))))
            (equal (ex-trsh flg np (ex-tr flg e i cm)) (ex-tr flg e i (ex-drop np cm))))
