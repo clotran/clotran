@@ -123,7 +123,8 @@ contains
   ! prim so that :clotran.vm/builtin says so of a constant of 100 or more, and
   ! :clotran.vm/wraps of a Var's v of 200 or more at n arguments answers
   ! 1000 + v + n): 1 a constant builtin, 2 a direct-linked (i2 1) Var
-  ! wrapping one; vtg_hd the builtin's number
+  ! wrapping one, 3 any other Var wrapping one; vtg_hd the builtin's
+  ! number, or :clotran.vm/callw and the Var's constant
   integer(int64) function vtg_pk(x)
     type(gc_value), intent(in) :: x
     type(gc_value) :: h
@@ -131,6 +132,7 @@ contains
     vtg_pk = 0
     if (.not. ok(h)) return
     if (nkind(h%id) == 1 .and. nc(h%id) >= 100) vtg_pk = 1
+    if (nkind(h%id) == 3 .and. nc(h%id) >= 200) vtg_pk = 3
     if (nkind(h%id) == 3 .and. ni2(h%id) == 1 .and. nc(h%id) >= 200) vtg_pk = 2
   end function vtg_pk
   subroutine vtg_hd(tb, x)
@@ -140,6 +142,9 @@ contains
     h = vtg_kid(x, 0_int64)
     if (vtg_pk(x) == 2) then
        call push(tb, itoa(int(1000 + nc(h%id) + nnk(x%id) - 1, int64)))
+    else if (vtg_pk(x) == 3) then
+       call push(tb, ':clotran.vm/callw')
+       call push(tb, cstr(h))
     else
        call push(tb, itoa(int(nc(h%id), int64)))
     end if

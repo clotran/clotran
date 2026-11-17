@@ -59,22 +59,28 @@
 ; prim :clotran.vm/wraps (NAMED: vtg_pk's test is vm_wraps where the model
 ; asks prim). A DIRECT-LINKED Var's (ex-linked: i2 1) is vm.inc's (:prim f
 ; args..), f that builtin, fixed at translation (DEVIATIONS 55); exec-vm's
-; named ex-wrapok says the fn's call is the builtin's and v an IFn.
+; named ex-wrapok says the fn's call is the builtin's and v an IFn. A Var
+; not so linked whose fn wraps one (item 4(b)) is vm.inc's (:prim
+; :clotran.vm/callw (:const var) args..), the runtime's call of what the Var
+; holds then; exec-vm's named ex-callwok says prim :clotran.vm/callw of v
+; and the values is prim of the builtin v wraps on them.
 (defun ex-wrapf (v n) (prim :clotran.vm/wraps (list v n)))
 ; THE CALLS WHOSE HEAD IS READ AT TRANSLATION (ex-pcall): ex-pk 1 a constant
-; builtin, 2 a direct-linked Var wrapping one; 0 every other call (ex-trcall).
+; builtin, 2 a direct-linked Var wrapping one, 3 any other Var wrapping one;
+; 0 every other call (ex-trcall).
 ; Their translation is (op items.. args..), ex-pop the op, ex-phd the items
 ; before the arguments, the arguments in the call's scope cm, no head let.
 (defun ex-pk (e)
   (let ((h (ex-kid-of e 0)))
     (cond ((ex-bipe e) 1)
           ((and (consp h) (equal (ex-kind h) 3) (equal (ex-i2 h) 1) (ex-wrapf (ex-c h) (- (ex-nk e) 1))) 2)
+          ((and (consp h) (equal (ex-kind h) 3) (ex-wrapf (ex-c h) (- (ex-nk e) 1))) 3)
           (t 0))))
 (defun ex-pcall (e) (not (equal (ex-pk e) 0)))
 (defun ex-pop (e) (declare (ignore e)) :prim)
 (defun ex-phd (e)
   (let ((v (ex-c (ex-kid-of e 0))))
-    (case (ex-pk e) (1 (list v)) (2 (list (ex-wrapf v (- (ex-nk e) 1)))) (otherwise nil))))
+    (case (ex-pk e) (1 (list v)) (2 (list (ex-wrapf v (- (ex-nk e) 1)))) (3 (list :clotran.vm/callw (list :const v))) (otherwise nil))))
 (defthm ex-pcall-head
   (implies (ex-pcall e) (and (consp (ex-kid-of e 0)) (member-equal (ex-kind (ex-kid-of e 0)) '(1 3))))
   :rule-classes :forward-chaining :hints (("Goal" :use ex-bipe-head :in-theory (disable ex-bipe-head))))
@@ -681,7 +687,8 @@
 (defthm ex-pcall-x2wf
   (implies (and (ex-pcall e) (x2wf-args args n) (x2wf (ex-tr :m (ex-kid-of e 0) 0 cm) n nil))
            (x2wf (cons (ex-pop e) (append (ex-phd e) args)) n k))
-  :hints (("Goal" :in-theory (enable ex-pop ex-phd) :expand ((:free (x) (x2wf (cons :prim x) n k))))))
+  :hints (("Goal" :in-theory (enable ex-pop ex-phd)
+                  :expand ((:free (x) (x2wf (cons :prim x) n k)) (:free (x y) (x2wf-args (cons x y) n)) (:free (x) (x2wf (cons :const x) n nil))))))
 
 (defthm ex-tr-xwf-flag
   (ex-xgood flg e i cm lp defs)

@@ -196,9 +196,9 @@
 (ex-old ex-vgood-m-rec ((consp e) (ex-mflg) (equal (ex-kind e) 16)) ((ex-vgood :rec e 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-m-throw ((consp e) (ex-mflg) (equal (ex-kind e) 17)) ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)))
 ; a call whose head is read at translation (exec-vmtr's ex-pcall: a constant
-; builtin's, a direct-linked Var's wrapping one): its items and arguments in
-; the call's scope, the head's call on them (exec-vm's ex-mx-pcall, under
-; ex-bipok and ex-wrapok)
+; builtin's, a Var's wrapping one): its items and arguments in the call's
+; scope, the head's call on them (exec-vm's ex-mx-pcall, under ex-bipok,
+; ex-wrapok and ex-callwok)
 (defthm ex-vgood-m-callp
   (implies (and (consp e) (ex-mflg) (equal (ex-kind e) 6) (ex-pcall e)
                 (ex-vgood :call e 1 (list (ex-c (ex-kid-of e 0))) cm env fr fuel caps defs lp))
@@ -246,7 +246,7 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-callwok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -254,7 +254,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-callwok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))

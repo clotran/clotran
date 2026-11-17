@@ -11,7 +11,7 @@
 ;; slots new or shadowing, too few children), loop (its inits reading the
 ;; slots before them or not: ex-lind's two shapes), recur, throw, a builtin's
 ;; call (:prim f args..), its head a constant fz-prim calls a builtin or a
-;; direct-linked Var whose fn fz-prim says wraps one -- with a Var and a
+;; Var (direct-linked or not) whose fn fz-prim says wraps one -- with a Var and a
 ;; kind ex-tr does not know among them (vtg_other's), under a scope of
 ;; slots and blanks, np parameters and m captures (vtb-cs). ACL2 prints
 ;; ex-tr :m of the tree in the scope, its captures read in place (ex-cs);
@@ -60,9 +60,9 @@
            (node k :i2 nb :s2 (pick [2 4 6 8]) :kids (vec (repeatedly (+ nb (pick [1 1 1 1 0])) sub))))
       5 (node 5 :kids (vec (repeatedly (pick [0 1 2 2 3 4]) sub)))
       ;; a call whose head is read at translation (fz-prim below): a constant
-      ;; of 100 or more, a builtin; a direct-linked Var of 200 or more, its fn
-      ;; wrapping one
-      6 (node 6 :kids (vec (cons (pick [(node 1 :c (pick [100 101])) (node 3 :i2 1 :c (pick [200 201]))]) (repeatedly (rnd 4) sub))))
+      ;; of 100 or more, a builtin; a Var of 200 or more, direct-linked (i2 1)
+      ;; or not, its fn wrapping one
+      6 (node 6 :kids (vec (cons (pick [(node 1 :c (pick [100 101])) (node 3 :i2 (pick [0 1]) :c (pick [200 201]))]) (repeatedly (rnd 4) sub))))
       17 (node 17 :kids [(sub)])
       99 (node 99 :kids [(sub)]))))
 (defn gen-case [] {:t (gen (pick [1 2 3 3 4 5])) :cm (vec (repeatedly (rnd 6) #(pick [0 1 2 3 4 5 nil]))) :np (rnd 3) :m (rnd 3)})

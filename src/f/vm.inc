@@ -439,39 +439,20 @@
        head = gcv_nth(kids, 0)
        call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
        if (c%ok) then
-          ! (A constant builtin's call and a direct-linked Var's whose fn wraps
-          ! a builtin are vtg_tr's, generated: vtg_pk, model/vmtrg.lisp;
-          ! apply's, B_APPLY, falls to :callv below.)
-          if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_VAR .and. vm_wraps(head, nk - 1)) then
-             ! a Var whose fn now only wraps a builtin at this arity, as
-             ! core's first and next do: (:prim :clotran.vm/callw var args ..),
-             ! the runtime's call of what the Var holds then (the Var's node
-             ! when it is direct-linked: the fn the site bound)
-             call vs_set(vst, base + 4, vm_kw("const"))
-             x = vm_l([vs_get(vst, base + 4), vm_var_ref(head)], [roots, vs_get(vst, base + 2), head])
-             call vs_set(vst, base + 4, x)
+          ! (A constant builtin's call and a Var's whose fn wraps a builtin
+          ! are vtg_tr's, generated: vtg_pk, model/vmtrg.lisp; apply's,
+          ! B_APPLY, falls to :callv below.)
+          ! anything else: the machine's call, (:callv f args ..) -- its
+          ! own when f is one of its closures, the runtime's otherwise
+          x = vm_tr(c, head, [roots, vs_get(vst, base + 2)])
+          call vs_set(vst, base + 4, x)
+          if (c%ok) then
              x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
              call vs_set(vst, base + 3, x)
              x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
              call vs_set(vst, base + 3, x)
-             call vs_set(vst, base + 4, vm_kw("clotran.vm/callw"))
-             x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
-             call vs_set(vst, base + 3, x)
-             call vs_set(vst, base + 5, vm_kw("prim"))
+             call vs_set(vst, base + 5, vm_kw("callv"))
              e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
-          else
-             ! anything else: the machine's call, (:callv f args ..) -- its
-             ! own when f is one of its closures, the runtime's otherwise
-             x = vm_tr(c, head, [roots, vs_get(vst, base + 2)])
-             call vs_set(vst, base + 4, x)
-             if (c%ok) then
-                x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
-                call vs_set(vst, base + 3, x)
-                x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
-                call vs_set(vst, base + 3, x)
-                call vs_set(vst, base + 5, vm_kw("callv"))
-                e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
-             end if
           end if
        end if
     case default
@@ -578,8 +559,13 @@
   ! Var whose bound fn only wraps a builtin at this arity (the fn fixed when
   ! the site was analysed, DEVIATIONS 55, so the builtin is too: no deref,
   ! no look-up of the wrapper each time) -- NAMED: vm_linked_builtin where
-  ! the model asks i2 1 and prim :clotran.vm/wraps; 0 any other.
-  ! vtg_hd pushes (:prim f ..)'s f: the constant, or the wrapped builtin
+  ! the model asks i2 1 and prim :clotran.vm/wraps; 3 any other Var whose fn
+  ! now only wraps a builtin at this arity, as core's first and next do --
+  ! NAMED: vm_wraps where the model asks prim :clotran.vm/wraps; 0 any other.
+  ! vtg_hd pushes (:prim items.. args..)'s items: the constant, the wrapped
+  ! builtin, or :clotran.vm/callw and (:const var), the runtime's call of
+  ! what the Var holds then (the Var's node when it is direct-linked: the
+  ! fn the site bound; NAMED: vm_var_ref's where the model's is v)
   integer(int64) function vtg_pk(nd)
     type(gc_value), intent(in) :: nd
     type(gc_value) :: h, f
@@ -591,6 +577,8 @@
        if (gc_kind(f) == OBJ_BUILTIN .and. gc_i1(f) /= B_APPLY) vtg_pk = 1
     else if (vm_linked_builtin(h, int(ast_nkids(nd)) - 1)) then
        vtg_pk = 2
+    else if (ast_kind(h) == N_VAR) then
+       if (vm_wraps(h, int(ast_nkids(nd)) - 1)) vtg_pk = 3
     end if
   end function vtg_pk
   subroutine vtg_hd(tb, nd)
@@ -600,8 +588,11 @@
     h = ast_kid(nd, 0_int64)
     if (ast_kind(h) == N_CONST) then
        call anb_push(gc_slot(h, 2))
-    else
+    else if (vtg_pk(nd) == 2) then
        call anb_push(wrapper_of(strip_meta(gc_slot(h, 3)), int(ast_nkids(nd)) - 1))
+    else
+       call anb_push(vm_kw("clotran.vm/callw"))
+       call anb_push(vm_l([vm_kw("const"), vm_var_ref(h)], [h]))
     end if
   end subroutine vtg_hd
   subroutine vtg_nil(tb)

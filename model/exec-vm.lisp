@@ -242,6 +242,14 @@
                   (or (equal (ex-mxcall v vs defs fuel) '(:out))
                       (equal (ex-mxcall v vs defs fuel) (ex-pres (prim (ex-wrapf v (len vs)) vs))))))))
 (in-theory (disable ex-wrapok))
+; A CALL OF A VAR NOT DIRECT-LINKED WHOSE FN WRAPS A BUILTIN (ex-pk 3:
+; vm.inc's (:prim :clotran.vm/callw (:const var) args..)). The runtime's
+; callw of v on values vs, when v wraps a builtin f at their count, is its
+; prim of f on them -- a named hypothesis, ex-callwok (clotran: VmRuntime's
+; dispatch 4 derefs the Var and calls its value, whose call is f's)
+(defun-sk ex-callwok ()
+  (forall (v vs) (implies (ex-wrapf v (len vs)) (equal (prim :clotran.vm/callw (cons v vs)) (prim (ex-wrapf v (len vs)) vs)))))
+(in-theory (disable ex-callwok))
 (defthm ex-mx-primf
   (equal (mx2 (list* :prim f args) env caps defs fuel)
          (let ((rs (mx2-args args env caps defs fuel))) (if (valp rs) (ex-pres (prim f (val rs))) rs)))
@@ -249,7 +257,7 @@
 (defthm ex-mx2-args-len
   (implies (valp (mx2-args es env caps defs fuel)) (equal (len (val (mx2-args es env caps defs fuel))) (len es)))
   :hints (("Goal" :induct (len es) :expand ((mx2-args es env caps defs fuel)))))
-(defthm ex-pk-cases (or (equal (ex-pk e) 0) (equal (ex-pk e) 1) (equal (ex-pk e) 2)) :rule-classes nil :hints (("Goal" :in-theory (enable ex-pk))))
+(defthm ex-pk-cases (or (equal (ex-pk e) 0) (equal (ex-pk e) 1) (equal (ex-pk e) 2) (equal (ex-pk e) 3)) :rule-classes nil :hints (("Goal" :in-theory (enable ex-pk))))
 (defthm ex-pk-bipe (iff (equal (ex-pk e) 1) (ex-bipe e)) :hints (("Goal" :in-theory (enable ex-pk))))
 (defmacro ex-pcx (e args)
   `(let ((m (mx2-args ,args env caps defs fuel))) (if (valp m) (ex-mxcall (ex-c (ex-kid-of ,e 0)) (val m) defs fuel) m)))
@@ -259,17 +267,27 @@
   :hints (("Goal" :in-theory (e/d (ex-pk) (ex-mxcall ex-wrapok-necc))
                   :use ((:instance ex-mx2-args-len (es args)) (:instance ex-mx-primf (f (ex-wrapf (ex-c (ex-kid-of e 0)) (- (ex-nk e) 1))))
                         (:instance ex-wrapok-necc (v (ex-c (ex-kid-of e 0))) (n (- (ex-nk e) 1)) (vs (val (mx2-args args env caps defs fuel))))))))
+(defthm ex-mx-pcallw
+  (implies (and (equal (ex-pk e) 3) (ex-wrapok defs) (ex-callwok) (equal (len args) (- (ex-nk e) 1)) (not (equal (ex-pcx e args) '(:out))))
+           (equal (mx2 (list* :prim :clotran.vm/callw (list :const (ex-c (ex-kid-of e 0))) args) env caps defs fuel) (ex-pcx e args)))
+  :hints (("Goal" :in-theory (e/d (ex-pk) (ex-mxcall ex-wrapok-necc ex-callwok-necc))
+                  :expand ((mx2-args (cons (list :const (ex-c (ex-kid-of e 0))) args) env caps defs fuel)
+                           (mx2 (list :const (ex-c (ex-kid-of e 0))) env caps defs fuel))
+                  :use ((:instance ex-mx2-args-len (es args))
+                        (:instance ex-mx-primf (f :clotran.vm/callw) (args (cons (list :const (ex-c (ex-kid-of e 0))) args)))
+                        (:instance ex-callwok-necc (v (ex-c (ex-kid-of e 0))) (vs (val (mx2-args args env caps defs fuel))))
+                        (:instance ex-wrapok-necc (v (ex-c (ex-kid-of e 0))) (n (- (ex-nk e) 1)) (vs (val (mx2-args args env caps defs fuel))))))))
 ; a call whose head is read at translation (exec-vmtr's ex-pcall): its
 ; translation answers the tree's call of the head's value on the arguments,
 ; as :applyv's would (ex-mxcall), unless that runs out of fuel
 (defthm ex-mx-pcall
-  (implies (and (ex-pcall e) (ex-bipok) (ex-wrapok defs) (equal (len args) (- (ex-nk e) 1))
+  (implies (and (ex-pcall e) (ex-bipok) (ex-wrapok defs) (ex-callwok) (equal (len args) (- (ex-nk e) 1))
                 (not (equal (let ((m (mx2-args args env caps defs fuel))) (if (valp m) (ex-mxcall (ex-c (ex-kid-of e 0)) (val m) defs fuel) m))
                             '(:out))))
            (equal (mx2 (cons (ex-pop e) (append (ex-phd e) args)) env caps defs fuel)
                   (let ((m (mx2-args args env caps defs fuel))) (if (valp m) (ex-mxcall (ex-c (ex-kid-of e 0)) (val m) defs fuel) m))))
-  :hints (("Goal" :use (ex-pk-cases ex-bipe-head (:instance ex-mx-callp (c (ex-c (ex-kid-of e 0)))) ex-mx-pwrap)
-                  :cases ((equal (ex-pk e) 1) (equal (ex-pk e) 2)) :in-theory (e/d (ex-pcall ex-pop ex-phd) (ex-mxcall mx2 ex-kid-of ex-mx-callp ex-bipe-head ex-mx-pwrap)))))
+  :hints (("Goal" :use (ex-pk-cases ex-bipe-head (:instance ex-mx-callp (c (ex-c (ex-kid-of e 0)))) ex-mx-pwrap ex-mx-pcallw)
+                  :cases ((equal (ex-pk e) 1) (equal (ex-pk e) 2) (equal (ex-pk e) 3)) :in-theory (e/d (ex-pcall ex-pop ex-phd) (ex-mxcall mx2 ex-kid-of ex-mx-callp ex-bipe-head ex-mx-pwrap ex-mx-pcallw)))))
 (defthm ex-pcall-ifn
   (implies (and (ex-pcall e) (ex-bipok) (ex-wrapok defs)) (ex-ifn (ex-c (ex-kid-of e 0))))
   :hints (("Goal" :in-theory (e/d (ex-pcall ex-pk) (ex-wrapok-necc))
@@ -456,7 +474,7 @@
 (in-theory (disable ex-collok))
 
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-callwok) (ex-caseok) (ex-collok defs)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)

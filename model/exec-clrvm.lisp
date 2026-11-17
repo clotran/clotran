@@ -249,7 +249,7 @@
 ; a tree whose marks are anpass's liveness decision runs on the VM as on the tree
 (defthm ex-anp-runs
   (implies (and (ex-vwf0 :m e 0 nil nil defs) (ex-mkok :m e 0 L n) (equal (len L) n)
-                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs)
+                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-callwok) (ex-caseok) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -263,7 +263,7 @@
 ; frame (analyze_top's apply_clears): the body's run, in a frame of nils
 (defthm ex-top-runs
   (implies (and (consp e) (equal (ex-kind e) 26) (ex-vwf0 :m (ex-c e) 0 nil nil defs) (ex-mkok :m (ex-c e) 0 L n) (equal (len L) n)
-                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs)
+                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-callwok) (ex-caseok) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -370,7 +370,7 @@
 ; analyzer leaves them run on the VM as on the tree
 (defthm ex-anp-runs-defs
   (implies (and (ex-vwf0 :m e 0 nil nil defs) (ex-mkok :m e 0 L n) (equal (len L) n)
-                (ex-defs-ok0 defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs)
+                (ex-defs-ok0 defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-callwok) (ex-caseok) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
