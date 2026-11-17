@@ -1,8 +1,8 @@
 ; THE VM'S TRANSLATION, GENERATED (src/f/gen/vm_tr_gen.inc,
 ; scripts/acl2-fortran -b vmtrg): exec-vmtr's ex-tr at the level the
 ; Fortran is generated from, guard-verified, for the kinds whose encoding
-; vm.inc and ex-tr share -- a constant, a local, if, do, let*, loop, recur
-; and throw --
+; vm.inc and ex-tr share -- a constant, a local, a Var, if, do, let*, loop,
+; recur and throw --
 ; every other kind the host's (vtg-other: vm.inc's hand-written vm_tr,
 ; which calls back here for these kinds). exec-PLAN's Lane 3 says what
 ; is left.
@@ -39,6 +39,17 @@
 ; test at most 6 steps a node it walks.
 ; vtg-tlr-ex-tlr -- vtg-tlr, vm_clause's loop test, is exec-vmtr's ex-tlr
 ; (a recur to the fn); vtg-tlr-steps-bound -- 5 steps a node it reaches.
+;
+; A VAR (exec-PLAN Lane 3 item 3, first slice). Encoding: ex-tr's kind 3 is
+; vm.inc's, (:prim :clotran.vm/deref (:const v)), v the tree's (ex-c e);
+; generated here by one shim, vtg_deref (vm_deref_of of vm_var_ref).
+; Hypotheses, named not proved: exec-vm's ex-derefok -- the host's deref of
+; v answers v (the namespace's root, a direct link's epoch re-read); vm.inc's
+; constant is the Var or the linked node where the model's is the value; and
+; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) (exec-clrvm's
+; ex-vwf0 the same). ex-vm-agree, ex-recur-stays, ex-vm-runs, ex-anp-runs gain
+; (ex-derefok), otherwise unchanged. Cost: a Var 2 steps here as before
+; (vtg-steps' default, one shim); mx2 one prim call more a Var read.
 
 (in-package "ACL2")
 
@@ -91,6 +102,11 @@
 ; (:const v), (:const nil) (vtg_const, vtg_nil)
 (defun vtg-const (v vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :const v) vtb))
 (defun vtg-nil (vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push '(:const nil) vtb))
+; a Var: (:prim :clotran.vm/deref (:const v)), the host's deref (vtg_deref:
+; vm_deref_of of vm_var_ref -- named: its constant is the Var, or the
+; node itself when direct-linked (the link epoch), where the model's is the
+; Var's value; exec-vm's ex-derefok says the deref answers that value)
+(defun vtg-deref (e vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :prim :clotran.vm/deref (list :const (vtg-c e))) vtb))
 ; a slot's read: its position in the scope, the fn's captures read in
 ; place -- cs is (np . m), the clause's np parameters and m captures, the
 ; captures' positions np .. np+m-1 of the scope -- as exec-vmcs's ex-cs
@@ -246,6 +262,7 @@
    (t
     (let ((k (vtg-kind e)))
       (cond ((equal k 1) (vtg-const (vtg-c e) vtb))
+            ((equal k 3) (vtg-deref e vtb))
             ((equal k 2) (vtg-local (vtg-i2 e) vtb))
             ((equal k 4)
              (let* ((vtb (vtg-tr 0 (vtg-kid e 0) 0 vtb))
@@ -269,7 +286,7 @@
             ((equal k 16) (let ((vtb (vtg-tr 3 e 0 vtb))) (vtg-node 5 (vtg-nk e) vtb)))
             (t (vtg-other e vtb)))))))
 
-(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-nil))))
+(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-deref vtg-nil))))
 
 ; whether the clause's body recurs to the fn -- exec-vmtr's ex-tlr, a recur
 ; in a tail place no loop is round: vm_clause's loop round the body only
@@ -317,7 +334,7 @@
          (and (equal (vtg-kind e) 12) (vtg-okt nil e) (vtg-lind e 1)
               (if (< (nfix i) (vtg-i2 e)) (vtg-frag 5 e (+ 1 (nfix i))) (vtg-frag 0 (vtg-kid e (vtg-i2 e)) 0))))
         (t (let ((k (vtg-kind e)))
-             (cond ((member k '(1 2)) t)
+             (cond ((member k '(1 2 3)) t)
                    ((equal k 4) (and (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 0 (vtg-kid e 1) 0)
                                      (or (<= (vtg-nk e) 2) (vtg-frag 0 (vtg-kid e 2) 0))))
                    ((equal k 17) (vtg-frag 0 (vtg-kid e 0) 0))
@@ -361,6 +378,7 @@
 (defthm ex-tr-gen-kinds
   (implies (consp e)
            (and (implies (equal (ex-kind e) 1) (equal (ex-tr :m e 0 cm) (list :const (ex-c e))))
+                (implies (equal (ex-kind e) 3) (equal (ex-tr :m e 0 cm) (list :prim :clotran.vm/deref (list :const (ex-c e)))))
                 (implies (equal (ex-kind e) 2) (equal (ex-tr :m e 0 cm) (list :local (ex-pos (ex-i2 e) cm))))
                 (implies (equal (ex-kind e) 4)
                          (equal (ex-tr :m e 0 cm)
@@ -434,6 +452,7 @@
 (defthm vtg-shims
   (and (equal (vtg-const v (vtg-st s c sv cs)) (vtg-st (cons (list :const v) s) c sv cs))
        (equal (vtg-nil (vtg-st s c sv cs)) (vtg-st (cons '(:const nil) s) c sv cs))
+       (equal (vtg-deref e (vtg-st s c sv cs)) (vtg-st (cons (list :prim :clotran.vm/deref (list :const (vtg-c e))) s) c sv cs))
        (equal (vtg-local n (vtg-st s c sv cs)) (vtg-st (cons (ex-cs nil (list :local (ex-pos n c)) (vtg-np cs) (vtg-nm cs)) s) c sv cs))
        (equal (vtg-save (vtg-st s c sv cs)) (vtg-st s c (cons c sv) cs))
        (equal (vtg-restore (vtg-st s c (cons c0 sv) cs)) (vtg-st s c0 sv cs))
@@ -462,13 +481,14 @@
 ; the rewrite of the captures, through the nodes the generated kinds make
 (defthm vtg-cs-nodes
   (and (equal (ex-cs nil (list :const v) np m) (list :const v))
+       (equal (ex-cs nil (list :prim op (list :const v)) np m) (list :prim op (list :const v)))
        (equal (ex-cs nil (list :if x y z) np m) (list :if (ex-cs nil x np m) (ex-cs nil y np m) (ex-cs nil z np m)))
        (equal (ex-cs nil (list :let x y) np m) (list :let (ex-cs nil x np m) (ex-cs nil y np m)))
        (equal (ex-cs nil (list :loop x y) np m) (list :loop (ex-cs t x np m) (ex-cs nil y np m)))
        (equal (ex-cs nil (cons :recur x) np m) (cons :recur (ex-cs t x np m)))
        (equal (ex-cs nil (list :throw x) np m) (list :throw (ex-cs nil x np m)))))
 (in-theory (disable ex-cs vtg-np vtg-nm ex-lind ex-rd vtg-rd))
-(in-theory (disable ex-tr vtg-st vtg-const vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-binds vtg-dead vtg-node vtg-frag vtg-ok
+(in-theory (disable ex-tr vtg-st vtg-const vtg-deref vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-binds vtg-dead vtg-node vtg-frag vtg-ok
                     vtg-locs vtg-lind vtg-okt))
 
 (defun vtg-locs-ind (s j n stk c cs)
@@ -491,7 +511,7 @@
                 (implies (equal flg 2) (equal (vtg-kind e) 5))
                 (implies (equal flg 3) (or (equal (vtg-kind e) 12) (equal (vtg-kind e) 16)))
                 (implies (equal flg 5) (and (equal (vtg-kind e) 12) (vtg-okt nil e) (vtg-lind e 1)))
-                (implies (not (member flg '(1 2 3 5))) (member (vtg-kind e) (quote (1 2 4 5 11 12 16 17))))
+                (implies (not (member flg '(1 2 3 5))) (member (vtg-kind e) (quote (1 2 3 4 5 11 12 16 17))))
                 (implies (and (not (member flg '(1 2 3 5))) (equal (vtg-kind e) 12)) (vtg-okt nil e))))
   :rule-classes :forward-chaining :hints (("Goal" :expand ((vtg-frag flg e i)))))
 

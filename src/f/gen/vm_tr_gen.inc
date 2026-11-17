@@ -341,6 +341,8 @@
         select case (k_15)
         case (1_int64)
           call vtg_const(tb, vtg_c(e_))
+        case (3_int64)
+          call vtg_deref(tb, e_)
         case (2_int64)
           call vtg_local(tb, vtg_i2(e_))
         case (4_int64)

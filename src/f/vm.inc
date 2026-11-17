@@ -408,7 +408,7 @@
     nk = 0
     if (gcv_is(kids)) nk = gcv_count(kids)
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
-    if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
+    if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR) then
        e = vm_tr_gen(c, nd, roots)
        return
@@ -416,8 +416,6 @@
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
-    case (N_VAR)
-       e = vm_deref_of(vm_var_ref(nd), [roots, vs_get(vst, base + 1)])
     case (N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT)
        ! the runtime's node on the parts' values (vm_node_hook)
        call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
@@ -582,6 +580,12 @@
     k = vm_kw("const")
     call anb_push(vm_l([k, v], [k, v]))
   end subroutine vtg_const
+  ! a Var: (:prim :clotran.vm/deref (:const var)), the node itself when direct-linked
+  subroutine vtg_deref(tb, nd)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    call anb_push(vm_deref_of(vm_var_ref(nd), [nd]))
+  end subroutine vtg_deref
   subroutine vtg_nil(tb)
     type(vtg_state), intent(inout) :: tb
     call vtg_const(tb, gc_nil())

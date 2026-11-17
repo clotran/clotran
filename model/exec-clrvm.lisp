@@ -88,7 +88,8 @@
                          (and (ex-vwf0 :m (ex-cthen e i) 0 cm lp defs) (ex-vwf0 :ct e (1+ i) cm lp defs))
                        t)))
            (otherwise
-            (cond ((or (equal k 1) (equal k 3)) (ex-xvs defs (list (ex-c e))))
+            (cond ((equal k 1) (ex-xvs defs (list (ex-c e))))
+                  ((equal k 3) (and (ex-xvs defs (list (ex-c e))) (not (throwp (ex-c e)))))
                   ((equal k 2) (member-equal (ex-i2 e) cm))
                   ((member k '(14 15)) (and (consp (assoc-equal (ex-c e) defs))
                                      (nat-listp (ex-outers (nth 2 (ex-c e))))
@@ -246,7 +247,7 @@
 ; a tree whose marks are anpass's liveness decision runs on the VM as on the tree
 (defthm ex-anp-runs
   (implies (and (ex-vwf0 :m e 0 nil nil defs) (ex-mkok :m e 0 L n) (equal (len L) n)
-                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
+                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -260,7 +261,7 @@
 ; frame (analyze_top's apply_clears): the body's run, in a frame of nils
 (defthm ex-top-runs
   (implies (and (consp e) (equal (ex-kind e) 26) (ex-vwf0 :m (ex-c e) 0 nil nil defs) (ex-mkok :m (ex-c e) 0 L n) (equal (len L) n)
-                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
+                (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))
@@ -367,7 +368,7 @@
 ; analyzer leaves them run on the VM as on the tree
 (defthm ex-anp-runs-defs
   (implies (and (ex-vwf0 :m e 0 nil nil defs) (ex-mkok :m e 0 L n) (equal (len L) n)
-                (ex-defs-ok0 defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
+                (ex-defs-ok0 defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))

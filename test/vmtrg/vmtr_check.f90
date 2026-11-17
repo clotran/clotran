@@ -4,7 +4,7 @@
 ! (blank -1), vtg_blank blanking what exec-vmtr's ex-clr says the node may
 ! clear, vtg_restore giving back the saved scope, vtg_local ex-pos, the
 ! output stack strings -- and vtg_other ex-tr's of every other kind the
-! cases hold (a Var, kind 3: (:const c); anything else, (:const nil)).
+! cases hold, (:const nil).
 ! scripts/fuzz-vmtr-gen writes the cases and compares the answers with
 ! ACL2's ex-tr. With the argument `broken`, a node's items are taken in
 ! the wrong order on purpose: the negative control. With `tlr` it prints
@@ -114,6 +114,11 @@ contains
     type(gc_value), value :: v
     call push(tb, cstr(v))
   end subroutine vtg_const
+  subroutine vtg_deref(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    call push(tb, '(:prim :clotran.vm/deref ' // cstr(vtg_c(x)) // ')')
+  end subroutine vtg_deref
   subroutine vtg_nil(tb)
     type(vtg_state), intent(inout) :: tb
     call push(tb, '(:const nil)')
@@ -258,11 +263,7 @@ contains
   recursive subroutine vtg_other(tb, x)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
-    if (vtg_kind(x) == 3) then
-       call push(tb, cstr(x))
-    else
-       call push(tb, '(:const nil)')
-    end if
+    call push(tb, '(:const nil)')
   end subroutine vtg_other
 
   ! vmtrcl's: a number, a keyword, the self let's value (:mkclo tm (:capt 0) ..),

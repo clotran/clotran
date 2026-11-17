@@ -206,7 +206,8 @@
         (:fin (ex-tr :m (ex-kid-of e 1) 0 (append cm (list nil))))
         (:ct (if (< i (len (ex-c e))) (cons (ex-tr :m (ex-cthen e i) 0 cm) (ex-tr :ct e (1+ i) cm)) nil))
         (otherwise
-         (cond ((or (equal k 1) (equal k 3)) (list :const (ex-c e)))
+         (cond ((equal k 1) (list :const (ex-c e)))
+               ((equal k 3) (list :prim :clotran.vm/deref (list :const (ex-c e))))
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
                ((equal k 15) (list :prim (ex-cop e) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm))))
                ((equal k 26) (ex-tr :m (ex-c e) 0 (ex-blank cm cm)))
@@ -297,7 +298,8 @@
                          (and (ex-vwf :m (ex-cthen e i) 0 cm lp defs) (ex-vwf :ct e (1+ i) cm lp defs))
                        t)))
            (otherwise
-            (cond ((or (equal k 1) (equal k 3)) (ex-xvs defs (list (ex-c e))))
+            (cond ((equal k 1) (ex-xvs defs (list (ex-c e))))
+                  ((equal k 3) (and (ex-xvs defs (list (ex-c e))) (not (throwp (ex-c e)))))
                   ((equal k 2) (member-equal (ex-i2 e) cm))
                   ((equal k 26) (and (null lp) (ex-vwf :m (ex-c e) 0 (ex-blank cm cm) nil defs)))
                   ((or (equal k 14) (equal k 15)) (and (consp (assoc-equal (ex-c e) defs))

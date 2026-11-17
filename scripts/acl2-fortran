@@ -361,11 +361,11 @@
     {:out "src/f/gen/vm_tr_gen.inc" :include true :book "vmtrcl"
      :fns [vtg-rd vtg-lind vtg-locs vtg-tr vtg-tlr vtg-clause vtg-arcl]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
-     :host [vtg-const vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other
+     :host [vtg-const vtg-deref vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other
             vtg-num vtg-key vtg-self]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
-     :value-formals {vtg-tr #{e} vtg-tlr #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-blank #{x} vtg-other #{x}
+     :value-formals {vtg-tr #{e} vtg-tlr #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-deref #{e} vtg-blank #{x} vtg-other #{x}
                      vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm}}
      :value-fns #{}
      :reentrant #{vtg-tr}

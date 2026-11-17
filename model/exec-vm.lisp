@@ -193,6 +193,14 @@
 (defthm ex-isaok-nothrow (implies (ex-isaok) (not (throwp (prim :isa (list c v)))))
   :hints (("Goal" :use ex-isaok-necc)))
 (in-theory (disable ex-isaok))
+; A VAR. The runtime's deref (vm.inc's vm_deref_of: (:prim :clotran.vm/deref
+; (:const var)), the namespace's root, the link epoch's re-read) answers the
+; Var's value, the tree's (ex-c e) -- a named hypothesis, ex-derefok; a
+; value shaped as prim's throw, (:throw . x), is no Var's (ex-vwf)
+(defun-sk ex-derefok () (forall v (implies (not (throwp v)) (equal (prim :clotran.vm/deref (list v)) v))))
+(defthm ex-derefok-val (implies (and (ex-derefok) (not (throwp v))) (equal (prim :clotran.vm/deref (list v)) v))
+  :hints (("Goal" :use ex-derefok-necc)))
+(in-theory (disable ex-derefok))
 (defthm ex-catchw-nat (implies (equal (car (ex-catchw cs v j)) 1) (natp (cdr (ex-catchw cs v j))))
   :rule-classes (:rewrite :type-prescription))
 (defthm ex-catchw-lo (implies (equal (car (ex-catchw cs v j)) 1) (<= (nfix j) (cdr (ex-catchw cs v j))))
@@ -350,7 +358,7 @@
 (in-theory (disable ex-collok))
 
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-caseok) (ex-collok defs)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
