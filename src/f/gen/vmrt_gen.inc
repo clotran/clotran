@@ -1066,7 +1066,7 @@
     end if
   end function vrt_capt_place
 
-  pure function vrt_prim_kind(hs, tag_, ref_, karg_, kar_, kder_, kcw_, kinv_, kinvm_) result(r)
+  pure function vrt_prim_kind(hs, tag_, ref_, karg_, kar_, kder_, kcw_, kinv_, kinvm_, kifn_, knf_) result(r)
     type(vrt_heap), intent(in) :: hs
     integer(int64), value :: tag_
     integer(int64), value :: ref_
@@ -1076,6 +1076,8 @@
     integer(int64), value :: kcw_
     integer(int64), value :: kinv_
     integer(int64), value :: kinvm_
+    integer(int64), value :: kifn_
+    integer(int64), value :: knf_
     integer(int64) :: r
     integer(int64) :: k_2
     logical :: t_1
@@ -1131,8 +1133,18 @@
                   r = 5_int64
                   return
                 else
-                  r = 7_int64
-                  return
+                  if ((ref_ == kifn_)) then
+                    r = 9_int64
+                    return
+                  else
+                    if ((ref_ == knf_)) then
+                      r = 10_int64
+                      return
+                    else
+                      r = 7_int64
+                      return
+                    end if
+                  end if
                 end if
               end if
             end if

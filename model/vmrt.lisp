@@ -396,10 +396,12 @@
 
 ; rt_prim's op: 6 a node of the program's own (OBJ_AST 30), 8 a builtin
 ; (OBJ_BUILTIN 13), and of the keywords, by identity: 1 arg, 2 arity, 3
-; deref, 4 callw, 5 invoke (either name); 7 any other value, called
-(defun vrt-prim-kind (tag ref karg kar kder kcw kinv kinvm hpg)
+; deref, 4 callw, 5 invoke (either name), 9 ifn (the tree's IFn cast, a
+; call's head first: exec-vmtr's ex-trcall), 10 notfn (its refusal); 7 any
+; other value, called
+(defun vrt-prim-kind (tag ref karg kar kder kcw kinv kinvm kifn knf hpg)
   (declare (xargs :stobjs hpg :guard (and (sb64p tag) (sb64p ref) (sb64p karg) (sb64p kar) (sb64p kder)
-                                          (sb64p kcw) (sb64p kinv) (sb64p kinvm))))
+                                          (sb64p kcw) (sb64p kinv) (sb64p kinvm) (sb64p kifn) (sb64p knf))))
   (cond ((and (equal tag 8) (< 0 ref)) (let ((k (hpg-okd ref hpg))) (cond ((equal k 30) 6) ((equal k 13) 8) (t 7))))
         ((not (equal tag 7)) 7)
         ((equal ref karg) 1)
@@ -407,6 +409,8 @@
         ((equal ref kder) 3)
         ((equal ref kcw) 4)
         ((or (equal ref kinv) (equal ref kinvm)) 5)
+        ((equal ref kifn) 9)
+        ((equal ref knf) 10)
         (t 7)))
 
 ; (:prim arg (:const i)): the running body's entry value i, slot rb+i+1 of
@@ -808,12 +812,12 @@
 ; ---- THE DISPATCH ---------------------------------------------------------------------------
 
 (defthm vrt-prim-kind-range
-  (and (integerp (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm hpg))
-       (<= 1 (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm hpg))
-       (<= (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm hpg) 8)
+  (and (integerp (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm kifn knf hpg))
+       (<= 1 (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm kifn knf hpg))
+       (<= (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm kifn knf hpg) 10)
        ; a keyword is chosen by identity alone, and only a keyword is
-       (iff (member (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm hpg) '(1 2 3 4 5))
-            (and (equal tag 7) (member ref (list karg kar kder kcw kinv kinvm))))))
+       (iff (member (vrt-prim-kind tag ref karg kar kder kcw kinv kinvm kifn knf hpg) '(1 2 3 4 5 9 10))
+            (and (equal tag 7) (member ref (list karg kar kder kcw kinv kinvm kifn knf))))))
 
 (defthm vrt-arg-slot-inside
   (implies (and (integerp rb) (integerp ival) (integerp len) (< 0 (vrt-arg-slot n tag ival rb len)))

@@ -106,7 +106,7 @@
        "          (b (vrt-throwp tg rf (nth 0 hd) (nth 1 hd) hpg)) (vrt-thrown-place tg rf hpg)\n"
        "          (b (vrt-clop tg rf (nth 2 hd) (nth 3 hd) hpg vrx)) (vrt-clo-f tg rf hpg vrx)\n"
        "          (vrt-capt-place i tg rf hpg vrx) (vrt-cfid tg rf hpg vrx) (vrt-cncap tg rf hpg vrx)\n"
-       "          (vrt-prim-kind tg rf 1 2 3 4 5 6 hpg) (vrt-arg-slot nn tg iv rb len))))\n"
+       "          (vrt-prim-kind tg rf 1 2 3 4 5 6 7 8 hpg) (vrt-arg-slot nn tg iv rb len))))\n"
        "(defun asks (qs hd hpg vrx) (declare (xargs :stobjs (hpg vrx) :mode :program))\n"
        "  (if (endp qs) nil (cons (ask (car qs) hd hpg vrx) (asks (cdr qs) hd hpg vrx))))\n"
        "(defun run-case (k hs xs hd qs hpg vrx) (declare (xargs :stobjs (hpg vrx) :mode :program))\n"

@@ -12,7 +12,8 @@
 ;; slots before them or not: ex-lind's two shapes), recur, throw, a builtin's
 ;; call (:prim f args..), its head a constant fz-prim calls a builtin or a
 ;; Var (direct-linked or not) whose fn fz-prim says wraps one, or a constant
-;; or Var fz-prim says is an IFn (:callv head args..) -- with a Var and a
+;; or Var fz-prim says is an IFn (:callv head args..), else (a local's or any
+;; other expression's head, a non-IFn's) ex-trcall's -- with a Var and a
 ;; kind ex-tr does not know among them (vtg_other's), under a scope of
 ;; slots and blanks, np parameters and m captures (vtb-cs). ACL2 prints
 ;; ex-tr :m of the tree in the scope, its captures read in place (ex-cs);
@@ -62,9 +63,11 @@
       5 (node 5 :kids (vec (repeatedly (pick [0 1 2 2 3 4]) sub)))
       ;; a call whose head is read at translation (fz-prim below): a constant
       ;; 100..199, a builtin; a Var of 200..299, direct-linked (i2 1) or not,
-      ;; its fn wrapping one; a constant or Var of 300 or more, an IFn
+      ;; its fn wrapping one; a constant or Var of 300 or more, an IFn; any
+      ;; other head (ex-trcall): a constant or Var no IFn, a local, a subtree
       6 (node 6 :kids (vec (cons (pick [(node 1 :c (pick [100 101])) (node 3 :i2 (pick [0 1]) :c (pick [200 201]))
-                                        (node 1 :c (pick [300 301])) (node 3 :i2 (pick [0 1]) :c (pick [300 301]))])
+                                        (node 1 :c (pick [300 301])) (node 3 :i2 (pick [0 1]) :c (pick [300 301]))
+                                        (node 1 :c (pick [nil 7])) (node 3 :c (pick [nil 5])) (node 2 :i2 (rnd 10) :mark (pick [0 0 1])) (sub)])
                                  (repeatedly (rnd 4) sub))))
       17 (node 17 :kids [(sub)])
       99 (node 99 :kids [(sub)]))))

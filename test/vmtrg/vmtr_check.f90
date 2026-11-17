@@ -166,20 +166,39 @@ contains
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: s
     integer :: j
-    integer(int64) :: p
     do j = 1, size(tb%cm)
        if (tb%cm(j) == s) exit
     end do
-    ! ex-cloc: below np a local, then the captures, past them m lower
-    p = j - 1
-    if (p < tb%np) then
-       call push(tb, '(:local ' // itoa(p) // ')')
-    else if (p < tb%np + tb%m) then
-       call push(tb, '(:capt ' // itoa(p - tb%np) // ')')
-    else
-       call push(tb, '(:local ' // itoa(p - tb%m) // ')')
-    end if
+    call push(tb, cloc(tb, int(j - 1, int64)))
   end subroutine vtg_local
+  ! ex-cloc: below np a local, then the captures, past them m lower
+  function cloc(tb, p0) result(r)
+    type(vtg_state), intent(in) :: tb
+    integer(int64), intent(in) :: p0
+    character(len=:), allocatable :: r
+    integer(int64) :: p
+    p = max(0_int64, p0)
+    if (p < tb%np) then
+       r = '(:local ' // itoa(p) // ')'
+    else if (p < tb%np + tb%m) then
+       r = '(:capt ' // itoa(p - tb%np) // ')'
+    else
+       r = '(:local ' // itoa(p - tb%m) // ')'
+    end if
+  end function cloc
+  ! ex-trcall's parts: the scope's last position read, its cast, the refusal
+  subroutine vtg_top(tb)
+    type(vtg_state), intent(inout) :: tb
+    call push(tb, cloc(tb, int(size(tb%cm) - 1, int64)))
+  end subroutine vtg_top
+  subroutine vtg_cast(tb)
+    type(vtg_state), intent(inout) :: tb
+    call push(tb, '(:prim :ifn ' // cloc(tb, int(size(tb%cm) - 1, int64)) // ')')
+  end subroutine vtg_cast
+  subroutine vtg_notfn(tb)
+    type(vtg_state), intent(inout) :: tb
+    call push(tb, '(:throw (:const :not-fn))')
+  end subroutine vtg_notfn
   subroutine vtg_node(tb, op, n)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: op, n
@@ -193,6 +212,7 @@ contains
     case (5); s = '(:recur'
     case (6); s = '(:prim'
     case (7); s = '(:callv'
+    case (8); s = '(:applyv'
     case default; s = '(:throw'
     end select
     if (broken) then

@@ -440,7 +440,22 @@
                 call vtg_tr(tb, 3_int64, e_, 1_int64)
                 call vtg_node(tb, 6_int64, vtg_nk(e_))
               else
-                call vtg_other(tb, e_)
+                if ((k_17 == 6_int64)) then
+                  call vtg_tr(tb, 0_int64, vtg_kid(e_, 0_int64), 0_int64)
+                  call vtg_save(tb)
+                  call vtg_blank(tb, vtg_kid(e_, 0_int64))
+                  call vtg_dead(tb)
+                  call vtg_cast(tb)
+                  call vtg_top(tb)
+                  call vtg_tr(tb, 3_int64, e_, 1_int64)
+                  call vtg_node(tb, 8_int64, vtg_nk(e_))
+                  call vtg_notfn(tb)
+                  call vtg_node(tb, 1_int64, 3_int64)
+                  call vtg_restore(tb)
+                  call vtg_node(tb, 2_int64, 2_int64)
+                else
+                  call vtg_other(tb, e_)
+                end if
               end if
             end if
           end if

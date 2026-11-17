@@ -45,7 +45,10 @@
   !                         (:prim NODE parts..): the runtime does what
   !                         flat does with the node (vm_node_hook)
   !   a call of a builtin   (:prim builtin args)
-  !   any other call        (:callv head args)
+  !   any other call        an IFn constant's or Var's (:callv head args);
+  !                         else ex-trcall's, head first and cast: (:let head
+  !                         (:if (:prim :ifn p) (:applyv p args) (:throw
+  !                         (:prim :clotran.vm/notfn p)))) (generated)
   ! and a last clause (0 .. :rest) for a call of no arity the fn has,
   ! clj's ArityException. Anything else -- try, letfn, case, def -- and
   ! the fn runs as before.
@@ -62,6 +65,7 @@
           vmrt_deref => vm_deref_hook
           vmrt_node => vm_node_hook
           vmrt_arity => vm_arity_hook
+          vmrt_cast => vm_cast_hook
           block
             character(len=8) :: tr
             call get_environment_variable("CLOTRAN_VM_TRACE", tr)
@@ -151,6 +155,29 @@
        end if
     end if
   end subroutine vm_took
+
+  ! a call's cast, head first (ex-trcall): kind 9 (:prim :ifn v) is_ifn's
+  ! answer, as exec_core's; kind 10 (:prim :clotran.vm/notfn v) its
+  ! refusal, refuse_not_fn's error raised, as exec_core's action 23
+  recursive subroutine vm_cast_hook(op, argbase, nargs, out, ok)
+    type(gc_value), intent(in) :: op
+    integer, intent(in) :: argbase, nargs
+    type(gc_value), intent(out) :: out
+    logical, intent(out) :: ok
+    type(eval_ctx), pointer :: tctx
+    type(gc_stack), pointer :: vst
+    tctx => ctx_self()
+    vst => tctx%stk
+    out = gc_nil()
+    ok = .true.
+    if (nargs /= 1) return
+    if (gc_identical(op, vm_kw("ifn"))) then
+       out = gc_bool(is_ifn(vs_get(vst, argbase + 1)))
+    else
+       call refuse_not_fn(vs_get(vst, argbase + 1))
+       call vm_took(tctx, ok, out, op)
+    end if
+  end subroutine vm_cast_hook
 
   ! a call of no arity the fn has: clj's ArityException, the count the
   ! arguments' (the last clause's rest list), the fn named by its display
@@ -398,7 +425,7 @@
   recursive function vm_tr(c, nd, roots) result(e)
     type(vm_tr_ctx), intent(inout), target :: c
     type(gc_value), intent(in) :: nd, roots(:)
-    type(gc_value) :: e, kids, x, head, v
+    type(gc_value) :: e, kids, x, v
     type(gc_stack), pointer :: vst
     integer :: base, i, nk
     e = gc_nil()
@@ -410,7 +437,7 @@
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
-         .or. (gc_i1(nd) == N_CALL .and. vtg_pk(nd) /= 0)) then
+         .or. gc_i1(nd) == N_CALL) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -435,28 +462,6 @@
           call vs_set(vst, base + 2, x)
        end do
        if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
-    case (N_CALL)
-       head = gcv_nth(kids, 0)
-       call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
-       if (c%ok) then
-          ! (A constant builtin's call, a Var's whose fn wraps a builtin, and
-          ! an IFn constant's or Var's, not apply, are vtg_tr's, generated:
-          ! vtg_pk, model/vmtrg.lisp.) Left here, unproved: a local's or any
-          ! other expression's head, a non-IFn's, apply's -- the model's is
-          ! ex-trcall, head first and cast; this runs the args first, no cast.
-          ! anything else: the machine's call, (:callv f args ..) -- its
-          ! own when f is one of its closures, the runtime's otherwise
-          x = vm_tr(c, head, [roots, vs_get(vst, base + 2)])
-          call vs_set(vst, base + 4, x)
-          if (c%ok) then
-             x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
-             call vs_set(vst, base + 3, x)
-             x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
-             call vs_set(vst, base + 3, x)
-             call vs_set(vst, base + 5, vm_kw("callv"))
-             e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
-          end if
-       end if
     case default
        c%ok = .false.
     end select
@@ -642,7 +647,7 @@
     integer(int64), value :: s
     call anb_push(vm_slot_ref(tb%c, int(s), [gc_value ::]))
   end subroutine vtg_local
-  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw, 4 :loop, 5 :recur, 6 :prim; 0 the items alone
+  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw, 4 :loop, 5 :recur, 6 :prim, 7 :callv, 8 :applyv; 0 the items alone
   subroutine vtg_node(tb, op, n)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: op, n
@@ -663,6 +668,7 @@
        case (5); k = vm_kw("recur")
        case (6); k = vm_kw("prim")
        case (7); k = vm_kw("callv")
+       case (8); k = vm_kw("applyv")
        case default; k = vm_kw("throw")
        end select
        l = gcl_cons(k, l, [l, k])
@@ -728,6 +734,42 @@
     tb%c%depth = tb%c%svd(tb%c%nsv)
     tb%c%nsv = tb%c%nsv - 1
   end subroutine vtg_restore
+  ! ex-trcall's parts (vmtrg.lisp's vtg-top, vtg-cast, vtg-notfn), the head
+  ! bound at the last local, depth - 1 -- NAMED: the depth is the model's
+  ! scope length less the m captures, as vtg_local's map: (:local p); the
+  ! cast (:prim :ifn (:local p)), the runtime's kind 9, is_ifn -- NAMED: the
+  ! model's prim :ifn, as exec_core's cast; its refusal (:throw (:prim
+  ! :clotran.vm/notfn (:local p))), the runtime's kind 10, refuse_not_fn of
+  ! the head -- NAMED: where the model's is (:throw (:const :not-fn)), the
+  ! host's error as exec_core's action 23 throws it, nothing run between
+  function vtg_toploc(tb) result(l)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value) :: l, k
+    k = vm_kw("local")
+    l = vm_l([k, gc_int(int(tb%c%depth - 1, gc_ip))], [k])
+  end function vtg_toploc
+  subroutine vtg_top(tb)
+    type(vtg_state), intent(inout) :: tb
+    call anb_push(vtg_toploc(tb))
+  end subroutine vtg_top
+  subroutine vtg_cast(tb)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value) :: l, k, i
+    l = vtg_toploc(tb)
+    k = vm_kw("prim")
+    i = vm_kw("ifn")
+    call anb_push(vm_l([k, i, l], [l]))
+  end subroutine vtg_cast
+  subroutine vtg_notfn(tb)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value) :: l, k, i
+    l = vtg_toploc(tb)
+    k = vm_kw("prim")
+    i = vm_kw("clotran.vm/notfn")
+    l = vm_l([k, i, l], [l])
+    k = vm_kw("throw")
+    call anb_push(vm_l([k, l], [l]))
+  end subroutine vtg_notfn
   ! every other kind: vm_tr's own (which calls back for the kinds above)
   ! a number (gc_int), a keyword (0 :rest, 1 :clotran.vm/arity, 2 :prim, else
   ! :local), the self let's value: (:capt m), the runtime's closure, which

@@ -92,6 +92,9 @@ module vm_runtime
   procedure(vmrt_call_i), pointer, public :: vmrt_node => null()
   ! a call of no arity a compiled fn has: clj's ArityException
   procedure(vmrt_call_i), pointer, public :: vmrt_arity => null()
+  ! a call's cast, head first (exec-vmtr's ex-trcall): (:prim :ifn v) the
+  ! tree's IFn test, (:prim :clotran.vm/notfn v) its refusal raised
+  procedure(vmrt_call_i), pointer, public :: vmrt_cast => null()
   ! the running body's entry values (the arguments, the captures, the fn
   ! itself) are vstack(vm_args_rb + i + 1), vm_args_rb the thread's own
   ! (gc_stack, set by vm.inc around each run)
@@ -110,7 +113,7 @@ module vm_runtime
   type(gc_root) :: thrown_head, clo_head
   type(value) :: thrown_v, clo_v
   ! the primitives' own keywords, looked up once
-  type(value) :: kw_arg, kw_deref, kw_invoke, kw_invoke_m, kw_arity, kw_callw
+  type(value) :: kw_arg, kw_deref, kw_invoke, kw_invoke_m, kw_arity, kw_callw, kw_ifn, kw_notfn
   ! (CLO f nil) for the first few f, made once: a closure of nothing is
   ! a value no one can tell from another made the same, and main's
   ! mkclo of the arity's own function would otherwise allocate per call
@@ -167,9 +170,10 @@ contains
   ! every keyword the generated code and the primitives test, made once
   ! before any thread runs VM code; and the private heads
   subroutine vmrt_init()
-    character(len=17), parameter :: names(21) = [character(len=17) :: "const", "local", "capt", "if", &
+    character(len=17), parameter :: names(24) = [character(len=17) :: "const", "local", "capt", "if", &
          "let", "add", "lt", "mkclo", "mkgrp", "callv", "loop", "recur", "prim", "throw", "try", "rest", &
-         "clotran.vm/arg", "clotran.vm/deref", "clotran.vm/invoke", "invoke", "clotran.vm/arity"]
+         "clotran.vm/arg", "clotran.vm/deref", "clotran.vm/invoke", "invoke", "clotran.vm/arity", "applyv", &
+         "ifn", "clotran.vm/notfn"]
     type(value) :: k
     integer :: i
     kw_frozen = .false.
@@ -185,6 +189,8 @@ contains
     kw_invoke_m = rt_keyword("invoke")
     kw_arity = rt_keyword("clotran.vm/arity")
     kw_callw = rt_keyword("clotran.vm/callw")
+    kw_ifn = rt_keyword("ifn")
+    kw_notfn = rt_keyword("clotran.vm/notfn")
     kw_frozen = .true.
     do i = 0, NCLO0 - 1
        clo0(i) = gc_nil()
@@ -350,8 +356,10 @@ contains
   ! reading the seq only through req + 1), proved and fuzzed against the
   ! model on test/vm's runtime. Here no clotran value is the model's
   ! :apply yet, so a call of clojure.core/apply stays the evaluator's
-  ! (:callv's :invoke, B_APPLY's walk, which walks the same way): vm.inc's
-  ! translation emits no :applyv, and these reads are not wired to the
+  ! (:applyv's call, :invoke, B_APPLY's walk, which walks the same way --
+  ! NAMED: vm.inc's translation emits ex-trcall's :applyv for a call whose
+  ! head is not read at translation, and the spread there is the runtime's
+  ! :invoke of B_APPLY where the model's is sk-spread), and these reads are not wired to the
   ! heap -- they would be exec.inc's ap_kind/ap_realise/ap_first/ap_next
   ! and ap_spread's rest through new hooks, with the scratch (st%tmp) a GC
   ! root while a walk realises (docs/model-coverage.md, the VM step loop's
@@ -566,14 +574,14 @@ contains
   end function rt_prim3
 
   ! what an op is, as the generated vrt_prim_kind chooses: 1 arg, 2 arity,
-  ! 3 deref, 4 callw, 5 invoke -- the op keywords the translator and the
+  ! 3 deref, 4 callw, 5 invoke, 9 ifn, 10 notfn -- the op keywords the translator and the
   ! generated code make by rt_keyword from its cache, so identity is the
   ! test -- 6 a node of the program's own, 8 a builtin, 7 any other value
   integer(int64) function opkind(op)
     type(value), intent(in) :: op
     opkind = vrt_prim_kind(hs, int(op%tag, int64), int(op%ref, int64), int(kw_arg%ref, int64), &
          int(kw_arity%ref, int64), int(kw_deref%ref, int64), int(kw_callw%ref, int64), &
-         int(kw_invoke%ref, int64), int(kw_invoke_m%ref, int64))
+         int(kw_invoke%ref, int64), int(kw_invoke_m%ref, int64), int(kw_ifn%ref, int64), int(kw_notfn%ref, int64))
   end function opkind
 
   ! op on the n values in slots argbase+1 ..
@@ -619,6 +627,10 @@ contains
           call vmrt_call(vs_get(vst, argbase + 1), argbase + 1, n - 1, r, ok)
           if (.not. ok) r = vmrt_throw_of(r)
        end if
+    case (9, 10)
+       ! the tree's cast and its refusal (vm.inc's vm_cast_hook)
+       call vmrt_cast(op, argbase, n, r, ok)
+       if (.not. ok) r = vmrt_throw_of(r)
     case default
        vm_prim_n(7) = vm_prim_n(7) + 1
        call vmrt_call(op, argbase, n, r, ok)

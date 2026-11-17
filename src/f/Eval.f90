@@ -63,7 +63,7 @@ module Eval
   use DynLoad
   use Socket
   use Threads
-  use vm_runtime, only: rt_resize_int, vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_init, rt_keyword, vm_prim_n
+  use vm_runtime, only: rt_resize_int, vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_cast, vmrt_init, rt_keyword, vm_prim_n
   use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_fortran_env, only: int64

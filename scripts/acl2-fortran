@@ -361,7 +361,7 @@
     {:out "src/f/gen/vm_tr_gen.inc" :include true :book "vmtrcl"
      :fns [vtg-rd vtg-lind vtg-locs vtg-tr vtg-tlr vtg-clause vtg-arcl]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
-     :host [vtg-const vtg-deref vtg-hd vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other
+     :host [vtg-const vtg-deref vtg-hd vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other vtg-top vtg-cast vtg-notfn
             vtg-num vtg-key vtg-self]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}

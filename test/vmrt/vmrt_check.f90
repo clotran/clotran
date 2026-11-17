@@ -109,7 +109,7 @@ program vmrt_check
           b(vrt_throwp(hs, t, r, hd(1), hd(2))), vrt_thrown_place(hs, t, r), &
           b(vrt_clop(hs, vx, t, r, hd(3), hd(4))), vrt_clo_f(hs, vx, t, r), &
           vrt_capt_place(hs, vx, i, t, r), vrt_cfid(hs, vx, t, r), vrt_cncap(hs, vx, t, r), &
-          vrt_prim_kind(hs, t, r, 1_int64, 2_int64, 3_int64, 4_int64, 5_int64, 6_int64), &
+          vrt_prim_kind(hs, t, r, 1_int64, 2_int64, 3_int64, 4_int64, 5_int64, 6_int64, 7_int64, 8_int64), &
           vrt_arg_slot(nn, t, iv, rb, ln)
   end do
 contains
