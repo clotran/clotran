@@ -40,6 +40,19 @@
 ; ex-ifn), then :applyv of it on the arguments, or :not-fn thrown
 (defun ex-trcall (h args p)
   (list :let h (list :if (list :prim :ifn (list :local p)) (list* :applyv (list :local p) args) '(:throw (:const :not-fn)))))
+; A BUILTIN CALL (exec-PLAN Lane 3 item 3, N_CALL's first case): a call whose
+; head is a constant the runtime says is a builtin -- prim
+; :clotran.vm/builtin, vm.inc's OBJ_BUILTIN test (vtg_bip) -- no closure (an
+; atom) and not apply (its spread is the tree's, ex-callee) is vm.inc's
+; (:prim f args..), the arguments in the call's scope cm, no head let, no
+; cast. exec-vm's named ex-bipok says the runtime's prim of a builtin is its
+; invoke and a builtin is an IFn.
+(defun ex-bip (c) (and (atom c) (not (equal c :apply)) (truthy (prim :clotran.vm/builtin (list c)))))
+(defun ex-bipe (e) (let ((h (ex-kid-of e 0))) (and (consp h) (equal (ex-kind h) 1) (ex-bip (ex-c h)))))
+(defthm ex-bipe-head
+  (implies (ex-bipe e) (and (consp (ex-kid-of e 0)) (equal (ex-kind (ex-kid-of e 0)) 1) (ex-bip (ex-c (ex-kid-of e 0)))))
+  :rule-classes :forward-chaining)
+(in-theory (disable ex-bip ex-bipe))
 
 ; A TRY (exec-PLAN 3b): (:try B H), H the catch walk at the thrown value's
 ; position p -- (:if (:prim :isa (:const c) (:local p)) Hj ..(:throw (:local
@@ -165,6 +178,9 @@
           ((or (equal k 14) (equal k 15)) (ex-rdin (ex-outers (nth 2 (ex-c e))) lo hi))
           ((member k '(4 5 17 7 8 9 22 21 6 11 12 16)) (ex-rd t e 0 lo hi))
           (t t))))
+; a builtin call's head, a constant, clears nothing
+(defthm ex-bipe-clr0 (implies (ex-bipe e) (equal (ex-clr :m (ex-kid-of e 0) 0) nil))
+  :hints (("Goal" :use ex-bipe-head :in-theory (disable ex-kid-of ex-bipe-head) :expand ((ex-clr :m (ex-kid-of e 0) 0)))))
 ; A LOOP OF INDEPENDENT INITS (vm.inc's vm_loop_indep): init i, from 1,
 ; reads none of the loop's slots s .. s+i-1. vm.inc emits it (:loop (inits..)
 ; body), the inits in the loop's outer scope (exec-PLAN Lane 3 item 3(a)).
@@ -211,6 +227,7 @@
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
                ((equal k 15) (list :prim (ex-cop e) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm))))
                ((equal k 26) (ex-tr :m (ex-c e) 0 (ex-blank cm cm)))
+               ((and (equal k 6) (ex-bipe e)) (list* :prim (ex-c (ex-kid-of e 0)) (ex-tr :call e 1 cm)))
                ((equal k 6) (ex-trcall (ex-tr :m (ex-kid-of e 0) 0 cm)
                                     (ex-tr :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil))) (len cm)))
                ((equal k 2) (list :local (ex-pos (ex-i2 e) cm)))
@@ -305,6 +322,7 @@
                   ((or (equal k 14) (equal k 15)) (and (consp (assoc-equal (ex-c e) defs))
                                      (nat-listp (ex-outers (nth 2 (ex-c e))))
                                      (subsetp-equal (ex-outers (nth 2 (ex-c e))) cm)))
+                  ((and (equal k 6) (ex-bipe e)) (and (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 cm lp defs)))
                   ((equal k 6) (and (< 0 nk) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)))
                   ((equal k 4) (and (or (equal nk 2) (equal nk 3))
                                     (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) lp defs)

@@ -195,7 +195,19 @@
 (in-theory (disable ex-vgood-m-let))
 (ex-old ex-vgood-m-rec ((consp e) (ex-mflg) (equal (ex-kind e) 16)) ((ex-vgood :rec e 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-m-throw ((consp e) (ex-mflg) (equal (ex-kind e) 17)) ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)))
-(ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6))
+; a builtin's call (exec-vmtr's ex-bip): (:prim f args..), its arguments in
+; the call's scope, the runtime's invoke of f on them (ex-bipok)
+(defthm ex-vgood-m-callp
+  (implies (and (consp e) (ex-mflg) (equal (ex-kind e) 6) (ex-bipe e)
+                (ex-vgood :call e 1 (list (ex-c (ex-kid-of e 0))) cm env fr fuel caps defs lp))
+           (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
+  :hints (("Goal" :do-not-induct t :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-clr ex-csbr ex-cbuild ex-mxcall))
+                  :expand ((:free (flg) (ex-clr flg e i)) (ex-clr :m (ex-kid-of e 0) 0)
+                           (:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
+                           (:free (cm lp) (ex-vwf :m (ex-kid-of e 0) 0 cm lp defs))
+                           (:free (flg fr tmp) (ex-ev flg e i tmp fr fuel)) (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
+(in-theory (disable ex-vgood-m-callp))
+(ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6) (not (ex-bipe e)))
         ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
          (ex-vgood :call e 1 (list (val (car (ex-k0)))) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append env (list (val (car (ex-k0)))))
                    (cadr (ex-k0)) fuel caps defs lp)))
@@ -222,7 +234,7 @@
 (in-theory (enable ex-vgood-atom ex-vgood-iter-zp ex-vgood-iter ex-vgood-do-none ex-vgood-do-mid ex-vgood-do-last
                    ex-vgood-let-mid ex-vgood-let-loop ex-vgood-let-imid ex-vgood-let-iend ex-vgood-let-body ex-vgood-rec-mid ex-vgood-rec-end
                    ex-vgood-call-mid ex-vgood-call-zp ex-vgood-call-enter2 ex-vgood-fin ex-vgood-fin-end
-                   ex-vgood-m-if ex-vgood-m-lazy ex-vgood-m-top ex-vgood-m-do ex-vgood-m-let ex-vgood-m-rec ex-vgood-m-throw ex-vgood-m-call ex-vgood-m-leaf
+                   ex-vgood-m-if ex-vgood-m-lazy ex-vgood-m-top ex-vgood-m-do ex-vgood-m-let ex-vgood-m-rec ex-vgood-m-throw ex-vgood-m-call ex-vgood-m-callp ex-vgood-m-leaf
                    ex-vgood-m-mark))
 
 (defthm ex-vm-agree-flag
@@ -234,7 +246,7 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -242,7 +254,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))

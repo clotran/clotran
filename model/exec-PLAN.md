@@ -789,7 +789,7 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_DO, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 5, 17, 11 | yes -- **generated now** (vmtrg) |
 | N_LOCAL of a capture | ex-fbtc reads it in place, `(:capt j)` (exec-vmcs's ex-cs) | yes -- vtg_local exact |
 | N_LOOP, N_RECUR | lets, then `(:loop (locals..) body)`, `(:recur ..)` -- no dummy (item 3) | partly: the same when an init reads an earlier binding; vm.inc's independent-inits loop `(:loop (inits..) body)` (PLAN 34, no let keeps a walked seq's head) is not ex-tr's yet |
-| N_CALL | ex-trcall: `:ifn` then `:applyv` | no: vm.inc's builtin `(:prim f ..)`, a Var wrapping one `callw`, else `:callv` |
+| N_CALL | a constant builtin's call `(:prim f args..)` (item 3, done); else ex-trcall: `:ifn` then `:applyv` | partly: the constant builtin's call **generated now** (vtg_bip, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn) and vtg_bip's test (vm.inc's OBJ_BUILTIN, not B_APPLY, where the model asks prim :clotran.vm/builtin of an atom, not :apply); apply's constant now :callv. Not yet: a direct-linked Var wrapping a builtin `(:prim f ..)` (vm_linked_builtin), a Var wrapping one `callw`, else `:callv` (vm.inc evaluates the args before the head and asks no :ifn; the model's head is first) |
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
@@ -968,9 +968,24 @@ position.
    N_LOOP / N_RECUR cases, vm_loop_indep, vm_reads_in, vm_wrap_lets and
    vm_head_list are gone; fuzz-vmtr-gen draws loops and recurs.
    **Left:** vm_clause itself (item 2's Left).
-4. calls and Vars: vm.inc's builtin prim and callw as ex-trcall's cases
-   (the head a known builtin: a prim; else :ifn/:applyv), the deref as a
-   host prim under ex-collok's hypothesis; collections' op as the node.
+4. calls and Vars. **Var: done** (vtg_deref, ex-derefok). **A constant
+   builtin's call: done** -- exec-vmtr's ex-bip/ex-bipe (prim
+   :clotran.vm/builtin of an atom head constant, not :apply); ex-tr, ex-vwf
+   (args in scope cm, no head let), ex-v2, ex-vind, ex-vwf0, ex-cmpind take
+   the branch; exec-vm's named ex-bipok, ex-mx-callp; exec-vmok's
+   ex-vgood-m-callp (ex-vgood-m-call now its complement); ex-vm-agree,
+   ex-recur-stays, ex-vm-runs, ex-anp-runs, ex-top-runs, ex-anp-runs-defs gain
+   (ex-bipok). vmtrg generates it (vtg_bip, vtg_hd, vtg_node 6), vm_tr's
+   constant-builtin branch gone; fuzz-vmtr-gen draws it (fz-prim attaches the
+   builtin test). **Left, each its own named hypotheses**: (a) a
+   direct-linked Var whose fn wraps a builtin, `(:prim f ..)`
+   (vm_linked_builtin) -- the tree enters the Var's closure, so the
+   hypothesis relates prim to the wrapper's body; (b) a Var wrapping one,
+   `(:prim :clotran.vm/callw (:const var) ..)` -- the same, read at run time;
+   (c) `:callv` -- vm.inc translates and runs the args before the head and
+   asks no :ifn, and does no apply spread (:applyv): needs the head pure
+   (a local, a constant, a deref) or ex-tr reordered, and :invoke of a
+   non-IFn throwing :not-fn. Collections' op as the node.
 5. try, letfn, case: vm_scan refuses them; take them once 1-4 land.
 6. (the cost theorem and fuzz-vmtr-gen: done, above.)
 The hooks stay host actions; the gap to the analyzer's tree is the

@@ -119,6 +119,22 @@ contains
     type(gc_value), value :: x
     call push(tb, '(:prim :clotran.vm/deref ' // cstr(vtg_c(x)) // ')')
   end subroutine vtg_deref
+  ! a builtin call: its head a constant of 100 or more (the fuzzer's ACL2 side
+  ! attaches prim so that :clotran.vm/builtin says so of those); vtg_hd its number
+  logical function vtg_bip(x)
+    type(gc_value), intent(in) :: x
+    type(gc_value) :: h
+    h = vtg_kid(x, 0_int64)
+    vtg_bip = .false.
+    if (ok(h)) vtg_bip = nkind(h%id) == 1 .and. nc(h%id) >= 100
+  end function vtg_bip
+  subroutine vtg_hd(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    type(gc_value) :: h
+    h = vtg_kid(x, 0_int64)
+    call push(tb, itoa(int(nc(h%id), int64)))
+  end subroutine vtg_hd
   subroutine vtg_nil(tb)
     type(vtg_state), intent(inout) :: tb
     call push(tb, '(:const nil)')
@@ -153,6 +169,7 @@ contains
     case (2); s = '(:let'
     case (4); s = '(:loop'
     case (5); s = '(:recur'
+    case (6); s = '(:prim'
     case default; s = '(:throw'
     end select
     if (broken) then
@@ -216,6 +233,8 @@ contains
     case (11, 12)
        m = ni2(x%id)
     case (16)
+       m = nnk(x%id) - 1
+    case (6)
        m = nnk(x%id) - 1
     case (17)
        m = 0

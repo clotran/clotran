@@ -39,7 +39,10 @@
 ; apply, as the tree's ex-callee spreads it (apply is a value; only the
 ; head's value tells), after the runtime's cast to IFn the tree's pc 1
 ; asks (ex-ifn) -- so a throw in the head, the cast or an argument is the
-; same throw in both. mx2's
+; same throw in both. A call whose head is a constant builtin (exec-vmtr's
+; ex-bip, no closure, not apply) is vm.inc's (:prim f args..) instead, the
+; arguments in scope cm, under the named ex-bipok (the runtime's prim of a
+; builtin is its :invoke; a builtin is an IFn). mx2's
 ; defs are keyed by the template itself (vcs2-correct asks only x2defs-ok,
 ; and both look a name up by equal), the def a clause for each arity, (nf
 ; body) or (nf body :rest): the captures read in place, (:capt j)
@@ -201,6 +204,26 @@
 (defthm ex-derefok-val (implies (and (ex-derefok) (not (throwp v))) (equal (prim :clotran.vm/deref (list v)) v))
   :hints (("Goal" :use ex-derefok-necc)))
 (in-theory (disable ex-derefok))
+; A BUILTIN CALL (exec-vmtr's ex-bip: vm.inc's (:prim f args..)). The
+; runtime's prim of a builtin f on values vs is its invoke of f on them, and
+; a builtin is an IFn -- a named hypothesis, ex-bipok (clotran: vm_call_hook's
+; prim of a builtin applies it, as :invoke does)
+(defun-sk ex-bipok ()
+  (forall (c vs) (implies (ex-bip c) (and (ex-ifn c) (equal (prim c vs) (prim :invoke (cons c vs)))))))
+(defthm ex-bipok-ifn (implies (and (ex-bipok) (ex-bip c)) (ex-ifn c))
+  :hints (("Goal" :use ((:instance ex-bipok-necc (vs nil))))))
+(defthm ex-bipok-prim (implies (and (ex-bipok) (ex-bip c)) (equal (prim c vs) (prim :invoke (cons c vs))))
+  :hints (("Goal" :use ex-bipok-necc)))
+(in-theory (disable ex-bipok))
+; a builtin's call, (:prim f args..): the arguments, then the call -- the
+; runtime's invoke of f, as :applyv's (ex-bipok)
+(defthm ex-mx-callp
+  (implies (and (ex-bipok) (ex-bip c))
+           (equal (mx2 (list* :prim c args) env caps defs fuel)
+                  (let ((rs (mx2-args args env caps defs fuel))) (if (valp rs) (ex-mxcall c (val rs) defs fuel) rs))))
+  :hints (("Goal" :in-theory (e/d (ex-bip ex-mxcall ex-mxcl x2-fn x2-vals x2-cls x2-spreads x2-hands) (ex-bipok-prim))
+                  :use ((:instance ex-bipok-prim (vs (val (mx2-args args env caps defs fuel)))))
+                  :expand ((mx2 (list* :prim c args) env caps defs fuel)))))
 (defthm ex-catchw-nat (implies (equal (car (ex-catchw cs v j)) 1) (natp (cdr (ex-catchw cs v j))))
   :rule-classes (:rewrite :type-prescription))
 (defthm ex-catchw-lo (implies (equal (car (ex-catchw cs v j)) 1) (<= (nfix j) (cdr (ex-catchw cs v j))))
@@ -358,7 +381,7 @@
 (in-theory (disable ex-collok))
 
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-caseok) (ex-collok defs)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
@@ -531,6 +554,9 @@
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
                         (ex-vind :m (ex-csbr e (val (car r))) 0 nil (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append env (list (val (car r))))
                                  (cadr r) fuel caps defs lp))))
+               ((and (equal k 6) (ex-bipe e))
+                (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
+                      (ex-vind :call e 1 (list (ex-c (ex-kid-of e 0))) cm env fr fuel caps defs lp)))
                ((equal k 6)
                 (let ((r (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)

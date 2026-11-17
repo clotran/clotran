@@ -409,7 +409,8 @@
     if (gcv_is(kids)) nk = gcv_count(kids)
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
-         .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR) then
+         .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
+         .or. (gc_i1(nd) == N_CALL .and. vtg_bip(nd))) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -438,18 +439,14 @@
        head = gcv_nth(kids, 0)
        call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
        if (c%ok) then
-          if ((gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST .and. &
-               gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) .or. vm_linked_builtin(head, nk - 1)) then
-             ! a builtin: the runtime's own operation, (:prim f args ..) --
-             ! written as one, or the builtin a DIRECT-LINKED Var's fn only
-             ! wraps at this arity: the fn was fixed when the site was
-             ! analysed (DEVIATIONS 55), so the builtin is too, and the
-             ! call needs no deref and no look-up of the wrapper each time
-             if (gc_i1(head) == N_CONST) then
-                call vs_set(vst, base + 4, gc_slot(head, 2))
-             else
-                call vs_set(vst, base + 4, wrapper_of(strip_meta(gc_slot(head, 3)), nk - 1))
-             end if
+          if (vm_linked_builtin(head, nk - 1)) then
+             ! the builtin a DIRECT-LINKED Var's fn only wraps at this arity:
+             ! (:prim f args ..), the fn fixed when the site was analysed
+             ! (DEVIATIONS 55), so the builtin is too, and the call needs no
+             ! deref and no look-up of the wrapper each time. (A constant
+             ! builtin's call is vtg_tr's, generated: vtg_bip, model/vmtrg.lisp;
+             ! apply's, B_APPLY, falls to :callv below.)
+             call vs_set(vst, base + 4, wrapper_of(strip_meta(gc_slot(head, 3)), nk - 1))
              x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
              call vs_set(vst, base + 3, x)
              x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
@@ -586,6 +583,24 @@
     type(gc_value), value :: nd
     call anb_push(vm_deref_of(vm_var_ref(nd), [nd]))
   end subroutine vtg_deref
+  ! a builtin call (vmtrg.lisp's vtg-bip, exec-vmtr's ex-bipe): its head a
+  ! constant builtin, not apply -- NAMED: OBJ_BUILTIN where the model asks
+  ! prim :clotran.vm/builtin; vtg_hd pushes the head's constant, (:prim f ..)'s f
+  logical function vtg_bip(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: h, f
+    vtg_bip = .false.
+    if (ast_nkids(nd) < 1) return
+    h = ast_kid(nd, 0_int64)
+    if (ast_kind(h) /= N_CONST) return
+    f = strip_meta(gc_slot(h, 2))
+    vtg_bip = gc_kind(f) == OBJ_BUILTIN .and. gc_i1(f) /= B_APPLY
+  end function vtg_bip
+  subroutine vtg_hd(tb, nd)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    call anb_push(gc_slot(ast_kid(nd, 0_int64), 2))
+  end subroutine vtg_hd
   subroutine vtg_nil(tb)
     type(vtg_state), intent(inout) :: tb
     call vtg_const(tb, gc_nil())
@@ -595,7 +610,7 @@
     integer(int64), value :: s
     call anb_push(vm_slot_ref(tb%c, int(s), [gc_value ::]))
   end subroutine vtg_local
-  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw, 4 :loop, 5 :recur; 0 the items alone
+  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw, 4 :loop, 5 :recur, 6 :prim; 0 the items alone
   subroutine vtg_node(tb, op, n)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: op, n
@@ -614,6 +629,7 @@
        case (2); k = vm_kw("let")
        case (4); k = vm_kw("loop")
        case (5); k = vm_kw("recur")
+       case (6); k = vm_kw("prim")
        case default; k = vm_kw("throw")
        end select
        l = gcl_cons(k, l, [l, k])
