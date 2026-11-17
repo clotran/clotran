@@ -10,7 +10,8 @@
 ;; one, several: each value but the last a dead local), let* (its
 ;; slots new or shadowing, too few children), loop (its inits reading the
 ;; slots before them or not: ex-lind's two shapes), recur, throw, case* (its
-;; table's walk, entry j's test 50 + j), a builtin's
+;; table's walk, entry j's test 50 + j), letfn (its fns' templates (0 0
+;; (o 0 ..)), each outer slot the group's or not: ex-trlf's lets), a builtin's
 ;; call (:prim f args..), its head a constant fz-prim calls a builtin or a
 ;; Var (direct-linked or not) whose fn fz-prim says wraps one, or a constant
 ;; or Var fz-prim says is an IFn (:callv head args..), else (a local's or any
@@ -47,11 +48,15 @@
 (defn pick [xs] (nth xs (rnd (count xs))))
 
 ;; a node {:k :i2 :s2 :c :mark :kids}; c nil or a small number
-(defn node [k & {:keys [i2 s2 c mark kids thens] :or {i2 0 s2 0 c nil mark 0 kids [] thens []}}]
-  {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids :thens thens})
+(defn node [k & {:keys [i2 s2 c mark kids thens outs] :or {i2 0 s2 0 c nil mark 0 kids [] thens [] outs []}}]
+  {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids :thens thens :outs outs})
+;; a letfn's fn: its template (0 0 (o_0 0 o_1 1 ..)), the outer slots o_q
+(defn fnode [] (let [outs (vec (repeatedly (rnd 4) #(rnd 10)))]
+                 (node 14 :i2 (count outs) :outs outs
+                       :c (str "(0 0 " (if (seq outs) (str "(" (str/join " " (mapcat (fn [o q] [o q]) outs (range))) ")") "nil") ")"))))
 (def tlr-kinds (atom []))
 (defn gen [d]
-  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 16 16 17 17 19 19 99] @tlr-kinds)))
+  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 13 13 16 16 17 17 19 19 99] @tlr-kinds)))
         sub #(gen (dec d))]
     (case k
       1 (node 1 :c (pick [nil 0 1 7 42]))
@@ -59,7 +64,9 @@
       2 (node 2 :i2 (rnd 10) :mark (pick [0 0 1]))
       4 (node 4 :kids (vec (repeatedly (pick [2 3 3 1]) sub)))
       16 (node 16 :kids (vec (repeatedly (rnd 3) #(gen (max 0 (dec d))))))
-      (11 12 13) (let [nb (pick [0 1 1 2 3])]
+      13 (let [nb (pick [1 1 2 3])]
+           (node 13 :i2 nb :s2 (pick [2 4 6 8]) :kids (conj (vec (repeatedly nb fnode)) (sub))))
+      (11 12) (let [nb (pick [0 1 1 2 3])]
            (node k :i2 nb :s2 (pick [2 4 6 8]) :kids (vec (repeatedly (+ nb (pick [1 1 1 1 0])) sub))))
       5 (node 5 :kids (vec (repeatedly (pick [0 1 2 2 3 4]) sub)))
       ;; a call whose head is read at translation (fz-prim below): a constant
@@ -101,12 +108,15 @@
 ;; the Fortran's case: nodes numbered depth first, the root 1
 (defn flat [t]
   (let [out (atom [])]
-    (letfn [(walk [{:keys [k i2 s2 c mark kids thens]}]
+    (letfn [(walk [{:keys [k i2 s2 c mark kids thens outs]}]
               (let [me (count @out)
                     kids (into kids thens)]
                 (swap! out conj nil)
-                (let [ids (mapv walk kids)]
-                  (swap! out assoc me (str/join " " (concat [k i2 s2 (if (nil? c) -1 c) mark (count kids)] ids))))
+                (if (= k 14)
+                  ;; a letfn's fn: its outer slots its row's kids
+                  (swap! out assoc me (str/join " " (concat [k i2 s2 -1 mark (count outs)] outs)))
+                  (let [ids (mapv walk kids)]
+                    (swap! out assoc me (str/join " " (concat [k i2 s2 (if (nil? c) -1 c) mark (count kids)] ids)))))
                 (inc me)))]
       (walk t))
     @out))

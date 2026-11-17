@@ -295,7 +295,7 @@ contains
        m = 2
     case (5)
        m = nnk(x%id) - 1
-    case (11, 12)
+    case (11, 12, 13)
        m = ni2(x%id)
     case (16)
        m = nnk(x%id) - 1
@@ -345,6 +345,63 @@ contains
     tb%cm = tb%sv(tb%nsv)%v
     tb%nsv = tb%nsv - 1
   end subroutine vtg_restore
+  ! ex-pos: the first position holding s, else the scope's length
+  integer(int64) function pos(tb, s)
+    type(vtg_state), intent(in) :: tb
+    integer(int64), intent(in) :: s
+    integer :: j
+    do j = 1, size(tb%cm)
+       if (tb%cm(j) == s) exit
+    end do
+    pos = j - 1
+  end function pos
+  ! a letfn's j-th init, ex-trlf's (:mkgrp (j . shape) caps..): a fn's row
+  ! (kind 14) its outer slots as its kids, its template (0 0 (o 0 ..)) (the
+  ! fuzzer writes ACL2's so); a group capture (:const (:grp nil m)), any
+  ! other the slot's read
+  subroutine vtg_lfinit(tb, x, j)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    integer(int64), value :: j
+    character(len=:), allocatable :: s, cs
+    integer(int64) :: f, q, o, s0, n
+    integer :: fid
+    type(gc_value) :: kx
+    n = ni2(x%id)
+    s0 = ns2(x%id)
+    s = '(:mkgrp (' // itoa(j)
+    cs = ''
+    do f = 0, n - 1
+       kx = vtg_kid(x, f)
+       fid = kx%id
+       if (nnk(fid) == 0) then
+          s = s // ' ((0 0 nil) . 0)'
+       else
+          s = s // ' ((0 0 ('
+          do q = 0, nnk(fid) - 1
+             o = kids(noff(fid) + int(q))
+             if (q > 0) s = s // ' '
+             s = s // itoa(o) // ' ' // itoa(q)
+             if (o >= s0 .and. o < s0 + n) then
+                cs = cs // ' (:const (:grp nil ' // itoa(o - s0) // '))'
+             else
+                cs = cs // ' ' // cloc(tb, pos(tb, o))
+             end if
+          end do
+          s = s // ')) . ' // itoa(int(nnk(fid), int64)) // ')'
+       end if
+    end do
+    call push(tb, s // ')' // cs // ')')
+  end subroutine vtg_lfinit
+  ! a letfn's slots each a new position, none blanked
+  subroutine vtg_lfbinds(tb, s, n)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s, n
+    integer(int64) :: j
+    do j = 0, n - 1
+       tb%cm = [tb%cm, s + j]
+    end do
+  end subroutine vtg_lfbinds
   ! every other kind: ex-tr's (a Var its value, anything else nil)
   recursive subroutine vtg_other(tb, x)
     type(vtg_state), intent(inout) :: tb

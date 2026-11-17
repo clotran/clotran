@@ -793,7 +793,8 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | case* | ex-tr's `(:let test W)`, W ex-trcs's walk over prim :case | yes -- **generated now** (item 5, vtg-tr flg 6, vtg_cstest; vtg-tlrw walks its thens), no new semantic hypothesis (ex-caseok); named: vtg_ncs/vtg_cthen read gca_entries' order where the model's is ex-c's list, and vm.inc's test `(:prim NODE (:const then_j) p)` -- the runtime's kind 6, vm_node_hook: case_branch's probe takes entry j -- where the model's is `(:prim :case (:const t) p)` |
-| try, letfn, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
+| letfn | ex-tr's ex-trlf: n lets of `(:mkgrp (j . shape) caps..)`, then the body | yes -- **generated now** (item 5, vtg-tr flg 7, vtg_lfinit, vtg_lfbinds), no new semantic hypothesis; named: vm.inc's init `(:prim NODE (:const j) caps.. (:local d)..(:local d+j-1))` -- the runtime's kind 6, vm_node_hook N_LETFN: fn j's closure, the group's captures patched among it and the earlier lets' closures (exec_letfn's refresh_captures, one group, its fns identical), a group capture `(:const nil)` -- where the model's is :mkgrp, x2-seal's j-th |
+| try, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
 | `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)). **Generated now** (vmtrcl): the clause vtg_clause (vtg-clause-ex-clause: ex-clause, sl 1), the arity-error clause vtg_arcl (ex-arcl; ex-arcl-mxcl: appended to a callee's clauses it answers ex-mxcl's, its prim's throw for :arity); the scope setup, the arities' loop and the program's reservation stay vm_compile_fn's |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
@@ -1025,7 +1026,7 @@ position.
    asks no :ifn, and does no apply spread (:applyv): needs the head pure
    (a local, a constant, a deref) or ex-tr reordered, and :invoke of a
    non-IFn throwing :not-fn.) Collections' op as the node: not yet.
-5. try, letfn, case: vm_scan refuses them; take them once 1-4 land.
+5. try, letfn, case: vm_scan refused them; case and letfn taken, try left.
    (a) case* -- done: ex-tr's kind 19 generated (vtg-tr flg 6, the table's
    walk; vtg-tlrw: a recur in a then or the default is a tail), vm_scan
    takes N_CASE, vm_tr hands it to vtg_tr. No new semantic hypothesis
@@ -1049,7 +1050,29 @@ position.
    clears the host's error and keeps message and trace by the thrown value,
    restored by the run's status 1 when the same value leaves -- a runtime
    change, then the vtg_* for ex-trtry (catches' prim :isa as catch_matches
-   under ex-isaok). letfn: not started.
+   under ex-isaok). **The rethrow is a design decision, open** (observable):
+   the tree's explicit `(throw e)` in a catch raises gcp_str(e) with a trace
+   at the throw; its implicit rethrows (no clause matches; after a finally,
+   exec_core action 22) keep the host's message (kst%msg). The VM's
+   implicit ones are ex-trh's / ex-trfin's `(:throw (:local p))`, the same
+   node as an explicit throw, so keeping the host's message there needs
+   either (i) vm.inc emitting them as a distinct prim (a rethrow of the
+   saved message, named against ex-trh/ex-trfin), or (ii) a per-run stash
+   (value, message, trace) restored whenever that value leaves by status 1
+   -- which also restores it on an explicit rethrow, where the tree prints
+   the value. Either way the stash needs per-run state (vm_runref, Eval.f90)
+   and the clear at a host hook's entry (has_error set there means the VM
+   caught it) and at a status-0 exit.
+   (c) letfn -- done: ex-tr's kind 13 (ex-trlf) generated (vtg-tr flg 7,
+   vtg_lfinit, vtg_lfbinds), vm_scan takes N_LETFN (its kids fns), vm_tr hands
+   it to vtg_tr. No new semantic hypothesis (ex-lfok, x2-seal as before).
+   Named, not proved: vtg_lfinit's init is `(:prim NODE (:const j) caps..
+   (:local d)..(:local d+j-1))` -- vm_node_hook's N_LETFN builds fn j's
+   closure (the N_FN path) and patches the group's captures among it and the
+   earlier lets' closures, so after the last let the one cyclic group
+   exec_letfn makes (identical? of siblings as the tree's); a group capture
+   `(:const nil)` where the model's is `(:const (:grp nil m))`. fuzz-vmtr-gen
+   draws letfns (templates (0 0 (o 0 ..)), outer slots the group's or not).
 6. (the cost theorem and fuzz-vmtr-gen: done, above.)
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to

@@ -52,8 +52,12 @@
   !   case*                 (:let test (:if (:prim NODE (:const then) p)
   !                         then .. default)), an entry's test case_branch's
   !                         probe taking it (vm_node_hook; generated)
+  !   letfn                 a let a fn, (:let (:prim NODE (:const j) caps..
+  !                         earlier..) ..), then the body: fn j's closure,
+  !                         the group's captures patched (vm_node_hook;
+  !                         generated, vtg_lfinit)
   ! and a last clause (0 .. :rest) for a call of no arity the fn has,
-  ! clj's ArityException. Anything else -- try, letfn, def -- and
+  ! clj's ArityException. Anything else -- try, def -- and
   ! the fn runs as before.
   ! ===================================================================
 
@@ -251,7 +255,7 @@
     type(gc_stack), pointer :: vst
     type(eval_ctx), pointer :: tctx
     type(gc_value) :: x, capv
-    integer :: base, j, from, ncap
+    integer :: base, j, from, ncap, s0, jj, off, tot, f, q, o
     tctx => ctx_self()
     vst => tctx%stk
     out = gc_nil()
@@ -266,6 +270,47 @@
        ! tree's is one probe; cache the last (nd, v) if a hot case shows it
        if (n == 2) out = gc_bool(gc_identical(case_branch(vs_get(vst, base + 1), vs_get(vst, argbase + 2)), &
             vs_get(vst, argbase + 1)))
+    case (N_LETFN)
+       ! (:prim nd (:const j) caps.. earlier..), vmtrg's vtg-lfinit -- NAMED:
+       ! the model's (:mkgrp (j . shape) caps..), x2-seal's j-th closure. Fn
+       ! j's closure from its captures (every fn's, in turn, after j), then
+       ! the group's patched as exec_letfn's refresh_captures does: its own
+       ! capture of fn m < j the earlier let's closure m (args 2+tot+m), of
+       ! itself itself, and each earlier closure's capture of fn j this one --
+       ! after the last let one group, its fns identical as the tree's
+       s0 = int_of(gc_slot(nd, 2))
+       jj = int_of(vs_get(vst, argbase + 1))
+       off = 1
+       tot = 0
+       do f = 0, gc_i2(nd) - 1
+          q = gcv_count(gcv_nth(gc_slot(ast_kid(nd, int(f, int64)), 2), 2)) / 2
+          if (f < jj) off = off + q
+          tot = tot + q
+       end do
+       if (jj >= 0 .and. jj < gc_i2(nd) .and. n == 1 + tot + jj) then
+          x = ast_kid(nd, int(jj, int64))
+          capv = gcv_nth(gc_slot(x, 2), 2)
+          ncap = gcv_count(capv) / 2
+          call vm_node_hook(x, argbase + off, ncap, out, ok)
+          if (ok) then
+             call vs_set(vst, base + 2, out)
+             do q = 0, ncap - 1
+                o = int_of(gcv_nth(capv, 2 * q)) - s0
+                if (o >= 0 .and. o < jj) then
+                   call cap_put(out, q, ncap, vs_get(vst, argbase + 2 + tot + o))
+                else if (o == jj) then
+                   call cap_put(out, q, ncap, out)
+                end if
+             end do
+             do f = 0, jj - 1
+                capv = gcv_nth(gc_slot(ast_kid(nd, int(f, int64)), 2), 2)
+                do q = 0, gcv_count(capv) / 2 - 1
+                   if (int_of(gcv_nth(capv, 2 * q)) == s0 + jj) &
+                        call cap_put(vs_get(vst, argbase + 2 + tot + f), q, gcv_count(capv) / 2, out)
+                end do
+             end do
+          end if
+       end if
     case (N_VECTOR, N_MAP, N_SET, N_NEW)
        call vs_set(vst, base + 2, vm_slots_vec(vst, argbase, 0, n, [nd]))
        select case (gc_i1(nd))
@@ -368,7 +413,7 @@
     type(vm_tr_ctx), intent(inout) :: c
     type(gc_value), intent(in) :: nd
     type(gc_value) :: kids, head
-    integer :: i, n, start
+    integer :: i, j, n, start
     if (.not. c%ok) return
     if (gc_kind(nd) /= OBJ_AST) then
        c%ok = .false.
@@ -414,6 +459,27 @@
        do i = 0, gcv_count(kids) - 1
           call vm_scan(c, gcv_nth(kids, i))
        end do
+    case (N_LETFN)
+       ! its fns' captures read (each must be a fn), its slots bound, its body
+       n = gc_i2(nd)
+       start = int_of(gc_slot(nd, 2))
+       do i = 0, n - 1
+          head = gcv_nth(kids, i)
+          if (gc_kind(head) /= OBJ_AST) then
+             c%ok = .false.
+             return
+          end if
+          if (gc_i1(head) /= N_FN) then
+             c%ok = .false.
+             return
+          end if
+          head = gcv_nth(gc_slot(head, 2), 2)
+          do j = 0, gcv_count(head) / 2 - 1
+             call vm_mark(c%reads, int_of(gcv_nth(head, 2 * j)), c)
+          end do
+          call vm_mark(c%binds, start + i, c)
+       end do
+       call vm_scan(c, gcv_nth(kids, n))
     case (N_CASE)
        ! the test, the default, and each entry's then
        do i = 0, gcv_count(kids) - 1
@@ -456,7 +522,7 @@
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
-         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE) then
+         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -820,6 +886,53 @@
     call anb_push(nd)
     call vtg_const(tb, vtg_cthen(nd, j))
   end subroutine vtg_cstest
+  ! a letfn's j-th init (vmtrg's vtg-lfinit): (:prim NODE (:const j) caps..
+  ! (:local d) .. (:local d+j-1)), the letfn node the op of the runtime's
+  ! kind 6 (vm_node_hook), every fn's captures in turn -- an outer slot's
+  ! read as vtg_local's, the group's own (:const nil) -- then the earlier
+  ! lets' closures, d the depth at the letfn's scope (the inits are
+  ! translated there; the lets bind d, d+1, ..). NAMED, where the model's is
+  ! (:mkgrp (j . shape) caps..), a group capture (:const (:grp nil m)):
+  ! vm_node_hook's N_LETFN answers fn j's closure, the group's captures
+  ! patched among it and the earlier ones -- after the last let the one group
+  ! exec_letfn makes, the model's x2-seal of the j-th up to identity
+  subroutine vtg_lfinit(tb, nd, j)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    integer(int64), value :: j
+    type(gc_stack), pointer :: vst
+    type(gc_value) :: capv, k
+    integer :: top0, f, q, o, s0, n
+    vst => gc_my_stack()
+    top0 = vst%vs_top
+    n = gc_i2(nd)
+    s0 = int_of(gc_slot(nd, 2))
+    call anb_push(vm_kw("prim"))
+    call anb_push(nd)
+    call vtg_const(tb, gc_int(int(j, gc_ip)))
+    do f = 0, n - 1
+       capv = gcv_nth(gc_slot(ast_kid(nd, int(f, int64)), 2), 2)
+       do q = 0, gcv_count(capv) / 2 - 1
+          o = int_of(gcv_nth(capv, 2 * q))
+          if (o >= s0 .and. o < s0 + n) then
+             call vtg_nil(tb)
+          else
+             call anb_push(vm_slot_ref(tb%c, o, [gc_value ::]))
+          end if
+       end do
+    end do
+    do q = 0, int(j) - 1
+       k = vm_kw("local")
+       call anb_push(vm_l([k, gc_int(int(tb%c%depth + q, gc_ip))], [k]))
+    end do
+    call vtg_node(tb, 0_int64, int(vst%vs_top - top0, int64))
+  end subroutine vtg_lfinit
+  ! a letfn's slots the next locals, none blanked (vmtrg's vtg-lfbinds)
+  subroutine vtg_lfbinds(tb, s, n)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s, n
+    call vtg_binds(tb, s, n)
+  end subroutine vtg_lfbinds
   ! every other kind: vm_tr's own (which calls back for the kinds above)
   ! a number (gc_int), a keyword (0 :rest, 1 :clotran.vm/arity, 2 :prim, else
   ! :local), the self let's value: (:capt m), the runtime's closure, which
