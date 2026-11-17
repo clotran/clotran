@@ -56,9 +56,18 @@
   !                         earlier..) ..), then the body: fn j's closure,
   !                         the group's captures patched (vm_node_hook;
   !                         generated, vtg_lfinit)
+  !   try                   (:try body walk), the walk at the thrown value's
+  !                         local p (:if (:prim NODE (:const j) p) catch_j ..
+  !                         (:prim NODE p)); with a finally F (:let (:try
+  !                         that (:if F (:prim NODE p) (:prim NODE p))) (:if
+  !                         F p p)): catch_matches the test, (:prim NODE p)
+  !                         the rethrow -- the host's error raised again as
+  !                         the VM caught it (vm_caught, vm_rethrow), where
+  !                         exec-vmtr's ex-trh / ex-trfin have (:throw p)
+  !                         (vm_node_hook; generated, vtg_catest, vtg_rethrow)
   ! and a last clause (0 .. :rest) for a call of no arity the fn has,
-  ! clj's ArityException. Anything else -- try, def -- and
-  ! the fn runs as before.
+  ! clj's ArityException. Anything else -- def, set!, the host's forms --
+  ! and the fn runs as before.
   ! ===================================================================
 
   ! CLOTRAN_VM=1: fn bodies the VM can run, it runs
@@ -110,8 +119,8 @@
   ! the runtime's call: fn on the nargs values above argbase. A throw
   ! answers the thrown value -- or, for an error raised as a message
   ! alone, the value a catch would make of it -- and the error STAYS
-  ! raised: the VM has no handlers yet, so the throw unwinds straight out
-  ! of the run, nothing running between, and vm_run leaves it as it was
+  ! raised while the VM unwinds: out of the run, vm_run leaves it as it
+  ! was; into a (:try ..)'s handler, the next hook clears it (vm_caught)
   recursive subroutine vm_call_hook(fn, argbase, nargs, out, ok)
     type(gc_value), intent(in) :: fn
     integer, intent(in) :: argbase, nargs
@@ -141,6 +150,7 @@
     end if
     tctx => ctx_self()
     vst => tctx%stk
+    call vm_caught(tctx)
     out = gce_apply_slots(vst, fn, argbase, nargs)
     call vm_took(tctx, ok, out, fn)
   end subroutine vm_call_hook
@@ -159,9 +169,83 @@
             call gce_error(s=msg)
             out = error_value(msg, [root])
           end block
+          ! the value the VM unwinds with is the raised one (vm_caught
+          ! keeps it, vm_run's status 1 knows it)
+          call set_thrown(out)
        end if
     end if
   end subroutine vm_took
+
+  ! THE VM'S CATCH (exec-PLAN item 5(b)). A hook reports a throw by leaving
+  ! the host's error raised while the VM unwinds; a hook entered with it
+  ! still raised means the VM's (:try ..) caught it -- its catch walk's first
+  ! test, a finally's first call, the rethrow at its end. Here the error
+  ! is cleared, as exec_try's catch clears it, and kept: its value, message
+  ! and trace on the run's list (the last four), the calls it unwound out
+  ! of gone from the frame stack (exec_try's ftop). vm_run clears what is
+  ! left at a normal end.
+  subroutine vm_caught(tctx)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_value) :: v
+    integer :: k
+    if (.not. tctx%has_error) return
+    if (tctx%n_vm_deep == 0 .and. tctx%n_vm_runs > 0) then
+       associate (r => tctx%vm_runs(tctx%n_vm_runs))
+         tctx%fstack_top = min(tctx%fstack_top, r%fstop)
+         v = gc_root_get(r%exc_root)
+         if (gc_vec_len(v) /= 4) then
+            v = gc_vec(4, [thrown_value()])
+            call gc_global_keep(r%exc_root, v)
+         end if
+         k = mod(r%nexc, 4) + 1
+         r%nexc = r%nexc + 1
+         call gc_vec_set(v, k, thrown_value())
+         r%emsg(k)%s = ""
+         if (allocated(tctx%last_error)) r%emsg(k)%s = tctx%last_error
+         r%etr(k)%s = ""
+         if (allocated(tctx%last_trace)) r%etr(k)%s = tctx%last_trace
+       end associate
+    end if
+    call gce_clear_error()
+  end subroutine vm_caught
+
+  ! THE RETHROW (vmtrg's vtg-rethrow: vm.inc's (:prim NODE (:local p)) where
+  ! exec-vmtr's ex-trh / ex-trfin have (:throw (:local p)) -- a catch walk's
+  ! end, a finally's after an uncaught throw). p a host error vm_caught kept:
+  ! raised again with its message and trace, as the tree's implicit rethrows
+  ! keep them (k_unwind's pop, exec_core's action 22); else a value the VM
+  ! threw itself, raised as N_THROW raises it. Either way (:throw . p).
+  ! ponytail: four kept a run -- a finally that itself catches four host
+  ! errors before its rethrow loses the first's message (the value's text)
+  subroutine vm_rethrow(tctx, p)
+    type(eval_ctx), pointer, intent(in) :: tctx
+    type(gc_value), intent(in) :: p
+    type(gc_value) :: v
+    integer :: q, k
+    character(len=:), allocatable :: msg
+    if (tctx%n_vm_deep == 0 .and. tctx%n_vm_runs > 0) then
+       associate (r => tctx%vm_runs(tctx%n_vm_runs))
+         v = gc_root_get(r%exc_root)
+         if (r%nexc > 0 .and. gc_vec_len(v) == 4) then
+            do q = r%nexc, max(1, r%nexc - 3), -1
+               k = mod(q - 1, 4) + 1
+               if (.not. gc_identical(gc_vec_get(v, k), p)) cycle
+               call set_thrown(p)
+               tctx%has_error = .true.
+               tctx%last_error = r%emsg(k)%s
+               tctx%last_trace = r%etr(k)%s
+               r%nexc = q - 1
+               return
+            end do
+         end if
+       end associate
+    end if
+    call set_thrown(p)
+    tctx%has_error = .true.
+    call gcp_str(p, .true., s=msg)
+    tctx%last_error = msg
+    call capture_trace()
+  end subroutine vm_rethrow
 
   ! a call's cast, head first (ex-trcall): kind 9 (:prim :ifn v) is_ifn's
   ! answer, as exec_core's; kind 10 (:prim :clotran.vm/notfn v) its
@@ -175,6 +259,7 @@
     type(gc_stack), pointer :: vst
     tctx => ctx_self()
     vst => tctx%stk
+    call vm_caught(tctx)
     out = gc_nil()
     ok = .true.
     if (nargs /= 1) return
@@ -200,6 +285,7 @@
     character(len=16) :: buf
     tctx => ctx_self()
     vst => tctx%stk
+    call vm_caught(tctx)
     out = gc_nil()
     call gcp_str(vs_get(vst, argbase + 1), .false., s=who)
     write(buf, '(i0)') seq_len(vs_get(vst, argbase + nargs))
@@ -258,10 +344,21 @@
     integer :: base, j, from, ncap, s0, jj, off, tot, f, q, o
     tctx => ctx_self()
     vst => tctx%stk
+    call vm_caught(tctx)
     out = gc_nil()
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
+    case (N_TRY)
+       ! (:prim nd (:const j) v): whether catch j's class takes v (vmtrg's
+       ! vtg-catest, NAMED: the model's prim :isa, exec_try's catch_matches);
+       ! (:prim nd p): the rethrow (vtg-rethrow, vm_rethrow)
+       if (n == 2) then
+          out = gc_bool(catch_matches(gcv_nth(gcv_nth(gc_slot(vs_get(vst, base + 1), 2), &
+               int_of(vs_get(vst, argbase + 1))), 0), vs_get(vst, argbase + 2), gc_nil()))
+       else if (n == 1) then
+          call vm_rethrow(tctx, vs_get(vst, argbase + 1))
+       end if
     case (N_CASE)
        ! (:prim nd (:const then) v): whether case_branch's probe of v takes
        ! the entry whose then is that node (vmtrg's vtg-cstest, NAMED: the
@@ -480,6 +577,14 @@
           call vm_mark(c%binds, start + i, c)
        end do
        call vm_scan(c, gcv_nth(kids, n))
+    case (N_TRY)
+       ! the body, the finally, and each catch's body, its slot bound
+       call vm_scan(c, gcv_nth(kids, 0))
+       if (vtg_nk(nd) > 1) call vm_scan(c, gcv_nth(kids, 1))
+       do i = 0, int(vtg_ncs(nd)) - 1
+          call vm_mark(c%binds, int(vtg_cslot(nd, int(i, int64))), c)
+          call vm_scan(c, vtg_cbody(nd, int(i, int64)))
+       end do
     case (N_CASE)
        ! the test, the default, and each entry's then
        do i = 0, gcv_count(kids) - 1
@@ -522,7 +627,7 @@
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
-         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN) then
+         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN .or. gc_i1(nd) == N_TRY) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -594,9 +699,14 @@
     type(gc_value), intent(in) :: nd
     vtg_i2 = ast_i2(nd)
   end function vtg_i2
+  ! a try's kids are its body and its finally, nil when it has none: then
+  ! one (NAMED: the model's ex-nk, exec_core's nk of an N_TRY)
   integer(int64) function vtg_nk(nd)
     type(gc_value), intent(in) :: nd
     vtg_nk = ast_nkids(nd)
+    if (ast_kind(nd) == N_TRY .and. vtg_nk > 1) then
+       if (gc_kind(ast_kid(nd, 1_int64)) /= OBJ_AST) vtg_nk = 1
+    end if
   end function vtg_nk
   function vtg_kid(nd, j) result(k)
     type(gc_value), intent(in) :: nd
@@ -628,7 +738,22 @@
     type(gc_value), intent(in) :: nd
     vtg_ncs = 0
     if (ast_kind(nd) == N_CASE) vtg_ncs = gca_count(gc_slot(nd, 2))
+    if (ast_kind(nd) == N_TRY) vtg_ncs = gcv_count(gc_slot(nd, 2))
   end function vtg_ncs
+  ! a try's catch j (slot 2's j-th, [class slot body]): its body, its slot
+  function vtg_cbody(nd, j) result(b)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: j
+    type(gc_value) :: b
+    b = gc_nil()
+    if (ast_kind(nd) == N_TRY .and. j >= 0 .and. j < vtg_ncs(nd)) b = gcv_nth(gcv_nth(gc_slot(nd, 2), int(j)), 2)
+  end function vtg_cbody
+  integer(int64) function vtg_cslot(nd, j)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: j
+    vtg_cslot = 0
+    if (ast_kind(nd) == N_TRY .and. j >= 0 .and. j < vtg_ncs(nd)) vtg_cslot = int_of(gcv_nth(gcv_nth(gc_slot(nd, 2), int(j)), 1))
+  end function vtg_cslot
   function vtg_cthen(nd, j) result(t)
     type(gc_value), intent(in) :: nd
     integer(int64), intent(in) :: j
@@ -752,7 +877,7 @@
     integer(int64), value :: s
     call anb_push(vm_slot_ref(tb%c, int(s), [gc_value ::]))
   end subroutine vtg_local
-  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw, 4 :loop, 5 :recur, 6 :prim, 7 :callv, 8 :applyv; 0 the items alone
+  ! (op items..) of the top n: 1 :if, 2 :let, 3 :throw, 4 :loop, 5 :recur, 6 :prim, 7 :callv, 8 :applyv, 9 :try; 0 the items alone
   subroutine vtg_node(tb, op, n)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: op, n
@@ -774,6 +899,7 @@
        case (6); k = vm_kw("prim")
        case (7); k = vm_kw("callv")
        case (8); k = vm_kw("applyv")
+       case (9); k = vm_kw("try")
        case default; k = vm_kw("throw")
        end select
        l = gcl_cons(k, l, [l, k])
@@ -886,6 +1012,44 @@
     call anb_push(nd)
     call vtg_const(tb, vtg_cthen(nd, j))
   end subroutine vtg_cstest
+  ! a try's parts (vmtrg's vtg-catest, vtg-rethrow, vtg-blankcs), the thrown
+  ! value at the next local, the depth (p, as vtg_toploc's depth - 1 the
+  ! last): catch j's test (:prim NODE (:const j) (:local p)), the try node
+  ! the op of the runtime's kind 6 -- NAMED: the model's (:prim :isa (:const
+  ! c) (:local p)), vm_node_hook's N_TRY answering catch_matches of catch j's
+  ! class (exec-vm's prim :isa under ex-isaok); the rethrow (:prim NODE
+  ! (:local p)) -- NAMED: the model's (:throw (:local p)) at ex-trh's end and
+  ! twice in ex-trfin's handler, vm_node_hook's N_TRY answering p's throw,
+  ! the host's error raised again from what vm_caught kept (vm_rethrow); the
+  ! catches' blanks nothing, as vtg_blank
+  function vtg_nextloc(tb) result(l)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value) :: l, k
+    k = vm_kw("local")
+    l = vm_l([k, gc_int(int(tb%c%depth, gc_ip))], [k])
+  end function vtg_nextloc
+  subroutine vtg_catest(tb, nd, j)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    integer(int64), value :: j
+    type(gc_value) :: l, k, c
+    l = vtg_nextloc(tb)
+    c = vm_l([vm_kw("const"), gc_int(int(j, gc_ip))], [l, nd])
+    k = vm_kw("prim")
+    call anb_push(vm_l([k, nd, c, l], [l, nd, c]))
+  end subroutine vtg_catest
+  subroutine vtg_rethrow(tb, nd)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    type(gc_value) :: l, k
+    l = vtg_nextloc(tb)
+    k = vm_kw("prim")
+    call anb_push(vm_l([k, nd, l], [l, nd]))
+  end subroutine vtg_rethrow
+  subroutine vtg_blankcs(tb, nd)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+  end subroutine vtg_blankcs
   ! a letfn's j-th init (vmtrg's vtg-lfinit): (:prim NODE (:const j) caps..
   ! (:local d) .. (:local d+j-1)), the letfn node the op of the runtime's
   ! kind 6 (vm_node_hook), every fn's captures in turn -- an outer slot's
@@ -1305,7 +1469,7 @@
     type(gc_stack), pointer :: vst
     type(vm_state), target :: st
     type(gc_value) :: info
-    integer :: sbase, i, nl, start, ci, win, top, hi
+    integer :: sbase, i, nl, start, ci, win, top, hi, fs0
     integer(gc_ip) :: steps, ct0
     character(len=:), allocatable :: msg
     logical :: reg
@@ -1381,12 +1545,16 @@
        tctx%n_vm_runs = tctx%n_vm_runs + 1
        tctx%vm_runs(tctx%n_vm_runs)%st => st
        tctx%vm_runs(tctx%n_vm_runs)%fstop = tctx%fstack_top
+       tctx%vm_runs(tctx%n_vm_runs)%nexc = 0
        reg = .true.
     else
+       tctx%n_vm_deep = tctx%n_vm_deep + 1
        reg = .false.
     end if
+    fs0 = tctx%fstack_top
     hi = nl + 1
     steps = 0
+    do
     if (vmj_enabled()) then
        ! natively (vmjit.inc), the same steps
        call vmj_run(st, ct0, hi, steps)
@@ -1405,13 +1573,42 @@
        end if
     end do
     end if
+    ! the machine out of room (status 2) inside a (:try ..) of its own: the
+    ! host's stack_overflow_error raised and thrown to its handler
+    ! (vmg_unwind, as a prim's throw), as the tree's frame limit raises one
+    ! a try catches -- outside vmfg-correct, whose status 2 is out of room,
+    ! no answer (a host error still raised there the VM caught: cleared)
+    if (st%status /= 2 .or. st%hidx < 0) exit
+    if (tctx%has_error) call gce_clear_error()
+    call raise_class("clotran.host.stack_overflow_error", "stack overflow", [nd])
+    st%status = 0
+    block
+      type(gc_value) :: tv
+      logical :: okx
+      call vm_took(tctx, okx, tv, nd)
+      call vmg_unwind(st, tv)
+    end block
+    end do
     vst%vm_ctl_top = int(ct0)
     select case (int(st%status))
     case (0)
        val = st%stk(st%sp - 1)
+       ! a host error still raised: the VM caught it (vm_caught)
+       if (tctx%has_error) then
+          tctx%fstack_top = min(tctx%fstack_top, fs0)
+          call gce_clear_error()
+       end if
     case (1)
        ! a throw nothing in the body caught: a call's error is still
        ! raised, as it was; the body's own (:throw e) raised as N_THROW does
+       ! -- and so when the error still raised is one the VM caught and
+       ! another value is thrown (a finally's own throw: no hook between)
+       if (tctx%has_error) then
+          if (.not. gc_identical(thrown_value(), st%stk(0))) then
+             tctx%fstack_top = min(tctx%fstack_top, fs0)
+             call gce_clear_error()
+          end if
+       end if
        if (.not. tctx%has_error) then
           val = st%stk(0)
           call set_thrown(val)
@@ -1427,7 +1624,13 @@
     end select
     if (reg) then
        tctx%vm_runs(tctx%n_vm_runs)%st => null()
+       if (tctx%vm_runs(tctx%n_vm_runs)%nexc > 0) then
+          call gc_global_keep(tctx%vm_runs(tctx%n_vm_runs)%exc_root, gc_nil())
+          tctx%vm_runs(tctx%n_vm_runs)%nexc = 0
+       end if
        tctx%n_vm_runs = tctx%n_vm_runs - 1
+    else
+       tctx%n_vm_deep = tctx%n_vm_deep - 1
     end if
     if (vm_trace) then
        write(0, '(a, i0, a, i0, a, i0)') 'vm run clause ', ci, ' status ', st%status, ' steps ', steps
@@ -1469,7 +1672,7 @@
     type(vm_fname), allocatable, intent(out) :: names(:)
     integer, allocatable :: buf(:)
     type(vm_fname), allocatable :: nb(:)
-    integer :: i, r, j, n, nn, f
+    integer :: i, r, j, n, nn, f, lowc
     allocate(buf(tctx%fstack_top + 64), nb(64))
     n = 0
     nn = 0
@@ -1477,13 +1680,23 @@
        do r = tctx%n_vm_runs, 1, -1
           if (tctx%vm_runs(r)%fstop /= i .or. .not. associated(tctx%vm_runs(r)%st)) cycle
           associate (st => tctx%vm_runs(r)%st)
-            ! the function running, when it is not the entry's own
-            if (st%ctop >= 2) then
+            ! the function running, when it is not the entry's own (a
+            ! call record, kind 1, above the entry's at 0 -- a (:try ..)'s
+            ! handler record, kind 2, is no call)
+            lowc = 0
+            do j = 1, int(st%ctop) - 1
+               if (st%ckind(j) == 1) then
+                  lowc = j
+                  exit
+               end if
+            end do
+            if (lowc > 0) then
                f = vm_fn_at(st%pc)
                if (f >= 0) call trace_push(n, nn, buf, nb, f)
             end if
-            ! the innermost caller records: ctop-1 .. 2
-            do j = int(st%ctop) - 1, 2, -1
+            ! the innermost call records' callers, but the lowest's (the entry's own)
+            do j = int(st%ctop) - 1, lowc + 1, -1
+               if (st%ckind(j) /= 1) cycle
                f = vm_fn_at(st%ca(j))
                if (f >= 0) call trace_push(n, nn, buf, nb, f)
             end do

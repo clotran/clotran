@@ -794,7 +794,8 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | case* | ex-tr's `(:let test W)`, W ex-trcs's walk over prim :case | yes -- **generated now** (item 5, vtg-tr flg 6, vtg_cstest; vtg-tlrw walks its thens), no new semantic hypothesis (ex-caseok); named: vtg_ncs/vtg_cthen read gca_entries' order where the model's is ex-c's list, and vm.inc's test `(:prim NODE (:const then_j) p)` -- the runtime's kind 6, vm_node_hook: case_branch's probe takes entry j -- where the model's is `(:prim :case (:const t) p)` |
 | letfn | ex-tr's ex-trlf: n lets of `(:mkgrp (j . shape) caps..)`, then the body | yes -- **generated now** (item 5, vtg-tr flg 7, vtg_lfinit, vtg_lfbinds), no new semantic hypothesis; named: vm.inc's init `(:prim NODE (:const j) caps.. (:local d)..(:local d+j-1))` -- the runtime's kind 6, vm_node_hook N_LETFN: fn j's closure, the group's captures patched among it and the earlier lets' closures (exec_letfn's refresh_captures, one group, its fns identical), a group capture `(:const nil)` -- where the model's is :mkgrp, x2-seal's j-th |
-| try, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
+| try | ex-tr's kind 18 (ex-trtry) | **generated now** (item 5(b)): vtg-tr flg 8 and vtg_catest, vtg_rethrow; the implicit rethrows a distinct prim, named |
+| def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
 | `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)). **Generated now** (vmtrcl): the clause vtg_clause (vtg-clause-ex-clause: ex-clause, sl 1), the arity-error clause vtg_arcl (ex-arcl; ex-arcl-mxcl: appended to a callee's clauses it answers ex-mxcl's, its prim's throw for :arity); the scope setup, the arities' loop and the program's reservation stay vm_compile_fn's |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
@@ -1026,7 +1027,7 @@ position.
    asks no :ifn, and does no apply spread (:applyv): needs the head pure
    (a local, a constant, a deref) or ex-tr reordered, and :invoke of a
    non-IFn throwing :not-fn.) Collections' op as the node: not yet.
-5. try, letfn, case: vm_scan refused them; case and letfn taken, try left.
+5. try, letfn, case: vm_scan refused them; all three taken now.
    (a) case* -- done: ex-tr's kind 19 generated (vtg-tr flg 6, the table's
    walk; vtg-tlrw: a recur in a then or the default is a tail), vm_scan
    takes N_CASE, vm_tr hands it to vtg_tr. No new semantic hypothesis
@@ -1036,33 +1037,46 @@ position.
    runtime's kind 6, vm_node_hook, answers whether case_branch's probe of
    the value takes entry j -- one probe an entry walked (ponytail: O(n) a
    case). fuzz-vmtr-gen draws cases for vtg_tr, vtg_tlr and vtg_clause.
-   (b) try -- NOT taken: the model's VM has the machinery (mx2's :try,
-   ex-trh's catch walk, ex-trfin's finally desugaring), the host side does
-   not. vm.inc's host calls report a throw by leaving tctx%has_error set
-   (vm_took) while the VM unwinds (THROWN v); nothing clears it when the
-   VM's :try catches, so a handler or finally that calls the host sees the
-   stale error (vm_took then calls every later call a throw) -- exec_try
-   clears it on a catch (gce_clear_error) and saves/restores it around the
-   finally. A finally-only try's handler runs F before any host hook (no
-   prim :isa to clear it in). And a rethrow the VM ends with (status 1)
-   re-raises from the value (gcp_str), not the host's saved message and
-   trace. Needed: a hook at the VM's catch (VmRuntime/vm_gen's unwind) that
-   clears the host's error and keeps message and trace by the thrown value,
-   restored by the run's status 1 when the same value leaves -- a runtime
-   change, then the vtg_* for ex-trtry (catches' prim :isa as catch_matches
-   under ex-isaok). **The rethrow is a design decision, open** (observable):
-   the tree's explicit `(throw e)` in a catch raises gcp_str(e) with a trace
-   at the throw; its implicit rethrows (no clause matches; after a finally,
-   exec_core action 22) keep the host's message (kst%msg). The VM's
-   implicit ones are ex-trh's / ex-trfin's `(:throw (:local p))`, the same
-   node as an explicit throw, so keeping the host's message there needs
-   either (i) vm.inc emitting them as a distinct prim (a rethrow of the
-   saved message, named against ex-trh/ex-trfin), or (ii) a per-run stash
-   (value, message, trace) restored whenever that value leaves by status 1
-   -- which also restores it on an explicit rethrow, where the tree prints
-   the value. Either way the stash needs per-run state (vm_runref, Eval.f90)
-   and the clear at a host hook's entry (has_error set there means the VM
-   caught it) and at a status-0 exit.
+   (b) try -- done (option (i), James's decision): ex-tr's kind 18
+   (ex-trtry) generated (vtg-tr flg 8 the catch walk, ex-trh; with a finally
+   ex-trfin's two copies of F), vm_scan takes N_TRY (body, finally, each
+   catch's body, its slot bound), vm_tr hands it to vtg_tr. No new semantic
+   hypothesis (ex-isaok, mx2's :try as before). Named, not proved:
+   vtg_catest's test is vm.inc's (:prim NODE (:const j) (:local p)) --
+   vm_node_hook's N_TRY, catch_matches of catch j's class -- where the
+   model's is (:prim :isa (:const c) (:local p)); the implicit rethrows
+   (ex-trh's walk end, ex-trfin's handler's two) are a DISTINCT prim,
+   vtg_rethrow's (:prim NODE (:local p)) -- vm_node_hook's N_TRY with one
+   value, vm_rethrow: (:throw . p) as prim's throw unwinds, the host's
+   error raised again with the message and trace vm_caught kept when p is
+   the value the VM caught, else raised as N_THROW raises p -- where the
+   model's is (:throw (:local p)); an explicit (throw e) in a catch stays
+   kind 17's (:throw x), raising the printed value as the tree does. vtg_nk
+   of an N_TRY is exec_core's nk (a nil finally slot: one). The host side
+   (vm.inc, Eval.f90's vm_runref): a hook (call, node, cast, arity) entered
+   with the host's error raised means the VM caught it -- vm_caught clears
+   it as exec_try's catch does, trims the frame stack to the run's, and
+   keeps value, message and trace on the run's vm_runref (the last four;
+   ponytail: a finally catching four more host errors before its rethrow
+   loses the first's message to the value's text); a status-0 end clears
+   what is left; a status-1 end whose raised error is not the value thrown
+   (a finally's own throw, no hook between) clears it and raises the value;
+   vm_took sets the value it makes as the thrown one; runs past vm_runs' 64
+   keep nothing (n_vm_deep). trace_order now skips a (:try ..)'s handler
+   records (kind 2) where it read every record as a call's. And a run the
+   machine stops out of room (status 2) inside a (:try ..) of its own raises
+   the host's stack_overflow_error and throws it to the handler (vmg_unwind,
+   as a prim's throw) -- outside vmfg-correct, whose status 2 is no answer;
+   the tree's frame limit raises one a try catches (fuzz-regressions' deep
+   recursion caught as :so, which crosscheck found). fuzz-vmtr-gen
+   draws trys (catch j's class 60 + j, slot s2 + j, a finally or none);
+   scripts/fuzz -m vm,jit's try/catch/finally forms run on the VM now.
+   Divergences left, named: the tree's implicit rethrow reports no trace
+   lines (gce_trace empty -- after a finally exec_core's action 22 restores
+   kst%msg, not last_trace, which gce_clear_error emptied; with no clause
+   taken the tree's report has none either) where the VM's keeps the
+   original throw's (vm_caught's); and every VM frame in a trace lacks its
+   file:line and the report names the run's entry, as before try.
    (c) letfn -- done: ex-tr's kind 13 (ex-trlf) generated (vtg-tr flg 7,
    vtg_lfinit, vtg_lfbinds), vm_scan takes N_LETFN (its kids fns), vm_tr hands
    it to vtg_tr. No new semantic hypothesis (ex-lfok, x2-seal as before).

@@ -64,7 +64,7 @@ module Eval
   use Socket
   use Threads
   use vm_runtime, only: rt_resize_int, vm_state, vc_state, vmrt_call, vmrt_deref, vmrt_node, vmrt_arity, vmrt_cast, vmrt_init, rt_keyword, vm_prim_n
-  use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim
+  use vm_gen, only: vmg_xstep, vmg_fuse, vmg_callv, vmg_ret, vmg_prim, vmg_unwind
   use vmc_gen, only: vmicg_defs, vmicg_size_clauses
   use iso_fortran_env, only: int64
   use iso_c_binding, only: c_ptr, c_funptr, c_loc, c_f_pointer, c_double, c_int, c_long, c_char, c_null_char, c_associated, c_bool, c_int32_t, &
@@ -670,16 +670,22 @@ module Eval
   ! stack is GC's, bound the same way (gc_stack_bind). A task is a
   ! context; so is the paused frame a debugger inspects while the REPL
   ! runs in another, on the same thread.
-   ! a VM run on this thread (vm.inc), for a trace read while it runs: its
-   ! machine, and how deep the frame stack was when it was entered
-   type :: vm_runref
-      type(vm_state), pointer :: st => null()
-      integer :: fstop = 0
-   end type vm_runref
    ! a compiled function's name, for a trace
    type :: vm_fname
       character(len=:), allocatable :: s
    end type vm_fname
+   ! a VM run on this thread (vm.inc), for a trace read while it runs: its
+   ! machine, and how deep the frame stack was when it was entered; and the
+   ! host errors its VM caught (vm.inc vm_caught): the last four,
+   ! each its thrown value (exc_root's vector), message and trace, nexc
+   ! the count kept -- a rethrow (vm_rethrow) of one raises it again as it was
+   type :: vm_runref
+      type(vm_state), pointer :: st => null()
+      integer :: fstop = 0
+      type(gc_root) :: exc_root
+      integer :: nexc = 0
+      type(vm_fname) :: emsg(4), etr(4)
+   end type vm_runref
   type eval_ctx
      type(kframe), allocatable :: kst(:)
      integer :: ksp = 0
@@ -690,6 +696,8 @@ module Eval
      ! frames too, read off their control stacks when a trace is taken
      type(vm_runref) :: vm_runs(64)
      integer :: n_vm_runs = 0
+     ! the runs past those 64, entered inside them (kept nothing of)
+     integer :: n_vm_deep = 0
      ! the packed position of the top-level form being loaded: a def
      ! whose own form has none (read-string, eval) takes it, as DefExpr
      ! takes the compiler's LINE and SOURCE_PATH

@@ -67,6 +67,7 @@ contains
     vtg_nk = 0
     if (ok(x)) vtg_nk = nnk(x%id)
     if (vtg_kind(x) == 19) vtg_nk = min(vtg_nk, 2_int64)
+    if (vtg_kind(x) == 18) vtg_nk = vtg_nk - max(0, nc(x%id))
   end function vtg_nk
   ! a case (kind 19): its row's kids the test, the default, then each
   ! entry's then; entry j's test 50 + j (the fuzzer writes ACL2's so)
@@ -74,7 +75,49 @@ contains
     type(gc_value), intent(in) :: x
     vtg_ncs = 0
     if (vtg_kind(x) == 19) vtg_ncs = max(0, nnk(x%id) - 2)
+    if (vtg_kind(x) == 18) vtg_ncs = max(0, nc(x%id))
   end function vtg_ncs
+  ! a try (kind 18): its row's kids the body, the finally if any, then each
+  ! catch's body, c the catches' count; catch j's class 60 + j, its slot
+  ! s2 + j (the fuzzer writes ACL2's so)
+  function vtg_cbody(x, j) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: j
+    type(gc_value) :: k
+    k%id = 0
+    if (j >= 0 .and. j < vtg_ncs(x)) k = vtg_kid(x, vtg_nk(x) + j)
+  end function vtg_cbody
+  integer(int64) function vtg_cslot(x, j)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: j
+    vtg_cslot = vtg_s2(x) + j
+  end function vtg_cslot
+  subroutine vtg_catest(tb, x, j)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    integer(int64), value :: j
+    call push(tb, '(:prim :isa (:const ' // itoa(60 + j) // ') ' // cloc(tb, int(size(tb%cm), int64)) // ')')
+  end subroutine vtg_catest
+  subroutine vtg_rethrow(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    call push(tb, '(:throw ' // cloc(tb, int(size(tb%cm), int64)) // ')')
+  end subroutine vtg_rethrow
+  ! what the catches' bodies may clear blanked
+  subroutine vtg_blankcs(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    integer(int64), allocatable :: l(:)
+    integer(int64) :: j
+    integer :: q
+    allocate (l(0))
+    do j = 0, vtg_ncs(x) - 1
+       call clr(vtg_cbody(x, j), l)
+    end do
+    do q = 1, size(tb%cm)
+       if (any(l == tb%cm(q))) tb%cm(q) = -1
+    end do
+  end subroutine vtg_blankcs
   function vtg_cthen(x, j) result(k)
     type(gc_value), intent(in) :: x
     integer(int64), intent(in) :: j
@@ -235,6 +278,7 @@ contains
     case (6); s = '(:prim'
     case (7); s = '(:callv'
     case (8); s = '(:applyv'
+    case (9); s = '(:try'
     case default; s = '(:throw'
     end select
     if (broken) then
@@ -303,7 +347,7 @@ contains
        m = nnk(x%id) - 1
     case (17)
        m = 0
-    case (19)
+    case (18, 19)
        m = nnk(x%id) - 1
     case default
        return
