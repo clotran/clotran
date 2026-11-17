@@ -789,7 +789,7 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | `vm_tr` N_CONST, N_LOCAL (a frame slot), N_IF, N_DO, N_THROW, N_LET | ex-tr kinds 1, 2, 4, 5, 17, 11 | yes -- **generated now** (vmtrg) |
 | N_LOCAL of a capture | ex-fbtc reads it in place, `(:capt j)` (exec-vmcs's ex-cs) | yes -- vtg_local exact |
 | N_LOOP, N_RECUR | lets, then `(:loop (locals..) body)`, `(:recur ..)` -- no dummy (item 3) | partly: the same when an init reads an earlier binding; vm.inc's independent-inits loop `(:loop (inits..) body)` (PLAN 34, no let keeps a walked seq's head) is not ex-tr's yet |
-| N_CALL | a constant builtin's call `(:prim f args..)` (item 3, done); else ex-trcall: `:ifn` then `:applyv` | partly: the constant builtin's call **generated now** (vtg_bip, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn) and vtg_bip's test (vm.inc's OBJ_BUILTIN, not B_APPLY, where the model asks prim :clotran.vm/builtin of an atom, not :apply); apply's constant now :callv. Not yet: a direct-linked Var wrapping a builtin `(:prim f ..)` (vm_linked_builtin), a Var wrapping one `callw`, else `:callv` (vm.inc evaluates the args before the head and asks no :ifn; the model's head is first) |
+| N_CALL | a call whose head is read at translation (exec-vmtr's ex-pcall / ex-pk): a constant builtin's `(:prim f args..)`, a direct-linked Var's whose fn wraps builtin f `(:prim f args..)` (item 4); else ex-trcall: `:ifn` then `:applyv` | partly: both **generated now** (vtg_pk, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn), ex-wrapok (a fn the runtime says wraps f at n is an IFn, and its call on n values answers prim f's, unless out of fuel); vtg_pk's tests (vm.inc's OBJ_BUILTIN not B_APPLY, and vm_linked_builtin / wrapper_of, where the model asks prim :clotran.vm/builtin, and i2 1 with prim :clotran.vm/wraps); apply's constant :callv. Not yet: a Var wrapping one `callw`, else `:callv` (vm.inc evaluates the args before the head and asks no :ifn; the model's head is first) |
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
 | try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
@@ -977,10 +977,19 @@ position.
    ex-recur-stays, ex-vm-runs, ex-anp-runs, ex-top-runs, ex-anp-runs-defs gain
    (ex-bipok). vmtrg generates it (vtg_bip, vtg_hd, vtg_node 6), vm_tr's
    constant-builtin branch gone; fuzz-vmtr-gen draws it (fz-prim attaches the
-   builtin test). **Left, each its own named hypotheses**: (a) a
-   direct-linked Var whose fn wraps a builtin, `(:prim f ..)`
-   (vm_linked_builtin) -- the tree enters the Var's closure, so the
-   hypothesis relates prim to the wrapper's body; (b) a Var wrapping one,
+   builtin test). **(a) a direct-linked Var whose fn wraps a builtin: done**
+   -- the branch is now exec-vmtr's ex-pcall (ex-pk 1 a constant builtin, 2
+   a Var of i2 1 whose v prim :clotran.vm/wraps at the call's count, ex-wrapf;
+   ex-phd the items before the args, ex-pop the op), taken by ex-tr, ex-vwf,
+   ex-v2, ex-vind, ex-vwf0, ex-cmpind; exec-vm's named ex-wrapok (such a v is
+   an IFn; ex-mxcall of v on n values is (:out) or prim f's answer),
+   ex-mx-pwrap, ex-mx-pcall, ex-pcall-ifn; ex-vgood-m-callp over ex-pcall;
+   the top theorems gain (ex-wrapok defs); vmshift's ex-pcall-sh-rd. vmtrg
+   generates it (vtg_pk, an int, replacing vtg_bip; vtg_hd pushes
+   wrapper_of's f), vm_tr's vm_linked_builtin branch gone; fuzz-vmtr-gen
+   draws it (fz-prim attaches :clotran.vm/wraps). Named, not proved: the
+   model's link test is i2 1 where vm.inc's is i2 1 and the link epoch.
+   **Left, each its own named hypotheses**: (b) a Var wrapping one,
    `(:prim :clotran.vm/callw (:const var) ..)` -- the same, read at run time;
    (c) `:callv` -- vm.inc translates and runs the args before the head and
    asks no :ifn, and does no apply spread (:applyv): needs the head pure

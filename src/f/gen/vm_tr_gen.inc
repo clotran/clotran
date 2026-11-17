@@ -409,7 +409,7 @@
           call vtg_node(tb, 5_int64, vtg_nk(e_))
         case default
           if ((k_17 == 6_int64)) then
-            t_27 = vtg_bip(e_)
+            t_27 = (.not. (vtg_pk(e_) == 0_int64))
           else
             t_27 = .false.
           end if

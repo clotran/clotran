@@ -195,19 +195,19 @@
 (in-theory (disable ex-vgood-m-let))
 (ex-old ex-vgood-m-rec ((consp e) (ex-mflg) (equal (ex-kind e) 16)) ((ex-vgood :rec e 0 nil cm env fr fuel caps defs lp)))
 (ex-old ex-vgood-m-throw ((consp e) (ex-mflg) (equal (ex-kind e) 17)) ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)))
-; a builtin's call (exec-vmtr's ex-bip): (:prim f args..), its arguments in
-; the call's scope, the runtime's invoke of f on them (ex-bipok)
+; a call whose head is read at translation (exec-vmtr's ex-pcall: a constant
+; builtin's, a direct-linked Var's wrapping one): its items and arguments in
+; the call's scope, the head's call on them (exec-vm's ex-mx-pcall, under
+; ex-bipok and ex-wrapok)
 (defthm ex-vgood-m-callp
-  (implies (and (consp e) (ex-mflg) (equal (ex-kind e) 6) (ex-bipe e)
+  (implies (and (consp e) (ex-mflg) (equal (ex-kind e) 6) (ex-pcall e)
                 (ex-vgood :call e 1 (list (ex-c (ex-kid-of e 0))) cm env fr fuel caps defs lp))
            (ex-vgood flg e i tmp cm env fr fuel caps defs lp))
-  :hints (("Goal" :do-not-induct t :in-theory (e/d (ex-vgood) (ex-kid-of ex-xvs ex-catchw ex-clr ex-csbr ex-cbuild ex-mxcall))
-                  :expand ((:free (flg) (ex-clr flg e i)) (ex-clr :m (ex-kid-of e 0) 0)
-                           (:free (flg cm) (ex-tr flg e i cm)) (:free (flg cm lp) (ex-vwf flg e i cm lp defs))
-                           (:free (cm lp) (ex-vwf :m (ex-kid-of e 0) 0 cm lp defs))
-                           (:free (flg fr tmp) (ex-ev flg e i tmp fr fuel)) (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
+  :hints (("Goal" :do-not-induct t :cases ((equal flg :m))
+                  :in-theory (e/d (ex-vgood ex-ev-pcall ex-pcall-parts) (ex-kid-of ex-xvs ex-catchw ex-clr ex-csbr ex-cbuild ex-mxcall ex-mx-pcall ex-tr ex-vwf ex-ev ex-pcall))
+                  :use (ex-pcall-ifn (:instance ex-mx-pcall (args (ex-tr :call e 1 cm))) (:instance ex-len-call (i 1) (c cm))))))
 (in-theory (disable ex-vgood-m-callp))
-(ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6) (not (ex-bipe e)))
+(ex-old ex-vgood-m-call ((consp e) (ex-mflg) (equal (ex-kind e) 6) (not (ex-pcall e)))
         ((ex-vgood :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
          (ex-vgood :call e 1 (list (val (car (ex-k0)))) (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append env (list (val (car (ex-k0)))))
                    (cadr (ex-k0)) fuel caps defs lp)))
@@ -246,7 +246,7 @@
 ; A WELL-FORMED TREE ANSWERS WHAT THE VM'S MEANING DOES, its defs the
 ; templates' and its scope's values good
 (defthm ex-vm-agree
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env) (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))))
            (equal (mx2 (ex-tr :m e 0 cm) env caps defs fuel) (car (ex-ev :m e 0 nil fr fuel))))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))
@@ -254,7 +254,7 @@
 ; ... and outside every loop's tail it never answers a recur: a recur's
 ; values become its loop's slots, never a value
 (defthm ex-recur-stays
-  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
+  (implies (and (ex-vwf :m e 0 cm nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs) (ex-agree cm env fr)
                 (ex-xvs defs env))
            (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :recur)))
   :hints (("Goal" :use ((:instance ex-vm-agree-flag (flg :m) (i 0) (tmp nil) (lp nil))))))

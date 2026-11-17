@@ -17,7 +17,7 @@
 ; the program's defs every template's the tree can call (ex-defs-ok), its
 ; fns of any arities, variadic ones among them, and apply's spread call
 (defthm ex-vm-runs
-  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs) (ex-collok defs)
+  (implies (and (ex-vwf :m e 0 nil nil defs) (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs) (ex-collok defs)
                 (or (valp (car (ex-ev :m e 0 nil fr fuel))) (thrownp (car (ex-ev :m e 0 nil fr fuel)))) (natp k))
            (equal (vcs2-run-program (ex-tr :m e 0 nil) defs (+ (s2clk (ex-tr :m e 0 nil) nil nil defs fuel) k))
                   (car (ex-ev :m e 0 nil fr fuel))))

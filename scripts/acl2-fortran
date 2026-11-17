@@ -374,7 +374,7 @@
      :val-type "gc_value"
      :rt {vtg-kind ["vtg_kind" [:val] :int] vtg-i2 ["vtg_i2" [:val] :int] vtg-s2 ["vtg_s2" [:val] :int]
           vtg-nk ["vtg_nk" [:val] :int] vtg-c ["vtg_c" [:val] :val] vtg-kid ["vtg_kid" [:val :int] :val]
-          vtg-rdcap ["vtg_rdcap" [:val :int :int] :bool] vtg-bip ["vtg_bip" [:val] :bool]}
+          vtg-rdcap ["vtg_rdcap" [:val :int :int] :bool] vtg-pk ["vtg_pk" [:val] :int]}
      :header ["  ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the VM's translation of a constant, a local, if, do, let*,"

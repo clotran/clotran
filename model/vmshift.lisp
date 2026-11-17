@@ -117,6 +117,12 @@
 (defun ex-trsh (flg np x) (if (ex-trlst flg) (x2-sh-args np x) (x2-sh np x)))
 (defun ex-trrd (flg np x) (if (ex-trlst flg) (x2-rd-args np x) (x2-rd np x)))
 
+; a call whose head is read at translation (exec-vmtr ex-pcall): its items read no position
+(defthm ex-pcall-sh-rd
+  (implies (ex-pcall e)
+           (and (equal (x2-sh np (cons (ex-pop e) (append (ex-phd e) x))) (cons (ex-pop e) (append (ex-phd e) (x2-sh-args np x))))
+                (equal (x2-rd np (cons (ex-pop e) (append (ex-phd e) x))) (x2-rd-args np x))))
+  :hints (("Goal" :in-theory (enable ex-pcall ex-pk ex-pop ex-phd))))
 (defthm ex-tr-drop-flag
   (implies (and (natp np) (< np (len cm)) (not (ex-trrd flg np (ex-tr flg e i cm))))
            (equal (ex-trsh flg np (ex-tr flg e i cm)) (ex-tr flg e i (ex-drop np cm))))

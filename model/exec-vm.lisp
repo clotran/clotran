@@ -42,7 +42,10 @@
 ; same throw in both. A call whose head is a constant builtin (exec-vmtr's
 ; ex-bip, no closure, not apply) is vm.inc's (:prim f args..) instead, the
 ; arguments in scope cm, under the named ex-bipok (the runtime's prim of a
-; builtin is its :invoke; a builtin is an IFn). mx2's
+; builtin is its :invoke; a builtin is an IFn); so is a call whose head is a
+; direct-linked Var whose fn wraps a builtin f (exec-vmtr's ex-pk 2), (:prim f
+; args..), under the named ex-wrapok (the fn is an IFn and its call is f's,
+; unless it runs out of fuel). mx2's
 ; defs are keyed by the template itself (vcs2-correct asks only x2defs-ok,
 ; and both look a name up by equal), the def a clause for each arity, (nf
 ; body) or (nf body :rest): the captures read in place, (:capt j)
@@ -224,6 +227,78 @@
   :hints (("Goal" :in-theory (e/d (ex-bip ex-mxcall ex-mxcl x2-fn x2-vals x2-cls x2-spreads x2-hands) (ex-bipok-prim))
                   :use ((:instance ex-bipok-prim (vs (val (mx2-args args env caps defs fuel)))))
                   :expand ((mx2 (list* :prim c args) env caps defs fuel)))))
+; A CALL OF A DIRECT-LINKED VAR WHOSE FN WRAPS A BUILTIN (exec-vmtr's ex-pk
+; 2: vm.inc's (:prim f args..), f the builtin, vm_linked_builtin). The fn v's
+; call on n values vs, when v wraps a builtin at n (exec-vmtr's ex-wrapf),
+; answers what the runtime's prim of that builtin on vs does, unless it runs
+; out of fuel (its clause's one call), and such a v is an IFn -- a named
+; hypothesis, ex-wrapok (clotran: wrapper_of's builtin is the fn's body
+; at that arity, analyze.inc's wrapper_builtin, DEVIATIONS 55)
+(defun ex-pres (a) (if (throwp a) (cons :thrown (cdr a)) (cons :val a)))
+(defun-sk ex-wrapok (defs)
+  (forall (v n vs fuel)
+    (and (implies (ex-wrapf v n) (ex-ifn v))
+         (implies (ex-wrapf v (len vs))
+                  (or (equal (ex-mxcall v vs defs fuel) '(:out))
+                      (equal (ex-mxcall v vs defs fuel) (ex-pres (prim (ex-wrapf v (len vs)) vs))))))))
+(in-theory (disable ex-wrapok))
+(defthm ex-mx-primf
+  (equal (mx2 (list* :prim f args) env caps defs fuel)
+         (let ((rs (mx2-args args env caps defs fuel))) (if (valp rs) (ex-pres (prim f (val rs))) rs)))
+  :rule-classes nil :hints (("Goal" :expand ((mx2 (list* :prim f args) env caps defs fuel)))))
+(defthm ex-mx2-args-len
+  (implies (valp (mx2-args es env caps defs fuel)) (equal (len (val (mx2-args es env caps defs fuel))) (len es)))
+  :hints (("Goal" :induct (len es) :expand ((mx2-args es env caps defs fuel)))))
+(defthm ex-pk-cases (or (equal (ex-pk e) 0) (equal (ex-pk e) 1) (equal (ex-pk e) 2)) :rule-classes nil :hints (("Goal" :in-theory (enable ex-pk))))
+(defthm ex-pk-bipe (iff (equal (ex-pk e) 1) (ex-bipe e)) :hints (("Goal" :in-theory (enable ex-pk))))
+(defmacro ex-pcx (e args)
+  `(let ((m (mx2-args ,args env caps defs fuel))) (if (valp m) (ex-mxcall (ex-c (ex-kid-of ,e 0)) (val m) defs fuel) m)))
+(defthm ex-mx-pwrap
+  (implies (and (equal (ex-pk e) 2) (ex-wrapok defs) (equal (len args) (- (ex-nk e) 1)) (not (equal (ex-pcx e args) '(:out))))
+           (equal (mx2 (list* :prim (ex-wrapf (ex-c (ex-kid-of e 0)) (- (ex-nk e) 1)) args) env caps defs fuel) (ex-pcx e args)))
+  :hints (("Goal" :in-theory (e/d (ex-pk) (ex-mxcall ex-wrapok-necc))
+                  :use ((:instance ex-mx2-args-len (es args)) (:instance ex-mx-primf (f (ex-wrapf (ex-c (ex-kid-of e 0)) (- (ex-nk e) 1))))
+                        (:instance ex-wrapok-necc (v (ex-c (ex-kid-of e 0))) (n (- (ex-nk e) 1)) (vs (val (mx2-args args env caps defs fuel))))))))
+; a call whose head is read at translation (exec-vmtr's ex-pcall): its
+; translation answers the tree's call of the head's value on the arguments,
+; as :applyv's would (ex-mxcall), unless that runs out of fuel
+(defthm ex-mx-pcall
+  (implies (and (ex-pcall e) (ex-bipok) (ex-wrapok defs) (equal (len args) (- (ex-nk e) 1))
+                (not (equal (let ((m (mx2-args args env caps defs fuel))) (if (valp m) (ex-mxcall (ex-c (ex-kid-of e 0)) (val m) defs fuel) m))
+                            '(:out))))
+           (equal (mx2 (cons (ex-pop e) (append (ex-phd e) args)) env caps defs fuel)
+                  (let ((m (mx2-args args env caps defs fuel))) (if (valp m) (ex-mxcall (ex-c (ex-kid-of e 0)) (val m) defs fuel) m))))
+  :hints (("Goal" :use (ex-pk-cases ex-bipe-head (:instance ex-mx-callp (c (ex-c (ex-kid-of e 0)))) ex-mx-pwrap)
+                  :cases ((equal (ex-pk e) 1) (equal (ex-pk e) 2)) :in-theory (e/d (ex-pcall ex-pop ex-phd) (ex-mxcall mx2 ex-kid-of ex-mx-callp ex-bipe-head ex-mx-pwrap)))))
+(defthm ex-pcall-ifn
+  (implies (and (ex-pcall e) (ex-bipok) (ex-wrapok defs)) (ex-ifn (ex-c (ex-kid-of e 0))))
+  :hints (("Goal" :in-theory (e/d (ex-pcall ex-pk) (ex-wrapok-necc))
+                  :use (ex-bipe-head (:instance ex-bipok-ifn (c (ex-c (ex-kid-of e 0))))
+                        (:instance ex-wrapok-necc (v (ex-c (ex-kid-of e 0))) (n (- (ex-nk e) 1)) (vs nil) (fuel 0))))))
+; such a call's tree run, translation, clears and well-formedness, each by its parts
+(defthm ex-pcall-head2
+  (implies (ex-pcall e) (and (consp (ex-kid-of e 0)) (or (equal (ex-kind (ex-kid-of e 0)) 1) (equal (ex-kind (ex-kid-of e 0)) 3))))
+  :rule-classes :forward-chaining :hints (("Goal" :use ex-pcall-head :in-theory (disable ex-pcall-head))))
+; the tree's run of such a call: the head's value, its cast, then the args' walk
+(defthm ex-ev-pcall
+  (implies (and (consp e) (equal (ex-kind e) 6) (ex-pcall e) (ex-ifn (ex-c (ex-kid-of e 0))) (not (member-equal flg '(:iter :do :let :rec :call :coll :fin))))
+           (and (equal (car (ex-ev flg e i tmp fr fuel)) (car (ex-ev :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel)))
+                (equal (cadr (ex-ev flg e i tmp fr fuel)) (cadr (ex-ev :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel)))))
+  :hints (("Goal" :in-theory (disable ex-kid-of ex-pcall ex-ev)
+                  :expand ((ex-ev flg e i tmp fr fuel) (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
+(defthm ex-pcall-parts
+  (implies (and (consp e) (equal (ex-kind e) 6) (ex-pcall e))
+           (and (equal (ex-tr :m e i cm) (cons (ex-pop e) (append (ex-phd e) (ex-tr :call e 1 cm))))
+                (equal (ex-clr :m e i) (ex-clr :call e 1))
+                (equal (ex-vwf :m e i cm lp defs) (and (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 cm lp defs)))))
+  :hints (("Goal" :in-theory (disable ex-kid-of ex-pcall ex-tr ex-clr ex-vwf)
+                  :expand ((ex-tr :m e i cm) (ex-clr :m e i) (ex-vwf :m e i cm lp defs)))))
+(defthm ex-pcall-xvs
+  (implies (and (ex-pcall e) (ex-vwf :m (ex-kid-of e 0) 0 cm lp defs)) (ex-xvs defs (list (ex-c (ex-kid-of e 0)))))
+  :hints (("Goal" :in-theory (disable ex-kid-of ex-pcall ex-vwf ex-xvs) :expand ((ex-vwf :m (ex-kid-of e 0) 0 cm lp defs)))))
+(in-theory (disable ex-ev-pcall ex-pcall-parts))
+(defthm ex-pcall-nk1 (implies (ex-pcall e) (< 0 (ex-nk e))) :rule-classes :forward-chaining
+  :hints (("Goal" :use ex-pcall-head :in-theory (e/d (ex-nk ex-kid-of ex-kids) (ex-pcall-head)))))
 (defthm ex-catchw-nat (implies (equal (car (ex-catchw cs v j)) 1) (natp (cdr (ex-catchw cs v j))))
   :rule-classes (:rewrite :type-prescription))
 (defthm ex-catchw-lo (implies (equal (car (ex-catchw cs v j)) 1) (<= (nfix j) (cdr (ex-catchw cs v j))))
@@ -381,7 +456,7 @@
 (in-theory (disable ex-collok))
 
 (defun ex-vhyp (flg e i tmp cm env fr lp defs)
-  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-caseok) (ex-collok defs)
+  (and (ex-defs-ok defs defs) (ex-lzok defs) (ex-ifnok) (ex-apok) (ex-isaok) (ex-derefok) (ex-bipok) (ex-wrapok defs) (ex-caseok) (ex-collok defs)
        (if (equal flg :iter)
            (and (consp lp) (ex-vwf :m e 0 (append cm (ex-lsl lp)) lp defs)
                 (ex-agree (append cm (ex-lsl lp)) (append env tmp) fr)
@@ -554,7 +629,7 @@
                   (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
                         (ex-vind :m (ex-csbr e (val (car r))) 0 nil (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) (append env (list (val (car r))))
                                  (cadr r) fuel caps defs lp))))
-               ((and (equal k 6) (ex-bipe e))
+               ((and (equal k 6) (ex-pcall e))
                 (list (ex-vind :m (ex-kid-of e 0) 0 nil cm env fr fuel caps defs nil)
                       (ex-vind :call e 1 (list (ex-c (ex-kid-of e 0))) cm env fr fuel caps defs lp)))
                ((equal k 6)

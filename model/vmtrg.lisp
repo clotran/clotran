@@ -55,12 +55,23 @@
 ; whose head is a constant the runtime says is a builtin (exec-vmtr's
 ; ex-bipe: prim :clotran.vm/builtin, an atom, not apply) is vm.inc's
 ; (:prim f args..), the args in the call's scope (flg 3 from 1, as a recur's);
-; generated here by vtg_bip (the test) and vtg_hd (f pushed), vtg_node 6.
+; generated here by vtg_pk (the test, ex-pk 1) and vtg_hd (f pushed), vtg_node 6.
 ; Hypotheses, named not proved: exec-vm's ex-bipok -- the runtime's prim of
-; a builtin is its :invoke, and a builtin is an IFn; vtg_bip's test is
+; a builtin is its :invoke, and a builtin is an IFn; vtg_pk's test is
 ; vm.inc's OBJ_BUILTIN (not B_APPLY) where the model's is prim
-; :clotran.vm/builtin. Every other call -- a Var's (vm_linked_builtin, callw)
-; and :callv -- stays vm_tr's (vtg-other). Cost: 4 steps and the args' (vtg-steps).
+; :clotran.vm/builtin.
+;
+; A DIRECT-LINKED VAR WHOSE FN WRAPS A BUILTIN (item 4(a), vm_linked_builtin):
+; ex-pk 2 -- the head a Var of i2 1 whose v the runtime says wraps a builtin
+; f at the call's count (exec-vmtr's ex-wrapf, prim :clotran.vm/wraps) -- is
+; (:prim f args..), f fixed at translation; vtg_hd pushes f (wrapper_of).
+; Hypotheses, named not proved: exec-vm's ex-wrapok -- such a v is an IFn,
+; and its call on n values answers the runtime's prim of f on them unless
+; it runs out of fuel; vtg_pk's test is vm_linked_builtin (i2 1 and the
+; link epoch, vm_wraps: not B_RTFN or B_UUIDFN) and vtg_hd's f wrapper_of,
+; where the model asks i2 1 and prim :clotran.vm/wraps. Every other call --
+; a Var's callw and :callv -- stays vm_tr's (vtg-other). Cost: 4 steps and
+; the args' (vtg-steps), both cases.
 
 (in-package "ACL2")
 
@@ -118,12 +129,16 @@
 ; node itself when direct-linked (the link epoch), where the model's is the
 ; Var's value; exec-vm's ex-derefok says the deref answers that value)
 (defun vtg-deref (e vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (list :prim :clotran.vm/deref (list :const (vtg-c e))) vtb))
-; a builtin call (exec-vmtr's ex-bipe: its head a constant the runtime says
-; is a builtin, no closure, not apply -- vtg_bip, vm.inc's OBJ_BUILTIN test,
-; NAMED: its builtin test is prim :clotran.vm/builtin's); its head's constant
-; pushed as it is (vtg_hd), then (:prim f args..) (vtg_node 6)
-(defun vtg-bip (e) (declare (xargs :guard t)) (ec-call (ex-bipe e)))
-(defun vtg-hd (e vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (vtg-c (vtg-kid e 0)) vtb))
+; a call whose head is read at translation (exec-vmtr's ex-pk, vtg_pk): 1 a
+; constant builtin's (its head a constant the runtime says is a builtin, no
+; closure, not apply -- NAMED: vm.inc's OBJ_BUILTIN test where the model asks
+; prim :clotran.vm/builtin), 2 a direct-linked Var's whose fn wraps a builtin
+; at the call's count (NAMED: vm.inc's vm_linked_builtin -- i2 1 and the link
+; epoch, wrapper_of -- where the model asks i2 1 and prim
+; :clotran.vm/wraps), 0 any other; vtg_hd pushes the builtin (ex-phd's item),
+; then (:prim f args..) (vtg_node 6)
+(defun vtg-pk (e) (declare (xargs :guard t)) (ec-call (ex-pk e)))
+(defun vtg-hd (e vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (let ((l (ec-call (ex-phd e)))) (if (consp l) (car l) nil)) vtb))
 ; a slot's read: its position in the scope, the fn's captures read in
 ; place -- cs is (np . m), the clause's np parameters and m captures, the
 ; captures' positions np .. np+m-1 of the scope -- as exec-vmcs's ex-cs
@@ -302,10 +317,10 @@
                (vtg-tr 1 e 0 vtb)))
             ((equal k 16) (let ((vtb (vtg-tr 3 e 0 vtb))) (vtg-node 5 (vtg-nk e) vtb)))
             ; a builtin's call: (:prim f args..), the args in the call's scope
-            ((and (equal k 6) (vtg-bip e)) (let* ((vtb (vtg-hd e vtb)) (vtb (vtg-tr 3 e 1 vtb))) (vtg-node 6 (vtg-nk e) vtb)))
+            ((and (equal k 6) (not (equal (vtg-pk e) 0))) (let* ((vtb (vtg-hd e vtb)) (vtb (vtg-tr 3 e 1 vtb))) (vtg-node 6 (vtg-nk e) vtb)))
             (t (vtg-other e vtb)))))))
 
-(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-deref vtg-hd vtg-bip vtg-nil))))
+(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-deref vtg-hd vtg-pk vtg-nil))))
 
 ; whether the clause's body recurs to the fn -- exec-vmtr's ex-tlr, a recur
 ; in a tail place no loop is round: vm_clause's loop round the body only
@@ -361,7 +376,7 @@
                    ((equal k 5) (vtg-frag 2 e 0))
                    ((equal k 12) (and (vtg-okt nil e) (if (vtg-lind e 1) (and (vtg-frag 3 e 0) (vtg-frag 5 e 0)) (vtg-frag 1 e 0))))
                    ((equal k 16) (vtg-frag 3 e 0))
-                   ((equal k 6) (and (vtg-bip e) (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 3 e 1)))
+                   ((equal k 6) (and (not (equal (vtg-pk e) 0)) (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 3 e 1)))
                    (t nil))))))
 
 (defthm vtg-reads-ex
@@ -371,10 +386,14 @@
   :hints (("Goal" :in-theory (enable vtg-int vtg-kind vtg-i2 vtg-s2 vtg-nk vtg-c ex-kind ex-i2 ex-s2 ex-nk ex-c ex-kids))))
 (defthm vtg-kid-ex (equal (vtg-kid e j) (ex-kid-of e (nfix j))) :hints (("Goal" :in-theory (enable vtg-kid ex-kid-of ex-kids))))
 (defthm vtg-c-ex (equal (vtg-c e) (ex-c e)) :hints (("Goal" :in-theory (enable vtg-c ex-c))))
-(defthm vtg-bip-ex (equal (vtg-bip e) (ex-bipe e)))
-; a builtin call has its head: one child at least
-(defthm ex-bipe-nk (implies (ex-bipe e) (< 0 (ex-nk e))) :rule-classes :forward-chaining
-  :hints (("Goal" :use ex-bipe-head :in-theory (e/d (ex-nk ex-kid-of ex-kids) (ex-bipe-head)))))
+(defthm vtg-pk-ex (iff (equal (vtg-pk e) 0) (not (ex-pcall e))) :hints (("Goal" :in-theory (enable ex-pcall))))
+; such a call has its head: one child at least
+(defthm ex-pcall-nk (implies (ex-pcall e) (< 0 (ex-nk e))) :rule-classes :forward-chaining
+  :hints (("Goal" :use ex-pcall-head :in-theory (e/d (ex-nk ex-kid-of ex-kids) (ex-pcall-head)))))
+; its translation (:prim f args..), f its one item
+(defthm ex-pcall-form
+  (implies (ex-pcall e) (equal (cons (ex-pop e) (append (ex-phd e) x)) (list* :prim (car (ex-phd e)) x)))
+  :hints (("Goal" :in-theory (enable ex-pcall ex-pk ex-pop ex-phd))))
 
 ; vtg-rd is ex-rd, vtg-lind ex-lind, on a tree in the reads' range
 (defthm vtg-okt-nth (implies (vtg-okt t l) (vtg-okt nil (nth j l))))
@@ -410,7 +429,7 @@
                                 (list :if (ex-tr :m (ex-kid-of e 0) 0 cm)
                                       (ex-tr :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm))
                                       (if (< 2 (ex-nk e)) (ex-tr :m (ex-kid-of e 2) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm)) '(:const nil)))))
-                (implies (and (equal (ex-kind e) 6) (ex-bipe e)) (equal (ex-tr :m e 0 cm) (list* :prim (ex-c (ex-kid-of e 0)) (ex-tr :call e 1 cm))))
+                (implies (and (equal (ex-kind e) 6) (ex-pcall e)) (equal (ex-tr :m e 0 cm) (list* :prim (car (ex-phd e)) (ex-tr :call e 1 cm))))
                 (implies (equal (ex-kind e) 17) (equal (ex-tr :m e 0 cm) (list :throw (ex-tr :m (ex-kid-of e 0) 0 cm))))
                 (implies (equal (ex-kind e) 11) (equal (ex-tr :m e 0 cm) (ex-tr :let e 0 cm)))
                 (implies (and (or (equal (ex-kind e) 11) (and (equal (ex-kind e) 12) (not (ex-lind e 1)))) (natp i) (< i (ex-i2 e)))
@@ -485,7 +504,7 @@
   (and (equal (vtg-const v (vtg-st s c sv cs)) (vtg-st (cons (list :const v) s) c sv cs))
        (equal (vtg-nil (vtg-st s c sv cs)) (vtg-st (cons '(:const nil) s) c sv cs))
        (equal (vtg-deref e (vtg-st s c sv cs)) (vtg-st (cons (list :prim :clotran.vm/deref (list :const (vtg-c e))) s) c sv cs))
-       (equal (vtg-hd e (vtg-st s c sv cs)) (vtg-st (cons (vtg-c (vtg-kid e 0)) s) c sv cs))
+       (equal (vtg-hd e (vtg-st s c sv cs)) (vtg-st (cons (car (ex-phd e)) s) c sv cs))
        (equal (vtg-local n (vtg-st s c sv cs)) (vtg-st (cons (ex-cs nil (list :local (ex-pos n c)) (vtg-np cs) (vtg-nm cs)) s) c sv cs))
        (equal (vtg-save (vtg-st s c sv cs)) (vtg-st s c (cons c sv) cs))
        (equal (vtg-restore (vtg-st s c (cons c0 sv) cs)) (vtg-st s c0 sv cs))
@@ -528,7 +547,7 @@
        (equal (ex-cs nil (cons :recur x) np m) (cons :recur (ex-cs t x np m)))
        (equal (ex-cs nil (list :throw x) np m) (list :throw (ex-cs nil x np m)))))
 (in-theory (disable ex-cs vtg-np vtg-nm ex-lind ex-rd vtg-rd))
-(in-theory (disable ex-tr vtg-st vtg-const vtg-deref vtg-hd vtg-bip vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-binds vtg-dead vtg-node vtg-frag vtg-ok
+(in-theory (disable ex-tr vtg-st vtg-const vtg-deref vtg-hd vtg-pk vtg-nil vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-binds vtg-dead vtg-node vtg-frag vtg-ok
                     vtg-locs vtg-lind vtg-okt))
 
 (defun vtg-locs-ind (s j n stk c cs)
@@ -612,7 +631,7 @@
                    (list (vtg-ind 3 e 0 s c sv cs) (vtg-ind 5 e 0 (cons (vtg-cwl (ex-tr :lin e 0 c) cs) s) c sv cs))
                  (vtg-ind 1 e 0 s c sv cs)))
               ((equal k 16) (vtg-ind 3 e 0 s c sv cs))
-              ((equal k 6) (vtg-ind 3 e 1 (cons (vtg-c (vtg-kid e 0)) s) c sv cs))
+              ((equal k 6) (vtg-ind 3 e 1 (cons (car (ex-phd e)) s) c sv cs))
               (t nil)))))))
 
 ; what vtg-tr pushes: ex-tr's at the place flg names, the captures read in
@@ -718,7 +737,7 @@
             ((equal k 5) (+ 1 (vtg-steps 2 e 0)))
             ((equal k 12) (if (vtg-lind e 1) (+ 4 (vtg-steps 3 e 0) (vtg-steps 5 e 0)) (+ 2 (vtg-steps 1 e 0))))
             ((equal k 16) (+ 2 (vtg-steps 3 e 0)))
-            ((equal k 6) (if (vtg-bip e) (+ 4 (vtg-steps 3 e 1)) 3))
+            ((equal k 6) (if (not (equal (vtg-pk e) 0)) (+ 4 (vtg-steps 3 e 1)) 3))
             (t 2))))))
 (defun vtg-size (flg e i)
   (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o< :hints (("Goal" :in-theory (disable vtg-kid-ex)))))
@@ -752,7 +771,7 @@
             ((equal k 5) (+ 1 (vtg-size 2 e 0)))
             ((equal k 12) (if (vtg-lind e 1) (+ 1 (vtg-size 3 e 0) (vtg-size 5 e 0)) (+ 1 (vtg-size 1 e 0))))
             ((equal k 16) (+ 1 (vtg-size 3 e 0)))
-            ((equal k 6) (if (vtg-bip e) (+ 1 (vtg-size 3 e 1)) 1))
+            ((equal k 6) (if (not (equal (vtg-pk e) 0)) (+ 1 (vtg-size 3 e 1)) 1))
             (t 1))))))
 (defthm vtg-steps-bound-flag
   (<= (vtg-steps flg e i) (if (member flg '(1 2 3 5)) (+ 1 (* 16 (vtg-size flg e i))) (- (* 16 (vtg-size flg e i)) 7)))

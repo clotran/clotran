@@ -410,7 +410,7 @@
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
-         .or. (gc_i1(nd) == N_CALL .and. vtg_bip(nd))) then
+         .or. (gc_i1(nd) == N_CALL .and. vtg_pk(nd) /= 0)) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -439,21 +439,10 @@
        head = gcv_nth(kids, 0)
        call vm_tr_kids(c, kids, 1, nk - 1, base + 2, roots)
        if (c%ok) then
-          if (vm_linked_builtin(head, nk - 1)) then
-             ! the builtin a DIRECT-LINKED Var's fn only wraps at this arity:
-             ! (:prim f args ..), the fn fixed when the site was analysed
-             ! (DEVIATIONS 55), so the builtin is too, and the call needs no
-             ! deref and no look-up of the wrapper each time. (A constant
-             ! builtin's call is vtg_tr's, generated: vtg_bip, model/vmtrg.lisp;
-             ! apply's, B_APPLY, falls to :callv below.)
-             call vs_set(vst, base + 4, wrapper_of(strip_meta(gc_slot(head, 3)), nk - 1))
-             x = vec_to_list(vs_get(vst, base + 2), [roots, vs_get(vst, base + 4)])
-             call vs_set(vst, base + 3, x)
-             x = gcl_cons(vs_get(vst, base + 4), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 4)])
-             call vs_set(vst, base + 3, x)
-             call vs_set(vst, base + 5, vm_kw("prim"))
-             e = gcl_cons(vs_get(vst, base + 5), vs_get(vst, base + 3), [roots, vs_get(vst, base + 3), vs_get(vst, base + 5)])
-          else if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_VAR .and. vm_wraps(head, nk - 1)) then
+          ! (A constant builtin's call and a direct-linked Var's whose fn wraps
+          ! a builtin are vtg_tr's, generated: vtg_pk, model/vmtrg.lisp;
+          ! apply's, B_APPLY, falls to :callv below.)
+          if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_VAR .and. vm_wraps(head, nk - 1)) then
              ! a Var whose fn now only wraps a builtin at this arity, as
              ! core's first and next do: (:prim :clotran.vm/callw var args ..),
              ! the runtime's call of what the Var holds then (the Var's node
@@ -583,23 +572,37 @@
     type(gc_value), value :: nd
     call anb_push(vm_deref_of(vm_var_ref(nd), [nd]))
   end subroutine vtg_deref
-  ! a builtin call (vmtrg.lisp's vtg-bip, exec-vmtr's ex-bipe): its head a
-  ! constant builtin, not apply -- NAMED: OBJ_BUILTIN where the model asks
-  ! prim :clotran.vm/builtin; vtg_hd pushes the head's constant, (:prim f ..)'s f
-  logical function vtg_bip(nd)
+  ! a call whose head is read at translation (vmtrg.lisp's vtg-pk, exec-vmtr's
+  ! ex-pk): 1 its head a constant builtin, not apply -- NAMED: OBJ_BUILTIN
+  ! where the model asks prim :clotran.vm/builtin; 2 its head a DIRECT-LINKED
+  ! Var whose bound fn only wraps a builtin at this arity (the fn fixed when
+  ! the site was analysed, DEVIATIONS 55, so the builtin is too: no deref,
+  ! no look-up of the wrapper each time) -- NAMED: vm_linked_builtin where
+  ! the model asks i2 1 and prim :clotran.vm/wraps; 0 any other.
+  ! vtg_hd pushes (:prim f ..)'s f: the constant, or the wrapped builtin
+  integer(int64) function vtg_pk(nd)
     type(gc_value), intent(in) :: nd
     type(gc_value) :: h, f
-    vtg_bip = .false.
+    vtg_pk = 0
     if (ast_nkids(nd) < 1) return
     h = ast_kid(nd, 0_int64)
-    if (ast_kind(h) /= N_CONST) return
-    f = strip_meta(gc_slot(h, 2))
-    vtg_bip = gc_kind(f) == OBJ_BUILTIN .and. gc_i1(f) /= B_APPLY
-  end function vtg_bip
+    if (ast_kind(h) == N_CONST) then
+       f = strip_meta(gc_slot(h, 2))
+       if (gc_kind(f) == OBJ_BUILTIN .and. gc_i1(f) /= B_APPLY) vtg_pk = 1
+    else if (vm_linked_builtin(h, int(ast_nkids(nd)) - 1)) then
+       vtg_pk = 2
+    end if
+  end function vtg_pk
   subroutine vtg_hd(tb, nd)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: nd
-    call anb_push(gc_slot(ast_kid(nd, 0_int64), 2))
+    type(gc_value) :: h
+    h = ast_kid(nd, 0_int64)
+    if (ast_kind(h) == N_CONST) then
+       call anb_push(gc_slot(h, 2))
+    else
+       call anb_push(wrapper_of(strip_meta(gc_slot(h, 3)), int(ast_nkids(nd)) - 1))
+    end if
   end subroutine vtg_hd
   subroutine vtg_nil(tb)
     type(vtg_state), intent(inout) :: tb

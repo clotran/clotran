@@ -53,6 +53,32 @@
   (implies (ex-bipe e) (and (consp (ex-kid-of e 0)) (equal (ex-kind (ex-kid-of e 0)) 1) (ex-bip (ex-c (ex-kid-of e 0)))))
   :rule-classes :forward-chaining)
 (in-theory (disable ex-bip ex-bipe))
+; A CALL OF A VAR WHOSE FN WRAPS A BUILTIN (exec-PLAN Lane 3 item 4(a)): the
+; builtin the fn v stands for at n arguments, nil when none -- vm.inc's
+; vm_wraps / wrapper_of (its call table's wrapper entry), here the runtime's
+; prim :clotran.vm/wraps (NAMED: vtg_pk's test is vm_wraps where the model
+; asks prim). A DIRECT-LINKED Var's (ex-linked: i2 1) is vm.inc's (:prim f
+; args..), f that builtin, fixed at translation (DEVIATIONS 55); exec-vm's
+; named ex-wrapok says the fn's call is the builtin's and v an IFn.
+(defun ex-wrapf (v n) (prim :clotran.vm/wraps (list v n)))
+; THE CALLS WHOSE HEAD IS READ AT TRANSLATION (ex-pcall): ex-pk 1 a constant
+; builtin, 2 a direct-linked Var wrapping one; 0 every other call (ex-trcall).
+; Their translation is (op items.. args..), ex-pop the op, ex-phd the items
+; before the arguments, the arguments in the call's scope cm, no head let.
+(defun ex-pk (e)
+  (let ((h (ex-kid-of e 0)))
+    (cond ((ex-bipe e) 1)
+          ((and (consp h) (equal (ex-kind h) 3) (equal (ex-i2 h) 1) (ex-wrapf (ex-c h) (- (ex-nk e) 1))) 2)
+          (t 0))))
+(defun ex-pcall (e) (not (equal (ex-pk e) 0)))
+(defun ex-pop (e) (declare (ignore e)) :prim)
+(defun ex-phd (e)
+  (let ((v (ex-c (ex-kid-of e 0))))
+    (case (ex-pk e) (1 (list v)) (2 (list (ex-wrapf v (- (ex-nk e) 1)))) (otherwise nil))))
+(defthm ex-pcall-head
+  (implies (ex-pcall e) (and (consp (ex-kid-of e 0)) (member-equal (ex-kind (ex-kid-of e 0)) '(1 3))))
+  :rule-classes :forward-chaining :hints (("Goal" :use ex-bipe-head :in-theory (disable ex-bipe-head))))
+(in-theory (disable ex-wrapf ex-pk ex-pcall ex-pop ex-phd))
 
 ; A TRY (exec-PLAN 3b): (:try B H), H the catch walk at the thrown value's
 ; position p -- (:if (:prim :isa (:const c) (:local p)) Hj ..(:throw (:local
@@ -178,9 +204,9 @@
           ((or (equal k 14) (equal k 15)) (ex-rdin (ex-outers (nth 2 (ex-c e))) lo hi))
           ((member k '(4 5 17 7 8 9 22 21 6 11 12 16)) (ex-rd t e 0 lo hi))
           (t t))))
-; a builtin call's head, a constant, clears nothing
-(defthm ex-bipe-clr0 (implies (ex-bipe e) (equal (ex-clr :m (ex-kid-of e 0) 0) nil))
-  :hints (("Goal" :use ex-bipe-head :in-theory (disable ex-kid-of ex-bipe-head) :expand ((ex-clr :m (ex-kid-of e 0) 0)))))
+; such a call's head, a constant or a Var, clears nothing
+(defthm ex-pcall-clr0 (implies (ex-pcall e) (equal (ex-clr :m (ex-kid-of e 0) 0) nil))
+  :hints (("Goal" :use ex-pcall-head :in-theory (disable ex-kid-of ex-pcall-head) :expand ((ex-clr :m (ex-kid-of e 0) 0)))))
 ; A LOOP OF INDEPENDENT INITS (vm.inc's vm_loop_indep): init i, from 1,
 ; reads none of the loop's slots s .. s+i-1. vm.inc emits it (:loop (inits..)
 ; body), the inits in the loop's outer scope (exec-PLAN Lane 3 item 3(a)).
@@ -227,7 +253,7 @@
                ((equal k 14) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))
                ((equal k 15) (list :prim (ex-cop e) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm))))
                ((equal k 26) (ex-tr :m (ex-c e) 0 (ex-blank cm cm)))
-               ((and (equal k 6) (ex-bipe e)) (list* :prim (ex-c (ex-kid-of e 0)) (ex-tr :call e 1 cm)))
+               ((and (equal k 6) (ex-pcall e)) (cons (ex-pop e) (append (ex-phd e) (ex-tr :call e 1 cm))))
                ((equal k 6) (ex-trcall (ex-tr :m (ex-kid-of e 0) 0 cm)
                                     (ex-tr :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil))) (len cm)))
                ((equal k 2) (list :local (ex-pos (ex-i2 e) cm)))
@@ -249,6 +275,13 @@
                                             (ex-tr :m (ex-kid-of e 1) 0 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)))
                                             (len cm))))
                (t '(:const nil))))))))
+; a call's arguments from i: one expression each
+(defun ex-call-ind (e i c)
+  (declare (xargs :measure (nfix (- (ex-nk e) (nfix i))) :hints (("Goal" :in-theory (disable ex-kid-of ex-clr ex-blank)))))
+  (if (< (nfix i) (ex-nk e)) (ex-call-ind e (1+ (nfix i)) (ex-blank (ex-clr :m (ex-kid-of e (nfix i)) 0) c)) (list c)))
+(defthm ex-len-call
+  (implies (consp e) (equal (len (ex-tr :call e i c)) (nfix (- (ex-nk e) (nfix i)))))
+  :hints (("Goal" :induct (ex-call-ind e i c) :in-theory (disable ex-kid-of ex-clr ex-blank ex-tr) :expand ((ex-tr :call e i c)))))
 
 ; well-formed: the core, every local in scope -- a marked one's slot
 ; blanked after its read for every place a run reaches later (ex-clr),
@@ -322,7 +355,7 @@
                   ((or (equal k 14) (equal k 15)) (and (consp (assoc-equal (ex-c e) defs))
                                      (nat-listp (ex-outers (nth 2 (ex-c e))))
                                      (subsetp-equal (ex-outers (nth 2 (ex-c e))) cm)))
-                  ((and (equal k 6) (ex-bipe e)) (and (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 cm lp defs)))
+                  ((and (equal k 6) (ex-pcall e)) (and (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 cm lp defs)))
                   ((equal k 6) (and (< 0 nk) (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :call e 1 (append (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) (list nil)) lp defs)))
                   ((equal k 4) (and (or (equal nk 2) (equal nk 3))
                                     (ex-vwf :m (ex-kid-of e 0) 0 cm nil defs) (ex-vwf :m (ex-kid-of e 1) 0 (ex-blank (ex-clr :m (ex-kid-of e 0) 0) cm) lp defs)
@@ -643,6 +676,12 @@
              (:ct (ex-x2wfk (ex-tr flg e i cm) (len cm) (ex-k lp)))
              (:fin (or (not (< 1 (ex-nk e))) (x2wf (ex-tr flg e i cm) (1+ (len cm)) nil)))
              (otherwise (x2wf (ex-tr flg e i cm) (len cm) (ex-k lp))))))
+
+; a call whose head is read at translation: its op's items, then the arguments
+(defthm ex-pcall-x2wf
+  (implies (and (ex-pcall e) (x2wf-args args n) (x2wf (ex-tr :m (ex-kid-of e 0) 0 cm) n nil))
+           (x2wf (cons (ex-pop e) (append (ex-phd e) args)) n k))
+  :hints (("Goal" :in-theory (enable ex-pop ex-phd) :expand ((:free (x) (x2wf (cons :prim x) n k))))))
 
 (defthm ex-tr-xwf-flag
   (ex-xgood flg e i cm lp defs)
