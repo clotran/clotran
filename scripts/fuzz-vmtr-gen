@@ -9,7 +9,8 @@
 ;; clearing or not, in scope or not), if (two children or three), do (none,
 ;; one, several: each value but the last a dead local), let* (its
 ;; slots new or shadowing, too few children), loop (its inits reading the
-;; slots before them or not: ex-lind's two shapes), recur, throw, a builtin's
+;; slots before them or not: ex-lind's two shapes), recur, throw, case* (its
+;; table's walk, entry j's test 50 + j), a builtin's
 ;; call (:prim f args..), its head a constant fz-prim calls a builtin or a
 ;; Var (direct-linked or not) whose fn fz-prim says wraps one, or a constant
 ;; or Var fz-prim says is an IFn (:callv head args..), else (a local's or any
@@ -46,11 +47,11 @@
 (defn pick [xs] (nth xs (rnd (count xs))))
 
 ;; a node {:k :i2 :s2 :c :mark :kids}; c nil or a small number
-(defn node [k & {:keys [i2 s2 c mark kids] :or {i2 0 s2 0 c nil mark 0 kids []}}]
-  {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids})
+(defn node [k & {:keys [i2 s2 c mark kids thens] :or {i2 0 s2 0 c nil mark 0 kids [] thens []}}]
+  {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids :thens thens})
 (def tlr-kinds (atom []))
 (defn gen [d]
-  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 16 16 17 17 99] @tlr-kinds)))
+  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 16 16 17 17 19 19 99] @tlr-kinds)))
         sub #(gen (dec d))]
     (case k
       1 (node 1 :c (pick [nil 0 1 7 42]))
@@ -70,16 +71,18 @@
                                         (node 1 :c (pick [nil 7])) (node 3 :c (pick [nil 5])) (node 2 :i2 (rnd 10) :mark (pick [0 0 1])) (sub)])
                                  (repeatedly (rnd 4) sub))))
       17 (node 17 :kids [(sub)])
+      ;; a case*: its test and default, entries' thens (entry j's test 50 + j)
+      19 (node 19 :kids [(sub) (sub)] :thens (vec (repeatedly (rnd 4) sub)))
       99 (node 99 :kids [(sub)]))))
 (defn gen-case [] {:t (gen (pick [1 2 3 3 4 5])) :cm (vec (repeatedly (rnd 6) #(pick [0 1 2 3 4 5 nil]))) :np (rnd 3) :m (rnd 3)})
 (def cases (vec (repeatedly n gen-case)))
-(reset! tlr-kinds [16 16 16 12 13])
+(reset! tlr-kinds [16 16 16 12 13 19])
 (def tcases (vec (repeatedly n #(gen (pick [1 2 3 3 4 5])))))
 ;; a fn's clause: an arity (nf, variadic, its parameters' first slot) whose
 ;; body is a tree with recur and loop (vtg_tlr's two ways), m captures, a
 ;; self slot or none, sl 1 or 0 (no self let); the scope the host makes,
 ;; ex-fbcm, at sl 0 ex-fbcm0 (no self position)
-(reset! tlr-kinds [16 16 16 12])
+(reset! tlr-kinds [16 16 16 12 19])
 (defn gen-clause []
   (let [nf (rnd 3) var (pick [false false true]) start (pick [0 1 2 3]) np (+ nf (if var 1 0)) m (rnd 3)
         inners (vec (take m (drop (rnd 3) [5 6 7 8 9]))) self (pick [4 4 nil]) sl (pick [1 0])]
@@ -89,15 +92,18 @@
 (def ccases (vec (repeatedly n gen-clause)))
 (def anames [nil 0 1 7 42])
 
-(defn acl2-tree [{:keys [k i2 s2 c mark kids]}]
-  (str "(" k " " i2 " (" (str/join " " (map acl2-tree kids)) ") " (if (nil? c) "nil" c) " " s2 " " (if (= mark 1) "t" "nil") ")"))
+(defn acl2-tree [{:keys [k i2 s2 c mark kids thens]}]
+  (str "(" k " " i2 " (" (str/join " " (map acl2-tree kids)) ") "
+       (if (= k 19) (str "(" (str/join " " (map-indexed (fn [j t] (str "(" (+ 50 j) " " (acl2-tree t) ")")) thens)) ")") (if (nil? c) "nil" c))
+       " " s2 " " (if (= mark 1) "t" "nil") ")"))
 (defn acl2-cm [cm] (str "(" (str/join " " (map #(if (nil? %) "nil" %) cm)) ")"))
 
 ;; the Fortran's case: nodes numbered depth first, the root 1
 (defn flat [t]
   (let [out (atom [])]
-    (letfn [(walk [{:keys [k i2 s2 c mark kids]}]
-              (let [me (count @out)]
+    (letfn [(walk [{:keys [k i2 s2 c mark kids thens]}]
+              (let [me (count @out)
+                    kids (into kids thens)]
                 (swap! out conj nil)
                 (let [ids (mapv walk kids)]
                   (swap! out assoc me (str/join " " (concat [k i2 s2 (if (nil? c) -1 c) mark (count kids)] ids))))

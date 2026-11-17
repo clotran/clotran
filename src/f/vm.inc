@@ -49,8 +49,11 @@
   !                         else ex-trcall's, head first and cast: (:let head
   !                         (:if (:prim :ifn p) (:applyv p args) (:throw
   !                         (:prim :clotran.vm/notfn p)))) (generated)
+  !   case*                 (:let test (:if (:prim NODE (:const then) p)
+  !                         then .. default)), an entry's test case_branch's
+  !                         probe taking it (vm_node_hook; generated)
   ! and a last clause (0 .. :rest) for a call of no arity the fn has,
-  ! clj's ArityException. Anything else -- try, letfn, case, def -- and
+  ! clj's ArityException. Anything else -- try, letfn, def -- and
   ! the fn runs as before.
   ! ===================================================================
 
@@ -255,6 +258,14 @@
     base = vs_enter(vst, 3)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
+    case (N_CASE)
+       ! (:prim nd (:const then) v): whether case_branch's probe of v takes
+       ! the entry whose then is that node (vmtrg's vtg-cstest, NAMED: the
+       ! model's prim :case of the entry's test and v)
+       ! ponytail: one probe an entry walked, O(entries) a case where the
+       ! tree's is one probe; cache the last (nd, v) if a hot case shows it
+       if (n == 2) out = gc_bool(gc_identical(case_branch(vs_get(vst, base + 1), vs_get(vst, argbase + 2)), &
+            vs_get(vst, argbase + 1)))
     case (N_VECTOR, N_MAP, N_SET, N_NEW)
        call vs_set(vst, base + 2, vm_slots_vec(vst, argbase, 0, n, [nd]))
        select case (gc_i1(nd))
@@ -403,6 +414,14 @@
        do i = 0, gcv_count(kids) - 1
           call vm_scan(c, gcv_nth(kids, i))
        end do
+    case (N_CASE)
+       ! the test, the default, and each entry's then
+       do i = 0, gcv_count(kids) - 1
+          call vm_scan(c, gcv_nth(kids, i))
+       end do
+       do i = 0, int(vtg_ncs(nd)) - 1
+          call vm_scan(c, vtg_cthen(nd, int(i, int64)))
+       end do
     case default
        c%ok = .false.
        if (gc_i1(nd) >= 0 .and. gc_i1(nd) <= 40) vm_refused_by(gc_i1(nd)) = vm_refused_by(gc_i1(nd)) + 1
@@ -437,7 +456,7 @@
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
-         .or. gc_i1(nd) == N_CALL) then
+         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -534,6 +553,26 @@
        if (s >= lo .and. s < hi) yes = .true.
     end do
   end function vtg_rdcap
+  ! a case's table (slot 2: each [test then-node] by its key): how many
+  ! entries, and entry j's then node, in gca_entries' order (vmtrg's
+  ! vtg-ncs, vtg-cthen -- NAMED: the model reads ex-c's list in its order;
+  ! the macro's tests are distinct, so at most one entry takes a value)
+  ! ponytail: gca_entries each read, O(entries^2) a case translated once
+  integer(int64) function vtg_ncs(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_ncs = 0
+    if (ast_kind(nd) == N_CASE) vtg_ncs = gca_count(gc_slot(nd, 2))
+  end function vtg_ncs
+  function vtg_cthen(nd, j) result(t)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: j
+    type(gc_value) :: t
+    type(gc_value), allocatable :: ks(:), vls(:)
+    t = gc_nil()
+    if (ast_kind(nd) /= N_CASE) return
+    call gca_entries(gc_slot(nd, 2), ks, vls)
+    if (j >= 0 .and. j < size(vls)) t = gcv_nth(strip_meta(vls(j + 1)), 1)
+  end function vtg_cthen
   ! slot 2: a constant's value, a let's first slot
   function vtg_c(nd) result(v)
     type(gc_value), intent(in) :: nd
@@ -770,6 +809,17 @@
     k = vm_kw("throw")
     call anb_push(vm_l([k, l], [l]))
   end subroutine vtg_notfn
+  ! a case's entry j's test items (vmtrg's vtg-cstest): the N_CASE node
+  ! itself, the op of the runtime's kind 6 (vm_node_hook: case_branch's
+  ! probe takes entry j), and (:const then_j) -- NAMED: the model's :case and
+  ! (:const t), t the entry's test, exec-vm's prim :case under ex-caseok
+  subroutine vtg_cstest(tb, nd, j)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    integer(int64), value :: j
+    call anb_push(nd)
+    call vtg_const(tb, vtg_cthen(nd, j))
+  end subroutine vtg_cstest
   ! every other kind: vm_tr's own (which calls back for the kinds above)
   ! a number (gc_int), a keyword (0 :rest, 1 :clotran.vm/arity, 2 :prim, else
   ! :local), the self let's value: (:capt m), the runtime's closure, which

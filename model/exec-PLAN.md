@@ -792,7 +792,8 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_CALL | a call whose head is read at translation (exec-vmtr's ex-pcall / ex-pk): a constant builtin's `(:prim f args..)`, a direct-linked Var's whose fn wraps builtin f `(:prim f args..)` (item 4); else ex-trcall: `:ifn` then `:applyv` | partly: both **generated now** (vtg_pk, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn), ex-wrapok (a fn the runtime says wraps f at n is an IFn, and its call on n values answers prim f's, unless out of fuel); vtg_pk's tests (vm.inc's OBJ_BUILTIN not B_APPLY, and vm_linked_builtin / wrapper_of, where the model asks prim :clotran.vm/builtin, and i2 1 with prim :clotran.vm/wraps); apply's constant :callv. Also generated now (item 4(b)): a Var not direct-linked wrapping f, `(:prim :clotran.vm/callw (:const v) args..)` (vtg_pk 3, vtg_hd pushing callw and the Var's constant), under named ex-callwok (the runtime's callw of v on n values is prim f's) and vtg_pk's test (vm_wraps where the model asks prim :clotran.vm/wraps; vm_var_ref's constant where the model's is v). Also generated now (item 4(c)): an IFn constant's or Var's call, not apply, `(:callv h args..)` (vtg_pk 4, vtg_node 7), no new semantic hypothesis (the head answers v whenever the args do; v an IFn so the cast passes; not apply so no spread), named: vtg_pk's is_ifn (of the Var's value at translation) where the model asks prim :ifn. And generated now (item 4(c), the rest): every other call -- a local's or other expression's head, a non-IFn's, apply's -- is ex-trcall's `(:let h (:if (:prim :ifn p) (:applyv p args..) (:throw (:const :not-fn))))` (vtg_top, vtg_cast, vtg_notfn, vtg_node 8), no new semantic hypothesis (ex-ifnok, ex-apok as before); named: vm.inc's prim :ifn is VmRuntime's kind 9 (vrt-prim-kind's kifn) is_ifn, its not-fn throw `(:prim :clotran.vm/notfn p)` kind 10 refuse_not_fn, apply's spread the runtime's :invoke of B_APPLY (rt_applyp false). vm_tr's hand-written :callv is gone: N_CALL is wholly generated |
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT, N_FN, N_LAZY | `(:prim op ..)`, `(:mkclo tm ..)` | the op differs: vm.inc's op is the node itself (vm_node_hook) |
-| try, letfn, case, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
+| case* | ex-tr's `(:let test W)`, W ex-trcs's walk over prim :case | yes -- **generated now** (item 5, vtg-tr flg 6, vtg_cstest; vtg-tlrw walks its thens), no new semantic hypothesis (ex-caseok); named: vtg_ncs/vtg_cthen read gca_entries' order where the model's is ex-c's list, and vm.inc's test `(:prim NODE (:const then_j) p)` -- the runtime's kind 6, vm_node_hook: case_branch's probe takes entry j -- where the model's is `(:prim :case (:const t) p)` |
+| try, letfn, def, the host's | ex-tr has them | vm.inc refuses (vm_scan): the fn runs on the tree |
 | `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)). **Generated now** (vmtrcl): the clause vtg_clause (vtg-clause-ex-clause: ex-clause, sl 1), the arity-error clause vtg_arcl (ex-arcl; ex-arcl-mxcl: appended to a callee's clauses it answers ex-mxcl's, its prim's throw for :arity); the scope setup, the arities' loop and the program's reservation stay vm_compile_fn's |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
@@ -1025,6 +1026,30 @@ position.
    (a local, a constant, a deref) or ex-tr reordered, and :invoke of a
    non-IFn throwing :not-fn.) Collections' op as the node: not yet.
 5. try, letfn, case: vm_scan refuses them; take them once 1-4 land.
+   (a) case* -- done: ex-tr's kind 19 generated (vtg-tr flg 6, the table's
+   walk; vtg-tlrw: a recur in a then or the default is a tail), vm_scan
+   takes N_CASE, vm_tr hands it to vtg_tr. No new semantic hypothesis
+   (ex-caseok as before). Named, not proved: vtg_ncs/vtg_cthen's entry order
+   gca_entries' (the macro's tests distinct); vtg_cstest's items the N_CASE
+   node and (:const then_j) where the model's are :case and (:const t): the
+   runtime's kind 6, vm_node_hook, answers whether case_branch's probe of
+   the value takes entry j -- one probe an entry walked (ponytail: O(n) a
+   case). fuzz-vmtr-gen draws cases for vtg_tr, vtg_tlr and vtg_clause.
+   (b) try -- NOT taken: the model's VM has the machinery (mx2's :try,
+   ex-trh's catch walk, ex-trfin's finally desugaring), the host side does
+   not. vm.inc's host calls report a throw by leaving tctx%has_error set
+   (vm_took) while the VM unwinds (THROWN v); nothing clears it when the
+   VM's :try catches, so a handler or finally that calls the host sees the
+   stale error (vm_took then calls every later call a throw) -- exec_try
+   clears it on a catch (gce_clear_error) and saves/restores it around the
+   finally. A finally-only try's handler runs F before any host hook (no
+   prim :isa to clear it in). And a rethrow the VM ends with (status 1)
+   re-raises from the value (gcp_str), not the host's saved message and
+   trace. Needed: a hook at the VM's catch (VmRuntime/vm_gen's unwind) that
+   clears the host's error and keeps message and trace by the thrown value,
+   restored by the run's status 1 when the same value leaves -- a runtime
+   change, then the vtg_* for ex-trtry (catches' prim :isa as catch_matches
+   under ex-isaok). letfn: not started.
 6. (the cost theorem and fuzz-vmtr-gen: done, above.)
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to

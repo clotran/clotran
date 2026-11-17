@@ -1,7 +1,7 @@
   ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the VM's translation of a constant, a local, if, do, let*,
-  ! loop, recur, throw and a builtin's call (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --
+  ! loop, recur, throw, every call and case* (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --
   ! guard-verified, reading the tree through vm.inc's vtg_* reads and building
   ! the expression on the value stack through its vtg_* shims. vmtrg.lisp
   ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds
@@ -204,34 +204,38 @@
     type(gc_value), value :: e_
     integer(int64), value :: i_
     type(gc_value) :: e_19
-    type(gc_value) :: e_22
-    type(gc_value) :: e_25
+    type(gc_value) :: e_23
+    type(gc_value) :: e_26
+    type(gc_value) :: e_29
     type(gc_value) :: e_4
     type(gc_value) :: e_9
     integer(int64) :: flg_18
-    integer(int64) :: flg_21
-    integer(int64) :: flg_24
+    integer(int64) :: flg_22
+    integer(int64) :: flg_25
+    integer(int64) :: flg_28
     integer(int64) :: flg_3
     integer(int64) :: flg_8
     integer(int64) :: i_10
     integer(int64) :: i_13
     integer(int64) :: i_16
+    integer(int64) :: i_17
     integer(int64) :: i_2
     integer(int64) :: i_20
-    integer(int64) :: i_23
-    integer(int64) :: i_26
+    integer(int64) :: i_24
+    integer(int64) :: i_27
+    integer(int64) :: i_30
     integer(int64) :: i_5
     integer(int64) :: i_6
-    integer(int64) :: k_17
+    integer(int64) :: k_21
     integer(int64) :: nk_7
     logical :: t_1
     logical :: t_11
     logical :: t_12
     logical :: t_14
     integer(int64) :: t_15
-    logical :: t_27
-    logical :: t_28
-    logical :: t_29
+    logical :: t_31
+    logical :: t_32
+    logical :: t_33
     do
       select case (flg_)
       case (1_int64)
@@ -351,9 +355,31 @@
         else
           call vtg_other(tb, e_)
         end if
+      case (6_int64)
+        if ((vtg_kind(e_) == 19_int64)) then
+          i_17 = max(0_int64, i_)
+          if ((i_17 < vtg_ncs(e_))) then
+            call vtg_cstest(tb, e_, i_17)
+            call vtg_top(tb)
+            call vtg_node(tb, 6_int64, 3_int64)
+            call vtg_tr(tb, 0_int64, vtg_cthen(e_, i_17), 0_int64)
+            call vtg_tr(tb, 6_int64, e_, (1_int64 + i_17))
+            call vtg_node(tb, 1_int64, 3_int64)
+          else
+            flg_18 = 0_int64
+            e_19 = vtg_kid(e_, 1_int64)
+            i_20 = 0_int64
+            flg_ = flg_18
+            e_ = e_19
+            i_ = i_20
+            cycle
+          end if
+        else
+          call vtg_other(tb, e_)
+        end if
       case default
-        k_17 = vtg_kind(e_)
-        select case (k_17)
+        k_21 = vtg_kind(e_)
+        select case (k_21)
         case (1_int64)
           call vtg_const(tb, vtg_c(e_))
         case (3_int64)
@@ -376,20 +402,20 @@
           call vtg_tr(tb, 0_int64, vtg_kid(e_, 0_int64), 0_int64)
           call vtg_node(tb, 3_int64, 1_int64)
         case (11_int64)
-          flg_18 = 1_int64
-          e_19 = e_
-          i_20 = 0_int64
-          flg_ = flg_18
-          e_ = e_19
-          i_ = i_20
+          flg_22 = 1_int64
+          e_23 = e_
+          i_24 = 0_int64
+          flg_ = flg_22
+          e_ = e_23
+          i_ = i_24
           cycle
         case (5_int64)
-          flg_21 = 2_int64
-          e_22 = e_
-          i_23 = 0_int64
-          flg_ = flg_21
-          e_ = e_22
-          i_ = i_23
+          flg_25 = 2_int64
+          e_26 = e_
+          i_27 = 0_int64
+          flg_ = flg_25
+          e_ = e_26
+          i_ = i_27
           cycle
         case (12_int64)
           if (vtg_lind(e_, 1_int64)) then
@@ -398,49 +424,49 @@
             call vtg_tr(tb, 5_int64, e_, 0_int64)
             call vtg_node(tb, 4_int64, 2_int64)
           else
-            flg_24 = 1_int64
-            e_25 = e_
-            i_26 = 0_int64
-            flg_ = flg_24
-            e_ = e_25
-            i_ = i_26
+            flg_28 = 1_int64
+            e_29 = e_
+            i_30 = 0_int64
+            flg_ = flg_28
+            e_ = e_29
+            i_ = i_30
             cycle
           end if
         case (16_int64)
           call vtg_tr(tb, 3_int64, e_, 0_int64)
           call vtg_node(tb, 5_int64, vtg_nk(e_))
         case default
-          if ((k_17 == 6_int64)) then
-            t_27 = (vtg_pk(e_) == 4_int64)
+          if ((k_21 == 6_int64)) then
+            t_31 = (vtg_pk(e_) == 4_int64)
           else
-            t_27 = .false.
+            t_31 = .false.
           end if
-          if (t_27) then
+          if (t_31) then
             call vtg_hd(tb, e_)
             call vtg_tr(tb, 3_int64, e_, 1_int64)
             call vtg_node(tb, 7_int64, vtg_nk(e_))
           else
-            if ((k_17 == 6_int64)) then
-              t_28 = (vtg_pk(e_) == 3_int64)
+            if ((k_21 == 6_int64)) then
+              t_32 = (vtg_pk(e_) == 3_int64)
             else
-              t_28 = .false.
+              t_32 = .false.
             end if
-            if (t_28) then
+            if (t_32) then
               call vtg_hd(tb, e_)
               call vtg_tr(tb, 3_int64, e_, 1_int64)
               call vtg_node(tb, 6_int64, (1_int64 + vtg_nk(e_)))
             else
-              if ((k_17 == 6_int64)) then
-                t_29 = (.not. (vtg_pk(e_) == 0_int64))
+              if ((k_21 == 6_int64)) then
+                t_33 = (.not. (vtg_pk(e_) == 0_int64))
               else
-                t_29 = .false.
+                t_33 = .false.
               end if
-              if (t_29) then
+              if (t_33) then
                 call vtg_hd(tb, e_)
                 call vtg_tr(tb, 3_int64, e_, 1_int64)
                 call vtg_node(tb, 6_int64, vtg_nk(e_))
               else
-                if ((k_17 == 6_int64)) then
+                if ((k_21 == 6_int64)) then
                   call vtg_tr(tb, 0_int64, vtg_kid(e_, 0_int64), 0_int64)
                   call vtg_save(tb)
                   call vtg_blank(tb, vtg_kid(e_, 0_int64))
@@ -454,7 +480,17 @@
                   call vtg_restore(tb)
                   call vtg_node(tb, 2_int64, 2_int64)
                 else
-                  call vtg_other(tb, e_)
+                  if ((k_21 == 19_int64)) then
+                    call vtg_tr(tb, 0_int64, vtg_kid(e_, 0_int64), 0_int64)
+                    call vtg_save(tb)
+                    call vtg_blank(tb, vtg_kid(e_, 0_int64))
+                    call vtg_dead(tb)
+                    call vtg_tr(tb, 6_int64, e_, 0_int64)
+                    call vtg_restore(tb)
+                    call vtg_node(tb, 2_int64, 2_int64)
+                  else
+                    call vtg_other(tb, e_)
+                  end if
                 end if
               end if
             end if
@@ -465,62 +501,102 @@
     end do
   end subroutine vtg_tr
 
-  recursive function vtg_tlr(e_) result(r)
+  recursive function vtg_tlrw(flg_, e_, i_) result(r)
+    integer(int64), value :: flg_
     type(gc_value), value :: e_
+    integer(int64), value :: i_
     logical :: r
-    integer(int64) :: k_1
-    integer(int64) :: nk_2
+    integer(int64) :: i_1
+    integer(int64) :: k_4
+    integer(int64) :: nk_5
     logical :: t_10
+    logical :: t_11
+    logical :: t_12
+    logical :: t_13
+    logical :: t_14
+    logical :: t_15
+    logical :: t_2
     logical :: t_3
-    logical :: t_4
-    logical :: t_5
     logical :: t_6
     logical :: t_7
     logical :: t_8
     logical :: t_9
-    k_1 = vtg_kind(e_)
-    nk_2 = vtg_nk(e_)
-    if ((k_1 == 16_int64)) then
-      t_10 = .true.
-    else
-      if ((k_1 == 4_int64)) then
-        if (vtg_tlr(vtg_kid(e_, 1_int64))) then
-          t_4 = .true.
+    if ((flg_ == 1_int64)) then
+      i_1 = max(0_int64, i_)
+      if ((i_1 < vtg_ncs(e_))) then
+        if (vtg_tlrw(0_int64, vtg_cthen(e_, i_1), 0_int64)) then
+          t_2 = .true.
         else
-          if ((2_int64 < nk_2)) then
-            t_3 = vtg_tlr(vtg_kid(e_, 2_int64))
-          else
-            t_3 = .false.
-          end if
-          t_4 = t_3
+          t_2 = vtg_tlrw(1_int64, e_, (1_int64 + i_1))
         end if
-        t_9 = t_4
+        t_3 = t_2
       else
-        if ((k_1 == 5_int64)) then
-          if ((nk_2 <= 0_int64)) then
-            t_5 = .false.
-          else
-            t_5 = vtg_tlr(vtg_kid(e_, ((-1_int64) + nk_2)))
-          end if
-          t_8 = t_5
-        else
-          if ((k_1 == 11_int64)) then
-            t_6 = (k_1 == 11_int64)
-          else
-            t_6 = (k_1 == 13_int64)
-          end if
-          if (t_6) then
-            t_7 = vtg_tlr(vtg_kid(e_, vtg_i2(e_)))
-          else
-            t_7 = .false.
-          end if
-          t_8 = t_7
-        end if
-        t_9 = t_8
+        t_3 = .false.
       end if
-      t_10 = t_9
+      r = t_3
+      return
+    else
+      k_4 = vtg_kind(e_)
+      nk_5 = vtg_nk(e_)
+      if ((k_4 == 16_int64)) then
+        t_15 = .true.
+      else
+        if ((k_4 == 4_int64)) then
+          if (vtg_tlrw(0_int64, vtg_kid(e_, 1_int64), 0_int64)) then
+            t_7 = .true.
+          else
+            if ((2_int64 < nk_5)) then
+              t_6 = vtg_tlrw(0_int64, vtg_kid(e_, 2_int64), 0_int64)
+            else
+              t_6 = .false.
+            end if
+            t_7 = t_6
+          end if
+          t_14 = t_7
+        else
+          if ((k_4 == 5_int64)) then
+            if ((nk_5 <= 0_int64)) then
+              t_8 = .false.
+            else
+              t_8 = vtg_tlrw(0_int64, vtg_kid(e_, ((-1_int64) + nk_5)), 0_int64)
+            end if
+            t_13 = t_8
+          else
+            if ((k_4 == 11_int64)) then
+              t_9 = (k_4 == 11_int64)
+            else
+              t_9 = (k_4 == 13_int64)
+            end if
+            if (t_9) then
+              t_12 = vtg_tlrw(0_int64, vtg_kid(e_, vtg_i2(e_)), 0_int64)
+            else
+              if ((k_4 == 19_int64)) then
+                if (vtg_tlrw(0_int64, vtg_kid(e_, 1_int64), 0_int64)) then
+                  t_10 = .true.
+                else
+                  t_10 = vtg_tlrw(1_int64, e_, 0_int64)
+                end if
+                t_11 = t_10
+              else
+                t_11 = .false.
+              end if
+              t_12 = t_11
+            end if
+            t_13 = t_12
+          end if
+          t_14 = t_13
+        end if
+        t_15 = t_14
+      end if
+      r = t_15
+      return
     end if
-    r = t_10
+  end function vtg_tlrw
+
+  function vtg_tlr(e_) result(r)
+    type(gc_value), value :: e_
+    logical :: r
+    r = vtg_tlrw(0_int64, e_, 0_int64)
     return
   end function vtg_tlr
 

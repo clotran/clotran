@@ -66,7 +66,29 @@ contains
     type(gc_value), intent(in) :: x
     vtg_nk = 0
     if (ok(x)) vtg_nk = nnk(x%id)
+    if (vtg_kind(x) == 19) vtg_nk = min(vtg_nk, 2_int64)
   end function vtg_nk
+  ! a case (kind 19): its row's kids the test, the default, then each
+  ! entry's then; entry j's test 50 + j (the fuzzer writes ACL2's so)
+  integer(int64) function vtg_ncs(x)
+    type(gc_value), intent(in) :: x
+    vtg_ncs = 0
+    if (vtg_kind(x) == 19) vtg_ncs = max(0, nnk(x%id) - 2)
+  end function vtg_ncs
+  function vtg_cthen(x, j) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: j
+    type(gc_value) :: k
+    k%id = 0
+    if (j >= 0 .and. j < vtg_ncs(x)) k = vtg_kid(x, j + 2)
+  end function vtg_cthen
+  subroutine vtg_cstest(tb, x, j)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    integer(int64), value :: j
+    call push(tb, ':case')
+    call push(tb, '(:const ' // itoa(50 + j) // ')')
+  end subroutine vtg_cstest
   function vtg_kid(x, j) result(k)
     type(gc_value), intent(in) :: x
     integer(int64), intent(in) :: j
@@ -281,6 +303,8 @@ contains
        m = nnk(x%id) - 1
     case (17)
        m = 0
+    case (19)
+       m = nnk(x%id) - 1
     case default
        return
     end select
