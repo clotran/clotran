@@ -1,6 +1,6 @@
 ;; scripts/model-ratchet's record: what the model generates or describes, and
 ;; the books it answers to. scripts/model-ratchet --stamp writes the hashes.
-{:owed 2
+{:owed 1
  :entries
  [{:code "src/f/gen/vm_gen.f90", :model ["seqk" "vmg" "vmfg"], :code-sha "241be1b82f92073d96dafec4de99b67a78664dd86a47a500c510554b394a3e78", :model-sha "61a177d48eacd6261aff341a9d353cdc8e2a3720ccf4db7a2411fbed204c2508"}
   {:code "src/f/gen/vmc_gen.f90", :model ["vmic" "vmicg"], :code-sha "7325e0b33c076c1dbd5a2213b514e82a733f5515b51d1f3154d54f9c53c19001", :model-sha "2ca89c76001c8b3bdb8ac5c339db6716b9025f6c16da8461644359846472f587"}

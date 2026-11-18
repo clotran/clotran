@@ -1211,6 +1211,11 @@ position.
    the answer is the same. Cost vtg-fncl-steps-bound (13 + 3 an arity, the
    clauses' own). fuzz-vmtr-gen's fncl cases (vtg_arity a mock) run
    vtg_fncl against the theorem's list; -x parts them.
+10. **The row is Generated** (docs/model-coverage.md): everything vm.inc
+   decides is written from vmtrg / vmtrcl and proved exec-vmtr's; what
+   stays hand Fortran is named there -- the vtg_* shims, vm_clause's read
+   of an arity and its context, vm_compile_fn's reservation, compile,
+   fuse, JIT and constants, and the hooks.
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to
 ex-defs-ok0, exec-clrvm).
