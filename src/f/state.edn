@@ -169,6 +169,7 @@
  "Eval.f90/vm_op_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "VmRuntime.f90/vm_prim_n" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "VmRuntime.f90/hs" {:class :fixed, :note "an empty stobj handle for the generated reads (vmrt_gen.inc): no components, never written"}
+ "PersistentArrayMap.f90/hs" {:class :fixed, :note "an empty stobj handle for the generated reads (arraymap_gen.inc): no components, never written"}
  "VmRuntime.f90/vx" {:class :fixed, :note "an empty stobj handle for the generated reads (vmrt_gen.inc): no components, never written"}
  "Eval.f90/vm_n_refused" {:class :shared, :note "statistics (CLOTRAN_STATS): a race miscounts, nothing more"}
  "VmRuntime.f90/kw_name" {:class :fixed, :note "the VM runtime's keywords and private heads: set by vmrt_init in gce_base_env, on the main thread before any other runs VM code; read-only after"}

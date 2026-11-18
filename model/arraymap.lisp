@@ -38,7 +38,14 @@
 ;              1 step, where walking the chain is its length + 1
 ;
 ; Not modelled: the rooting (the roots(:) lists), and the heap's objects
-; -- a run is the list it holds.
+; -- a run is the list it holds. The reads -- index_of, gcm_get,
+; gcm_contains, gcm_key_at, gcm_val_at -- are GENERATED from
+; model/arraymapg.lisp, which reads the map off GC.f90's pools and proves
+; it answers am-index, am-get, am-contains and the i-th key and value here;
+; so are gcm_assoc's and gcm_dissoc's writes into their new runs (the
+; loops above, as amg-copy), proved to build am-assoc and am-dissoc
+; (amg-assoc-fill-refines, amg-dissoc-fill-refines), the runs' allocation
+; and the barrier left to the shim.
 
 (in-package "ACL2")
 
