@@ -32,7 +32,8 @@
 ;; loop and letfn besides (kinds 16, 12, 13), the generated answer t or nil.
 ;; Then a fn's clause, vtg_clause, against ex-clause (vmtrcl.lisp): random
 ;; arities (fixed or variadic), captures and self slot, bodies with recur
-;; and loop, the scope ex-fbcm; and the arity clause, vtg_arcl, against ex-arcl.
+;; and loop, the scope ex-fbcm -- which the generated vtg_scope must make
+;; from none (vtg-scope-fbcm) -- and the arity clause, vtg_arcl, against ex-arcl.
 ;;
 ;; -x is the NEGATIVE CONTROL: the Fortran side takes a node's items in the
 ;; wrong order, and the answers must part (the translation's, the clauses').

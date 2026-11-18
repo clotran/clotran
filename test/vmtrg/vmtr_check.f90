@@ -41,6 +41,8 @@ module vmtr_mock
      integer(int64) :: np = 0, m = 0
   end type vtg_state
   integer, allocatable :: nkind(:), ni2(:), ns2(:), nc(:), nmark(:), nnk(:), noff(:), kids(:)
+  ! a clause's captures' inner slots (vtg_nin / vtg_inr's template)
+  integer(int64), allocatable :: inr(:)
   logical :: broken = .false., tlr = .false., clause = .false., arcl = .false.
 contains
   logical function ok(x)
@@ -354,6 +356,23 @@ contains
     vtg_capo = 0
     if (j >= 0 .and. j < vtg_ncap(x)) vtg_capo = kids(noff(x%id) + int(j))
   end function vtg_capo
+  ! vmtrcl's vtg-nin, vtg-inr: the clause's captures' inner slots
+  integer(int64) function vtg_nin(tm)
+    type(gc_value), intent(in) :: tm
+    vtg_nin = size(inr)
+  end function vtg_nin
+  integer(int64) function vtg_inr(tm, j)
+    type(gc_value), intent(in) :: tm
+    integer(int64), intent(in) :: j
+    vtg_inr = 0
+    if (j >= 0 .and. j < size(inr)) vtg_inr = inr(j + 1)
+  end function vtg_inr
+  ! vmtrcl's vtg-capin: the slot appended to the scope
+  subroutine vtg_capin(tb, s, j)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s, j
+    tb%cm = [tb%cm, s]
+  end subroutine vtg_capin
   subroutine vtg_fnhd(tb, x)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
@@ -544,9 +563,9 @@ program vmtr_check
   implicit none
   character(len=4096) :: arg
   integer :: u, ios, nn, ncm, j, k, nk, tot
-  integer(int64) :: nf, var, st, sl
+  integer(int64) :: nf, var, st, sl, self
   integer, allocatable :: row(:)
-  type(vtg_state) :: tb
+  type(vtg_state) :: tb, sc
   type(gc_value) :: root
   call get_command_argument(1, arg)
   do j = 2, command_argument_count()
@@ -584,8 +603,20 @@ program vmtr_check
      tb%nsv = 0
      root%id = 1
      if (clause) then
+        ! the scope vtg_scope makes from none must be the one the case gives (ex-fbcm / ex-fbcm0)
+        inr = tb%cm(tb%np + 1:tb%np + tb%m)
+        sc%cm = [integer(int64) ::]
+        self = -1
+        if (sl == 1 .and. size(tb%cm) > 0) self = tb%cm(size(tb%cm))
+        call vtg_scope(sc, st, tb%np, self, sl, root)
         call vtg_clause(tb, nf, var, st, root, root, sl, tb%m)
-        write (*, '(a)') tb%stk(tb%top)%s
+        if (size(sc%cm) /= size(tb%cm)) then
+           write (*, '(a)') 'SCOPE-DIFFERS'
+        else if (any(sc%cm /= tb%cm)) then
+           write (*, '(a)') 'SCOPE-DIFFERS'
+        else
+           write (*, '(a)') tb%stk(tb%top)%s
+        end if
      else if (arcl) then
         call vtg_arcl(tb, root)
         write (*, '(a)') tb%stk(tb%top)%s

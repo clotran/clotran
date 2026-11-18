@@ -359,14 +359,14 @@
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
     "vmtrg"
     {:out "src/f/gen/vm_tr_gen.inc" :include true :book "vmtrcl"
-     :fns [vtg-coll vtg-rd vtg-lind vtg-locs vtg-caps vtg-tr vtg-tlrw vtg-tlr vtg-clause vtg-arcl]
+     :fns [vtg-coll vtg-rd vtg-lind vtg-locs vtg-caps vtg-tr vtg-tlrw vtg-tlr vtg-clause vtg-arcl vtg-inrs vtg-scope]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
      :host [vtg-const vtg-deref vtg-hd vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop vtg-fnhd
-            vtg-num vtg-key vtg-self]
+            vtg-num vtg-key vtg-self vtg-capin]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {vtg-tr #{e} vtg-tlrw #{e} vtg-tlr #{e} vtg-cstest #{e} vtg-lfinit #{e} vtg-catest #{e} vtg-rethrow #{e} vtg-blankcs #{e} vtg-cop #{e} vtg-fnhd #{e} vtg-caps #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-deref #{e} vtg-hd #{e} vtg-blank #{x} vtg-other #{x}
-                     vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm}}
+                     vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm} vtg-inrs #{tm} vtg-scope #{tm}}
      :value-fns #{}
      :reentrant #{vtg-tr}
      :bool-fns #{vtg-coll vtg-tlrw vtg-tlr vtg-rd vtg-lind}
@@ -377,7 +377,8 @@
           vtg-rdcap ["vtg_rdcap" [:val :int :int] :bool] vtg-pk ["vtg_pk" [:val] :int]
           vtg-ncs ["vtg_ncs" [:val] :int] vtg-cthen ["vtg_cthen" [:val :int] :val]
           vtg-cbody ["vtg_cbody" [:val :int] :val] vtg-cslot ["vtg_cslot" [:val :int] :int]
-          vtg-ncap ["vtg_ncap" [:val] :int] vtg-capo ["vtg_capo" [:val :int] :int]}
+          vtg-ncap ["vtg_ncap" [:val] :int] vtg-capo ["vtg_capo" [:val :int] :int]
+          vtg-nin ["vtg_nin" [:val] :int] vtg-inr ["vtg_inr" [:val :int] :int]}
      :header ["  ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the VM's translation of a constant, a local, if, do, let*,"
@@ -389,7 +390,8 @@
               "  ! (ex-lind). vtg_tlr: whether a clause's body recurs to the fn (its"
               "  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr). vtg_clause:"
               "  ! vm_clause's clause of one arity, exec-vmtr's ex-clause (vmtrcl.lisp's"
-              "  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl)."]}
+              "  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl);"
+              "  ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm)."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn

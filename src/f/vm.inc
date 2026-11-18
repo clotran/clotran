@@ -731,6 +731,21 @@
     if (j < 0 .or. j >= vtg_ncap(nd)) return
     vtg_capo = int_of(gcv_nth(gcv_nth(gc_slot(nd, 2), 2), int(2 * j)))
   end function vtg_capo
+  ! a fn's captures for its scope (vmtrcl's vtg-nin, vtg-inr): how many,
+  ! capture j's inner slot -- NAMED: tm here is the template's (outer,
+  ! inner) pair vector vm_compile_fn is handed (capv), where the model reads
+  ! ex-inners of the template's list
+  integer(int64) function vtg_nin(tm)
+    type(gc_value), intent(in) :: tm
+    vtg_nin = gcv_count(tm) / 2
+  end function vtg_nin
+  integer(int64) function vtg_inr(tm, j)
+    type(gc_value), intent(in) :: tm
+    integer(int64), intent(in) :: j
+    vtg_inr = 0
+    if (j < 0 .or. j >= vtg_nin(tm)) return
+    vtg_inr = int_of(gcv_nth(tm, int(2 * j + 1)))
+  end function vtg_inr
   ! a case's table (slot 2: each [test then-node] by its key): how many
   ! entries, and entry j's then node, in gca_entries' order (vmtrg's
   ! vtg-ncs, vtg-cthen -- NAMED: the model reads ex-c's list in its order;
@@ -929,6 +944,14 @@
     tb%c%depth = tb%c%depth + 1
   end subroutine vtg_bind
   ! a loop's slots s .. s+n-1 the next locals (each on the trail)
+  ! capture j's inner slot s read in place (vmtrcl's vtg-capin -- NAMED:
+  ! c%capt(s) = j, no local, where the model appends s to the scope; a slot
+  ! out of the map's range is left unread, so a read of it refuses)
+  subroutine vtg_capin(tb, s, j)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s, j
+    if (s >= 0 .and. s <= ubound(tb%c%capt, 1)) tb%c%capt(s) = int(j)
+  end subroutine vtg_capin
   subroutine vtg_binds(tb, s, n)
     type(vtg_state), intent(inout) :: tb
     integer(int64), value :: s, n
@@ -1265,7 +1288,7 @@
     type(vm_tr_ctx), allocatable, target :: c
     type(vtg_state) :: tb
     integer(int64) :: vari
-    integer :: base, i, nfixed, start, nl, ncap, s, sl
+    integer :: base, i, nfixed, start, nl, ncap, sl
     logical :: variadic
     cl = gc_nil()
     if (nslots > 4000) return
@@ -1292,20 +1315,16 @@
     ! it, (:mkclo template (:capt 0) ..): equal under the runtime's
     ! decoding), and only when the body reads it: a let a call costs fib
     ! a fifth (scripts/bench), and its slot is a position no name reaches
-    ! otherwise (the entry is named, not generated: exec-PLAN Lane 3)
+    ! otherwise (the sl decision is named: vmtrcl.lisp)
     sl = 0
     if (self_slot >= 0 .and. self_slot <= ubound(c%map, 1)) then
        if (c%reads(self_slot)) sl = 1
     end if
-    do i = 0, nl - 1
-       c%map(start + i) = i
-    end do
-    do i = 0, ncap - 1
-       s = int_of(gcv_nth(capv, 2 * i + 1))
-       if (s >= 0 .and. s <= ubound(c%capt, 1)) c%capt(s) = i
-    end do
-    if (sl == 1) c%map(self_slot) = nl
-    c%depth = nl + sl
+    ! the scope by vtg_scope (generated: vmtrcl.lisp's vtg-scope-fbcm, ex-fbcm
+    ! at sl 1, ex-fbcm0 at sl 0): the parameters, the captures in place, the self
+    tb%c => c
+    call vtg_scope(tb, int(start, int64), int(nl, int64), int(self_slot, int64), int(sl, int64), capv)
+    if (.not. c%ok) return
     ! the clause, (n body) or (n body :rest), by vtg_clause (generated:
     ! vmtrcl.lisp's vtg-clause-ex-clause, ex-clause; at sl 0 vtg-clause-ex-clause0,
     ! ex-clause0, which answers as ex-clause, ex-fbtc0-mx): the self slot's let
@@ -1316,7 +1335,6 @@
        call vs_set(vst, base + i, roots(i))
     end do
     call vs_set(vst, base + size(roots) + 1, body)
-    tb%c => c
     vari = 0
     if (variadic) vari = 1
     call vtg_clause(tb, int(nfixed, int64), vari, int(start, int64), body, gc_nil(), int(sl, int64), int(ncap, int64))

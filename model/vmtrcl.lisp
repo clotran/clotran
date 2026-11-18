@@ -6,9 +6,10 @@
 ; vtg-clause: one arity's clause, (n body) or (n body :rest) -- exec-vmtr's
 ; ex-clause: the body ex-fbtc's, the self slot's let round the loop (when
 ; the body recurs to the fn, vtg-tlr) or the body, the captures read in place.
-; The host makes the scope first (vm_clause: the parameters, the captures
-; read in place, the self slot: ex-fbcm; vtb-cs the counts), as vm_tr_gen
-; does for vtg-tr. Three shims more: vtg-num a number pushed, vtg-key a
+; The scope is made first by vtg-scope (vm_clause: the parameters, the
+; captures read in place, the self slot: ex-fbcm, vtg-scope-fbcm, at the
+; end of this book; vtb-cs the counts, the host's), as vm_tr_gen does for
+; vtg-tr. Three shims more: vtg-num a number pushed, vtg-key a
 ; keyword, vtg-self the self let's value.
 ; NAMED, not exact (exec-PLAN Lane 3 item 2): vtg_self pushes vm.inc's
 ; (:capt m) -- the runtime's closure, which holds itself past its captures
@@ -267,3 +268,56 @@
 ; its cost: vtg-clause-steps at sl 1 less the self shim and its let node
 (defthm vtg-clause-steps-sl0
   (equal (vtg-clause-steps nf var body 0) (- (vtg-clause-steps nf var body 1) 2)))
+
+; ---- THE SCOPE (Lane 3 item 2) ------------------------------------------------------------------
+;
+; vm_clause's scope, generated: vtg-scope makes ex-fbcm (sl 1) or ex-fbcm0
+; (sl 0) from an empty one -- the parameters' slots s .. s+np-1 (vtg_binds),
+; each capture's inner slot read in place (vtg-inrs over vtg_nin / vtg_inr,
+; each vtg_capin), then the self slot when sl (vtg_bind). vtg-scope-fbcm.
+; NAMED: vtg_nin / vtg_inr read the template's capture pairs vm_compile_fn
+; is handed (capv, a vector), where the model reads ex-inners of tm's list;
+; vtg_capin is vm.inc's c%capt(s) = j (the capture read in place, no
+; local) where the model appends s to the scope -- vtg_local's ex-cs
+; reading as before. Which sl, and the self slot, stay vm_clause's (the sl
+; decision named above).
+
+; a template's captures: how many, capture j's inner slot (vtg_nin, vtg_inr)
+(defun vtg-nin (tm) (declare (xargs :guard t)) (vtg-int (len (ec-call (ex-inners (vtg-nth 2 tm))))))
+(defun vtg-inr (tm j) (declare (xargs :guard (natp j))) (vtg-int (vtg-nth j (ec-call (ex-inners (vtg-nth 2 tm))))))
+(defthm vtg-nin-range (and (natp (vtg-nin tm)) (< (vtg-nin tm) *vtg40*))
+  :rule-classes ((:type-prescription :corollary (natp (vtg-nin tm))) (:linear :corollary (< (vtg-nin tm) *vtg40*))))
+; capture j's inner slot read in place (vtg_capin: c%capt(s) = j)
+(defun vtg-capin (s j vtb) (declare (xargs :stobjs vtb :guard t) (ignorable j)) (update-vtb-cm (append (true-list-fix (vtb-cm vtb)) (list s)) vtb))
+(defun vtg-inrs (tm j vtb)
+  (declare (xargs :stobjs vtb :guard (and (natp j) (< j *vtg40*)) :measure (nfix (- (vtg-nin tm) (nfix j)))))
+  (let ((j (nfix j)))
+    (if (< j (vtg-nin tm)) (let ((vtb (vtg-capin (vtg-inr tm j) j vtb))) (vtg-inrs tm (+ 1 j) vtb)) vtb)))
+(defun vtg-scope (s np self sl tm vtb)
+  (declare (xargs :stobjs vtb :guard (natp sl)))
+  (let* ((vtb (vtg-binds s np vtb))
+         (vtb (vtg-inrs tm 0 vtb)))
+    (if (equal sl 0) vtb (vtg-bind self vtb))))
+
+(defthm vtg-capin-st (equal (vtg-capin x j (vtg-st s c sv cs)) (vtg-st s (append (true-list-fix c) (list x)) sv cs))
+  :hints (("Goal" :in-theory (enable vtg-st))))
+(defun vtg-inrs-ind (j os c)
+  (declare (xargs :measure (len os)))
+  (if (consp os) (vtg-inrs-ind (+ 1 j) (cdr os) (append c (list (car os)))) (list j c)))
+(defthm vtg-app-assoc-1 (equal (append (append a (list x)) b) (append a (cons x b))))
+(defthm vtg-inrs-nthcdr
+  (implies (and (natp j) (true-listp c) (vtg-fnos os) (< (len (ex-inners (nth 2 tm))) *vtg40*) (equal os (nthcdr j (ex-inners (nth 2 tm)))))
+           (equal (vtg-inrs tm j (vtg-st s c sv cs)) (vtg-st s (append c os) sv cs)))
+  :hints (("Goal" :induct (vtg-inrs-ind j os c) :in-theory (e/d (vtg-nin vtg-inr vtg-int vtg-nthcdr-cdr) (vtg-capin vtg-nthcdr-parts vtg-nthcdr-end))
+                  :expand ((vtg-inrs tm j (vtg-st s c sv cs))))
+          (and stable-under-simplificationp '(:use ((:instance vtg-nthcdr-parts (i j) (l (ex-inners (nth 2 tm))))
+                                                    (:instance vtg-nthcdr-end (i j) (l (ex-inners (nth 2 tm)))))))))
+(defthm vtg-scope-fbcm
+  (implies (and (vtg-fnos (ex-inners (nth 2 tm))) (< (len (ex-inners (nth 2 tm))) *vtg40*))
+           (and (equal (vtg-scope (ex-astart ar) (ex-anp ar) (ex-fself tm) 1 tm (vtg-st s nil sv cs)) (vtg-st s (ex-fbcm tm ar) sv cs))
+                (equal (vtg-scope (ex-astart ar) (ex-anp ar) self 0 tm (vtg-st s nil sv cs)) (vtg-st s (ex-fbcm0 tm ar) sv cs))))
+  :hints (("Goal" :in-theory (e/d (ex-fbcm ex-fbcm0 ex-fparams) (vtg-inrs))
+                  :use ((:instance vtg-inrs-nthcdr (j 0) (os (ex-inners (nth 2 tm))) (c (ex-slots (ex-astart ar) (ex-anp ar))))))))
+; its cost: vtg_binds np + 1, a capture 2, the self bind, three calls
+(defun vtg-scope-steps (np nin sl) (+ 3 (nfix np) 1 (* 2 (nfix nin)) (if (equal sl 0) 0 1)))
+(defthm vtg-scope-steps-bound (<= (vtg-scope-steps np nin sl) (+ 5 (* 2 (+ (nfix np) (nfix nin))))) :rule-classes :linear)

@@ -9,7 +9,8 @@
   ! (ex-lind). vtg_tlr: whether a clause's body recurs to the fn (its
   ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr). vtg_clause:
   ! vm_clause's clause of one arity, exec-vmtr's ex-clause (vmtrcl.lisp's
-  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl).
+  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl);
+  ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm).
   pure function vtg_coll(k_) result(r)
     integer(int64), value :: k_
     logical :: r
@@ -798,3 +799,40 @@
     call vtg_key(tb, 0_int64)
     call vtg_node(tb, 0_int64, 3_int64)
   end subroutine vtg_arcl
+
+  subroutine vtg_inrs(tb, tm_, j_)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: tm_
+    integer(int64), value :: j_
+    integer(int64) :: j_1
+    integer(int64) :: j_3
+    type(gc_value) :: tm_2
+    do
+      j_1 = max(0_int64, j_)
+      if ((j_1 < vtg_nin(tm_))) then
+        call vtg_capin(tb, vtg_inr(tm_, j_1), j_1)
+        tm_2 = tm_
+        j_3 = (1_int64 + j_1)
+        tm_ = tm_2
+        j_ = j_3
+        cycle
+      else
+      end if
+      exit
+    end do
+  end subroutine vtg_inrs
+
+  subroutine vtg_scope(tb, s_, np_, self_, sl_, tm_)
+    type(vtg_state), intent(inout) :: tb
+    integer(int64), value :: s_
+    integer(int64), value :: np_
+    integer(int64), value :: self_
+    integer(int64), value :: sl_
+    type(gc_value), value :: tm_
+    call vtg_binds(tb, s_, np_)
+    call vtg_inrs(tb, tm_, 0_int64)
+    if ((sl_ == 0_int64)) then
+    else
+      call vtg_bind(tb, self_)
+    end if
+  end subroutine vtg_scope
