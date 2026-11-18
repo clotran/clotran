@@ -1160,8 +1160,8 @@ end module clotran_rt_decl
 
 (declare fn-procedure)
 
-(defn- gen
-  "One node, as a VALUE. Answers [code slot state]: the statements that
+(defn- gen-op
+  "One node, as a VALUE (through gen). Answers [code slot state]: the statements that
   compute it, the slot its value lands in, and the state after."
   [nd st]
   (if (not (compiled-ops (:op nd)))
@@ -1405,6 +1405,20 @@ end module clotran_rt_decl
                                [[] [] st] (map-indexed vector (:children nd)))
                        [r st] (fresh st)]
                    [(concat code vals [(str (:loop st) " = 1")]) r st]))))))
+
+(defn- gen
+  "One node, as a VALUE: gen-op's [code slot state], with one promise
+  its callers (gen-into, bind-slots, an if's test) rely on: a slot that
+  comes WITH code is a temporary, cleared once read. A :let's or :do's
+  value is its body's slot, and a pooled body's slot is the pool's:
+  cleared, a loop's second pass read nil (scripts/fuzz-fn seed
+  1791845522). So that slot is copied out to a temporary first."
+  [nd st]
+  (let [[c s st :as r] (gen-op nd st)]
+    (if (and (seq c) (some #{s} (vals (:pool st))))
+      (let [[t st] (fresh st)]
+        [(conj (vec c) (str "call clotran_copy(b + " t ", b + " s ")")) t st])
+      r)))
 
 (defn- decls-text
   "The Fortran declarations for every primitive variable a procedure

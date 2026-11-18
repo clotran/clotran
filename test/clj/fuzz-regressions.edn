@@ -356,4 +356,11 @@
  ;; long of NaN is 0 (RT.longCast's range test is false for NaN); the compiled
  ;; cl_long_of threw "out of range" (make crosscheck SEED=2741495394)
  (long ##NaN) (int ##NaN) (let [d (- ##Inf ##Inf)] (long d))
+ ;; a :let's or :do's value is its body's slot, and a pooled constant's is
+ ;; the pool's: the compiled code cleared it as a temporary once read, so a
+ ;; loop's second pass read nil -- an NPE in (long nil), or a nil in a
+ ;; vector (scripts/fuzz-fn, make crosscheck seed 1791845522)
+ (let [p 6.75] (loop [i 0 acc (unchecked-subtract -3 -9223372036854775808)] (if (< i 2) (recur (inc i) (long (let [x (long p)] -9223372036854775808))) acc)))
+ ((fn [n] (loop [i 0 acc -9223372036854775808] (if (< i 2) (recur (inc i) (do (str n) -9223372036854775808)) acc))) 1)
+ (loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (let [x (str i)] :k))) [acc :k]))
 ]
