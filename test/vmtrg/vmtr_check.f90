@@ -14,7 +14,7 @@
 ! ex-fbcm0), against ex-clause (at sl 0 ex-clause0);
 ! with `arcl` vtg_arcl of the root's constant, against ex-arcl.
 !
-!   vmtr_check CASEFILE [tlr|clause|arcl] [broken]
+!   vmtr_check CASEFILE [tlr|clause|arcl|scan] [broken]
 !
 ! CASEFILE: per case a line `nnodes np m ncm cm..` (np, m vtb-cs: the
 ! clause's parameters and captures, a capture read in place), then a line a node, 1..nnodes,
@@ -43,7 +43,7 @@ module vmtr_mock
   integer, allocatable :: nkind(:), ni2(:), ns2(:), nc(:), nmark(:), nnk(:), noff(:), kids(:)
   ! a clause's captures' inner slots (vtg_nin / vtg_inr's template)
   integer(int64), allocatable :: inr(:)
-  logical :: broken = .false., tlr = .false., clause = .false., arcl = .false.
+  logical :: broken = .false., tlr = .false., clause = .false., arcl = .false., scan = .false.
 contains
   logical function ok(x)
     type(gc_value), intent(in) :: x
@@ -555,6 +555,21 @@ contains
     end do
     call push(tb, s // ')')
   end subroutine vtg_self
+  ! vtg-scan's reads: a node of the case is the host's (vtg_okn), every one
+  ! taken (vtg_hok, the fuzzer's defattach), a kind not translated refused
+  ! (vtg_refk; broken: taken, the negative control)
+  logical function vtg_okn(x)
+    type(gc_value), intent(in) :: x
+    vtg_okn = ok(x)
+  end function vtg_okn
+  logical function vtg_hok(x)
+    type(gc_value), intent(in) :: x
+    vtg_hok = ok(x)
+  end function vtg_hok
+  logical function vtg_refk(x)
+    type(gc_value), intent(in) :: x
+    vtg_refk = broken
+  end function vtg_refk
   include 'vm_tr_gen.inc'
 end module vmtr_mock
 
@@ -574,6 +589,7 @@ program vmtr_check
      if (trim(arg(2048:)) == 'tlr') tlr = .true.
      if (trim(arg(2048:)) == 'clause') clause = .true.
      if (trim(arg(2048:)) == 'arcl') arcl = .true.
+     if (trim(arg(2048:)) == 'scan') scan = .true.
   end do
   open (newunit=u, file=trim(arg(1:2047)), status='old', action='read')
   allocate (row(4096))
@@ -617,6 +633,10 @@ program vmtr_check
         else
            write (*, '(a)') tb%stk(tb%top)%s
         end if
+     else if (scan) then
+        ! np the frame's bound hi, m the slot s: vtg_scan's answer, vtg_rds's
+        write (*, '(a, 1x, a)') merge('t  ', 'nil', vtg_scan(0_int64, root, 0_int64, tb%np)), &
+             merge('t  ', 'nil', vtg_rds(0_int64, root, 0_int64, tb%m))
      else if (arcl) then
         call vtg_arcl(tb, root)
         write (*, '(a)') tb%stk(tb%top)%s

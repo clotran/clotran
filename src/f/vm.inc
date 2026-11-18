@@ -80,7 +80,7 @@
   !                         exec-vmtr's ex-trh / ex-trfin have (:throw p)
   !                         (vm_node_hook; generated, vtg_catest, vtg_rethrow)
   ! and a last clause (0 .. :rest) for a call of no arity the fn has,
-  ! clj's ArityException. Anything else -- a node kind vm_scan does not
+  ! clj's ArityException. Anything else -- a node kind vtg_scan does not
   ! know (N_FAIL, N_LATEVAR, the top's) -- and the fn runs as before.
   ! ===================================================================
 
@@ -530,116 +530,35 @@
     k = rt_keyword(name)
   end function vm_kw
 
-  ! The slots a body binds and reads, and whether it holds a node the VM
-  ! cannot run; whether the fn's own recur is in it.
-  recursive subroutine vm_scan(c, nd)
-    type(vm_tr_ctx), intent(inout) :: c
+  ! WHETHER THE VM TAKES A BODY is the generated vtg_scan (model/vmtrg.lisp's
+  ! vtg-scan; vtg-scan-frag: a body it takes is one vtg_tr translates exactly,
+  ! vtg-tr-ex-tr's hypothesis, and vtg-scan-tlr-ok vtg_tlr's), every slot it
+  ! reads or binds below the frame's bound; whether it reads or binds the self
+  ! slot is vtg_rds (vm_clause's sl). Its reads, NAMED in vmtrg.lisp: vtg_okn
+  ! (a node, OBJ_AST: its numbers in the reads' range, the analyzer's),
+  ! vtg_hok (the host's refusal the model need not explain: a call of the
+  ! analyzer's runtime fn, as flat refuses it), vtg_refk (a kind not
+  ! translated: refused, counted for CLOTRAN_STATS)
+  logical function vtg_okn(nd)
     type(gc_value), intent(in) :: nd
-    type(gc_value) :: kids, head
-    integer :: i, j, n, start
-    if (.not. c%ok) return
-    if (gc_kind(nd) /= OBJ_AST) then
-       c%ok = .false.
-       return
-    end if
-    kids = gc_slot(nd, 1)
-    select case (gc_i1(nd))
-    case (N_CONST, N_VAR)
-    case (N_LOCAL)
-       call vm_mark(c%reads, gc_i2(nd), c)
-    case (N_DEF, N_DEFTYPE)
-       ! exec_core's children (vtg_nk, vtg_kid)
-       do i = 0, int(vtg_nk(nd)) - 1
-          call vm_scan(c, vtg_kid(nd, int(i, int64)))
-       end do
-    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT, N_CALL, N_NEWTYPE, N_SETBANG)
-       if (gcv_is(kids)) then
-          do i = 0, gcv_count(kids) - 1
-             call vm_scan(c, gcv_nth(kids, i))
-          end do
-       end if
-       if (gc_i1(nd) == N_CALL) then
-          head = gcv_nth(kids, 0)
-          if (gc_kind(head) == OBJ_AST .and. gc_i1(head) == N_CONST) then
-             ! a builtin that is a runtime fn of the analyzer's own, as flat refuses it
-             if (gc_kind(strip_meta(gc_slot(head, 2))) == OBJ_BUILTIN) then
-                if (gc_i1(strip_meta(gc_slot(head, 2))) == B_RTFN .or. gc_i1(strip_meta(gc_slot(head, 2))) == B_UUIDFN) &
-                     c%ok = .false.
-             end if
-          end if
-       end if
-    case (N_FN, N_LAZY)
-       ! the slots its template captures, read here
-       head = gcv_nth(gc_slot(nd, 2), 2)
-       do i = 0, gcv_count(head) / 2 - 1
-          call vm_mark(c%reads, int_of(gcv_nth(head, 2 * i)), c)
-       end do
-    case (N_LET, N_LOOP)
-       n = gc_i2(nd)
-       start = int_of(gc_slot(nd, 2))
-       do i = 0, n - 1
-          call vm_mark(c%binds, start + i, c)
-       end do
-       do i = 0, gcv_count(kids) - 1
-          call vm_scan(c, gcv_nth(kids, i))
-       end do
-    case (N_RECUR)
-       do i = 0, gcv_count(kids) - 1
-          call vm_scan(c, gcv_nth(kids, i))
-       end do
-    case (N_LETFN)
-       ! its fns' captures read (each must be a fn), its slots bound, its body
-       n = gc_i2(nd)
-       start = int_of(gc_slot(nd, 2))
-       do i = 0, n - 1
-          head = gcv_nth(kids, i)
-          if (gc_kind(head) /= OBJ_AST) then
-             c%ok = .false.
-             return
-          end if
-          if (gc_i1(head) /= N_FN) then
-             c%ok = .false.
-             return
-          end if
-          head = gcv_nth(gc_slot(head, 2), 2)
-          do j = 0, gcv_count(head) / 2 - 1
-             call vm_mark(c%reads, int_of(gcv_nth(head, 2 * j)), c)
-          end do
-          call vm_mark(c%binds, start + i, c)
-       end do
-       call vm_scan(c, gcv_nth(kids, n))
-    case (N_TRY)
-       ! the body, the finally, and each catch's body, its slot bound
-       call vm_scan(c, gcv_nth(kids, 0))
-       if (vtg_nk(nd) > 1) call vm_scan(c, gcv_nth(kids, 1))
-       do i = 0, int(vtg_ncs(nd)) - 1
-          call vm_mark(c%binds, int(vtg_cslot(nd, int(i, int64))), c)
-          call vm_scan(c, vtg_cbody(nd, int(i, int64)))
-       end do
-    case (N_CASE)
-       ! the test, the default, and each entry's then
-       do i = 0, gcv_count(kids) - 1
-          call vm_scan(c, gcv_nth(kids, i))
-       end do
-       do i = 0, int(vtg_ncs(nd)) - 1
-          call vm_scan(c, vtg_cthen(nd, int(i, int64)))
-       end do
-    case default
-       c%ok = .false.
-       if (gc_i1(nd) >= 0 .and. gc_i1(nd) <= 40) vm_refused_by(gc_i1(nd)) = vm_refused_by(gc_i1(nd)) + 1
-    end select
-  end subroutine vm_scan
-
-  subroutine vm_mark(set, s, c)
-    logical, intent(inout) :: set(0:)
-    integer, intent(in) :: s
-    type(vm_tr_ctx), intent(inout) :: c
-    if (s < 0 .or. s > ubound(set, 1)) then
-       c%ok = .false.
-    else
-       set(s) = .true.
-    end if
-  end subroutine vm_mark
+    vtg_okn = gc_kind(nd) == OBJ_AST
+  end function vtg_okn
+  logical function vtg_hok(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: head, f
+    vtg_hok = .true.
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) /= N_CALL .or. ast_nkids(nd) < 1) return
+    head = ast_kid(nd, 0_int64)
+    if (ast_kind(head) /= N_CONST) return
+    f = strip_meta(gc_slot(head, 2))
+    if (gc_kind(f) == OBJ_BUILTIN) vtg_hok = gc_i1(f) /= B_RTFN .and. gc_i1(f) /= B_UUIDFN
+  end function vtg_hok
+  logical function vtg_refk(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_refk = .false.
+    if (gc_i1(nd) >= 0 .and. gc_i1(nd) <= 40) vm_refused_by(gc_i1(nd)) = vm_refused_by(gc_i1(nd)) + 1
+  end function vtg_refk
 
   ! nd as core language: c%map holds each slot's local, c%capt each
   ! captured slot's capture index, c%depth the locals' count
@@ -658,7 +577,7 @@
        e = vm_tr_gen(c, nd, roots)
        return
     end if
-    ! every other kind: vm_scan refuses it, the fn stays the tree's
+    ! every other kind: vtg_scan refuses it, the fn stays the tree's
     c%ok = .false.
   end function vm_tr
 
@@ -1327,12 +1246,12 @@
     if (variadic) nl = nl + 1
     ncap = gcv_count(capv) / 2
     allocate(c)
-    allocate(c%reads(0:nslots + 8), c%binds(0:nslots + 8), c%map(0:nslots + 8), c%capt(0:nslots + 8))
-    c%reads = .false.
-    c%binds = .false.
+    allocate(c%map(0:nslots + 8), c%capt(0:nslots + 8))
     c%map = -1
     c%capt = -1
-    call vm_scan(c, body)
+    ! whether the VM takes it: the generated vtg_scan, its slots below the
+    ! arrays' bound (vmtrg.lisp's vtg-scan-frag, vtg-scan-tlr-ok)
+    c%ok = vtg_scan(0_int64, body, 0_int64, int(nslots + 9, int64))
     if (.not. c%ok) return
     ! the parameters the clause's locals, the captures its closure's read
     ! in place, the fn the local after the parameters (ex-fbtc's self let:
@@ -1344,7 +1263,7 @@
     ! otherwise (the sl decision is named: vmtrcl.lisp)
     sl = 0
     if (self_slot >= 0 .and. self_slot <= ubound(c%map, 1)) then
-       if (c%reads(self_slot)) sl = 1
+       if (vtg_rds(0_int64, body, 0_int64, int(self_slot, int64))) sl = 1
     end if
     ! the scope by vtg_scope (generated: vmtrcl.lisp's vtg-scope-fbcm, ex-fbcm
     ! at sl 1, ex-fbcm0 at sl 0): the parameters, the captures in place, the self

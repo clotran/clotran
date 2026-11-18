@@ -1163,6 +1163,32 @@ position.
    (N_FAIL, N_LATEVAR, the top's). Nothing of the translation is hand
    Fortran but the named vtg_* shims, vm_scan, and the entry's host part
    (item 2).
+8. **vm_scan: generated** (vmtrg's `vtg-scan`, `vtg_scan`). Whether the VM
+   takes a body is a guard-verified ACL2 predicate over ex-tr's tree:
+   every node one vtg-tr translates -- a let's, loop's and letfn's body
+   present, an if's two children, a call's head, a letfn's inits fns --
+   and every slot it reads or binds below the frame's bound (nslots + 9,
+   the context's arrays). vtg-scan-frag: a body it takes satisfies
+   vtg-frag, vtg-tr-ex-tr's hypothesis, so the generated translation of it
+   is exactly ex-tr's; vtg-scan-tlr-ok: and vtg-tlrok, vtg-tlr-ex-tlr's.
+   The self slot's read (the sl decision's input) is `vtg_rds` (vtg-rds:
+   the tree reads or binds slot s), generated too; that it gives
+   ex-fbtc0-mx's hypothesis is still named (item 9). Named reads:
+   `vtg_okn` -- a node is OBJ_AST, its numbers in the reads' range (the
+   analyzer's; the model checks the range, vtg-okn); `vtg_hok` -- the
+   host's own refusal, a call of the analyzer's runtime fn (B_RTFN,
+   B_UUIDFN), as flat refuses it, unconstrained in the model (a refusal
+   it need not explain); `vtg_refk` -- a kind not translated, nil, counted
+   for CLOTRAN_STATS. Changed: the scan now also refuses malformed shapes
+   the hand scan let through to vtg_tr (an if with one child, a let short
+   of its body, a call with no head) -- the analyzer makes none, so no fn
+   it took is refused (scripts/fuzz -m vm); a slot bound by a let and
+   never read now also makes sl 1 (the hand decision asked reads only):
+   the self slot is no let's, so it never happens. Cost:
+   vtg-scan-steps-bound, vtg-rds-steps-bound (12 and 8 steps a node,
+   entry or capture). fuzz-vmtr-gen's scan cases run both against ACL2's
+   on its trees with a bound and a slot drawn (kind 99, short shapes and
+   out-of-range slots the refusals); -x takes an untranslated kind.
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to
 ex-defs-ok0, exec-clrvm).

@@ -23,9 +23,8 @@
 ; NAMED, not proved (the sl decision): ex-fbtc0-mx's hypothesis (not (x2-rd
 ; (ex-fnp tm ar) (ex-fbinr tm ar))) -- the body's translation never reads
 ; the self slot's position -- is what vm_clause's choice of sl 0 (self_slot
-; < 0, or vm_scan's c%reads(self_slot) false) is taken to establish:
-; vm_scan is hand Fortran over the source tree, and no model predicate of
-; it is proved to imply the hypothesis.
+; < 0, or vtg_rds of it false -- vmtrg.lisp's vtg-rds, generated) is
+; taken to establish: no theorem yet ties vtg-rds to it.
 ;
 ; vtg-arcl: the last clause, a call of no arity the fn has --
 ; (0 (:prim :clotran.vm/arity (:const name) (:local 0)) :rest), ex-arcl.

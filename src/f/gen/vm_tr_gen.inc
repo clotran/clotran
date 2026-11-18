@@ -10,7 +10,9 @@
   ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr). vtg_clause:
   ! vm_clause's clause of one arity, exec-vmtr's ex-clause (vmtrcl.lisp's
   ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl);
-  ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm).
+  ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm). vtg_scan:
+  ! whether the VM takes a body (vm_scan; vtg-scan-frag, vtg-scan-tlr-ok);
+  ! vtg_rds: whether a body reads or binds a slot (vm_clause's sl).
   pure function vtg_coll(k_) result(r)
     integer(int64), value :: k_
     logical :: r
@@ -848,3 +850,485 @@
       call vtg_bind(tb, self_)
     end if
   end subroutine vtg_scope
+
+  recursive function vtg_scan(flg_, e_, i_, hi_) result(r)
+    integer(int64), value :: flg_
+    type(gc_value), value :: e_
+    integer(int64), value :: i_
+    integer(int64), value :: hi_
+    logical :: r
+    integer(int64) :: i_1
+    integer(int64) :: k_18
+    integer(int64) :: nk_19
+    logical :: t_10
+    logical :: t_11
+    logical :: t_12
+    logical :: t_13
+    logical :: t_14
+    logical :: t_15
+    logical :: t_16
+    logical :: t_17
+    logical :: t_2
+    logical :: t_20
+    logical :: t_21
+    logical :: t_22
+    logical :: t_23
+    logical :: t_24
+    logical :: t_25
+    logical :: t_26
+    logical :: t_27
+    logical :: t_28
+    logical :: t_29
+    logical :: t_3
+    logical :: t_30
+    logical :: t_31
+    logical :: t_32
+    logical :: t_33
+    logical :: t_34
+    logical :: t_35
+    logical :: t_36
+    logical :: t_37
+    logical :: t_38
+    logical :: t_39
+    logical :: t_4
+    logical :: t_40
+    logical :: t_41
+    logical :: t_42
+    logical :: t_43
+    logical :: t_44
+    logical :: t_45
+    logical :: t_46
+    logical :: t_47
+    logical :: t_48
+    logical :: t_49
+    logical :: t_5
+    logical :: t_50
+    logical :: t_51
+    logical :: t_52
+    logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    logical :: t_9
+    i_1 = max(0_int64, i_)
+    if ((flg_ == 1_int64)) then
+      if ((i_1 < vtg_nk(e_))) then
+        if (vtg_scan(0_int64, vtg_kid(e_, i_1), 0_int64, hi_)) then
+          t_2 = vtg_scan(1_int64, e_, (1_int64 + i_1), hi_)
+        else
+          t_2 = .false.
+        end if
+        t_3 = t_2
+      else
+        t_3 = .true.
+      end if
+      t_52 = t_3
+    else
+      if ((flg_ == 2_int64)) then
+        if ((i_1 < vtg_ncs(e_))) then
+          if (vtg_scan(0_int64, vtg_cthen(e_, i_1), 0_int64, hi_)) then
+            t_4 = vtg_scan(2_int64, e_, (1_int64 + i_1), hi_)
+          else
+            t_4 = .false.
+          end if
+          t_5 = t_4
+        else
+          t_5 = .true.
+        end if
+        t_51 = t_5
+      else
+        if ((flg_ == 3_int64)) then
+          if ((i_1 < vtg_ncs(e_))) then
+            if ((vtg_cslot(e_, i_1) < hi_)) then
+              if (vtg_scan(0_int64, vtg_cbody(e_, i_1), 0_int64, hi_)) then
+                t_6 = vtg_scan(3_int64, e_, (1_int64 + i_1), hi_)
+              else
+                t_6 = .false.
+              end if
+              t_7 = t_6
+            else
+              t_7 = .false.
+            end if
+            t_8 = t_7
+          else
+            t_8 = .true.
+          end if
+          t_50 = t_8
+        else
+          if ((flg_ == 4_int64)) then
+            if ((vtg_kind(e_) == 13_int64)) then
+              t_9 = (i_1 < vtg_i2(e_))
+            else
+              t_9 = .false.
+            end if
+            if (t_9) then
+              if ((i_1 < vtg_nk(e_))) then
+                if (vtg_okn(vtg_kid(e_, i_1))) then
+                  if ((vtg_kind(vtg_kid(e_, i_1)) == 14_int64)) then
+                    if (vtg_scan(5_int64, vtg_kid(e_, i_1), 0_int64, hi_)) then
+                      if (((vtg_s2(e_) + i_1) < hi_)) then
+                        t_10 = vtg_scan(4_int64, e_, (1_int64 + i_1), hi_)
+                      else
+                        t_10 = .false.
+                      end if
+                      t_11 = t_10
+                    else
+                      t_11 = .false.
+                    end if
+                    t_12 = t_11
+                  else
+                    t_12 = .false.
+                  end if
+                  t_13 = t_12
+                else
+                  t_13 = .false.
+                end if
+                t_14 = t_13
+              else
+                t_14 = .false.
+              end if
+              t_15 = t_14
+            else
+              t_15 = .true.
+            end if
+            t_49 = t_15
+          else
+            if ((flg_ == 5_int64)) then
+              if ((i_1 < vtg_ncap(e_))) then
+                if ((vtg_capo(e_, i_1) < hi_)) then
+                  t_16 = vtg_scan(5_int64, e_, (1_int64 + i_1), hi_)
+                else
+                  t_16 = .false.
+                end if
+                t_17 = t_16
+              else
+                t_17 = .true.
+              end if
+              t_48 = t_17
+            else
+              if (vtg_okn(e_)) then
+                if (vtg_hok(e_)) then
+                  k_18 = vtg_kind(e_)
+                  nk_19 = vtg_nk(e_)
+                  if ((k_18 == 1_int64)) then
+                    t_20 = (k_18 == 1_int64)
+                  else
+                    t_20 = (k_18 == 3_int64)
+                  end if
+                  if (t_20) then
+                    t_45 = .true.
+                  else
+                    if ((k_18 == 2_int64)) then
+                      t_44 = (vtg_i2(e_) < hi_)
+                    else
+                      if ((k_18 == 4_int64)) then
+                        if ((.not. (nk_19 < 2_int64))) then
+                          t_21 = vtg_scan(1_int64, e_, 0_int64, hi_)
+                        else
+                          t_21 = .false.
+                        end if
+                        t_43 = t_21
+                      else
+                        if ((k_18 == 19_int64)) then
+                          if ((.not. (nk_19 < 2_int64))) then
+                            if (vtg_scan(1_int64, e_, 0_int64, hi_)) then
+                              t_22 = vtg_scan(2_int64, e_, 0_int64, hi_)
+                            else
+                              t_22 = .false.
+                            end if
+                            t_23 = t_22
+                          else
+                            t_23 = .false.
+                          end if
+                          t_42 = t_23
+                        else
+                          if ((k_18 == 6_int64)) then
+                            t_24 = (k_18 == 6_int64)
+                          else
+                            t_24 = (k_18 == 17_int64)
+                          end if
+                          if (t_24) then
+                            if ((.not. (nk_19 < 1_int64))) then
+                              t_25 = vtg_scan(1_int64, e_, 0_int64, hi_)
+                            else
+                              t_25 = .false.
+                            end if
+                            t_41 = t_25
+                          else
+                            if ((k_18 == 5_int64)) then
+                              t_27 = (k_18 == 5_int64)
+                            else
+                              if ((k_18 == 16_int64)) then
+                                t_26 = (k_18 == 16_int64)
+                              else
+                                t_26 = vtg_coll(k_18)
+                              end if
+                              t_27 = t_26
+                            end if
+                            if (t_27) then
+                              t_40 = vtg_scan(1_int64, e_, 0_int64, hi_)
+                            else
+                              if ((k_18 == 11_int64)) then
+                                t_28 = (k_18 == 11_int64)
+                              else
+                                t_28 = (k_18 == 12_int64)
+                              end if
+                              if (t_28) then
+                                if ((vtg_i2(e_) < nk_19)) then
+                                  if ((.not. (hi_ < (vtg_s2(e_) + vtg_i2(e_))))) then
+                                    t_29 = vtg_scan(1_int64, e_, 0_int64, hi_)
+                                  else
+                                    t_29 = .false.
+                                  end if
+                                  t_30 = t_29
+                                else
+                                  t_30 = .false.
+                                end if
+                                t_39 = t_30
+                              else
+                                if ((k_18 == 13_int64)) then
+                                  if ((vtg_i2(e_) < nk_19)) then
+                                    if (vtg_scan(4_int64, e_, 0_int64, hi_)) then
+                                      t_31 = vtg_scan(0_int64, vtg_kid(e_, vtg_i2(e_)), 0_int64, hi_)
+                                    else
+                                      t_31 = .false.
+                                    end if
+                                    t_32 = t_31
+                                  else
+                                    t_32 = .false.
+                                  end if
+                                  t_38 = t_32
+                                else
+                                  if ((k_18 == 14_int64)) then
+                                    t_33 = (k_18 == 14_int64)
+                                  else
+                                    t_33 = (k_18 == 15_int64)
+                                  end if
+                                  if (t_33) then
+                                    t_37 = vtg_scan(5_int64, e_, 0_int64, hi_)
+                                  else
+                                    if ((k_18 == 18_int64)) then
+                                      if ((.not. (nk_19 < 1_int64))) then
+                                        if (vtg_scan(1_int64, e_, 0_int64, hi_)) then
+                                          t_34 = vtg_scan(3_int64, e_, 0_int64, hi_)
+                                        else
+                                          t_34 = .false.
+                                        end if
+                                        t_35 = t_34
+                                      else
+                                        t_35 = .false.
+                                      end if
+                                      t_36 = t_35
+                                    else
+                                      t_36 = vtg_refk(e_)
+                                    end if
+                                    t_37 = t_36
+                                  end if
+                                  t_38 = t_37
+                                end if
+                                t_39 = t_38
+                              end if
+                              t_40 = t_39
+                            end if
+                            t_41 = t_40
+                          end if
+                          t_42 = t_41
+                        end if
+                        t_43 = t_42
+                      end if
+                      t_44 = t_43
+                    end if
+                    t_45 = t_44
+                  end if
+                  t_46 = t_45
+                else
+                  t_46 = .false.
+                end if
+                t_47 = t_46
+              else
+                t_47 = .false.
+              end if
+              t_48 = t_47
+            end if
+            t_49 = t_48
+          end if
+          t_50 = t_49
+        end if
+        t_51 = t_50
+      end if
+      t_52 = t_51
+    end if
+    r = t_52
+    return
+  end function vtg_scan
+
+  pure function vtg_inr2(s_, lo_, n_) result(r)
+    integer(int64), value :: s_
+    integer(int64), value :: lo_
+    integer(int64), value :: n_
+    logical :: r
+    if ((.not. (s_ < lo_))) then
+      r = (s_ < (lo_ + n_))
+      return
+    else
+      r = .false.
+      return
+    end if
+  end function vtg_inr2
+
+  recursive function vtg_rds(flg_, e_, i_, s_) result(r)
+    integer(int64), value :: flg_
+    type(gc_value), value :: e_
+    integer(int64), value :: i_
+    integer(int64), value :: s_
+    logical :: r
+    integer(int64) :: i_1
+    integer(int64) :: k_11
+    logical :: t_10
+    logical :: t_12
+    logical :: t_13
+    logical :: t_14
+    logical :: t_15
+    logical :: t_16
+    logical :: t_17
+    logical :: t_18
+    logical :: t_19
+    logical :: t_2
+    logical :: t_20
+    logical :: t_21
+    logical :: t_22
+    logical :: t_23
+    logical :: t_24
+    logical :: t_25
+    logical :: t_26
+    logical :: t_3
+    logical :: t_4
+    logical :: t_5
+    logical :: t_6
+    logical :: t_7
+    logical :: t_8
+    logical :: t_9
+    i_1 = max(0_int64, i_)
+    if ((flg_ == 1_int64)) then
+      if ((i_1 < vtg_nk(e_))) then
+        if (vtg_rds(0_int64, vtg_kid(e_, i_1), 0_int64, s_)) then
+          t_2 = .true.
+        else
+          t_2 = vtg_rds(1_int64, e_, (1_int64 + i_1), s_)
+        end if
+        t_3 = t_2
+      else
+        t_3 = .false.
+      end if
+      t_26 = t_3
+    else
+      if ((flg_ == 2_int64)) then
+        if ((i_1 < vtg_ncs(e_))) then
+          if (vtg_rds(0_int64, vtg_cthen(e_, i_1), 0_int64, s_)) then
+            t_4 = .true.
+          else
+            t_4 = vtg_rds(2_int64, e_, (1_int64 + i_1), s_)
+          end if
+          t_5 = t_4
+        else
+          t_5 = .false.
+        end if
+        t_25 = t_5
+      else
+        if ((flg_ == 3_int64)) then
+          if ((i_1 < vtg_ncs(e_))) then
+            if ((vtg_cslot(e_, i_1) == s_)) then
+              t_7 = .true.
+            else
+              if (vtg_rds(0_int64, vtg_cbody(e_, i_1), 0_int64, s_)) then
+                t_6 = .true.
+              else
+                t_6 = vtg_rds(3_int64, e_, (1_int64 + i_1), s_)
+              end if
+              t_7 = t_6
+            end if
+            t_8 = t_7
+          else
+            t_8 = .false.
+          end if
+          t_24 = t_8
+        else
+          if ((flg_ == 5_int64)) then
+            if ((i_1 < vtg_ncap(e_))) then
+              if ((vtg_capo(e_, i_1) == s_)) then
+                t_9 = .true.
+              else
+                t_9 = vtg_rds(5_int64, e_, (1_int64 + i_1), s_)
+              end if
+              t_10 = t_9
+            else
+              t_10 = .false.
+            end if
+            t_23 = t_10
+          else
+            k_11 = vtg_kind(e_)
+            if ((k_11 == 2_int64)) then
+              t_22 = (vtg_i2(e_) == s_)
+            else
+              if ((k_11 == 14_int64)) then
+                t_12 = (k_11 == 14_int64)
+              else
+                t_12 = (k_11 == 15_int64)
+              end if
+              if (t_12) then
+                t_21 = vtg_rds(5_int64, e_, 0_int64, s_)
+              else
+                if ((k_11 == 11_int64)) then
+                  t_14 = (k_11 == 11_int64)
+                else
+                  if ((k_11 == 12_int64)) then
+                    t_13 = (k_11 == 12_int64)
+                  else
+                    t_13 = (k_11 == 13_int64)
+                  end if
+                  t_14 = t_13
+                end if
+                if (t_14) then
+                  if (vtg_inr2(s_, vtg_s2(e_), vtg_i2(e_))) then
+                    t_15 = .true.
+                  else
+                    t_15 = vtg_rds(1_int64, e_, 0_int64, s_)
+                  end if
+                  t_20 = t_15
+                else
+                  if ((k_11 == 18_int64)) then
+                    if (vtg_rds(1_int64, e_, 0_int64, s_)) then
+                      t_16 = .true.
+                    else
+                      t_16 = vtg_rds(3_int64, e_, 0_int64, s_)
+                    end if
+                    t_19 = t_16
+                  else
+                    if ((k_11 == 19_int64)) then
+                      if (vtg_rds(1_int64, e_, 0_int64, s_)) then
+                        t_17 = .true.
+                      else
+                        t_17 = vtg_rds(2_int64, e_, 0_int64, s_)
+                      end if
+                      t_18 = t_17
+                    else
+                      t_18 = vtg_rds(1_int64, e_, 0_int64, s_)
+                    end if
+                    t_19 = t_18
+                  end if
+                  t_20 = t_19
+                end if
+                t_21 = t_20
+              end if
+              t_22 = t_21
+            end if
+            t_23 = t_22
+          end if
+          t_24 = t_23
+        end if
+        t_25 = t_24
+      end if
+      t_26 = t_25
+    end if
+    r = t_26
+    return
+  end function vtg_rds

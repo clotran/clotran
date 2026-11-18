@@ -359,17 +359,17 @@
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
     "vmtrg"
     {:out "src/f/gen/vm_tr_gen.inc" :include true :book "vmtrcl"
-     :fns [vtg-coll vtg-rd vtg-lind vtg-locs vtg-caps vtg-tr vtg-tlrw vtg-tlr vtg-clause vtg-arcl vtg-inrs vtg-scope]
+     :fns [vtg-coll vtg-rd vtg-lind vtg-locs vtg-caps vtg-tr vtg-tlrw vtg-tlr vtg-clause vtg-arcl vtg-inrs vtg-scope vtg-scan vtg-inr2 vtg-rds]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
      :host [vtg-const vtg-deref vtg-hd vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop vtg-fnhd
             vtg-num vtg-key vtg-self vtg-capin]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
      :value-formals {vtg-tr #{e} vtg-tlrw #{e} vtg-tlr #{e} vtg-cstest #{e} vtg-lfinit #{e} vtg-catest #{e} vtg-rethrow #{e} vtg-blankcs #{e} vtg-cop #{e} vtg-fnhd #{e} vtg-caps #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-deref #{e} vtg-hd #{e} vtg-blank #{x} vtg-other #{x}
-                     vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm} vtg-inrs #{tm} vtg-scope #{tm}}
+                     vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm} vtg-inrs #{tm} vtg-scope #{tm} vtg-scan #{e} vtg-rds #{e}}
      :value-fns #{}
      :reentrant #{vtg-tr}
-     :bool-fns #{vtg-coll vtg-tlrw vtg-tlr vtg-rd vtg-lind}
+     :bool-fns #{vtg-coll vtg-tlrw vtg-tlr vtg-rd vtg-lind vtg-scan vtg-inr2 vtg-rds}
      ;; a node is a value of clotran's heap, read by vm.inc's shims
      :val-type "gc_value"
      :rt {vtg-kind ["vtg_kind" [:val] :int] vtg-i2 ["vtg_i2" [:val] :int] vtg-s2 ["vtg_s2" [:val] :int]
@@ -378,7 +378,8 @@
           vtg-ncs ["vtg_ncs" [:val] :int] vtg-cthen ["vtg_cthen" [:val :int] :val]
           vtg-cbody ["vtg_cbody" [:val :int] :val] vtg-cslot ["vtg_cslot" [:val :int] :int]
           vtg-ncap ["vtg_ncap" [:val] :int] vtg-capo ["vtg_capo" [:val :int] :int]
-          vtg-nin ["vtg_nin" [:val] :int] vtg-inr ["vtg_inr" [:val :int] :int]}
+          vtg-nin ["vtg_nin" [:val] :int] vtg-inr ["vtg_inr" [:val :int] :int]
+          vtg-okn ["vtg_okn" [:val] :bool] vtg-hok ["vtg_hok" [:val] :bool] vtg-refk ["vtg_refk" [:val] :bool]}
      :header ["  ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the VM's translation of a constant, a local, if, do, let*,"
@@ -391,7 +392,9 @@
               "  ! loop's test in vm_clause), exec-vmtr's ex-tlr (vtg-tlr-ex-tlr). vtg_clause:"
               "  ! vm_clause's clause of one arity, exec-vmtr's ex-clause (vmtrcl.lisp's"
               "  ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl);"
-              "  ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm)."]}
+              "  ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm). vtg_scan:"
+              "  ! whether the VM takes a body (vm_scan; vtg-scan-frag, vtg-scan-tlr-ok);"
+              "  ! vtg_rds: whether a body reads or binds a slot (vm_clause's sl)."]}
     "anbuild"
     {:out "src/f/gen/anbuild_gen.inc" :include true :book "anbuild-proof"
      :fns [anb-try-n anb-drop anb-try-fin anb-lfnames anb-defend anb-an anb-deff anb-listn anb-body anb-binds anb-let anb-lfinits anb-letfn
