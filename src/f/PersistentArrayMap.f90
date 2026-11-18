@@ -20,8 +20,16 @@
 ! positional edits, as the loops below run them, and their step counts.
 module PersistentArrayMap
   use GC
+  use iso_fortran_env, only: int64
   implicit none
   private
+
+  ! the reads (index_of, gcm_get, gcm_key_at, gcm_val_at) are GENERATED:
+  ! src/f/gen/arraymap_gen.inc, from model/arraymapg.lisp, included below. Its
+  ! stobj is GC's pools, read through GC's hp_* accessors; this is its handle.
+  type :: amg_heap
+  end type amg_heap
+  type(amg_heap) :: hs
 
   public :: gcm_empty, gcm_count, gcm_is, gcm_get, gcm_contains, &
        gcm_assoc, gcm_dissoc, gcm_key_at, gcm_val_at, &
@@ -63,40 +71,42 @@ contains
 
   ! 1-based positional access, for callers that want to walk entries
   ! without materialising a seq (the printer and `into` both do).
+  ! GENERATED: amg_at answers the place (arraymapg's amg-at-refines).
   function gcm_key_at(m, i) result(k)
     type(gc_value), intent(in) :: m
     integer, intent(in) :: i
     type(gc_value) :: k
-    k = gc_nil()
-    if (.not. gcm_is(m)) return
-    if (i < 1 .or. i > gc_i1(m)) return
-    k = gc_vec_get(gc_slot(m, 1), i)
+    k = amg_value(amg_at(hs, int(m%tag, int64), int(m%ref, int64), 0_int64, int(i, int64)))
   end function gcm_key_at
 
   function gcm_val_at(m, i) result(v)
     type(gc_value), intent(in) :: m
     integer, intent(in) :: i
     type(gc_value) :: v
-    v = gc_nil()
-    if (.not. gcm_is(m)) return
-    if (i < 1 .or. i > gc_i1(m)) return
-    v = gc_vec_get(gc_slot(m, 2), i)
+    v = amg_value(amg_at(hs, int(m%tag, int64), int(m%ref, int64), 1_int64, int(i, int64)))
   end function gcm_val_at
 
+  ! what a generated read's place holds: 0 nil, else the arena word -p-1
+  function amg_value(p) result(v)
+    integer(int64), intent(in) :: p
+    type(gc_value) :: v
+    v = gc_nil()
+    if (p /= 0) v = gc_word_at(p)
+  end function amg_value
+
+  ! the generated scan's host read (arraymapg's amg-keq): gc_equal on the run's
+  ! key and k, given as their words, in index_of's order
+  logical function am_keq(kt, kr, kv, wt, wr, wv)
+    integer(int64), intent(in) :: kt, kr, kv, wt, wr, wv
+    am_keq = gc_equal(gc_value(int(wt), int(wr), wv), gc_value(int(kt), int(kr), kv))
+  end function am_keq
+
   ! The index of k, or 0. The linear scan the type is named for.
+  ! GENERATED: amg_index (arraymapg's amg-index-refines: arraymap's am-index).
   function index_of(m, k) result(at)
     type(gc_value), intent(in) :: m, k
-    integer :: at, i
-    type(gc_value) :: keys
-    at = 0
-    if (.not. gcm_is(m)) return
-    keys = gc_slot(m, 1)
-    do i = 1, gc_i1(m)
-       if (gc_equal(gc_vec_get(keys, i), k)) then
-          at = i
-          return
-       end if
-    end do
+    integer :: at
+    at = int(amg_index(hs, int(m%tag, int64), int(m%ref, int64), int(k%tag, int64), int(k%ref, int64), k%ival))
   end function index_of
 
   function gcm_contains(m, k) result(yes)
@@ -108,13 +118,11 @@ contains
   ! nil when absent, which is what Clojure's own (get m k) does. A
   ! caller that must tell "absent" from "present and nil" uses
   ! gcm_contains, exactly as `find` exists for that reason in Clojure.
+  ! GENERATED: amg_get (arraymapg's amg-get-refines: arraymap's am-get).
   function gcm_get(m, k) result(v)
     type(gc_value), intent(in) :: m, k
     type(gc_value) :: v
-    integer :: at
-    v = gc_nil()
-    at = index_of(m, k)
-    if (at /= 0) v = gc_vec_get(gc_slot(m, 2), at)
+    v = amg_value(amg_get(hs, int(m%tag, int64), int(m%ref, int64), int(k%tag, int64), int(k%ref, int64), k%ival))
   end function gcm_get
 
   ! Replaces in place when the key is present (same size), appends
@@ -316,5 +324,7 @@ contains
     out(1:size(roots)) = roots
     out(size(roots) + 1) = v
   end function append_root
+
+  include "gen/arraymap_gen.inc"
 
 end module PersistentArrayMap

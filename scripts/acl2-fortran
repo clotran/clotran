@@ -4,7 +4,7 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec|vmtrg] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|arraymapg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec|vmtrg] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
@@ -234,6 +234,32 @@
               "  ! loops push heaprt's rootset (vsg-push-refines, glg-push-refines, push-roots-refines);"
               "  ! each size's spare frames are a stack of at most 8, a give clearing the frame's"
               "  ! words and nothing else (spg-take-refines, spg-give-refines, spg-reset-refines)."]}
+    "arraymapg"
+    {:out "src/f/gen/arraymap_gen.inc" :include true
+     :fns [hpg-ot hpg-or hpg-okd hpg-oi hpg-obj-at amg-voff amg-vlen amg-wt amg-wr amg-wv amg-roff amg-rlen amg-kat
+           amg-w amg-place amg-map amg-index-from amg-index amg-at amg-get]
+     :stobjs {hpg "hs"} :stobj-types {"hs" "amg_heap"}
+     :fields {}
+     :array-names {"hs" ["otag" "oref" "okind" "oi1" "voff" "vlen" "atag" "aref" "aival"]}
+     :prefix {"hs" "h-"}
+     :value-arrays #{}
+     ;; GC.f90's pools, through its accessors, read only
+     :externs {"otag" ["hp_otag" "-" "hp_n_oslot"] "oref" ["hp_oref" "-" "hp_n_oslot"]
+               "okind" ["hp_okind" "-" "hp_n_obj"] "oi1" ["hp_oi1" "-" "hp_n_obj"]
+               "voff" ["hp_voff" "-" "hp_n_vec"] "vlen" ["hp_vlen" "-" "hp_n_vec"]
+               "atag" ["hp_atag" "-" "hp_n_arena"] "aref" ["hp_aref" "-" "hp_n_arena"]
+               "aival" ["hp_aival" "-" "hp_n_arena"]}
+     ;; gc_equal on two values' words (PersistentArrayMap.f90's am_keq)
+     :rt {amg-keq ["am_keq" [:int :int :int :int :int :int] :bool]}
+     :value-formals {} :value-fns #{}
+     :bool-fns #{hpg-obj-at amg-map amg-kat}
+     :header ["  ! GENERATED from model/arraymapg.lisp by scripts/acl2-fortran -b arraymapg. Do not"
+              "  ! edit: change the model, prove it, and generate again. Included in"
+              "  ! PersistentArrayMap.f90's contains part: the array map's reads -- index_of's"
+              "  ! scan, get, the positional reads -- guard-verified, reading GC.f90's pools"
+              "  ! through its accessors and writing nothing. arraymapg.lisp proves each is"
+              "  ! arraymap's on the map the heap holds (amg-index-refines, amg-get-refines,"
+              "  ! amg-contains-refines, amg-at-refines), gc_equal named (amg-keq-ok)."]}
     "anpass"
     {:out "src/f/gen/anpass_gen.inc" :include true
      :fns [anp-nn anp-ch anp-tc anp-hfr anp-get anp-put anp-copy anp-or anp-zero anp-set anp-mark anp-local

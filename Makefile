@@ -386,6 +386,7 @@ $(B)/clotran_ieee.o: $(S)/clotran_ieee$(if $(filter lite,$(IEEE)),_lite).f90 $(B
 $(B)/Printer.o $(B)/LispReader.o $(B)/Eval.o: $(B)/clotran_ieee.o
 $(B)/GC.o: $(B)/BigInt.o $(B)/BigDec.o $(B)/Threads.o $(S)/gen/heap_gen.inc $(S)/gen/heaprt_gen.inc
 $(B)/PersistentVector.o $(B)/PersistentList.o $(B)/PersistentArrayMap.o $(B)/NativeArray.o: $(B)/GC.o
+$(B)/PersistentArrayMap.o: $(S)/gen/arraymap_gen.inc
 $(B)/PersistentHashMap.o $(B)/Env.o: $(B)/GC.o $(B)/PersistentArrayMap.o
 $(B)/Assoc.o: $(B)/GC.o $(B)/PersistentArrayMap.o $(B)/PersistentHashMap.o
 $(B)/Namespace.o: $(B)/GC.o $(B)/Assoc.o $(B)/PersistentVector.o
@@ -1091,7 +1092,7 @@ ifneq ($(ACL2),)
 export ACL2
 endif
 .PHONY: model model-full
-MODEL_BOOKS = boundary seqk vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt heaprtg vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost anlocal anlocal-frames anlocal-proof anlocal-checks anlocal-cost anform anform-proof anform-cost anprim anprim-proof anprim-cost anbuild anbuild-proof anbuild-props anbuild-cost exec-tree exec exec-proof exec-xvs exec-vmcs exec-vmtr exec-vmcall exec-vmlf exec-vm exec-vmok1 exec-vmok exec-vmrun exec-cost exec-clr exec-clrmap exec-clrlv exec-clrfn exec-clrvm vmtrg vmtrcl vmshift
+MODEL_BOOKS = boundary seqk vector string hashseq hashmap btree arraymap casloop envns stm seqlock waits threads vm vm-loop vm-call vm-call-proof vm-stack vm-stack-proof vm-cost vm-call-opt vm-call-opt-proof lazy-cell vm-closure vm-closure-proof vm-closure-correct vm-closure-stack-proof vm-closure-stack-correct vm-closure-cost vm-closure-rooted jit jit-proof jit-correct jit2 jit2-proof jit2-correct jit3 jit3-proof jit3-correct alloc alloc-old pool vmx vmx-proof vmx-cost vmx2 vmx2-proof vmx2-cost vmx2-time vmi vmi-proof vmg vmg-correct vmic vmic-proof vmic-correct vmicg vmf vmf-proof vmfg vmj vmj2 heapg heapg-proof heapsw heapsw-proof heapal heapal-proof heaprn heaprn-proof heap-cost heapsq heapgn heapgn-proof heapmt heapmt-proof heaprt heaprtg arraymapg vmrt vmrt-frame agents agents-drive mainbox lineedit anpass anpass-proof anpass-runs anpass-sound anpass-cost anlocal anlocal-frames anlocal-proof anlocal-checks anlocal-cost anform anform-proof anform-cost anprim anprim-proof anprim-cost anbuild anbuild-proof anbuild-props anbuild-cost exec-tree exec exec-proof exec-xvs exec-vmcs exec-vmtr exec-vmcall exec-vmlf exec-vm exec-vmok1 exec-vmok exec-vmrun exec-cost exec-clr exec-clrmap exec-clrlv exec-clrfn exec-clrvm vmtrg vmtrcl vmshift
 MODEL_CERTS = $(MODEL_BOOKS:%=model/%.cert)
 # A book past CERT_SECS seconds of CPU is killed: a runaway proof, not a
 # slow one (the slowest, vmg, takes ~1940s). CPU, not wall time, so a
@@ -1211,6 +1212,7 @@ gen-vm: model
 	scripts/acl2-fortran -b vmicg
 	scripts/acl2-fortran -b heapg
 	scripts/acl2-fortran -b heaprtg
+	scripts/acl2-fortran -b arraymapg
 	scripts/acl2-fortran -b vmrt
 	scripts/acl2-fortran -b anpass
 	scripts/acl2-fortran -b anlocal
@@ -1251,6 +1253,11 @@ check-vm-gen-run:
 	scripts/fuzz-heaprt-gen -n 300 -s 1
 	scripts/fuzz-heaprt-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-heaprt-gen -n 100 -s 2 -x
+	scripts/acl2-fortran -b arraymapg -o $(B)/arraymap_gen.inc
+	@cmp -s $(B)/arraymap_gen.inc src/f/gen/arraymap_gen.inc || { echo "src/f/gen/arraymap_gen.inc is not what model/arraymapg.lisp generates: make gen-vm"; exit 1; }
+	scripts/fuzz-amg-gen -n 300 -s 1
+	scripts/fuzz-amg-gen -n 100 -s 2 --fc flang
+	scripts/fuzz-amg-gen -n 100 -s 2 -x
 	scripts/acl2-fortran -b vmrt -o $(B)/vmrt_gen.inc
 	@cmp -s $(B)/vmrt_gen.inc src/f/gen/vmrt_gen.inc || { echo "src/f/gen/vmrt_gen.inc is not what model/vmrt.lisp generates: make gen-vm"; exit 1; }
 	scripts/fuzz-vmrt-gen -n 300 -s 1

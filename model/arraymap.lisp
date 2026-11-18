@@ -38,7 +38,10 @@
 ;              1 step, where walking the chain is its length + 1
 ;
 ; Not modelled: the rooting (the roots(:) lists), and the heap's objects
-; -- a run is the list it holds.
+; -- a run is the list it holds. The reads -- index_of, gcm_get,
+; gcm_contains, gcm_key_at, gcm_val_at -- are GENERATED from
+; model/arraymapg.lisp, which reads the map off GC.f90's pools and proves
+; it answers am-index, am-get, am-contains and the i-th key and value here.
 
 (in-package "ACL2")
 
