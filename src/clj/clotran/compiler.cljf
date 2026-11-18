@@ -1615,9 +1615,14 @@ end module clotran_rt_decl
           (reduce (fn [[bs st] [ar pv]]
                     (let [[c st] (arity-code ar pv st)] [(conj bs [ar c]) st]))
                   [[] st0] (map vector arities pvecs)))
-        single? (and (= 1 (count arities)) (not (nth (first arities) 1)))
-        fixed (remove (fn [[ar _]] (nth ar 1)) branches)
-        varg (first (filter (fn [[ar _]] (nth ar 1)) branches))
+        ;; THE ARITY CHOICE IS GENERATED: clotran-aot-arity is model/aot.lisp's
+        ;; aot-arreg, aot-arvr and aot-arnf's walk -- what the procedure is
+        ;; registered with, its variadic arity, its fixed ones in the order
+        ;; tested -- and aot-ar-proof.lisp proves the pick is exec's (ex-arity)
+        [reg var & fixed-ix] (clotran-aot-arity (mapv (fn [[n v]] [n (boolean v)]) arities))
+        single? (>= reg 0)
+        fixed (map branches fixed-ix)
+        varg (when (>= var 0) (nth branches var))
         indent #(map (fn [l] (str "   " l)) %)
         body (if single?
                (second (first branches))
@@ -1636,9 +1641,7 @@ end module clotran_rt_decl
     ;; a variadic fn's required arity rides along as -(req + 2), so apply
     ;; can hand it the rest unrealised (Eval.f90, B_APPLY); -1 is several
     ;; fixed arities, checked here
-    {:arity (if single?
-              (first (first arities))
-              (if-let [req (some #(when (nth % 1) (first %)) arities)] (- (+ req 2)) -1))
+    {:arity reg
      :inners (:inners st [])
      :who who
      :symbol sym

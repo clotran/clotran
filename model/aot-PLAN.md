@@ -41,8 +41,8 @@ answers -- the vmic-correct shape -- is the end statement (slice 4).
 
 Generated (scripts/acl2-fortran, Fortran called from cljf through a
 builtin): decision procedures over the OBJ_AST -- the eligibility scan
-(slice 1), the type inference (slice 2), the arity/version choice
-(slice 3). Named host glue, hand-written: the reads (anpass's `ast_*`
+(slice 1), the type inference (slice 2), the arity choice (slice 3; the
+version choice is modelled and proved but stays cljf). Named host glue, hand-written: the reads (anpass's `ast_*`
 shims, plus a fn's arity bodies `aot_nbods`/`aot_bod`), the builtin that
 calls a generated procedure, the cljf's map plumbing, the Fortran text
 itself (strings; slice 4 would model its meaning, not generate cljf).
@@ -136,10 +136,65 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      (aot-opof) assumes the core Var is not redefined -- a runtime assumption, kept. A-OP
      is the spec of the core ops (aot-optab against what +, aget, Math/... answer); it is
      not reducible to the reads and stays the one semantic assumption.
-3. ARITY/VERSION CHOICE -- proved to pick ex-tr's arity (exec's arfit).
+3. ARITY/VERSION CHOICE -- model/aot.lisp's aot-arreg, aot-arnf, aot-arvr (fn-procedure's
+   registration and pick), GENERATED into aot_gen.inc and answered by the builtin
+   `clotran-aot-arity` (analyze.inc's aot_arity: the arities [nfixed variadic?] loaded into
+   tv/rc, answered [reg var fixed...]); fn-procedure's hand-written single?/fixed/varg/:arity
+   are deleted. PROVED (model/aot-ar-proof.lisp, lane 3t):
+   - aot-arrun-is-ex-arity: aot-arrun (what a call of m arguments runs -- for reg >= 0 the
+     caller's count check, Eval.f90's call_compiled; else the procedure's chain, the fixed
+     arities by nargs == count in aot-arnf's walk, then the first variadic by nargs >= count,
+     else the arity error) is exec's ex-arity (bind_closure's two ex-arfit passes): an arity
+     exactly when exec has one, and the same one. HYPOTHESES: aot-arok (the stobj holds the
+     template's arities: count and variadic flag in order; a count past 40 bits is read as 0
+     and fails it) and aot-ar1v (at most one variadic -- clj's FnExpr refuses a second, so
+     the analyzer never builds one); m natural.
+   - THE VERSION CHOICE, modelled as arity-code's guards run it: aot-vsel (versions tried in
+     order, the first whose guard passes -- aot-hguard, each hinted slot's value fitting its
+     code: clotran_tag 2/3, an array view of kind 1/2 -- else the untyped body). aot-vsel-ffr:
+     the frame then fits the env the chosen body was typed in (aot-henv: the version's codes,
+     the rest any), which is aot-ty-sound-m's frame hypothesis, so aot-version-sound: the
+     chosen body's ex-ev value has the type aot-ty gives it. NOT generated: versions,
+     param-hints, array-params and guard-code stay hand-written cljf, the model stating what
+     they decide; that they decide it is checked only by compiler-check's hinted and
+     speculated-array cases (compiled against interpreted), not by the model. The guard's tag test IS aot-fits only through
+     aot-tag (a stub: the same reading of a value's tag A-CONST makes).
+   - COST: aot-arnf-cost, aot-arvr-cost (at most n - i + 1 calls each; the glue's walk calls
+     aot-arnf once per fixed arity and once more).
+   - fuzz-aot-gen: random arity sets (counts out of range, rc neither 0 nor 1) through the
+     generated aot_arreg/aot_arnf/aot_arvr against ACL2's at every index; -x flips arity 0's
+     variadic flag and the answers part ("arity" kind).
+   - NOT PROVED here: that the arity's body then runs in exec's frame (ex-write of the
+     arguments, the rest list) -- that is emission, slice 4 -- and that the template the
+     cljf reads is the one exec runs (the same analyzer tree; assumed, as in slice 2).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
-   then may the row be Modeled.
+   then may the row be Modeled. DESIGN (lane 3t, not started):
+   - THE IR (model/aot-ir.lisp): what gen's statements do, not their spelling. A program is a
+     list of instructions over a state (frame fr, boxed temporaries bt, typed temporaries tt,
+     the recur flag, an error): (:get d s) (:put s d) (:const d c) (:box d t x) (:unbox x t d),
+     (:prim op x a b) with its overflow test, (:if c then else), (:loop flag body),
+     (:recur starts..) (writes the slots, sets the flag), (:call d head args) (the callee by
+     ex-arity, slice 3), (:hatch d node) -- the escape: the node handed whole to the
+     interpreter, its meaning ex-ev's by definition. aot-ir-run: the meaning, with fuel, cost
+     theorem by counting as vm-cost does.
+   - THE COMPILE (aot-cc e env -> IR), one case per kind gen emits, reading the types aot-ty
+     gives (slice 2): a node typed long/double/bool goes to tt, any to bt; a typed op the
+     inline prim with the overflow branch to :hatch; the rest boxed.
+   - THE THEOREM, vmic-correct's shape: on aot-sub's subset, aot-ty ok, the frame fitting the
+     env (aot-ffr) -- for the fn's entry, aot-version-sound's env -- aot-ir-run of aot-cc e
+     answers ex-ev's value and frame (boxed: equal; typed: equal after :box), a recur as
+     ex-ev's recur event. One lemma per kind, the aot-ind induction slice 2 built.
+   - THE ENTRY: the arguments into the frame (ex-write, the rest list nil or the seq) after
+     slice 3's pick, and the body as the flag loop; tying aot-arrun to ex-ev's :call case
+     closes the gap slice 3 names.
+   - CHECKED ARTIFACT: the generator returns integers, not lists, so the cljf keeps building
+     the IR, as data now (gen answers IR, a printer writes the Fortran). fuzz-aot-gen grows a
+     third part: random typed trees, the cljf's IR (through clotran) against ACL2's aot-cc,
+     -x a dropped overflow branch. The printer is named glue: one Fortran template per
+     instruction, read in review.
+   - Order: 4a const local var if do let (boxed); 4b loop recur; 4c typed temps and prims with
+     the hatch (A-OP enters here); 4d calls and closures; 4e the entry and versions.
 5. purefort's candidates/versions/can-fail, the same way.
 
 The Owed row stays Owed until slice 4; slice 1 is its own Generated row.
