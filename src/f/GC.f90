@@ -803,6 +803,8 @@ module GC
   ! the pools as the VM runtime's generated reads see them (src/f/gen/vmrt_gen.inc)
   public :: hp_otag, hp_oref, hp_n_oslot, hp_okind, hp_oi1, hp_n_obj, hp_voff, hp_vlen, hp_n_vec
   public :: hp_atag, hp_aref, hp_aival, hp_n_arena, hp_oival, hp_oi2, gc_word_at
+  ! the arena's words, written by the array map's generated edits (src/f/gen/arraymap_gen.inc)
+  public :: hp_set_atag, hp_set_aref, hp_set_aival
   ! the vector store itself, for the executor's register reads and writes
   ! inline (flat.inc reg_get, reg_set): a call each was a tenth of a call
   public :: vec_pool, vec_store, vec_mark, vec_rem, gc_reg_barrier

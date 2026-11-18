@@ -33,6 +33,27 @@
 ;   amg-at-refines     key_at and val_at hold the i-th key and value
 ;   amg-index-cost     the scan compares at most count keys, a turn each
 ;
+; THE EDITS (generated too): gcm_assoc's and gcm_dissoc's writes into the
+; runs they allocate -- copy_run's loop and dissoc's close-up (amg-copy), the
+; swap (amg-mv), the value set or the pair appended (amg-put) -- as
+; amg-assoc-fill and amg-dissoc-fill. The allocation stays the shim's
+; (gc_vec, gc_obj, gc_set_i1), and so does the generational barrier: the
+; shim remembers a new run the collector has marked old once its words are
+; written (amg_barrier, the per-word check gc_vec_set makes, after the
+; fact). Theorems:
+;   amg-assoc-fill-refines  the runs written, with the count, are arraymap's
+;                           am-assoc of the map the heap holds
+;   amg-dissoc-fill-refines likewise am-dissoc, swap or not
+;   amg-assoc-cost          index_of's steps and the writes are am-assoc-steps
+;   amg-dissoc-cost         ... at most am-dissoc-steps
+; Named, under them: AMG-FRESH, what gc_vec answers -- each new run as
+; long as the map will be, inside the arena, apart from the other new run
+; and from the map's own runs; that allocating (and any collection it runs)
+; keeps what the rooted map means, so the index found before (`at`) is
+; am-index after; the count non-negative and below 2^40 - 1; no other
+; thread writes the runs between gc_vec and gc_obj (they are not yet
+; reachable).
+;
 ; Named, outside the model: the count is a default integer (gc_i1), so
 ; below 2^40 (the theorems' hypothesis; the scan stops there); every
 ; arena word read is inside the arena (the shim's accessors are
@@ -282,3 +303,413 @@
                   :use ((:instance amg-index-refines)
                         (:instance amg-index-le)
                         (:instance amg-at-refines (i (amg-index tag ref kt kr kv hpg)))))))
+
+; ---- EDITS (generated) -------------------------------------------------------------------
+
+; an arena word the edits may write: inside every one of the word's three arrays
+(defun amg-in (w hpg)
+  (declare (xargs :stobjs hpg :guard (sb64p w)))
+  (and (< 0 w) (< w (h-atag-length hpg)) (< w (h-aref-length hpg)) (< w (h-aival-length hpg))))
+
+; gc_vec_set without the barrier: the run's element i (0-based) the words (wt wr wv)
+(defun amg-put (off len i wt wr wv hpg)
+  (declare (xargs :stobjs hpg :guard (and (sb64p off) (sb64p len) (natp i) (< i *hb40*) (sb64p wt) (sb64p wr) (sb64p wv))))
+  (let ((w (amg-w off len i)))
+    (if (amg-in w hpg)
+        (let* ((hpg (update-h-atagi w wt hpg))
+               (hpg (update-h-arefi w wr hpg))
+               (hpg (update-h-aivali w wv hpg)))
+          hpg)
+      hpg)))
+
+; the destination's element i the source's element j (what gc_vec_get answers)
+(defun amg-mv (soff slen j doff dlen i hpg)
+  (declare (xargs :stobjs hpg :guard (and (sb64p soff) (sb64p slen) (natp j) (< j *hb40*)
+                                          (sb64p doff) (sb64p dlen) (natp i) (< i *hb40*))))
+  (let ((w (amg-w soff slen j)))
+    (amg-put doff dlen i (amg-wt w hpg) (amg-wr w hpg) (amg-wv w hpg) hpg)))
+
+; copy_run's loop (d 0) and dissoc's close-up (d 1): the destination's
+; elements i .. n-1 the source's i+d
+(defun amg-copy (soff slen doff dlen d i n hpg)
+  (declare (xargs :stobjs hpg
+                  :guard (and (sb64p soff) (sb64p slen) (sb64p doff) (sb64p dlen) (sb64p d) (natp i) (sb64p n))
+                  :measure (nfix (- *hb40* (nfix i)))))
+  (if (and (natp i) (< i n) (< n *hb40*) (or (equal d 0) (equal d 1)))
+      (let ((hpg (amg-mv soff slen (+ i d) doff dlen i hpg)))
+        (amg-copy soff slen doff dlen d (+ 1 i) n hpg))
+    hpg))
+
+; gcm_assoc's writes into the fresh runs kq (keys) and vq (values), each
+; n long (k present at at) or n + 1 (absent, at 0): both runs copied, then
+; the value set in place, or the pair appended
+(defun amg-assoc-w (ko kl vo vl nko nkl nvo nvl n at kt kr kv vt vr vv hpg)
+  (declare (xargs :stobjs hpg :guard (and (sb64p ko) (sb64p kl) (sb64p vo) (sb64p vl) (sb64p nko) (sb64p nkl)
+                                          (sb64p nvo) (sb64p nvl) (natp n) (< (+ 1 n) *hb40*) (sb64p at)
+                                          (sb64p kt) (sb64p kr) (sb64p kv) (sb64p vt) (sb64p vr) (sb64p vv))))
+  (let* ((hpg (amg-copy ko kl nko nkl 0 0 n hpg))
+         (hpg (amg-copy vo vl nvo nvl 0 0 n hpg)))
+    (if (equal at 0)
+        (let ((hpg (amg-put nko nkl n kt kr kv hpg)))
+          (amg-put nvo nvl n vt vr vv hpg))
+      (if (and (< 0 at) (<= at n))
+          (amg-put nvo nvl (- at 1) vt vr vv hpg)
+        hpg))))
+
+(defun amg-assoc-fill (ref at kt kr kv vt vr vv kq vq hpg)
+  (declare (xargs :stobjs hpg :guard (and (sb64p ref) (sb64p at) (sb64p kt) (sb64p kr) (sb64p kv)
+                                          (sb64p vt) (sb64p vr) (sb64p vv) (sb64p kq) (sb64p vq))))
+  (let ((n (hpg-oi ref hpg)) (s (* 5 ref)))
+    (if (and (<= 0 ref) (< ref *hb40*) (<= 0 n) (< (+ 1 n) *hb40*))
+        (amg-assoc-w (amg-roff s hpg) (amg-rlen s hpg) (amg-roff (+ 1 s) hpg) (amg-rlen (+ 1 s) hpg)
+                     (amg-voff kq hpg) (amg-vlen kq hpg) (amg-voff vq hpg) (amg-vlen vq hpg)
+                     n at kt kr kv vt vr vv hpg)
+      hpg)))
+
+; gcm_dissoc's writes into the fresh runs kq and vq, each n - 1 long, k at
+; at (/= 0): n - 1 of each copied, then the last entry into the hole (swap)
+; or the entries after the hole moved up one, in order
+(defun amg-dissoc-w (ko kl vo vl nko nkl nvo nvl n at sw hpg)
+  (declare (xargs :stobjs hpg :guard (and (sb64p ko) (sb64p kl) (sb64p vo) (sb64p vl) (sb64p nko) (sb64p nkl)
+                                          (sb64p nvo) (sb64p nvl) (natp n) (< (+ 1 n) *hb40*) (natp at) (< 0 at) (<= at n)
+                                          (sb64p sw))))
+  (let* ((hpg (amg-copy ko kl nko nkl 0 0 (- n 1) hpg))
+         (hpg (amg-copy vo vl nvo nvl 0 0 (- n 1) hpg)))
+    (if (not (equal sw 0))
+        (if (equal at n) hpg
+          (let ((hpg (amg-mv ko kl (- n 1) nko nkl (- at 1) hpg)))
+            (amg-mv vo vl (- n 1) nvo nvl (- at 1) hpg)))
+      (let ((hpg (amg-copy ko kl nko nkl 1 (- at 1) (- n 1) hpg)))
+        (amg-copy vo vl nvo nvl 1 (- at 1) (- n 1) hpg)))))
+
+(defun amg-dissoc-fill (ref at sw kq vq hpg)
+  (declare (xargs :stobjs hpg :guard (and (sb64p ref) (sb64p at) (sb64p sw) (sb64p kq) (sb64p vq))))
+  (let ((n (hpg-oi ref hpg)) (s (* 5 ref)))
+    (if (and (<= 0 ref) (< ref *hb40*) (< 0 at) (<= at n) (< (+ 1 n) *hb40*))
+        (amg-dissoc-w (amg-roff s hpg) (amg-rlen s hpg) (amg-roff (+ 1 s) hpg) (amg-rlen (+ 1 s) hpg)
+                      (amg-voff kq hpg) (amg-vlen kq hpg) (amg-voff vq hpg) (amg-vlen vq hpg)
+                      n at sw hpg)
+      hpg)))
+
+; ---- THE EDITS' FRAME ----------------------------------------------------------------------
+
+(defthm amg-put-frame
+  (and (equal (amg-voff j (amg-put off len i wt wr wv hpg)) (amg-voff j hpg))
+       (equal (amg-vlen j (amg-put off len i wt wr wv hpg)) (amg-vlen j hpg))
+       (equal (hpg-ot j (amg-put off len i wt wr wv hpg)) (hpg-ot j hpg))
+       (equal (hpg-or j (amg-put off len i wt wr wv hpg)) (hpg-or j hpg))
+       (equal (hpg-oi j (amg-put off len i wt wr wv hpg)) (hpg-oi j hpg))
+       (equal (hpg-okd j (amg-put off len i wt wr wv hpg)) (hpg-okd j hpg))
+       (equal (amg-in j (amg-put off len i wt wr wv hpg)) (amg-in j hpg)))
+  :hints (("Goal" :in-theory (enable amg-voff amg-vlen hpg-ot hpg-or hpg-oi hpg-okd))))
+
+(defthm amg-put-wmean
+  (implies (integerp x)
+           (equal (amg-wmean x (amg-put off len i wt wr wv hpg))
+                  (if (and (equal x (amg-w off len i)) (amg-in x hpg))
+                      (amg-mean wt wr wv)
+                    (amg-wmean x hpg))))
+  :hints (("Goal" :in-theory (enable amg-wmean amg-wt amg-wr amg-wv))))
+
+(in-theory (disable amg-put amg-in))
+
+
+(defthm amg-wmean-words (equal (amg-mean (amg-wt w hpg) (amg-wr w hpg) (amg-wv w hpg)) (amg-wmean w hpg))
+  :hints (("Goal" :in-theory (enable amg-wmean))))
+
+; a run disjoint from the written one reads as it did
+(defthm amg-run-put-other
+  (implies (and (integerp off) (integerp len) (integerp doff) (integerp dlen) (natp j)
+                (or (<= (+ off len) doff) (<= (+ doff dlen) off)))
+           (equal (amg-run off len i n (amg-put doff dlen j wt wr wv hpg))
+                  (amg-run off len i n hpg)))
+  :hints (("Goal" :induct (amg-run off len i n hpg) :in-theory (enable amg-in amg-run))))
+
+(defthm amg-w-int (implies (and (integerp off) (integerp i)) (integerp (amg-w off len i))) :rule-classes :type-prescription)
+
+; two elements' words are one word only when both are nil's
+(defthm amg-w-inj
+  (implies (and (integerp off) (natp i) (natp j))
+           (equal (equal (amg-w off len i) (amg-w off len j))
+                  (or (equal i j) (and (equal (amg-w off len i) -1) (equal (amg-w off len j) -1))))))
+
+(defthm amg-in-neg (implies (<= w 0) (not (amg-in w hpg))) :hints (("Goal" :in-theory (enable amg-in))))
+
+; a write below the elements read leaves them
+(defthm amg-run-put-below
+  (implies (and (natp i) (natp j) (integerp off) (< j i))
+           (equal (amg-run off len i n (amg-put off len j wt wr wv hpg))
+                  (amg-run off len i n hpg)))
+  :hints (("Goal" :induct (amg-run off len i n hpg) :in-theory (enable amg-run amg-in))))
+
+; the written run: its element j the words written
+(defthm amg-run-put-same
+  (implies (and (natp i) (natp j) (integerp n) (integerp off) (<= i j) (< j n) (amg-in (amg-w off len j) hpg))
+           (equal (amg-run off len i n (amg-put off len j wt wr wv hpg))
+                  (update-nth (- j i) (amg-mean wt wr wv) (amg-run off len i n hpg))))
+  :hints (("Goal" :induct (amg-run off len i n hpg) :in-theory (e/d (amg-run) (amg-w)))))
+
+; a run every element of which is an arena word the edits may write
+(defun amg-run-in (off len hpg)
+  (declare (xargs :stobjs hpg :verify-guards nil))
+  (and (integerp off) (< 0 off) (< off *hb40*) (natp len)
+       (<= (+ off len) (h-atag-length hpg)) (<= (+ off len) (h-aref-length hpg)) (<= (+ off len) (h-aival-length hpg))))
+
+(defthm amg-run-in-w
+  (implies (and (amg-run-in off len hpg) (natp i) (< i len)) (amg-in (amg-w off len i) hpg))
+  :hints (("Goal" :in-theory (enable amg-in))))
+
+(defthm amg-put-run-in
+  (equal (amg-run-in off len (amg-put doff dlen i wt wr wv hpg)) (amg-run-in off len hpg))
+  :hints (("Goal" :in-theory (enable amg-put amg-in))))
+(defthm amg-run-in-fc
+  (implies (amg-run-in off len hpg) (and (integerp off) (< 0 off) (< off *hb40*) (natp len)))
+  :rule-classes :forward-chaining :hints (("Goal" :in-theory (enable amg-run-in))))
+(in-theory (disable amg-run-in))
+
+; ---- THE LOOP, AS A LIST -------------------------------------------------------------------
+
+; amg-copy on the runs as arraymap's lists: new's elements i .. n-1 old's i+d
+(defun amg-cpl (d i n new old)
+  (declare (xargs :measure (nfix (- (ifix n) (nfix i)))))
+  (if (and (natp i) (integerp n) (< i n))
+      (amg-cpl d (+ 1 i) n (update-nth i (nth (+ i (nfix d)) old) new) old)
+    new))
+
+(defthm amg-copy-frame
+  (and (equal (amg-voff j (amg-copy soff slen doff dlen d i n hpg)) (amg-voff j hpg))
+       (equal (amg-vlen j (amg-copy soff slen doff dlen d i n hpg)) (amg-vlen j hpg))
+       (equal (hpg-ot j (amg-copy soff slen doff dlen d i n hpg)) (hpg-ot j hpg))
+       (equal (hpg-or j (amg-copy soff slen doff dlen d i n hpg)) (hpg-or j hpg))
+       (equal (hpg-oi j (amg-copy soff slen doff dlen d i n hpg)) (hpg-oi j hpg))
+       (equal (hpg-okd j (amg-copy soff slen doff dlen d i n hpg)) (hpg-okd j hpg))
+       (equal (amg-run-in off len (amg-copy soff slen doff dlen d i n hpg)) (amg-run-in off len hpg))))
+
+; a run disjoint from the destination reads as it did
+(defthm amg-run-copy-other
+  (implies (and (integerp off) (integerp len) (integerp doff) (integerp dlen)
+                (or (<= (+ off len) doff) (<= (+ doff dlen) off)))
+           (equal (amg-run off len k m (amg-copy soff slen doff dlen d i n hpg))
+                  (amg-run off len k m hpg))))
+
+(defthm amg-run-copy
+  (implies (and (integerp soff) (integerp slen) (amg-run-in doff dlen hpg)
+                (or (<= (+ soff slen) doff) (<= (+ doff dlen) soff))
+                (natp i) (integerp n) (natp m) (<= n m) (<= m dlen) (< n *hb40*)
+                (or (equal d 0) (equal d 1)))
+           (equal (amg-run doff dlen 0 m (amg-copy soff slen doff dlen d i n hpg))
+                  (amg-cpl d i n (amg-run doff dlen 0 m hpg) (amg-run soff slen 0 (+ n d) hpg))))
+  :hints (("Goal" :induct (amg-copy soff slen doff dlen d i n hpg) :in-theory (disable amg-w))))
+
+(defthm amg-cpl-nth
+  (implies (and (natp k) (natp i) (natp d))
+           (equal (nth k (amg-cpl d i n new old))
+                  (if (and (<= i k) (integerp n) (< k n)) (nth (+ k d) old) (nth k new)))))
+
+(defthm amg-cpl-len
+  (implies (and (natp i) (<= (ifix n) (len new))) (equal (len (amg-cpl d i n new old)) (len new))))
+
+(defthm amg-cpl-true-listp
+  (implies (true-listp new) (true-listp (amg-cpl d i n new old))))
+
+; two true lists as long as each other, equal where they first differ, are equal
+(defun amg-nd (a b)
+  (if (or (atom a) (atom b)) 0 (if (equal (car a) (car b)) (+ 1 (amg-nd (cdr a) (cdr b))) 0)))
+
+(defthm amg-nth-equal
+  (implies (and (true-listp a) (true-listp b) (equal (len a) (len b))
+                (equal (nth (amg-nd a b) a) (nth (amg-nd a b) b)))
+           (equal a b))
+  :rule-classes nil)
+
+(defthm amg-nth-past (implies (<= (len l) (nfix k)) (equal (nth k l) nil)))
+(defthm amg-nd-natp (natp (amg-nd a b)) :rule-classes :type-prescription)
+
+; copy_run: the first p of old, into a run p long
+(defthm amg-cpl-take
+  (implies (and (true-listp x) (natp p) (equal (len x) p))
+           (equal (amg-cpl 0 0 p x l) (am-take p l)))
+  :hints (("Goal" :use ((:instance amg-nth-equal (a (amg-cpl 0 0 p x l)) (b (am-take p l))))
+                  :in-theory (disable amg-cpl amg-nd))))
+
+(defthm amg-take-all (implies (and (true-listp l) (equal (len l) p)) (equal (am-take p l) l)))
+
+; copy_run into a run one longer, the pair appended
+(defthm amg-update-nth-append-end
+  (implies (and (true-listp l) (equal (len l) n))
+           (equal (update-nth n k (append l (list y))) (append l (list k)))))
+
+(defthm amg-cpl-append
+  (implies (and (true-listp x) (natp n) (equal (len x) (+ 1 n)))
+           (equal (update-nth n k (amg-cpl 0 0 n x l)) (append (am-take n l) (list k))))
+  :hints (("Goal" :use ((:instance amg-nth-equal (a (update-nth n k (amg-cpl 0 0 n x l))) (b (append (am-take n l) (list k)))))
+                  :in-theory (disable amg-cpl amg-nd))))
+
+; dissoc's close-up is arraymap's shift-loop
+(defthm amg-cpl-shift
+  (implies (posp at) (equal (amg-cpl 1 (- at 1) (- n 1) new old) (shift-loop at n new old)))
+  :hints (("Goal" :induct (shift-loop at n new old))))
+
+; ---- THE ALLOCATION (the shim's, named) ------------------------------------------------------
+
+(defun amg-disj (a al b bl) (or (<= (+ a al) b) (<= (+ b bl) a)))
+
+; what gc_vec answers, twice, for the map's new runs kq and vq: each n2 long,
+; inside the arena, apart from each other and from the map's own runs
+(defun amg-fresh (ref kq vq n2 hpg)
+  (declare (xargs :stobjs hpg :verify-guards nil))
+  (let* ((s (* 5 ref))
+         (ko (amg-roff s hpg)) (kl (amg-rlen s hpg))
+         (vo (amg-roff (+ 1 s) hpg)) (vl (amg-rlen (+ 1 s) hpg))
+         (nko (amg-voff kq hpg)) (nkl (amg-vlen kq hpg))
+         (nvo (amg-voff vq hpg)) (nvl (amg-vlen vq hpg)))
+    (and (amg-run-in nko nkl hpg) (amg-run-in nvo nvl hpg) (equal nkl n2) (equal nvl n2)
+         (amg-disj nko nkl nvo nvl)
+         (amg-disj ko kl nko nkl) (amg-disj ko kl nvo nvl)
+         (amg-disj vo vl nko nkl) (amg-disj vo vl nvo nvl))))
+
+; the map gc_obj builds of the runs kq and vq, its count n2
+(defun amg-new-abs (n2 kq vq hpg)
+  (declare (xargs :stobjs hpg :verify-guards nil))
+  (am-make n2 (amg-run (amg-voff kq hpg) (amg-vlen kq hpg) 0 n2 hpg)
+           (amg-run (amg-voff vq hpg) (amg-vlen vq hpg) 0 n2 hpg)))
+
+(defthm amg-roff-int (implies (hpgp hpg) (integerp (amg-roff s hpg))) :rule-classes :type-prescription)
+(defthm amg-rlen-int (implies (hpgp hpg) (integerp (amg-rlen s hpg))) :rule-classes :type-prescription)
+
+(defthm amg-run-empty (implies (<= (ifix n) (nfix i)) (equal (amg-run off len i n hpg) nil)) :hints (("Goal" :in-theory (enable amg-run))))
+(defun amg-take-ind (p i) (if (zp p) i (amg-take-ind (- p 1) (+ 1 i))))
+(defthm amg-take-run
+  (implies (and (natp p) (natp i) (integerp q) (<= (+ i p) q))
+           (equal (am-take p (amg-run off len i q hpg)) (amg-run off len i (+ i p) hpg)))
+  :hints (("Goal" :induct (amg-take-ind p i) :in-theory (enable amg-run) :expand ((amg-run off len i q hpg) (amg-run off len i (+ i p) hpg)))))
+
+(defthm amg-run-true-listp (true-listp (amg-run off len i n hpg)) :hints (("Goal" :in-theory (enable amg-run))))
+
+; ---- REFINEMENT (the edits) -----------------------------------------------------------------
+
+(defthm amg-assoc-w-runs
+  (implies (and (integerp ko) (integerp kl) (integerp vo) (integerp vl) (natp n) (< (+ 1 n) *hb40*)
+                (amg-run-in nko nkl hpg) (amg-run-in nvo nvl hpg)
+                (equal nkl (if (equal at 0) (+ 1 n) n)) (equal nvl (if (equal at 0) (+ 1 n) n))
+                (or (equal at 0) (and (posp at) (<= at n)))
+                (amg-disj nko nkl nvo nvl) (amg-disj ko kl nko nkl) (amg-disj ko kl nvo nvl)
+                (amg-disj vo vl nko nkl) (amg-disj vo vl nvo nvl))
+           (let ((h2 (amg-assoc-w ko kl vo vl nko nkl nvo nvl n at kt kr kv vt vr vv hpg)))
+             (and (equal (amg-run nko nkl 0 nkl h2)
+                         (if (equal at 0) (append (amg-run ko kl 0 n hpg) (list (amg-mean kt kr kv)))
+                           (amg-run ko kl 0 n hpg)))
+                  (equal (amg-run nvo nvl 0 nvl h2)
+                         (if (equal at 0) (append (amg-run vo vl 0 n hpg) (list (amg-mean vt vr vv)))
+                           (update-nth (- at 1) (amg-mean vt vr vv) (amg-run vo vl 0 n hpg)))))))
+  :hints (("Goal" :in-theory (disable amg-w amg-cpl amg-copy amg-put))))
+
+(defthm amg-wmean-put-other
+  (implies (and (integerp off) (integerp len) (integerp doff) (integerp dlen) (natp j) (natp i) (amg-disj off len doff dlen))
+           (equal (amg-wmean (amg-w off len j) (amg-put doff dlen i wt wr wv hpg)) (amg-wmean (amg-w off len j) hpg)))
+  :hints (("Goal" :in-theory (enable amg-in))))
+
+(defthm amg-wmean-copy-other
+  (implies (and (integerp off) (integerp len) (integerp doff) (integerp dlen) (natp j) (amg-disj off len doff dlen))
+           (equal (amg-wmean (amg-w off len j) (amg-copy soff slen doff dlen d i n hpg)) (amg-wmean (amg-w off len j) hpg)))
+  :hints (("Goal" :induct (amg-copy soff slen doff dlen d i n hpg) :in-theory (disable amg-w amg-disj))))
+
+(defthm amg-dissoc-w-runs
+  (implies (and (integerp ko) (integerp kl) (integerp vo) (integerp vl) (natp n) (< (+ 1 n) *hb40*)
+                (posp at) (<= at n)
+                (amg-run-in nko nkl hpg) (amg-run-in nvo nvl hpg)
+                (equal nkl (- n 1)) (equal nvl (- n 1))
+                (amg-disj nko nkl nvo nvl) (amg-disj ko kl nko nkl) (amg-disj ko kl nvo nvl)
+                (amg-disj vo vl nko nkl) (amg-disj vo vl nvo nvl))
+           (let ((h2 (amg-dissoc-w ko kl vo vl nko nkl nvo nvl n at sw hpg)))
+             (and (equal (amg-run nko nkl 0 nkl h2)
+                         (if (not (equal sw 0)) (swap-fill at n (amg-run ko kl 0 n hpg))
+                           (shift-loop at n (am-take (- n 1) (amg-run ko kl 0 n hpg)) (amg-run ko kl 0 n hpg))))
+                  (equal (amg-run nvo nvl 0 nvl h2)
+                         (if (not (equal sw 0)) (swap-fill at n (amg-run vo vl 0 n hpg))
+                           (shift-loop at n (am-take (- n 1) (amg-run vo vl 0 n hpg)) (amg-run vo vl 0 n hpg)))))))
+  :hints (("Goal" :in-theory (e/d (swap-fill) (amg-w amg-cpl amg-copy amg-put shift-loop shift-loop-is remove-at-is-rm-pos shift-loop-rm-pos swap-fill-last)))))
+
+(defthm amg-w-frame
+  (and (equal (amg-voff j (amg-assoc-w ko kl vo vl nko nkl nvo nvl n at kt kr kv vt vr vv hpg)) (amg-voff j hpg))
+       (equal (amg-vlen j (amg-assoc-w ko kl vo vl nko nkl nvo nvl n at kt kr kv vt vr vv hpg)) (amg-vlen j hpg))
+       (equal (amg-voff j (amg-dissoc-w ko kl vo vl nko nkl nvo nvl n at sw hpg)) (amg-voff j hpg))
+       (equal (amg-vlen j (amg-dissoc-w ko kl vo vl nko nkl nvo nvl n at sw hpg)) (amg-vlen j hpg)))
+  :hints (("Goal" :in-theory (disable amg-copy amg-put))))
+
+(defthm amg-index-abs-range
+  (implies (and (natp n) (equal (len ks) n))
+           (or (equal (am-index-from ks k 1) 0)
+               (and (posp (am-index-from ks k 1)) (<= (am-index-from ks k 1) n))))
+  :rule-classes nil
+  :hints (("Goal" :use ((:instance am-index-from-range (i 1)) (:instance am-index-from-member (i 1))))))
+
+(defthm amg-assoc-fill-refines
+  (implies (and (hpgp hpg) (integerp ref) (amg-map tag ref hpg)
+                (<= 0 (hpg-oi ref hpg)) (< (+ 1 (hpg-oi ref hpg)) *hb40*)
+                (equal at (am-index (amg-abs ref hpg) (amg-mean kt kr kv)))
+                (amg-fresh ref kq vq (if (equal at 0) (+ 1 (hpg-oi ref hpg)) (hpg-oi ref hpg)) hpg))
+           (equal (amg-new-abs (if (equal at 0) (+ 1 (hpg-oi ref hpg)) (hpg-oi ref hpg)) kq vq
+                               (amg-assoc-fill ref at kt kr kv vt vr vv kq vq hpg))
+                  (am-assoc (amg-abs ref hpg) (amg-mean kt kr kv) (amg-mean vt vr vv))))
+  :hints (("Goal" :in-theory (e/d (am-assoc) (amg-assoc-w amg-assoc-w-runs amg-roff amg-rlen amg-run-in amg-disj am-index-from))
+                  :use ((:instance amg-assoc-w-runs
+                                   (ko (amg-roff (* 5 ref) hpg)) (kl (amg-rlen (* 5 ref) hpg))
+                                   (vo (amg-roff (+ 1 (* 5 ref)) hpg)) (vl (amg-rlen (+ 1 (* 5 ref)) hpg))
+                                   (nko (amg-voff kq hpg)) (nkl (amg-vlen kq hpg)) (nvo (amg-voff vq hpg)) (nvl (amg-vlen vq hpg))
+                                   (n (hpg-oi ref hpg)))
+                        (:instance amg-index-abs-range (n (hpg-oi ref hpg)) (k (amg-mean kt kr kv))
+                                   (ks (amg-run (amg-roff (* 5 ref) hpg) (amg-rlen (* 5 ref) hpg) 0 (hpg-oi ref hpg) hpg)))))))
+
+(defthm amg-dissoc-fill-refines
+  (implies (and (hpgp hpg) (integerp ref) (amg-map tag ref hpg)
+                (<= 0 (hpg-oi ref hpg)) (< (+ 1 (hpg-oi ref hpg)) *hb40*)
+                (equal at (am-index (amg-abs ref hpg) (amg-mean kt kr kv))) (not (equal at 0))
+                (amg-fresh ref kq vq (- (hpg-oi ref hpg) 1) hpg))
+           (equal (amg-new-abs (- (hpg-oi ref hpg) 1) kq vq (amg-dissoc-fill ref at sw kq vq hpg))
+                  (am-dissoc (amg-abs ref hpg) (amg-mean kt kr kv) (not (equal sw 0)))))
+  :hints (("Goal" :in-theory (e/d (am-dissoc) (amg-dissoc-w amg-dissoc-w-runs amg-roff amg-rlen amg-run-in amg-disj am-index-from
+                                                swap-fill shift-loop shift-loop-is remove-at-is-rm-pos shift-loop-rm-pos swap-fill-last))
+                  :use ((:instance amg-dissoc-w-runs
+                                   (ko (amg-roff (* 5 ref) hpg)) (kl (amg-rlen (* 5 ref) hpg))
+                                   (vo (amg-roff (+ 1 (* 5 ref)) hpg)) (vl (amg-rlen (+ 1 (* 5 ref)) hpg))
+                                   (nko (amg-voff kq hpg)) (nkl (amg-vlen kq hpg)) (nvo (amg-voff vq hpg)) (nvl (amg-vlen vq hpg))
+                                   (n (hpg-oi ref hpg)))
+                        (:instance amg-index-abs-range (n (hpg-oi ref hpg)) (k (amg-mean kt kr kv))
+                                   (ks (amg-run (amg-roff (* 5 ref) hpg) (amg-rlen (* 5 ref) hpg) 0 (hpg-oi ref hpg) hpg)))))))
+
+; ---- COST (the edits) -----------------------------------------------------------------------
+;
+; a write a turn: amg-copy's loop writes once a turn, amg-put and amg-mv once
+
+(defun amg-copy-turns (d i n)
+  (declare (xargs :measure (nfix (- *hb40* (nfix i)))))
+  (if (and (natp i) (< i n) (< n *hb40*) (or (equal d 0) (equal d 1))) (+ 1 (amg-copy-turns d (+ 1 i) n)) 0))
+
+(defthm amg-copy-turns-is
+  (implies (and (natp i) (integerp n) (< n *hb40*) (or (equal d 0) (equal d 1)))
+           (equal (amg-copy-turns d i n) (nfix (- n i)))))
+
+(defun amg-assoc-turns (n at) (+ (amg-copy-turns 0 0 n) (amg-copy-turns 0 0 n) (if (equal at 0) 2 1)))
+
+(defun amg-dissoc-turns (n at swap)
+  (+ (amg-copy-turns 0 0 (- n 1)) (amg-copy-turns 0 0 (- n 1))
+     (if swap (if (equal at n) 0 2) (+ (amg-copy-turns 1 (- at 1) (- n 1)) (amg-copy-turns 1 (- at 1) (- n 1))))))
+
+; the index_of before them and these writes are arraymap's steps: assoc's
+; exactly, dissoc's at most (the swap at the last place writes nothing)
+(defthm amg-assoc-cost
+  (implies (and (hpgp hpg) (integerp ref) (<= 0 (hpg-oi ref hpg)) (< (+ 1 (hpg-oi ref hpg)) *hb40*)
+                (equal at (am-index (amg-abs ref hpg) k)))
+           (equal (+ (am-index-steps (am-keys (amg-abs ref hpg)) k) (amg-assoc-turns (hpg-oi ref hpg) at))
+                  (am-assoc-steps (amg-abs ref hpg) k)))
+  :hints (("Goal" :in-theory (disable amg-run amg-roff amg-rlen))))
+
+(defthm amg-dissoc-cost
+  (implies (and (hpgp hpg) (integerp ref) (<= 0 (hpg-oi ref hpg)) (< (+ 1 (hpg-oi ref hpg)) *hb40*)
+                (equal at (am-index (amg-abs ref hpg) k)) (not (equal at 0)))
+           (<= (+ (am-index-steps (am-keys (amg-abs ref hpg)) k) (amg-dissoc-turns (hpg-oi ref hpg) at swap))
+               (am-dissoc-steps (amg-abs ref hpg) k swap)))
+  :hints (("Goal" :in-theory (disable amg-run amg-roff amg-rlen am-index-from)
+                  :use ((:instance amg-index-abs-range (n (hpg-oi ref hpg))
+                                   (ks (amg-run (amg-roff (* 5 ref) hpg) (amg-rlen (* 5 ref) hpg) 0 (hpg-oi ref hpg) hpg)))))))

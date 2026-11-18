@@ -1259,6 +1259,7 @@ check-vm-gen-run:
 	scripts/fuzz-amg-gen -n 300 -s 1
 	scripts/fuzz-amg-gen -n 100 -s 2 --fc flang
 	scripts/fuzz-amg-gen -n 100 -s 2 -x
+	scripts/fuzz-amg-gen -n 100 -s 2 -xe
 	scripts/acl2-fortran -b vmrt -o $(B)/vmrt_gen.inc
 	@cmp -s $(B)/vmrt_gen.inc src/f/gen/vmrt_gen.inc || { echo "src/f/gen/vmrt_gen.inc is not what model/vmrt.lisp generates: make gen-vm"; exit 1; }
 	scripts/fuzz-vmrt-gen -n 300 -s 1

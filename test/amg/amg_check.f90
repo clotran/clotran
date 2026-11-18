@@ -1,9 +1,11 @@
 ! The generated array map reads (src/f/gen/arraymap_gen.inc, from
 ! model/arraymapg.lisp) on a heap read from a file: scripts/fuzz-amg-gen's
 ! case, the same one ACL2 answers. Prints, a line a query, index_of's,
-! get's, key_at's and val_at's answers. gc_equal is the words' equality, as
-! the ACL2 side attaches it. With a second argument "broken", the negative
-! control: a map's count reads one more.
+! get's, key_at's and val_at's answers, then the edits' (amg_assoc_fill,
+! amg_dissoc_fill) arena digest. gc_equal is the words' equality, as the
+! ACL2 side attaches it. With a second argument "broken", the negative
+! control: a map's count reads one more; "broken-edit", the edits' arena
+! writes drop a word's ival.
 module amg_check_m
   use iso_fortran_env, only: int64
   implicit none
@@ -12,7 +14,7 @@ module amg_check_m
   type(amg_heap) :: hs
   integer(int64), allocatable :: otag(:), oref(:), okind(:), oi1(:)
   integer(int64), allocatable :: voff(:), vlen(:), atag(:), aref(:), aival(:)
-  logical :: broken = .false.
+  logical :: broken = .false., broken_edit = .false.
 contains
   pure integer(int64) function hp_otag(j)
     integer(int64), intent(in) :: j
@@ -60,6 +62,19 @@ contains
     integer(int64), intent(in) :: j
     hp_aival = aival(j)
   end function hp_aival
+  subroutine hp_set_atag(j, x)
+    integer(int64), intent(in) :: j, x
+    atag(j) = x
+  end subroutine hp_set_atag
+  subroutine hp_set_aref(j, x)
+    integer(int64), intent(in) :: j, x
+    aref(j) = x
+  end subroutine hp_set_aref
+  subroutine hp_set_aival(j, x)
+    integer(int64), intent(in) :: j, x
+    aival(j) = x
+    if (broken_edit) aival(j) = 0
+  end subroutine hp_set_aival
   pure integer(int64) function hp_n_arena()
     hp_n_arena = size(atag, kind=int64)
   end function hp_n_arena
@@ -77,10 +92,11 @@ program amg_check
   implicit none
   character(len=4096) :: path, arg
   integer :: u, no, nv, na, nq, q
-  integer(int64) :: tg, rf, kt, kr, kv, i
+  integer(int64) :: tg, rf, kt, kr, kv, i, vt, vr, vv, kq, vq, sw, at, g, ka, va, d, j
   call get_command_argument(1, path)
   call get_command_argument(2, arg)
   broken = trim(arg) == "broken"
+  broken_edit = trim(arg) == "broken-edit"
   open(newunit=u, file=trim(path), status="old", action="read")
   read(u, *) no, nv, na
   allocate(otag(0:5*no-1), oref(0:5*no-1), okind(0:no-1), oi1(0:no-1))
@@ -89,9 +105,18 @@ program amg_check
   read(u, *) voff; read(u, *) vlen; read(u, *) atag; read(u, *) aref; read(u, *) aival
   read(u, *) nq
   do q = 1, nq
-     read(u, *) tg, rf, kt, kr, kv, i
-     write(*, '(I0,1X,I0,1X,I0,1X,I0)') amg_index(hs, tg, rf, kt, kr, kv), amg_get(hs, tg, rf, kt, kr, kv), &
-          amg_at(hs, tg, rf, 0_int64, i), amg_at(hs, tg, rf, 1_int64, i)
+     read(u, *) tg, rf, kt, kr, kv, i, vt, vr, vv, kq, vq, sw
+     at = amg_index(hs, tg, rf, kt, kr, kv)
+     g = amg_get(hs, tg, rf, kt, kr, kv)
+     ka = amg_at(hs, tg, rf, 0_int64, i)
+     va = amg_at(hs, tg, rf, 1_int64, i)
+     call amg_assoc_fill(hs, rf, at, kt, kr, kv, vt, vr, vv, kq, vq)
+     call amg_dissoc_fill(hs, rf, at, sw, kq, vq)
+     d = 0
+     do j = 1, size(atag, kind=int64) - 1
+        d = d + (j + 1) * (3 * atag(j) + 5 * aref(j) + 7 * aival(j))
+     end do
+     write(*, '(I0,1X,I0,1X,I0,1X,I0,1X,I0)') at, g, ka, va, d
   end do
   close(u)
 end program amg_check

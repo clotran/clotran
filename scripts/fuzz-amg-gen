@@ -11,15 +11,20 @@
 ;; a few, so keys repeat and lookups find them. Each query asks index_of,
 ;; get, key_at and val_at of a value (a map most often) with a key (one of
 ;; the arena's words most often). gc_equal is the words' equality on both
-;; sides (ACL2: defattach). ACL2 answers with the model's functions,
-;; test/amg/amg_check with the generated ones; every answer must agree.
+;; sides (ACL2: defattach). Then the EDITS: gcm_assoc's writes (amg-assoc-fill,
+;; the index found as `at`, a value's words, two runs as the new keys and
+;; values -- any two, overlapping or not: both sides write in one order) and
+;; gcm_dissoc's (amg-dissoc-fill, swap or not) into the heap the next query
+;; reads, the arena's digest after them. ACL2 answers with the model's
+;; functions, test/amg/amg_check with the generated ones; every answer must agree.
 ;;
 ;; -x is the NEGATIVE CONTROL: the generated side reads a map's count one
-;; more, and the answers must part.
+;; more, and the answers must part; -xe the edits' own: the generated side's
+;; arena writes drop a word's ival, and the digests must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[clojure.edn :as edn] '[babashka.fs :as fs])
 
-(def broken (some #{"-x"} *command-line-args*))
-(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def broken (cond (some #{"-x"} *command-line-args*) "broken" (some #{"-xe"} *command-line-args*) "broken-edit"))
+(def args (apply hash-map (remove #{"-x" "-xe"} *command-line-args*)))
 (def n (parse-long (get args "-n" "200")))
 (def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
 (def fc (get args "--fc" "gfortran"))
@@ -54,7 +59,8 @@
                                    [kt kr kv] (cond (and (pos? (rnd 3)) (< 0 o) (< (+ o (nth vlen v)) na) (pos? (nth vlen v)))
                                                     (nth arena (+ o (rnd (nth vlen v))))
                                                     (pos? (rnd 2)) (pick arena) :else (gen-word))]
-                               [tg rf kt kr kv (pick [0 1 2 3 4 (rnd 9) -1])])))]
+                               (into [tg rf kt kr kv (pick [0 1 2 3 4 (rnd 9) -1])]
+                                     (concat (gen-word) [(pick [(rnd nv) (rnd nv) (rnd nv) -1 nv]) (pick [(rnd nv) (rnd nv) (rnd nv) -1 nv]) (rnd 2)])))))]
     {:no no :nv nv :na na :slots slots :okind okind :oi1 oi1 :voff voff :vlen vlen :arena arena :qs qs}))
 
 (def cases (vec (repeatedly n gen-case)))
@@ -78,15 +84,23 @@
        "  (let ((hpg (case f "
        (str/join " " (for [[nm k] hfields] (str "(" k " (resize-h-" nm " (len xs) hpg))")))
        " (t hpg)))) (ld-h f 0 xs hpg)))\n"
+       "(defun dig (j hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (or (< j 1) (<= (h-atag-length hpg) j)) 0\n"
+       "    (+ (* (+ 1 j) (+ (* 3 (h-atagi j hpg)) (* 5 (h-arefi j hpg)) (* 7 (h-aivali j hpg)))) (dig (+ 1 j) hpg))))\n"
        "(defun ask (q hpg) (declare (xargs :stobjs hpg :mode :program))\n"
-       "  (let ((tg (nth 0 q)) (rf (nth 1 q)) (kt (nth 2 q)) (kr (nth 3 q)) (kv (nth 4 q)) (i (nth 5 q)))\n"
-       "    (list (amg-index tg rf kt kr kv hpg) (amg-get tg rf kt kr kv hpg) (amg-at tg rf 0 i hpg) (amg-at tg rf 1 i hpg))))\n"
-       "(defun asks (qs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
-       "  (if (endp qs) nil (cons (ask (car qs) hpg) (asks (cdr qs) hpg))))\n"
+       "  (let* ((tg (nth 0 q)) (rf (nth 1 q)) (kt (nth 2 q)) (kr (nth 3 q)) (kv (nth 4 q)) (i (nth 5 q))\n"
+       "         (vt (nth 6 q)) (vr (nth 7 q)) (vv (nth 8 q)) (kq (nth 9 q)) (vq (nth 10 q)) (sw (nth 11 q))\n"
+       "         (at (amg-index tg rf kt kr kv hpg))\n"
+       "         (r (list at (amg-get tg rf kt kr kv hpg) (amg-at tg rf 0 i hpg) (amg-at tg rf 1 i hpg)))\n"
+       "         (hpg (amg-assoc-fill rf at kt kr kv vt vr vv kq vq hpg))\n"
+       "         (hpg (amg-dissoc-fill rf at sw kq vq hpg)))\n"
+       "    (mv (append r (list (dig 1 hpg))) hpg)))\n"
+       "(defun asks (qs acc hpg) (declare (xargs :stobjs hpg :mode :program))\n"
+       "  (if (endp qs) (mv (reverse acc) hpg) (mv-let (a hpg) (ask (car qs) hpg) (asks (cdr qs) (cons a acc) hpg))))\n"
        "(defun put-all (k hs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
        "  (if (endp hs) hpg (let ((hpg (put-h k (car hs) hpg))) (put-all (1+ k) (cdr hs) hpg))))\n"
        "(defun run-case (k hs qs hpg) (declare (xargs :stobjs hpg :mode :program))\n"
-       "  (let ((hpg (put-all 0 hs hpg))) (prog2$ (cw \"CASE ~x0 ~x1~%\" k (asks qs hpg)) hpg)))\n"
+       "  (let ((hpg (put-all 0 hs hpg))) (mv-let (as hpg) (asks qs nil hpg) (prog2$ (cw \"CASE ~x0 ~x1~%\" k as) hpg))))\n"
        (str/join (map-indexed
                   (fn [k c]
                     (let [s (:slots c) a (:arena c)]
@@ -123,11 +137,11 @@
                  "\n" (count (:qs c)) "\n" (str/join "\n" (map nums (:qs c))) "\n"))
     f))
 
-(def kinds ["index" "get" "key-at" "val-at"])
+(def kinds ["index" "get" "key-at" "val-at" "edits"])
 
 (def results
   (vec (for [[k c] (map-indexed vector cases)]
-         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken [broken]))
                got (mapv (fn [ln] (mapv parse-long (str/split (str/trim ln) #"\s+"))) (remove str/blank? (str/split-lines (:out r))))
                want (mapv vec (expected k))]
            {:k k :got got :want want :ok (= got want)}))))
@@ -136,10 +150,11 @@
   (frequencies (for [{:keys [got want]} results [g w] (map vector got want) [nm a b] (map vector kinds w g) :when (not= a b)] nm)))
 (def bad (remove :ok results))
 (def asked (mapcat :want results))
-(println (str n " heaps, seed " seed (when broken " (negative control: a map's count one more)")))
+(println (str n " heaps, seed " seed (case broken "broken" " (negative control: a map's count one more)"
+                                         "broken-edit" " (negative control: the edits drop a word's ival)" nil)))
 (println (str "  asked " (count asked) " lookups, " (count (filter #(pos? (first %)) asked)) " of them found, "
               (count (filter #(neg? (nth % 2)) asked)) " key_at in a run"))
-(println (str "generated array map reads against ACL2's: " (count bad) " cases differ"))
+(println (str "generated array map reads and edits against ACL2's: " (count bad) " cases differ"))
 (doseq [[nm c] (sort by-kind)] (println (str "  " nm ": " c)))
 (doseq [b (take 2 bad)]
   (println "  case" (:k b))
