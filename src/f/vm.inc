@@ -41,9 +41,13 @@
   !                         vtg_tr / vtg_lind: ex-tr's, vmtrg.lisp)
   !   recur                 (:recur args); the fn's own recur, a loop
   !                         around the body over its parameters
-  !   vector, map, set, new, a dot call, fn, lazy-seq
+  !   vector, map, set, new, a dot call
   !                         (:prim NODE parts..): the runtime does what
-  !                         flat does with the node (vm_node_hook)
+  !                         flat does with the node (vm_node_hook;
+  !                         generated, vtg_cop: NAMED against ex-tr's
+  !                         (:prim ex-cop parts..), ex-cop :vector, :map,
+  !                         :set or (:host k C))
+  !   fn, lazy-seq          (:prim NODE captures..) (vm_node_hook)
   !   a call of a builtin   (:prim builtin args)
   !   any other call        an IFn constant's or Var's (:callv head args);
   !                         else ex-trcall's, head first and cast: (:let head
@@ -615,29 +619,24 @@
   recursive function vm_tr(c, nd, roots) result(e)
     type(vm_tr_ctx), intent(inout), target :: c
     type(gc_value), intent(in) :: nd, roots(:)
-    type(gc_value) :: e, kids, x, v
+    type(gc_value) :: e, x, v
     type(gc_stack), pointer :: vst
-    integer :: base, i, nk
+    integer :: base, i
     e = gc_nil()
     if (.not. c%ok) return
     vst => gc_my_stack()
-    kids = gc_slot(nd, 1)
-    nk = 0
-    if (gcv_is(kids)) nk = gcv_count(kids)
     ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
-         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN .or. gc_i1(nd) == N_TRY) then
+         .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN .or. gc_i1(nd) == N_TRY &
+         .or. gc_i1(nd) == N_VECTOR .or. gc_i1(nd) == N_MAP .or. gc_i1(nd) == N_SET .or. gc_i1(nd) == N_NEW &
+         .or. gc_i1(nd) == N_DOT) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
-    case (N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT)
-       ! the runtime's node on the parts' values (vm_node_hook)
-       call vm_tr_kids(c, kids, 0, nk - 1, base + 2, roots)
-       if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
     case (N_FN, N_LAZY)
        ! the captured slots' values, in the template's order
        call vs_set(vst, base + 2, gcv_empty(roots))
@@ -661,7 +660,8 @@
   end function vm_tr
 
   ! ---- THE GENERATED TRANSLATION'S HOST (model/vmtrg.lisp) ---------------
-  ! A constant, a local, if, do, let*, loop, recur and throw are translated by vtg_tr
+  ! A constant, a local, a Var, if, do, let*, loop, recur, throw, every call, case*, letfn,
+  ! try and a vector, map, set, new or dot call are translated by vtg_tr
   ! (src/f/gen/vm_tr_gen.inc), generated from model/vmtrg.lisp, which
   ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
   ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
@@ -1001,6 +1001,14 @@
     k = vm_kw("throw")
     call anb_push(vm_l([k, l], [l]))
   end subroutine vtg_notfn
+  ! a collection's op (vmtrg's vtg-cop): the node itself, the op of the
+  ! runtime's kind 6 (vm_node_hook builds it from the parts' values) --
+  ! NAMED: the model's exec-tree ex-cop, :vector, :map, :set or (:host k C)
+  subroutine vtg_cop(tb, nd)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    call anb_push(nd)
+  end subroutine vtg_cop
   ! a case's entry j's test items (vmtrg's vtg-cstest): the N_CASE node
   ! itself, the op of the runtime's kind 6 (vm_node_hook: case_branch's
   ! probe takes entry j), and (:const then_j) -- NAMED: the model's :case and
@@ -1206,27 +1214,6 @@
     call vs_leave(vst, base)
   end function vm_deref_of
 
-  ! kids i..j translated into a vector in slot acc
-  recursive subroutine vm_tr_kids(c, kids, i, j, acc, roots)
-    type(vm_tr_ctx), intent(inout), target :: c
-    type(gc_value), intent(in) :: kids, roots(:)
-    integer, intent(in) :: i, j, acc
-    type(gc_stack), pointer :: vst
-    type(gc_value) :: x
-    integer :: k, base
-    vst => gc_my_stack()
-    base = vs_enter(vst, 2)
-    call vs_set(vst, base + 1, kids)
-    call vs_set(vst, acc, gcv_empty(roots))
-    do k = i, j
-       if (.not. c%ok) exit
-       x = vm_tr(c, gcv_nth(vs_get(vst, base + 1), k), [roots, vs_get(vst, acc)])
-       call vs_set(vst, base + 2, x)
-       x = gcv_conj(vs_get(vst, acc), vs_get(vst, base + 2), [roots, vs_get(vst, acc), vs_get(vst, base + 2)])
-       call vs_set(vst, acc, x)
-    end do
-    call vs_leave(vst, base)
-  end subroutine vm_tr_kids
 
   ! (:prim NODE items ..)
   function vm_node_prim(nd, items, roots) result(e)

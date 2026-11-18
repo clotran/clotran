@@ -125,6 +125,21 @@ contains
     k%id = 0
     if (j >= 0 .and. j < vtg_ncs(x)) k = vtg_kid(x, j + 2)
   end function vtg_cthen
+  ! a collection's op, exec-tree's ex-cop: :vector, :map, :set, else (:host k C)
+  subroutine vtg_cop(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    character(len=:), allocatable :: c
+    select case (vtg_kind(x))
+    case (7); call push(tb, ':vector')
+    case (8); call push(tb, ':map')
+    case (9); call push(tb, ':set')
+    case default
+       c = 'nil'
+       if (nc(x%id) >= 0) c = itoa(int(nc(x%id), int64))
+       call push(tb, '(:host ' // itoa(vtg_kind(x)) // ' ' // c // ')')
+    end select
+  end subroutine vtg_cop
   subroutine vtg_cstest(tb, x, j)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
@@ -343,7 +358,7 @@ contains
        m = ni2(x%id)
     case (16)
        m = nnk(x%id) - 1
-    case (6)
+    case (6, 7, 8, 9, 21, 22)
        m = nnk(x%id) - 1
     case (17)
        m = 0
