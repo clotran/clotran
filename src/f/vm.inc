@@ -41,12 +41,14 @@
   !                         vtg_tr / vtg_lind: ex-tr's, vmtrg.lisp)
   !   recur                 (:recur args); the fn's own recur, a loop
   !                         around the body over its parameters
-  !   vector, map, set, new, a dot call
+  !   vector, map, set, new, a dot call, def, deftype, new of a type, set!
   !                         (:prim NODE parts..): the runtime does what
   !                         flat does with the node (vm_node_hook;
   !                         generated, vtg_cop: NAMED against ex-tr's
   !                         (:prim ex-cop parts..), ex-cop :vector, :map,
-  !                         :set or (:host k C))
+  !                         :set or (:host k C); def, deftype and set! the
+  !                         tree's def_finish, deftype_finish,
+  !                         setbang_finish on the kids' values)
   !   fn                    (:prim NODE captures..) (vm_node_hook;
   !                         generated, vtg_fnhd / vtg_caps: NAMED against
   !                         ex-tr's (:mkclo tm captures..))
@@ -78,8 +80,8 @@
   !                         exec-vmtr's ex-trh / ex-trfin have (:throw p)
   !                         (vm_node_hook; generated, vtg_catest, vtg_rethrow)
   ! and a last clause (0 .. :rest) for a call of no arity the fn has,
-  ! clj's ArityException. Anything else -- def, set!, the host's forms --
-  ! and the fn runs as before.
+  ! clj's ArityException. Anything else -- a node kind vm_scan does not
+  ! know (N_FAIL, N_LATEVAR, the top's) -- and the fn runs as before.
   ! ===================================================================
 
   ! CLOTRAN_VM=1: fn bodies the VM can run, it runs
@@ -420,7 +422,16 @@
              end do
           end if
        end if
-    case (N_VECTOR, N_MAP, N_SET, N_NEW)
+    case (N_DEF, N_DEFTYPE, N_SETBANG)
+       ! the host's actions on their kids' values, as exec_core's action 27:
+       ! def_finish, deftype_finish, setbang_finish (ex-cop's (:host k C), named)
+       call vs_set(vst, base + 2, vm_slots_vec(vst, argbase, 0, n, [nd]))
+       select case (gc_i1(nd))
+       case (N_DEF);     out = def_finish(vs_get(vst, base + 1), vs_get(vst, base + 2))
+       case (N_DEFTYPE); out = deftype_finish(vs_get(vst, base + 1), vs_get(vst, base + 2))
+       case default;     out = setbang_finish(vs_get(vst, base + 1), vs_get(vst, base + 2))
+       end select
+    case (N_VECTOR, N_MAP, N_SET, N_NEW, N_NEWTYPE)
        call vs_set(vst, base + 2, vm_slots_vec(vst, argbase, 0, n, [nd]))
        select case (gc_i1(nd))
        case (N_VECTOR); out = vs_get(vst, base + 2)
@@ -536,7 +547,12 @@
     case (N_CONST, N_VAR)
     case (N_LOCAL)
        call vm_mark(c%reads, gc_i2(nd), c)
-    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT, N_CALL)
+    case (N_DEF, N_DEFTYPE)
+       ! exec_core's children (vtg_nk, vtg_kid)
+       do i = 0, int(vtg_nk(nd)) - 1
+          call vm_scan(c, vtg_kid(nd, int(i, int64)))
+       end do
+    case (N_IF, N_DO, N_THROW, N_VECTOR, N_MAP, N_SET, N_NEW, N_DOT, N_CALL, N_NEWTYPE, N_SETBANG)
        if (gcv_is(kids)) then
           do i = 0, gcv_count(kids) - 1
              call vm_scan(c, gcv_nth(kids, i))
@@ -637,7 +653,8 @@
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
          .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN .or. gc_i1(nd) == N_TRY &
          .or. gc_i1(nd) == N_VECTOR .or. gc_i1(nd) == N_MAP .or. gc_i1(nd) == N_SET .or. gc_i1(nd) == N_NEW &
-         .or. gc_i1(nd) == N_DOT .or. gc_i1(nd) == N_FN .or. gc_i1(nd) == N_LAZY) then
+         .or. gc_i1(nd) == N_DOT .or. gc_i1(nd) == N_FN .or. gc_i1(nd) == N_LAZY .or. gc_i1(nd) == N_DEF &
+         .or. gc_i1(nd) == N_DEFTYPE .or. gc_i1(nd) == N_NEWTYPE .or. gc_i1(nd) == N_SETBANG) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
@@ -647,7 +664,8 @@
 
   ! ---- THE GENERATED TRANSLATION'S HOST (model/vmtrg.lisp) ---------------
   ! A constant, a local, a Var, if, do, let*, loop, recur, throw, every call, case*, letfn,
-  ! try, a vector, map, set, new or dot call, a fn and a lazy seq are translated by vtg_tr
+  ! try, a vector, map, set, new, dot call, def, deftype, new of a type, set!, a
+  ! fn and a lazy seq are translated by vtg_tr
   ! (src/f/gen/vm_tr_gen.inc), generated from model/vmtrg.lisp, which
   ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
   ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
@@ -686,10 +704,14 @@
     vtg_i2 = ast_i2(nd)
   end function vtg_i2
   ! a try's kids are its body and its finally, nil when it has none: then
-  ! one (NAMED: the model's ex-nk, exec_core's nk of an N_TRY)
+  ! one (NAMED: the model's ex-nk, exec_core's nk of an N_TRY). A def's
+  ! and a deftype's are exec_core's (core_kid, ex-kid-of's): a def's init
+  ! then its evaluated metadata (slot 3), a deftype's methods' fns
   integer(int64) function vtg_nk(nd)
     type(gc_value), intent(in) :: nd
     vtg_nk = ast_nkids(nd)
+    if (ast_kind(nd) == N_DEF) vtg_nk = vtg_nk + merge(1, 0, gc_kind(gc_slot(nd, 3)) == OBJ_AST)
+    if (ast_kind(nd) == N_DEFTYPE) vtg_nk = gcv_count(gcv_nth(gc_slot(nd, 2), 4))
     if (ast_kind(nd) == N_TRY .and. vtg_nk > 1) then
        if (gc_kind(ast_kid(nd, 1_int64)) /= OBJ_AST) vtg_nk = 1
     end if
@@ -699,6 +721,10 @@
     integer(int64), intent(in) :: j
     type(gc_value) :: k
     k = ast_kid(nd, j)
+    if (ast_kind(nd) == N_DEF .or. ast_kind(nd) == N_DEFTYPE) then
+       k = gc_nil()
+       if (j >= 0 .and. j < vtg_nk(nd)) k = core_kid(nd, gc_slot(nd, 1), int(j))
+    end if
   end function vtg_kid
   ! whether a fn's or lazy seq's captures name a slot in lo .. hi-1: its
   ! template's (outer, inner) pairs, the outer slot each first

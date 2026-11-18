@@ -2,8 +2,8 @@
 ; scripts/acl2-fortran -b vmtrg): exec-vmtr's ex-tr at the level the
 ; Fortran is generated from, guard-verified, for the kinds whose encoding
 ; vm.inc and ex-tr share -- a constant, a local, a Var, if, do, let*, loop,
-; recur, throw, every call, case*, letfn, try, a collection, a fn and a
-; lazy seq --
+; recur, throw, every call, case*, letfn, try, a collection (def, deftype,
+; new of a type and set! among them), a fn and a lazy seq --
 ; every other kind the host's (vtg-other: vm.inc's hand-written vm_tr,
 ; which calls back here for these kinds). exec-PLAN's Lane 3 says what
 ; is left.
@@ -177,8 +177,12 @@
 ; (ex-collok). Named, not proved: vtg_cop's op is vm.inc's NODE itself, the
 ; runtime's kind 6 (vm_node_hook building it: vm_slots_vec, vec_to_set,
 ; vec_to_map, new_cached, dot_dispatch), where the model's is ex-cop. Def,
-; deftype, a new of a type and set! (10 20 23 24) stay vtg_other's (vm_tr
-; refuses them). Tests: fuzz-vmtr-gen draws collections (c nil or a number).
+; deftype, a new of a type and set! (10 20 23 24) the same (exec-PLAN item
+; 7(c)): ex-tr's (:prim (:host k C) kids..), vm_node_hook's N_DEF, N_DEFTYPE,
+; N_SETBANG the tree's def_finish, deftype_finish, setbang_finish, N_NEWTYPE
+; new_cached, on the kids' values, a def's and a deftype's kids exec_core's
+; core_kid (vtg_nk, vtg_kid: ex-kid-of's) (named; ex-collok as before). Tests:
+; fuzz-vmtr-gen draws all nine (c nil or a number).
 ; Cost: 3 steps and the kids' (vtg-steps).
 ;
 ; A FN (item 7(b)) is ex-tr's kind 14, (:mkclo tm caps..), tm its template
@@ -321,7 +325,7 @@
 ; a collection's kind: a vector, map, set, new or dot (ex-cop's ops; vtg-tr
 ; walks its kids as a recur's args); its op ex-cop (vtg_cop -- NAMED: vm.inc
 ; pushes the node itself, the runtime's kind 6, vm_node_hook building it)
-(defun vtg-coll (k) (declare (xargs :guard t)) (or (equal k 7) (equal k 8) (equal k 9) (equal k 21) (equal k 22)))
+(defun vtg-coll (k) (declare (xargs :guard t)) (or (equal k 7) (equal k 8) (equal k 9) (equal k 21) (equal k 22) (equal k 10) (equal k 20) (equal k 23) (equal k 24)))
 (defun vtg-cop (e vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (ec-call (ex-cop e)) vtb))
 ; a fn's head items :mkclo and its template (vtg_fnhd -- NAMED: vm.inc
 ; pushes :prim and the N_FN node itself, the runtime's kind 6)
@@ -1176,7 +1180,7 @@
                 (implies (equal flg 6) (and (equal (vtg-kind e) 19) (< (len (ex-c e)) *vtg40*)))
                 (implies (equal flg 7) (equal (vtg-kind e) 13))
                 (implies (equal flg 8) (and (equal (vtg-kind e) 18) (< (len (ex-c e)) *vtg40*)))
-                (implies (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) (quote (1 2 3 4 5 6 7 8 9 11 12 13 14 15 16 17 18 19 21 22))))
+                (implies (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) (quote (1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24))))
                 (implies (and (not (member flg '(1 2 3 5 6 7 8))) (equal (vtg-kind e) 12)) (vtg-okt nil e))
                 (implies (and (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) '(18 19))) (< (len (ex-c e)) *vtg40*))
                 (implies (and (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) '(14 15))) (vtg-fnok e))))

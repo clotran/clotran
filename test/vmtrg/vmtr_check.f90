@@ -416,7 +416,7 @@ contains
        m = ni2(x%id)
     case (16)
        m = nnk(x%id) - 1
-    case (6, 7, 8, 9, 21, 22)
+    case (6, 7, 8, 9, 21, 22, 10, 20, 23, 24)
        m = nnk(x%id) - 1
     case (17)
        m = 0

@@ -13,8 +13,9 @@
 ;; table's walk, entry j's test 50 + j), letfn (its fns' templates (0 0
 ;; (o 0 ..)), each outer slot the group's or not: ex-trlf's lets), try (its
 ;; catch walk, catch j's class 60 + j and slot s2 + j, a finally or none:
-;; ex-trh, ex-trfin), a collection (a vector, map, set, new or dot: kinds
-;; 7 8 9 22 21, (:prim op args..), op ex-cop), a fn ((:mkclo tm caps..),
+;; ex-trh, ex-trfin), a collection (a vector, map, set, new, dot, def,
+;; deftype, new of a type or set!: kinds 7 8 9 22 21 10 20 23 24, (:prim op
+;; args..), op ex-cop), a fn ((:mkclo tm caps..),
 ;; its template (0 0 (o 0 ..))), a lazy seq ((:prim (:host 15 tm) (:mkclo
 ;; tm caps..))), a builtin's
 ;; call (:prim f args..), its head a constant fz-prim calls a builtin or a
@@ -62,7 +63,7 @@
                        :c (str "(0 0 " (if (seq outs) (str "(" (str/join " " (mapcat (fn [o q] [o q]) outs (range))) ")") "nil") ")"))))
 (def tlr-kinds (atom []))
 (defn gen [d]
-  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 13 13 16 16 17 17 18 18 19 19 7 8 9 21 22 14 14 15 15 99] @tlr-kinds)))
+  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 13 13 16 16 17 17 18 18 19 19 7 8 9 21 22 10 20 23 24 14 14 15 15 99] @tlr-kinds)))
         sub #(gen (dec d))]
     (case k
       1 (node 1 :c (pick [nil 0 1 7 42]))
@@ -89,7 +90,7 @@
       ;; a lazy seq: (:prim (:host 15 tm) (:mkclo tm caps..))
       15 (fnode 15)
       ;; a collection: its kids the parts, c the host op's constant
-      (7 8 9 21 22) (node k :c (pick [nil 3]) :kids (vec (repeatedly (rnd 4) sub)))
+      (7 8 9 21 22 10 20 23 24) (node k :c (pick [nil 3]) :kids (vec (repeatedly (rnd 4) sub)))
       ;; a case*: its test and default, entries' thens (entry j's test 50 + j)
       19 (node 19 :kids [(sub) (sub)] :thens (vec (repeatedly (rnd 4) sub)))
       ;; a try: its body, a finally or none, catches' bodies (c their count)
