@@ -9,8 +9,11 @@
   ! scan leaves none (aot-sc-sound, aot-scan-norec), and counts it (aot-sc-steps-bound).
   ! And the compiler's type inference (aot_ty: infer, call-type, bind-types, loop-env)
   ! over aot_state, reading aot_hop, aot_cty, aot_kw, aot_i2, aot_s2, aot_rs, aot_rn;
-  ! B_AOTTY (clotran-aot-ty, analyze.inc's aot_infer) answers it. Its proof is owed
-  ! (model/aot-PLAN.md, slice 2).
+  ! B_AOTTY (clotran-aot-ty, analyze.inc's aot_infer) answers it; aot-ty-sound.lisp
+  ! proves it sound against ex-ev (aot-ty-sound-m) and aot-ty-proof.lisp counts it.
+  ! And the arity choice (aot_arreg, aot_arnf, aot_arvr: fn-procedure's registration
+  ! and pick) over arities loaded into tv/rc by analyze.inc's aot_arity; B_AOTAR
+  ! (clotran-aot-arity) answers it. aot-ar-proof.lisp proves the pick is ex-arity's.
   function aot_ch(fl_, x_, i_) result(r)
     integer(int64), value :: fl_
     type(gc_value), value :: x_
@@ -1639,3 +1642,140 @@
       exit
     end do
   end subroutine aot_ty
+
+  pure function aot_arf(as, i_) result(r)
+    type(aot_state), intent(in) :: as
+    integer(int64), value :: i_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_3
+    integer(int64) :: t_4
+    integer(int64) :: v_2
+    if ((i_ >= 0_int64)) then
+      t_1 = (i_ < size(as%tv, kind=int64))
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      v_2 = as%tv(i_)
+      if ((v_2 >= 0_int64)) then
+        t_3 = (v_2 < 1099511627776_int64)
+      else
+        t_3 = .false.
+      end if
+      if (t_3) then
+        t_4 = v_2
+      else
+        t_4 = 0_int64
+      end if
+      r = t_4
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function aot_arf
+
+  pure function aot_arv(as, i_) result(r)
+    type(aot_state), intent(in) :: as
+    integer(int64), value :: i_
+    integer(int64) :: r
+    logical :: t_1
+    logical :: t_2
+    if ((i_ >= 0_int64)) then
+      if ((i_ < size(as%rc, kind=int64))) then
+        t_1 = (as%rc(i_) == 1_int64)
+      else
+        t_1 = .false.
+      end if
+      t_2 = t_1
+    else
+      t_2 = .false.
+    end if
+    if (t_2) then
+      r = 1_int64
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function aot_arv
+
+  pure function aot_arnf(as, i_) result(r)
+    type(aot_state), intent(in) :: as
+    integer(int64), value :: i_
+    integer(int64) :: r
+    integer(int64) :: i_2
+    logical :: t_1
+    do
+      if ((i_ >= 0_int64)) then
+        t_1 = (i_ < size(as%tv, kind=int64))
+      else
+        t_1 = .false.
+      end if
+      if (t_1) then
+        if ((aot_arv(as, i_) == 1_int64)) then
+          i_2 = (1_int64 + i_)
+          i_ = i_2
+          cycle
+        else
+          r = i_
+          return
+        end if
+      else
+        r = (-1_int64)
+        return
+      end if
+    end do
+  end function aot_arnf
+
+  pure function aot_arvr(as, i_) result(r)
+    type(aot_state), intent(in) :: as
+    integer(int64), value :: i_
+    integer(int64) :: r
+    integer(int64) :: i_2
+    logical :: t_1
+    do
+      if ((i_ >= 0_int64)) then
+        t_1 = (i_ < size(as%tv, kind=int64))
+      else
+        t_1 = .false.
+      end if
+      if (t_1) then
+        if ((aot_arv(as, i_) == 1_int64)) then
+          r = i_
+          return
+        else
+          i_2 = (1_int64 + i_)
+          i_ = i_2
+          cycle
+        end if
+      else
+        r = (-1_int64)
+        return
+      end if
+    end do
+  end function aot_arvr
+
+  pure function aot_arreg(as) result(r)
+    type(aot_state), intent(in) :: as
+    integer(int64) :: r
+    logical :: t_1
+    if ((size(as%tv, kind=int64) == 1_int64)) then
+      t_1 = (aot_arv(as, 0_int64) == 0_int64)
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = aot_arf(as, 0_int64)
+      return
+    else
+      if ((.not. (aot_arvr(as, 0_int64) < 0_int64))) then
+        r = ((-2_int64) + (-aot_arf(as, aot_arvr(as, 0_int64))))
+        return
+      else
+        r = (-1_int64)
+        return
+      end if
+    end if
+  end function aot_arreg

@@ -290,6 +290,8 @@ module Eval
   integer, parameter :: B_AOTSCAN = 478
   ! (clotran-aot-ty node env nslots loop?): the compiler's type inference, generated (aot_gen.inc)
   integer, parameter :: B_AOTTY = 479
+  ! (clotran-aot-arity arities): the compiler's arity choice, generated (aot_gen.inc)
+  integer, parameter :: B_AOTAR = 480
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1343,6 +1345,7 @@ contains
     call bind_builtin(core, "clotran-ast-pool", B_ASTPOOL)
     call bind_builtin(core, "clotran-aot-scan", B_AOTSCAN)
     call bind_builtin(core, "clotran-aot-ty", B_AOTTY)
+    call bind_builtin(core, "clotran-aot-arity", B_AOTAR)
     call bind_builtin(core, "clotran-monitor-enter", B_MONENTER)
     call bind_builtin(core, "clotran-monitor-exit", B_MONEXIT)
     call bind_builtin(core, "clotran-clone-binding-frame", B_CLONETB)
@@ -14236,6 +14239,11 @@ contains
        ! loop's settled slot types (loop-env). Generated from model/aot.lisp.
        out = aot_infer(gcv_nth(args, 0), gcv_nth(args, 1), int_of(gcv_nth(args, 2)), &
             truthy(gcv_nth(args, 3)), [args])
+    case (B_AOTAR)
+       ! (clotran-aot-arity arities): fn-procedure's registration and pick for a
+       ! fn's arities, [nfixed variadic?] each -- [reg var fixed...], analyze.inc's
+       ! aot_arity. Generated from model/aot.lisp.
+       out = aot_arity(gcv_nth(args, 0), [args])
     case (B_ASTPOOL)
        ! (clotran-ast-pool 'form) -- clotran-ast's :pool and :fingerprint
        ! without exporting the tree: what clotran.loader needs to install

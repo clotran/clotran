@@ -5728,6 +5728,41 @@
     end do
   end function aot_infer
 
+  ! clotran-aot-arity: a fn's arities, [nfixed variadic?] in its template's
+  ! order, loaded as model/aot.lisp's slice 3 reads them (tv the count, rc 1
+  ! variadic), answered as [reg var fixed...]: what the procedure is
+  ! registered with (aot_arreg), the first variadic arity (aot_arvr, -1
+  ! none), and the fixed arities in the order the procedure tests them
+  ! (aot_arnf's walk). aot-ar-proof.lisp proves that pick is ex-arity's.
+  function aot_arity(ars, roots) result(out)
+    type(gc_value), intent(in) :: ars
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, a, c
+    type(aot_state) :: as
+    integer(int64) :: n, i, j
+    n = 0
+    if (gcv_is(ars)) n = gcv_count(ars)
+    allocate(as%tv(0:n - 1), as%rc(0:n - 1), as%lo(0:n - 1))
+    as%tv = 0
+    as%rc = 0
+    as%lo = 1
+    do i = 0, n - 1
+       a = gcv_nth(ars, int(i))
+       if (.not. gcv_is(a)) cycle
+       c = gcv_nth(a, 0)
+       if (c%tag == GCT_INT) as%tv(i) = c%ival
+       if (truthy(gcv_nth(a, 1))) as%rc(i) = 1
+    end do
+    out = gcv_empty(roots)
+    out = gcv_conj(out, gc_int(aot_arreg(as)), [roots, out])
+    out = gcv_conj(out, gc_int(aot_arvr(as, 0_int64)), [roots, out])
+    j = aot_arnf(as, 0_int64)
+    do while (j >= 0)
+       out = gcv_conj(out, gc_int(j), [roots, out])
+       j = aot_arnf(as, j + 1)
+    end do
+  end function aot_arity
+
   ! The tail check of a body standing as tt says (anpass.lisp's anp-tc: 1
   ! a fn's, 0 the top level's): fails the analysis as clj's compiler
   ! does, and answers whether it passed.

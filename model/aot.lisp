@@ -432,3 +432,43 @@
   :hints (("Goal" :induct (aot-ty fl e j m k aots))))
 
 (verify-guards aot-ty)
+
+; =============================================================================================
+; SLICE 3: THE ARITY CHOICE (compiler.cljf's fn-procedure: which arity's body a call of n
+; arguments runs), generated into the same aot_gen.inc. analyze.inc's aot_arity loads a fn's
+; arities into the stobj in its template's order: arity i's count of fixed parameters in tv[i],
+; rc[i] 1 when it is variadic; tv's length is the count of arities.
+;
+;   aot-arnf i   the first fixed arity at or after i, -1 none
+;   aot-arvr i   the first variadic arity at or after i, -1 none
+;   aot-arreg    what the procedure is registered with: a lone fixed arity its count (the caller
+;                checks it: Eval.f90's call_compiled), else a variadic one's -(req + 2) (apply
+;                hands it its rest unrealised), else -1. Below 0 the procedure picks itself:
+;                the fixed arities, aot-arnf's walk from 0, by nargs == count, then the first
+;                variadic by nargs >= count, else Clojure's ArityException.
+;
+; model/aot-ar-proof.lisp proves that pick is exec's (ex-arity: bind_closure's, clj's FnExpr).
+
+(defun aot-arf (i aots)
+  (declare (xargs :stobjs aots :guard t))
+  (if (and (natp i) (< i (aot-tv-length aots)))
+      (let ((v (aot-tvi i aots))) (if (and (natp v) (< v *anp40*)) v 0))
+    0))
+(defun aot-arv (i aots)
+  (declare (xargs :stobjs aots :guard t))
+  (if (and (natp i) (< i (aot-rc-length aots)) (equal (aot-rci i aots) 1)) 1 0))
+(defun aot-arnf (i aots)
+  (declare (xargs :stobjs aots :guard t :measure (nfix (- (aot-tv-length aots) (nfix i)))))
+  (if (and (natp i) (< i (aot-tv-length aots)))
+      (if (equal (aot-arv i aots) 1) (aot-arnf (+ 1 i) aots) i)
+    -1))
+(defun aot-arvr (i aots)
+  (declare (xargs :stobjs aots :guard t :measure (nfix (- (aot-tv-length aots) (nfix i)))))
+  (if (and (natp i) (< i (aot-tv-length aots)))
+      (if (equal (aot-arv i aots) 1) i (aot-arvr (+ 1 i) aots))
+    -1))
+(defun aot-arreg (aots)
+  (declare (xargs :stobjs aots :guard t))
+  (cond ((and (equal (aot-tv-length aots) 1) (equal (aot-arv 0 aots) 0)) (aot-arf 0 aots))
+        ((<= 0 (aot-arvr 0 aots)) (- -2 (aot-arf (aot-arvr 0 aots) aots)))
+        (t -1)))

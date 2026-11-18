@@ -13,8 +13,13 @@
 ;; and aot-fr of every node; test/aot/aot_check with the generated ones,
 ;; through mock reads of the same tree. Every answer must agree.
 ;;
+;; Slice 3: each case carries random arities ([nfixed rc], some counts out of
+;; range, some rc neither 0 nor 1); ACL2 answers aot-arreg and aot-arnf,
+;; aot-arvr of every index, and the generated ones must agree.
+;;
 ;; -x is the NEGATIVE CONTROL: the generated side reads a case as a do, a
-;; kind the compiler emits, and the answers must part.
+;; kind the compiler emits, a double constant as a long, and its arity 0 as
+;; variadic when it is fixed and back; the answers must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -80,7 +85,8 @@
                     id))))]
       (let [r (walk root)] [r @rows]))))
 
-(def cases (vec (repeatedly n #(let [[r rows] (number (gen-node (+ 1 (rnd 6))))] {:root r :rows rows :env (vec (repeatedly 64 (fn [] (pick [1 1 1 1 2 2 3 4 5 6 0]))))}))))
+(def cases (vec (repeatedly n #(let [[r rows] (number (gen-node (+ 1 (rnd 6))))] {:root r :rows rows :env (vec (repeatedly 64 (fn [] (pick [1 1 1 1 2 2 3 4 5 6 0]))))
+                                                       :ars (vec (repeatedly (rnd 5) (fn [] [(pick [0 1 2 3 4 5 20 -1 1099511627776]) (pick [0 0 1 1 2])])))}))))
 
 ;; ---- ACL2 -------------------------------------------------------------------------------
 
@@ -99,8 +105,13 @@
 (def fz-defs (str "(defun fz-fill (i env aots) (declare (xargs :stobjs aots :mode :program)) (if (< i 64) (let* ((aots (update-aot-tvi i (nth i env) aots)) (aots (update-aot-rci i 0 aots)) (aots (update-aot-loi i 1 aots))) (fz-fill (+ 1 i) env aots)) aots))\n"
   "(defun fz-run (nd env aots) (declare (xargs :stobjs aots :mode :program)) (let* ((aots (resize-aot-tv 64 aots)) (aots (resize-aot-rc 64 aots)) (aots (resize-aot-lo 64 aots)) (aots (fz-fill 0 env aots)) (aots (update-aot-cb 0 aots)) (aots (update-aot-cn 0 aots)) (aots (update-aot-a0 1 aots)) (aots (update-aot-a1 1 aots)) (aots (update-aot-a2 1 aots)) (aots (update-aot-ad 0 aots))) (aot-ty 0 nd 0 0 0 aots)))\n"))
 
+;; slice 3: the arities loaded as analyze.inc's aot_arity loads them
+(def ar-defs (str "(defun fz-arfill (i ar aots) (declare (xargs :stobjs aots :mode :program)) (if (consp ar) (let* ((aots (update-aot-tvi i (car (car ar)) aots)) (aots (update-aot-rci i (cadr (car ar)) aots))) (fz-arfill (+ 1 i) (cdr ar) aots)) aots))\n"
+  "(defun fz-walk (i n aots) (declare (xargs :stobjs aots :mode :program)) (if (> i n) nil (list* (aot-arnf i aots) (aot-arvr i aots) (fz-walk (+ 1 i) n aots))))\n"
+  "(defun fz-ar (k ar aots) (declare (xargs :stobjs aots :mode :program)) (let* ((n (len ar)) (aots (resize-aot-tv n aots)) (aots (resize-aot-rc n aots)) (aots (resize-aot-lo n aots)) (aots (fz-arfill 0 ar aots))) (prog2$ (cw \"AR ~x0 ~x1 ~x2~%\" k (aot-arreg aots) (fz-walk 0 n aots)) aots)))\n"))
+
 (def driver
-  (str "(include-book \"aot\")\n" fz-defs
+  (str "(include-book \"aot\")\n" fz-defs ar-defs
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
        (str/join (map-indexed (fn [k c]
                                 (let [ns (map #(acl2-node (:rows c) %) (range 1 (inc (count (:rows c)))))]
@@ -111,6 +122,7 @@
                                 (str/join (map (fn [i] (str "(mv-let (ty ok aots) (fz-run " (ex-node (:rows c) i) " '" (pr-str (seq (:env c))) " aots) (prog2$ (cw \"TY ~x0 ~x1 ~x2 ~x3~%\" " k " " i " ty ok) (mv ty ok aots)))\n"))
                                            (range 1 (inc (count (:rows c)))))))
                               cases))
+       (str/join (map-indexed (fn [k c] (str "(fz-ar " k " '" (pr-str (map seq (:ars c))) " aots)\n")) cases))
        "(good-bye)\n"))
 
 (def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
@@ -121,8 +133,11 @@
              [(parse-long k) [(parse-long a) (mapv parse-long (remove str/blank? (str/split b #"\s+")))]])))
 (def expected-ty
   (reduce (fn [m [_ k i t o]] (assoc-in m [(parse-long k) (parse-long i)] [(parse-long t) (parse-long o)])) {} (re-seq #"TY (\d+) (\d+) (\d+) (\d+)" out)))
-(when (not= (count expected) n)
-  (println (str "fuzz-aot-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+(def expected-ar
+  (into {} (for [[_ k r w] (re-seq #"AR (\d+) (-?\d+) \(([^)]*)\)" out)]
+             [(parse-long k) (vec (cons (parse-long r) (map parse-long (remove str/blank? (str/split w #"\s+")))))])))
+(when (or (not= (count expected) n) (not= (count expected-ar) n))
+  (println (str "fuzz-aot-gen: ACL2 answered " (count expected) " and " (count expected-ar) " of " n " cases; its output ends:"))
   (println (subs out (max 0 (- (count out) 2000))))
   (System/exit 1))
 
@@ -144,29 +159,35 @@
                                                    [(count (:alt-ids row))] (:alt-ids row) [(count (:bod-ids row))] (:bod-ids row)
                                                    [(:i2 row) (:s2 row) (:rs row) (:rn row) (:cty row) (:hop row) (:kw row)])]
                                     (str (count vs) " " (str/join " " vs)))))
-                 "\n64 " (str/join " " (:env c)) "\n"))
+                 "\n64 " (str/join " " (:env c))
+                 "\n" (count (:ars c)) " " (str/join " " (flatten (:ars c))) "\n"))
     f))
 
 (def results
   (vec (for [[k c] (map-indexed vector cases)]
          (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
-               [l1 l2 l3] (remove str/blank? (str/split-lines (:out r)))
+               [l1 l2 l3 l4] (remove str/blank? (str/split-lines (:out r)))
+               gar (mapv parse-long (remove str/blank? (str/split (or l4 "") #"\s+")))
+               war (expected-ar k)
                gty (mapv parse-long (remove str/blank? (str/split (or l3 "") #"\s+")))
                wty (vec (mapcat #(get-in expected-ty [k %]) (range 1 (inc (count (:rows c))))))
                got [(some-> l1 str/trim parse-long) (mapv parse-long (remove str/blank? (str/split (or l2 "") #"\s+")))]
                want (expected k)]
-           {:k k :got got :want want :ok (and (= got want) (= gty wty)) :wty wty
+           {:k k :got got :want want :ok (and (= got want) (= gty wty) (= gar war)) :wty wty :war war
             :kinds (cond-> [] (not= (first got) (first want)) (conj "scan") (not= (second got) (second want)) (conj "recur-under")
-                     (not= (take-nth 2 gty) (take-nth 2 wty)) (conj "type") (not= (take-nth 2 (rest gty)) (take-nth 2 (rest wty))) (conj "ok"))}))))
+                     (not= (take-nth 2 gty) (take-nth 2 wty)) (conj "type") (not= (take-nth 2 (rest gty)) (take-nth 2 (rest wty))) (conj "ok") (not= gar war) (conj "arity"))}))))
 
 (def bad (remove :ok results))
-(println (str n " trees, seed " seed (when broken " (negative control: a case read as a do)")))
+(println (str n " trees, seed " seed (when broken " (negative control: a case read as a do, a double as a long, arity 0 flipped)")))
 (println (str "  " (count (filter #(= 1 (first (:want %))) results)) " declined by the scan, "
               (reduce + (map #(count (second (:want %))) results)) " nodes, "
               (reduce + (map #(reduce + (second (:want %))) results)) " with a recur under them"))
 (let [ws (mapcat :wty results) ts (take-nth 2 ws)]
   (println (str "  types (none any long double bool doubles longs): " (pr-str (map #(count (filter #{%} ts)) (range 7))) ", ok " (count (filter #{1} (take-nth 2 (rest ws)))) " of " (count ts))))
-(println (str "generated eligibility scan and type inference against ACL2's: " (count bad) " cases differ"))
+(let [ws (keep :war results)]
+  (println (str "  arities: " (count ws) " sets; registered fixed " (count (filter #(>= (first %) 0) ws))
+                ", registered variadic " (count (filter #(<= (first %) -2) ws)) ", picked inside " (count (filter #(= (first %) -1) ws)))))
+(println (str "generated eligibility scan, type inference and arity choice against ACL2's: " (count bad) " cases differ"))
 (doseq [[nm c] (sort (frequencies (mapcat :kinds bad)))] (println (str "  " nm ": " c)))
 (doseq [b (take 2 bad)] (println "  case" (:k b) "ACL2" (pr-str (:want b)) "generated" (pr-str (:got b))))
 (System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

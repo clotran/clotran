@@ -295,7 +295,8 @@
     "aot"
     {:out "src/f/gen/aot_gen.inc" :include true :book "aot"
      :fns [aot-ch aot-cop aot-fr aot-sc aot-code aot-jn aot-and aot-num aot-arr aot-optab aot-get aot-raw aot-put
-           aot-rget aot-rjn aot-rz aot-lput aot-tick aot-rzero aot-settled aot-lcopy aot-ty]
+           aot-rget aot-rjn aot-rz aot-lput aot-tick aot-rzero aot-settled aot-lcopy aot-ty
+           aot-arf aot-arv aot-arnf aot-arvr aot-arreg]
      :stobjs {aots "as"} :stobj-types {"as" "aot_state"}
      :fields {aot-cb ["as" "cb"] aot-cn ["as" "cn"] aot-a0 ["as" "a0"] aot-a1 ["as" "a1"] aot-a2 ["as" "a2"]
               aot-ad ["as" "ad"] aot-ns ["as" "ns"]}
@@ -323,8 +324,11 @@
               "  ! scan leaves none (aot-sc-sound, aot-scan-norec), and counts it (aot-sc-steps-bound)."
               "  ! And the compiler's type inference (aot_ty: infer, call-type, bind-types, loop-env)"
               "  ! over aot_state, reading aot_hop, aot_cty, aot_kw, aot_i2, aot_s2, aot_rs, aot_rn;"
-              "  ! B_AOTTY (clotran-aot-ty, analyze.inc's aot_infer) answers it. Its proof is owed"
-              "  ! (model/aot-PLAN.md, slice 2)."]}
+              "  ! B_AOTTY (clotran-aot-ty, analyze.inc's aot_infer) answers it; aot-ty-sound.lisp"
+              "  ! proves it sound against ex-ev (aot-ty-sound-m) and aot-ty-proof.lisp counts it."
+              "  ! And the arity choice (aot_arreg, aot_arnf, aot_arvr: fn-procedure's registration"
+              "  ! and pick) over arities loaded into tv/rc by analyze.inc's aot_arity; B_AOTAR"
+              "  ! (clotran-aot-arity) answers it. aot-ar-proof.lisp proves the pick is ex-arity's."]}
     "anlocal"
     {:out "src/f/gen/anlocal_gen.inc" :include true
      :fns [anl-odd anl-shape anl-name-code anl-pans anl-pw anl-params

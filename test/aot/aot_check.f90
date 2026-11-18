@@ -3,13 +3,16 @@
 ! what model/aot.lisp's ast-* and aot-nbods/aot-bod answer of the same tree.
 ! scripts/fuzz-aot-gen writes the trees and compares the answers with ACL2's.
 ! With the argument `broken`, a case node reads as a do (a kind the compiler
-! emits): the negative control.
+! emits), a double constant as a long, and arity 0 flips variadic: the
+! negative control.
 !
 !   aot_check CASEFILE [broken]
 !
 ! CASEFILE: nnodes root, then a line a node, 1..nnodes:
 !   kind s3 nk kid.. na alt.. nb bod..
-! (0 is nil). Out: "sc" then aot_fr of each node 1..nnodes.
+! (0 is nil), then the env line (n codes) and the arity line (n, then each
+! arity's tv rc). Out: "sc", aot_fr of each node 1..nnodes, each node's
+! aot_ty, and (slice 3) aot_arreg then aot_arnf and aot_arvr of 0..n.
 module aot_mock
   use iso_fortran_env, only: int64
   implicit none
@@ -146,7 +149,8 @@ program aot_check
   implicit none
   character(len=4096) :: path, arg
   integer :: u, nn, root, i, j, a, cnt, vals(4096), tk, ta, tb, ne
-  integer(int64) :: env(0:63), ty, okf
+  integer(int64) :: env(0:63), ty, okf, arw(512)
+  integer :: nar, k
   type(aot_state) :: as
   type(gc_value) :: r
   call get_command_argument(1, path)
@@ -187,7 +191,9 @@ program aot_check
      if (cnt >= j + 6) xf(:, i) = vals(j:j + 6)
   end do
   env = 1
+  nar = -1
   read(u, *, end=9) ne, env(0:ne - 1)
+  read(u, *, end=9) nar, (arw(k), k = 1, 2 * nar)
 9 close(u)
   r%id = root
   write(*, '(i0)') merge(1, 0, aot_sc(0_int64, r, 0_int64, 0_int64))
@@ -210,4 +216,20 @@ program aot_check
      write(*, '(i0, 1x, i0, 1x)', advance="no") ty, okf
   end do
   write(*, *)
+  ! slice 3: the arities loaded as analyze.inc's aot_arity loads them
+  if (nar >= 0) then
+     deallocate(as%tv, as%rc, as%lo)
+     allocate(as%tv(0:nar - 1), as%rc(0:nar - 1), as%lo(0:nar - 1))
+     as%lo = 1
+     do k = 0, nar - 1
+        as%tv(k) = arw(2 * k + 1)
+        as%rc(k) = arw(2 * k + 2)
+     end do
+     if (broken .and. nar > 0) as%rc(0) = merge(0_int64, 1_int64, as%rc(0) == 1)
+     write(*, '(i0, 1x)', advance="no") aot_arreg(as)
+     do k = 0, nar
+        write(*, '(i0, 1x, i0, 1x)', advance="no") aot_arnf(as, int(k, int64)), aot_arvr(as, int(k, int64))
+     end do
+     write(*, *)
+  end if
 end program aot_check
