@@ -5515,6 +5515,28 @@
     end if
   end function ast_rfn
 
+  ! a fn's or a lazy seq's arity bodies, in its template's order
+  ! (model/aot.lisp's aot-nbods, aot-bod; the eligibility scan, aot_gen.inc):
+  ! a body that is a flat or VM form answers no node, as clotran-ast exports it
+  integer(int64) function aot_nbods(nd)
+    type(gc_value), intent(in) :: nd
+    aot_nbods = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) == N_FN .or. gc_i1(nd) == N_LAZY) aot_nbods = gcv_count(gcv_nth(gc_slot(nd, 2), 1))
+  end function aot_nbods
+
+  function aot_bod(nd, i) result(k)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: i
+    type(gc_value) :: k
+    k = gc_nil()
+    if (i < 0 .or. i >= aot_nbods(nd)) return
+    k = gcv_nth(gcv_nth(gcv_nth(gc_slot(nd, 2), 1), int(i)), 3)
+    if (gc_kind(k) == OBJ_AST) then
+       if (gc_i1(k) == N_FLAT .or. gc_i1(k) == N_VMB) k = gc_nil()
+    end if
+  end function aot_bod
+
   ! The tail check of a body standing as tt says (anpass.lisp's anp-tc: 1
   ! a fn's, 0 the top level's): fails the analysis as clj's compiler
   ! does, and answers whether it passed.
