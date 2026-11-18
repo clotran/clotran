@@ -1,0 +1,134 @@
+#!/usr/bin/env bb
+;; fuzz-aot-gen: the GENERATED eligibility scan of the ahead-of-time compiler
+;; (src/f/gen/aot_gen.inc, written by scripts/acl2-fortran -b aot from
+;; model/aot.lisp) against the ACL2 it was generated from.
+;;
+;;   scripts/fuzz-aot-gen [-n COUNT] [-s SEED] [-x] [--fc gfortran|flang]
+;;
+;; Random trees of the analyzer's node kinds -- the ones compiler.cljf emits
+;; (const local var if do call let loop recur fn lazy new dot) and the ones it
+;; hands to the interpreter (case try def letfn deftype vector ..., and kinds
+;; nobody knows) -- recurs everywhere, fns and lazy seqs with arity bodies
+;; (some none), cases with missing branches. ACL2 answers aot-sc of the root
+;; and aot-fr of every node; test/aot/aot_check with the generated ones,
+;; through mock reads of the same tree. Every answer must agree.
+;;
+;; -x is the NEGATIVE CONTROL: the generated side reads a case as a do, a
+;; kind the compiler emits, and the answers must part.
+(require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
+
+(def broken (some #{"-x"} *command-line-args*))
+(def args (apply hash-map (remove #{"-x"} *command-line-args*)))
+(def n (parse-long (get args "-n" "200")))
+(def seed (parse-long (get args "-s" (str (mod (System/nanoTime) 2147483647)))))
+(def fc (get args "--fc" "gfortran"))
+(def work (str (fs/create-temp-dir {:prefix "fuzz-aot-gen"})))
+
+;; the house LCG: every case reproduces from its seed
+(def rng (atom seed))
+(defn rnd [k]
+  (let [x (swap! rng #(unchecked-add (unchecked-multiply % 6364136223846793005) 1442695040888963407))]
+    (mod (bit-shift-right x 33) (max k 1))))
+(defn pick [xs] (nth xs (rnd (count xs))))
+
+;; ---- the trees: {:kind :kids :s3 :alts :bods}, nil no node -----------------------------
+
+(defn node [kind & {:as m}] (merge {:kind kind :kids [] :s3 nil :alts [] :bods []} m))
+(declare gen-node)
+(defn gen-kids [d k] (vec (repeatedly k #(gen-node (dec d)))))
+(defn gen-fn [d] (node 14 :bods (vec (repeatedly (rnd 3) #(when (pos? (rnd 6)) (gen-node (dec d)))))))
+(defn gen-node [d]
+  (if (<= d 0)
+    (node (pick [1 2 3 16 16]))
+    (let [k (pick [1 2 3 4 5 6 11 12 12 14 15 16 16 16 21 22 10 13 18 19 19 20 7 8 99])]
+      (case k
+        (1 2 3) (node k)
+        16 (node 16 :kids (gen-kids d (rnd 3)))
+        (14 15) (assoc (gen-fn d) :kind k)
+        18 (node 18 :kids [(gen-node (dec d)) (when (pos? (rnd 2)) (gen-node (dec d)))] :alts (gen-kids d (rnd 3)))
+        19 (node 19 :kids [(gen-node (dec d)) (gen-node (dec d))] :alts (vec (repeatedly (rnd 4) #(when (pos? (rnd 5)) (gen-node (dec d))))))
+        10 (node 10 :kids (gen-kids d (rnd 2)) :s3 (when (pos? (rnd 2)) (gen-node (dec d))))
+        20 (node 20 :alts (vec (repeatedly (rnd 3) #(gen-fn d))))
+        (node k :kids (gen-kids d (rnd 4)))))))
+
+;; ids in a walk; the table, a row a node
+(defn number [root]
+  (let [rows (atom [])]
+    (letfn [(walk [nd]
+              (if (nil? nd) 0
+                (let [id (inc (count @rows))]
+                  (swap! rows conj nil)
+                  (let [kids (mapv walk (:kids nd)) s3 (walk (:s3 nd)) alts (mapv walk (:alts nd)) bods (mapv walk (:bods nd))]
+                    (swap! rows assoc (dec id) (assoc nd :kid-ids kids :s3-id s3 :alt-ids alts :bod-ids bods))
+                    id))))]
+      (let [r (walk root)] [r @rows]))))
+
+(def cases (vec (repeatedly n #(let [[r rows] (number (gen-node (+ 1 (rnd 6))))] {:root r :rows rows}))))
+
+;; ---- ACL2 -------------------------------------------------------------------------------
+
+(defn acl2-node [rows id]
+  (if (zero? id) "nil"
+    (let [row (nth rows (dec id)) l #(str "(list " (str/join " " (map (partial acl2-node rows) %)) ")")]
+      (str "(list :ast " id " " (:kind row) " 0 " (l (:kid-ids row)) " " (acl2-node rows (:s3-id row))
+           " nil " (l (:alt-ids row)) " 0 " (l (:bod-ids row)) ")"))))
+
+(def driver
+  (str "(include-book \"aot\")\n"
+       "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       (str/join (map-indexed (fn [k c]
+                                (let [ns (map #(acl2-node (:rows c) %) (range 1 (inc (count (:rows c)))))]
+                                  (str "(cw \"CASE ~x0 ~x1 ~x2~%\" " k " (if (aot-sc 0 " (acl2-node (:rows c) (:root c)) " 0 0) 1 0) (list "
+                                       (str/join " " (map #(str "(if (aot-fr 0 " % " 0 0) 1 0)") ns)) "))\n")))
+                              cases))
+       "(good-bye)\n"))
+
+(def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
+            (if (fs/exists? a) a (str (fs/home) "/clotran/acl2/saved_acl2"))))
+(def out (:out (p/shell {:dir "model" :in driver :out :string :err :string} acl2)))
+(def expected
+  (into {} (for [[_ k a b] (re-seq #"CASE (\d+) (\d) \(([^)]*)\)" out)]
+             [(parse-long k) [(parse-long a) (mapv parse-long (remove str/blank? (str/split b #"\s+")))]])))
+(when (not= (count expected) n)
+  (println (str "fuzz-aot-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
+  (println (subs out (max 0 (- (count out) 2000))))
+  (System/exit 1))
+
+;; ---- the generated code -----------------------------------------------------------------
+
+(let [r (p/shell {:continue true :out :string :err :string :extra-env (if (System/getenv "ACL2") {} {"ACL2" acl2})}
+                 "scripts/acl2-fortran" "-b" "aot" "-o" (str work "/aot_gen.inc"))]
+  (when-not (zero? (:exit r)) (println (:out r) (:err r)) (System/exit 1)))
+(fs/copy "test/aot/aot_check.f90" (str work "/aot_check.f90"))
+(def exe (str work "/aot_check"))
+(let [r (apply p/shell {:continue true :out :string :err :string :dir work} fc (concat ["-O2"] (when (= fc "gfortran") ["-frecursive"]) ["-o" exe "aot_check.f90"]))]
+  (when-not (zero? (:exit r)) (println (:err r) (:out r)) (System/exit 1)))
+
+(defn case-file [k c]
+  (let [f (str work "/case" k ".txt")]
+    (spit f (str (count (:rows c)) " " (:root c) "\n"
+                 (str/join "\n" (for [row (:rows c)]
+                                  (let [vs (concat [(:kind row) (:s3-id row) (count (:kid-ids row))] (:kid-ids row)
+                                                   [(count (:alt-ids row))] (:alt-ids row) [(count (:bod-ids row))] (:bod-ids row))]
+                                    (str (count vs) " " (str/join " " vs)))))
+                 "\n"))
+    f))
+
+(def results
+  (vec (for [[k c] (map-indexed vector cases)]
+         (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
+               [l1 l2] (remove str/blank? (str/split-lines (:out r)))
+               got [(some-> l1 str/trim parse-long) (mapv parse-long (remove str/blank? (str/split (or l2 "") #"\s+")))]
+               want (expected k)]
+           {:k k :got got :want want :ok (= got want)
+            :kinds (cond-> [] (not= (first got) (first want)) (conj "scan") (not= (second got) (second want)) (conj "recur-under"))}))))
+
+(def bad (remove :ok results))
+(println (str n " trees, seed " seed (when broken " (negative control: a case read as a do)")))
+(println (str "  " (count (filter #(= 1 (first (:want %))) results)) " declined by the scan, "
+              (reduce + (map #(count (second (:want %))) results)) " nodes, "
+              (reduce + (map #(reduce + (second (:want %))) results)) " with a recur under them"))
+(println (str "generated eligibility scan against ACL2's: " (count bad) " cases differ"))
+(doseq [[nm c] (sort (frequencies (mapcat :kinds bad)))] (println (str "  " nm ": " c)))
+(doseq [b (take 2 bad)] (println "  case" (:k b) "ACL2" (pr-str (:want b)) "generated" (pr-str (:got b))))
+(System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

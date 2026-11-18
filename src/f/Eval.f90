@@ -286,6 +286,8 @@ module Eval
   ! (clotran-class-cast x C): the checkcast clj emits on a `.`'s hinted
   ! target (analyze.inc dot_host, DEVIATIONS 84)
   integer, parameter :: B_CLASSCAST = 477
+  ! (clotran-aot-scan node): the compiler's eligibility scan, generated (aot_gen.inc)
+  integer, parameter :: B_AOTSCAN = 478
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -1328,6 +1330,7 @@ contains
     ! executor runs. PLAN step 10.
     call bind_builtin(core, "clotran-ast", B_ASTDATA)
     call bind_builtin(core, "clotran-ast-pool", B_ASTPOOL)
+    call bind_builtin(core, "clotran-aot-scan", B_AOTSCAN)
     call bind_builtin(core, "clotran-monitor-enter", B_MONENTER)
     call bind_builtin(core, "clotran-monitor-exit", B_MONEXIT)
     call bind_builtin(core, "clotran-clone-binding-frame", B_CLONETB)
@@ -14209,6 +14212,12 @@ contains
             end if
          end if
        end block
+    case (B_AOTSCAN)
+       ! (clotran-aot-scan node): whether a node of a kind compiler.cljf does
+       ! not emit, under this fn body (an OBJ_AST, clotran-ast's :node), has a
+       ! recur under it not past a loop, fn or lazy seq -- decline-reason's
+       ! recur clause. Generated from model/aot.lisp (aot_gen.inc).
+       out = gc_bool(aot_sc(0_int64, gcv_nth(args, 0), 0_int64, 0_int64))
     case (B_ASTPOOL)
        ! (clotran-ast-pool 'form) -- clotran-ast's :pool and :fingerprint
        ! without exporting the tree: what clotran.loader needs to install
@@ -24634,6 +24643,7 @@ contains
 
   include "analyze.inc"
   include "gen/anpass_gen.inc"
+  include "gen/aot_gen.inc"
   include "gen/anlocal_gen.inc"
   include "gen/anform_gen.inc"
   include "gen/anprim_gen.inc"

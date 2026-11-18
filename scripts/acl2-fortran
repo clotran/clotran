@@ -4,7 +4,7 @@
 ;; everything"). Nobody edits the output; a change goes into the model,
 ;; is proved, and is generated again.
 ;;
-;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|vmrt|anpass|anlocal|anform|anprim|anbuild|exec|vmtrg] [-o FILE]
+;;   scripts/acl2-fortran [-b vmg|vmicg|heapg|heaprtg|vmrt|anpass|aot|anlocal|anform|anprim|anbuild|exec|vmtrg] [-o FILE]
 ;;
 ;; -b names the book: vmg, the machine and its superinstructions
 ;; (src/f/gen/vm_gen.f90, the default; read from vmfg, which includes
@@ -262,6 +262,27 @@
               "  ! read marked for clearing is followed by another of its slot in any run"
               "  ! (tr-sound, anp-clears-sound: anpass-sound.lisp), and that a body the"
               "  ! tail check passes recurs only as the last thing it does (tr-tail)."]}
+    "aot"
+    {:out "src/f/gen/aot_gen.inc" :include true :book "aot"
+     :fns [aot-ch aot-cop aot-fr aot-sc]
+     :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
+     :value-formals {aot-ch #{x} aot-fr #{x} aot-sc #{x}}
+     :value-fns #{aot-ch}
+     :bool-fns #{aot-cop aot-fr aot-sc}
+     ;; a node is a value of clotran's heap, read by analyze.inc's shims and Eval.f90's aot_nbods, aot_bod
+     :val-type "gc_value"
+     :rt {ast-kind ["ast_kind" [:val] :int] ast-nkids ["ast_nkids" [:val] :int] ast-kid ["ast_kid" [:val :int] :val]
+          ast-s3 ["ast_s3" [:val] :val] ast-nalts ["ast_nalts" [:val] :int] ast-alt ["ast_alt" [:val :int] :val]
+          aot-nbods ["aot_nbods" [:val] :int] aot-bod ["aot_bod" [:val :int] :val]}
+     :header ["  ! GENERATED from model/aot.lisp by scripts/acl2-fortran -b aot. Do not edit:"
+              "  ! change the model, prove it, and generate again. Included in Eval.f90's"
+              "  ! contains part: the ahead-of-time compiler's eligibility scan (aot_sc: some"
+              "  ! node of a kind compiler.cljf does not emit has a recur under it, aot_fr, not"
+              "  ! past a loop, fn or lazy seq), guard-verified, reading the tree through"
+              "  ! analyze.inc's ast_* shims and Eval.f90's aot_nbods, aot_bod. B_AOTSCAN"
+              "  ! (clotran-aot-scan) answers it to decline-reason. aot-proof.lisp proves a node"
+              "  ! with no such recur makes none in any run (aot-handed-norec), that a passing"
+              "  ! scan leaves none (aot-sc-sound, aot-scan-norec), and counts it (aot-sc-steps-bound)."]}
     "anlocal"
     {:out "src/f/gen/anlocal_gen.inc" :include true
      :fns [anl-odd anl-shape anl-name-code anl-pans anl-pw anl-params

@@ -366,8 +366,7 @@ end module clotran_rt_decl
   generator is always the answer to a question."
   [tmpl]
   (let [[_ arities captures _ selfslot _] tmpl
-        bodies (map #(nth % 3) arities)
-        nodes (mapcat walk-nodes bodies)]
+        bodies (map #(nth % 3) arities)]
     (cond
       (or (empty? bodies) (some nil? bodies)) "no body"
       (seq captures) "closes over an outer local"
@@ -378,13 +377,11 @@ end module clotran_rt_decl
       ;; than wrong. Only a recur that targets the COMPILED code counts:
       ;; one inside a loop, fn or lazy-seq of that subtree is its own,
       ;; and the interpreter runs it whole -- map's variadic arity is
-      ;; such a lazy-seq.
-      (some (fn [nd] (and (not (compiled-ops (:op nd)))
-                          (some #(= :recur (:op %))
-                                (filter #(and (map? %) (:op %))
-                                        (tree-seq #(and (coll? %) (not (#{:loop :fn :lazy} (:op %))))
-                                                  seq nd)))))
-            nodes)
+      ;; such a lazy-seq. GENERATED: clotran-aot-scan is model/aot.lisp's
+      ;; aot-sc (src/f/gen/aot_gen.inc) on each body's node, nested fns'
+      ;; bodies included; aot-proof.lisp proves a node it lets through
+      ;; makes no recur in any run (aot-scan-norec).
+      (some #(clotran-aot-scan (:node %)) bodies)
       "a recur inside a form the generator hands to the interpreter"
       :else nil)))
 
