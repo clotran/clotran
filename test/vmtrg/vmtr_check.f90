@@ -134,6 +134,7 @@ contains
     case (7); call push(tb, ':vector')
     case (8); call push(tb, ':map')
     case (9); call push(tb, ':set')
+    case (15); call push(tb, '(:host 15 ' // tmpl(x) // ')')
     case default
        c = 'nil'
        if (nc(x%id) >= 0) c = itoa(int(nc(x%id), int64))
@@ -345,7 +346,7 @@ contains
   integer(int64) function vtg_ncap(x)
     type(gc_value), intent(in) :: x
     vtg_ncap = 0
-    if (vtg_kind(x) == 14) vtg_ncap = nnk(x%id)
+    if (vtg_kind(x) == 14 .or. vtg_kind(x) == 15) vtg_ncap = nnk(x%id)
   end function vtg_ncap
   integer(int64) function vtg_capo(x, j)
     type(gc_value), intent(in) :: x
@@ -356,20 +357,25 @@ contains
   subroutine vtg_fnhd(tb, x)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: x
+    call push(tb, ':mkclo')
+    call push(tb, tmpl(x))
+  end subroutine vtg_fnhd
+  ! a fn's or lazy seq's template (0 0 (o_0 0 ..)), as the fuzzer writes it
+  function tmpl(x) result(t)
+    type(gc_value), intent(in) :: x
     character(len=:), allocatable :: t
     integer(int64) :: j
-    call push(tb, ':mkclo')
     if (vtg_ncap(x) == 0) then
-       call push(tb, '(0 0 nil)')
+       t = '(0 0 nil)'
     else
        t = '(0 0 ('
        do j = 0, vtg_ncap(x) - 1
           if (j > 0) t = t // ' '
           t = t // itoa(vtg_capo(x, j)) // ' ' // itoa(j)
        end do
-       call push(tb, t // '))')
+       t = t // '))'
     end if
-  end subroutine vtg_fnhd
+  end function tmpl
   subroutine vtg_dead(tb)
     type(vtg_state), intent(inout) :: tb
     tb%cm = [tb%cm, -1_int64]

@@ -793,7 +793,7 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT | `(:prim op ..)`, op ex-cop (`:vector`, `:map`, `:set`, `(:host k C)`) | **generated now** (item 7, vtg-tr k 7 8 9 21 22: vtg_cop, flg 3 from 0, vtg_node 6), no new semantic hypothesis (ex-collok); named: vtg_cop's op is the node itself, the runtime's kind 6 (vm_node_hook builds it), where the model's is ex-cop |
 | N_FN | `(:mkclo tm caps..)` | **generated now** (item 7(b), vtg-tr k 14: vtg_fnhd, vtg-caps over vtg_ncap / vtg_capo, vtg_node 0), no new semantic hypothesis; named: vtg_fnhd's items are vm.inc's :prim and the node itself (vm_node_hook building the closure) where the model's are :mkclo and tm; vtg_ncap / vtg_capo read slot 2's pair vector where the model's is ex-outers |
-| N_LAZY | `(:prim op (:mkclo tm caps..))` | the shape differs: vm.inc's one flat `(:prim NODE caps..)`; still vm_tr's |
+| N_LAZY | `(:prim op (:mkclo tm caps..))` | **generated now** (item 7, vtg-tr k 15: vtg_cop, a fn's items, vtg_node 0, vtg_node 6 2), no new semantic hypothesis (ex-collok's (prim (:host 15 C))); vm.inc's encoding changed to nest the same way (approved): `(:prim LAZY (:prim FN caps..))`; named: vtg_cop's op the N_LAZY node, the runtime's kind 6 wrapping its one argument in a pending lazy seq (as eval_new's clotran.host.lazy_seq), vtg_fnhd's op an N_FN node of the same template made at translation (mk_node), where the model's are (:host 15 tm), :mkclo and tm |
 | case* | ex-tr's `(:let test W)`, W ex-trcs's walk over prim :case | yes -- **generated now** (item 5, vtg-tr flg 6, vtg_cstest; vtg-tlrw walks its thens), no new semantic hypothesis (ex-caseok); named: vtg_ncs/vtg_cthen read gca_entries' order where the model's is ex-c's list, and vm.inc's test `(:prim NODE (:const then_j) p)` -- the runtime's kind 6, vm_node_hook: case_branch's probe takes entry j -- where the model's is `(:prim :case (:const t) p)` |
 | letfn | ex-tr's ex-trlf: n lets of `(:mkgrp (j . shape) caps..)`, then the body | yes -- **generated now** (item 5, vtg-tr flg 7, vtg_lfinit, vtg_lfbinds), no new semantic hypothesis; named: vm.inc's init `(:prim NODE (:const j) caps.. (:local d)..(:local d+j-1))` -- the runtime's kind 6, vm_node_hook N_LETFN: fn j's closure, the group's captures patched among it and the earlier lets' closures (exec_letfn's refresh_captures, one group, its fns identical), a group capture `(:const nil)` -- where the model's is :mkgrp, x2-seal's j-th |
 | try | ex-tr's kind 18 (ex-trtry) | **generated now** (item 5(b)): vtg-tr flg 8 and vtg_catest, vtg_rethrow; the implicit rethrows a distinct prim, named |
@@ -1113,12 +1113,20 @@ position.
    runtime's kind 6, vm_node_hook building the closure from the captured
    values (make_closure_from's two shapes) -- where the model's are :mkclo
    and tm; vtg_ncap / vtg_capo read the template's pair vector (slot 2)
-   where the model's is ex-outers of its list. A lazy seq (15) stays
-   vm_tr's: ex-tr's `(:prim op (:mkclo tm caps..))` nests the closure,
-   vm.inc's `(:prim NODE caps..)` is flat -- generating it needs vm.inc's
-   encoding nested too (vm_node_hook's N_LAZY wrapping a closure value
-   made by an N_FN-like prim): a host change, no observable one, not
-   taken here. (c) open: def, deftype, a new of a type, set! (10 20 23
+   where the model's is ex-outers of its list. A lazy seq (15) -- done:
+   ex-tr's `(:prim (:host 15 tm) (:mkclo tm caps..))`, generated: vmtrg's
+   vtg-tr k 15 (vtg_cop, vtg_fnhd, vtg-caps, vtg_node 0, vtg_node 6 2;
+   ex-tr-lazy-kind, vtg-tr-ex-tr and vtg-steps-bound hold, 5 steps and 2 a
+   capture). vm.inc's encoding changed to ex-tr's nesting (James approved;
+   it was one flat `(:prim NODE caps..)`): `(:prim LAZY (:prim FN
+   caps..))` -- the inner a fn's closure exactly (vm_node_hook's N_FN), FN
+   an N_FN node of the lazy seq's template made at translation (vtg_fnhd,
+   mk_node in analyze_fn's shape), the outer vm_node_hook's N_LAZY now
+   only the wrap of its one value in a pending lazy seq (eval_new's
+   clotran.host.lazy_seq's). Behaviour unchanged: the same closure, wrapped
+   the same. No new semantic hypothesis (ex-collok's (prim (:host 15
+   C))). vm_tr's N_LAZY branch and vm_node_prim are deleted.
+   fuzz-vmtr-gen draws lazy seqs. (c) open: def, deftype, a new of a type, set! (10 20 23
    24): ex-tr has them, vm_scan refuses them.
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to

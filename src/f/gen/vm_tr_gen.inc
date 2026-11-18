@@ -1,7 +1,7 @@
   ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the VM's translation of a constant, a local, if, do, let*,
-  ! loop, recur, throw, every call, case*, letfn, try, a vector, map, set, new or dot, a fn (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --
+  ! loop, recur, throw, every call, case*, letfn, try, a vector, map, set, new or dot, a fn, a lazy seq (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --
   ! guard-verified, reading the tree through vm.inc's vtg_* reads and building
   ! the expression on the value stack through its vtg_* shims. vmtrg.lisp
   ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds
@@ -619,7 +619,15 @@
                       call vtg_caps(tb, e_, 0_int64)
                       call vtg_node(tb, 0_int64, (2_int64 + vtg_ncap(e_)))
                     else
-                      call vtg_other(tb, e_)
+                      if ((k_23 == 15_int64)) then
+                        call vtg_cop(tb, e_)
+                        call vtg_fnhd(tb, e_)
+                        call vtg_caps(tb, e_, 0_int64)
+                        call vtg_node(tb, 0_int64, (2_int64 + vtg_ncap(e_)))
+                        call vtg_node(tb, 6_int64, 2_int64)
+                      else
+                        call vtg_other(tb, e_)
+                      end if
                     end if
                   end if
                 end select

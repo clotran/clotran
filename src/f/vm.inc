@@ -50,7 +50,12 @@
   !   fn                    (:prim NODE captures..) (vm_node_hook;
   !                         generated, vtg_fnhd / vtg_caps: NAMED against
   !                         ex-tr's (:mkclo tm captures..))
-  !   lazy-seq              (:prim NODE captures..) (vm_node_hook; vm_tr's)
+  !   lazy-seq              (:prim NODE (:prim FN captures..)): the closure
+  !                         as a fn's, FN an N_FN node of the lazy seq's
+  !                         template, and the N_LAZY node's kind 6 wrapping
+  !                         it (vm_node_hook; generated, vtg_cop / vtg_fnhd /
+  !                         vtg_caps: NAMED against ex-tr's (:prim (:host 15
+  !                         C) (:mkclo tm captures..)))
   !   a call of a builtin   (:prim builtin args)
   !   any other call        an IFn constant's or Var's (:callv head args);
   !                         else ex-trcall's, head first and cast: (:let head
@@ -437,7 +442,15 @@
           call vs_set(vst, base + 3, out)
           out = apply(gc_slot(vs_get(vst, base + 3), 1), gc_slot(vs_get(vst, base + 3), 2))
        end if
-    case (N_FN, N_LAZY)
+    case (N_LAZY)
+       ! (:prim NODE closure): the lazy seq of its fn, pending, as eval_new's
+       ! clotran.host.lazy_seq (the closure built by its N_FN op, vtg_fnhd)
+       if (n == 1) then
+          call vs_set(vst, base + 3, vs_get(vst, argbase + 1))
+          out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [vs_get(vst, base + 3)])
+          call gc_set_i1(out, LAZY_PENDING)
+       end if
+    case (N_FN)
        ! the closure straight from the captured values, in its template's
        ! capture order: make_closure_from's two shapes, with no frame built
        ! to copy them out of
@@ -458,11 +471,6 @@
           out = gc_obj(OBJ_CLOSURE, [vs_get(vst, base + 2), vs_get(vst, base + 3), gc_nil(), gc_nil(), gc_nil()], [nd])
        end if
        call closure_note_table(out)
-       if (gc_i1(nd) == N_LAZY) then
-          call vs_set(vst, base + 3, out)
-          out = gc_obj(OBJ_LAZY, [vs_get(vst, base + 3), gc_nil(), gc_nil()], [vs_get(vst, base + 3)])
-          call gc_set_i1(out, LAZY_PENDING)
-       end if
     end select
     call vm_took(tctx, ok, out, nd)
     call vs_leave(vst, base)
@@ -622,49 +630,24 @@
   recursive function vm_tr(c, nd, roots) result(e)
     type(vm_tr_ctx), intent(inout), target :: c
     type(gc_value), intent(in) :: nd, roots(:)
-    type(gc_value) :: e, x, v
-    type(gc_stack), pointer :: vst
-    integer :: base, i
+    type(gc_value) :: e
     e = gc_nil()
     if (.not. c%ok) return
-    vst => gc_my_stack()
-    ! slots: 1 nd, 2 an accumulator vector, 3 4 scratch, 5 kw, 6 a second accumulator
     if (gc_i1(nd) == N_CONST .or. gc_i1(nd) == N_VAR .or. gc_i1(nd) == N_LOCAL .or. gc_i1(nd) == N_IF .or. gc_i1(nd) == N_THROW &
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
          .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN .or. gc_i1(nd) == N_TRY &
          .or. gc_i1(nd) == N_VECTOR .or. gc_i1(nd) == N_MAP .or. gc_i1(nd) == N_SET .or. gc_i1(nd) == N_NEW &
-         .or. gc_i1(nd) == N_DOT .or. gc_i1(nd) == N_FN) then
+         .or. gc_i1(nd) == N_DOT .or. gc_i1(nd) == N_FN .or. gc_i1(nd) == N_LAZY) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
-    base = vs_enter(vst, 6)
-    call vs_set(vst, base + 1, nd)
-    select case (gc_i1(nd))
-    case (N_LAZY)
-       ! the captured slots' values, in the template's order
-       call vs_set(vst, base + 2, gcv_empty(roots))
-       x = gcv_nth(gc_slot(nd, 2), 2)
-       call vs_set(vst, base + 6, x)
-       do i = 0, gcv_count(vs_get(vst, base + 6)) / 2 - 1
-          x = vm_slot_ref(c, int_of(gcv_nth(vs_get(vst, base + 6), 2 * i)), [roots, vs_get(vst, base + 2), &
-               vs_get(vst, base + 6)])
-          if (.not. c%ok) exit
-          call vs_set(vst, base + 3, x)
-          x = gcv_conj(vs_get(vst, base + 2), vs_get(vst, base + 3), [roots, vs_get(vst, base + 2), vs_get(vst, base + 6)])
-          call vs_set(vst, base + 2, x)
-       end do
-       if (c%ok) e = vm_node_prim(vs_get(vst, base + 1), vs_get(vst, base + 2), roots)
-    case default
-       c%ok = .false.
-    end select
-    v = e
-    call vs_leave(vst, base)
-    e = v
+    ! every other kind: vm_scan refuses it, the fn stays the tree's
+    c%ok = .false.
   end function vm_tr
 
   ! ---- THE GENERATED TRANSLATION'S HOST (model/vmtrg.lisp) ---------------
   ! A constant, a local, a Var, if, do, let*, loop, recur, throw, every call, case*, letfn,
-  ! try, a vector, map, set, new or dot call and a fn are translated by vtg_tr
+  ! try, a vector, map, set, new or dot call, a fn and a lazy seq are translated by vtg_tr
   ! (src/f/gen/vm_tr_gen.inc), generated from model/vmtrg.lisp, which
   ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
   ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
@@ -1031,12 +1014,19 @@
   ! a fn's head items (vmtrg's vtg-fnhd): :prim and the N_FN node itself,
   ! the op of the runtime's kind 6 (vm_node_hook builds the closure from the
   ! captured values) -- NAMED: the model's :mkclo and the template, ex-tr's
-  ! (:mkclo tm caps..)
+  ! (:mkclo tm caps..). A lazy seq's closure (ex-tr's inner (:mkclo tm
+  ! caps..)) is a fn's: an N_FN node of the N_LAZY node's template, made
+  ! here (analyze_fn's shape: no kids, slot 2 the template), so the N_LAZY
+  ! node's own kind 6 is only the wrap (vm_node_hook)
   subroutine vtg_fnhd(tb, nd)
     type(vtg_state), intent(inout) :: tb
     type(gc_value), value :: nd
     call anb_push(vm_kw("prim"))
-    call anb_push(nd)
+    if (gc_i1(nd) == N_LAZY) then
+       call anb_push(mk_node(N_FN, gc_nil(), gc_slot(nd, 2), gc_nil(), 0, [nd]))
+    else
+       call anb_push(nd)
+    end if
   end subroutine vtg_fnhd
   ! a case's entry j's test items (vmtrg's vtg-cstest): the N_CASE node
   ! itself, the op of the runtime's kind 6 (vm_node_hook: case_branch's
@@ -1243,23 +1233,6 @@
     call vs_leave(vst, base)
   end function vm_deref_of
 
-
-  ! (:prim NODE items ..)
-  function vm_node_prim(nd, items, roots) result(e)
-    type(gc_value), intent(in) :: nd, items, roots(:)
-    type(gc_value) :: e, x
-    type(gc_stack), pointer :: vst
-    integer :: base
-    vst => gc_my_stack()
-    base = vs_enter(vst, 2)
-    x = vec_to_list(items, [roots, items, nd])
-    call vs_set(vst, base + 1, x)
-    x = gcl_cons(nd, vs_get(vst, base + 1), [roots, nd, vs_get(vst, base + 1)])
-    call vs_set(vst, base + 1, x)
-    call vs_set(vst, base + 2, vm_kw("prim"))
-    e = gcl_cons(vs_get(vst, base + 2), vs_get(vst, base + 1), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_leave(vst, base)
-  end function vm_node_prim
 
   function vec_to_list(v, roots) result(l)
     type(gc_value), intent(in) :: v, roots(:)

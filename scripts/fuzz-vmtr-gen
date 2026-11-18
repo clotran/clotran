@@ -15,7 +15,8 @@
 ;; catch walk, catch j's class 60 + j and slot s2 + j, a finally or none:
 ;; ex-trh, ex-trfin), a collection (a vector, map, set, new or dot: kinds
 ;; 7 8 9 22 21, (:prim op args..), op ex-cop), a fn ((:mkclo tm caps..),
-;; its template (0 0 (o 0 ..))), a builtin's
+;; its template (0 0 (o 0 ..))), a lazy seq ((:prim (:host 15 tm) (:mkclo
+;; tm caps..))), a builtin's
 ;; call (:prim f args..), its head a constant fz-prim calls a builtin or a
 ;; Var (direct-linked or not) whose fn fz-prim says wraps one, or a constant
 ;; or Var fz-prim says is an IFn (:callv head args..), else (a local's or any
@@ -55,12 +56,12 @@
 (defn node [k & {:keys [i2 s2 c mark kids thens outs] :or {i2 0 s2 0 c nil mark 0 kids [] thens [] outs []}}]
   {:k k :i2 i2 :s2 s2 :c c :mark mark :kids kids :thens thens :outs outs})
 ;; a letfn's fn: its template (0 0 (o_0 0 o_1 1 ..)), the outer slots o_q
-(defn fnode [] (let [outs (vec (repeatedly (rnd 4) #(rnd 10)))]
-                 (node 14 :i2 (count outs) :outs outs
+(defn fnode [& [k]] (let [outs (vec (repeatedly (rnd 4) #(rnd 10)))]
+                 (node (or k 14) :i2 (count outs) :outs outs
                        :c (str "(0 0 " (if (seq outs) (str "(" (str/join " " (mapcat (fn [o q] [o q]) outs (range))) ")") "nil") ")"))))
 (def tlr-kinds (atom []))
 (defn gen [d]
-  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 13 13 16 16 17 17 18 18 19 19 7 8 9 21 22 14 14 99] @tlr-kinds)))
+  (let [k (if (zero? d) (pick (into [1 2 2 3] (when (seq @tlr-kinds) [16 16]))) (pick (into [1 2 2 3 4 4 4 5 5 5 6 6 11 11 11 12 12 12 13 13 16 16 17 17 18 18 19 19 7 8 9 21 22 14 14 15 15 99] @tlr-kinds)))
         sub #(gen (dec d))]
     (case k
       1 (node 1 :c (pick [nil 0 1 7 42]))
@@ -84,6 +85,8 @@
       17 (node 17 :kids [(sub)])
       ;; a fn: (:mkclo tm caps..), its outer slots read in the template's order
       14 (fnode)
+      ;; a lazy seq: (:prim (:host 15 tm) (:mkclo tm caps..))
+      15 (fnode 15)
       ;; a collection: its kids the parts, c the host op's constant
       (7 8 9 21 22) (node k :c (pick [nil 3]) :kids (vec (repeatedly (rnd 4) sub)))
       ;; a case*: its test and default, entries' thens (entry j's test 50 + j)
@@ -126,7 +129,7 @@
               (let [me (count @out)
                     kids (into kids thens)]
                 (swap! out conj nil)
-                (if (= k 14)
+                (if (#{14 15} k)
                   ;; a letfn's fn: its outer slots its row's kids
                   (swap! out assoc me (str/join " " (concat [k i2 s2 -1 mark (count outs)] outs)))
                   (let [ids (mapv walk kids)]

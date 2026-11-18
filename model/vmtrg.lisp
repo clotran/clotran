@@ -2,7 +2,8 @@
 ; scripts/acl2-fortran -b vmtrg): exec-vmtr's ex-tr at the level the
 ; Fortran is generated from, guard-verified, for the kinds whose encoding
 ; vm.inc and ex-tr share -- a constant, a local, a Var, if, do, let*, loop,
-; recur, throw, every call, case*, letfn, try, a collection and a fn --
+; recur, throw, every call, case*, letfn, try, a collection, a fn and a
+; lazy seq --
 ; every other kind the host's (vtg-other: vm.inc's hand-written vm_tr,
 ; which calls back here for these kinds). exec-PLAN's Lane 3 says what
 ; is left.
@@ -189,11 +190,22 @@
 ; runtime's kind 6 (vm_node_hook building the closure from the captured
 ; values, make_closure_from's two shapes), where the model's are :mkclo and
 ; tm; vtg_ncap / vtg_capo read the template's (outer, inner) pairs, slot 2's
-; vector, where the model's is ex-outers of its list. A lazy seq (15),
-; ex-tr's (:prim op (:mkclo ..)), stays vm_tr's: vm.inc's is one flat
-; (:prim NODE caps..). Tests: fuzz-vmtr-gen draws fns (templates (0 0 (o 0
-; ..))). Cost: 3 steps and 2 a capture (vtg-steps; vtg-size counts a
-; capture a node).
+; vector, where the model's is ex-outers of its list. Tests: fuzz-vmtr-gen
+; draws fns (templates (0 0 (o 0 ..))). Cost: 3 steps and 2 a capture
+; (vtg-steps; vtg-size counts a capture a node).
+;
+; A LAZY SEQ (item 7) is ex-tr's kind 15, (:prim (:host 15 tm) (:mkclo tm
+; caps..)): the host's wrap of a fn's closure (vtg_cop, then a fn's items,
+; vtg_node 0, vtg_node 6 2). No new semantic hypothesis: exec-vm's
+; agreement already takes it (ex-collok's (prim (:host 15 C))). Named, not
+; proved: vtg_cop's op is the N_LAZY node, the runtime's kind 6 wrapping
+; its one argument in a pending lazy seq (vm_node_hook, as eval_new's
+; clotran.host.lazy_seq); vtg_fnhd's op for it an N_FN node of the same
+; template, made at translation (mk_node, analyze_fn's shape), where the
+; model's are (:host 15 tm), :mkclo and tm. vm.inc's encoding changed for
+; this (it was one flat (:prim NODE caps..)); what runs is the same
+; closure, wrapped the same. Tests: fuzz-vmtr-gen draws lazy seqs (kind
+; 15, a fn's template). Cost: 5 steps and 2 a capture.
 
 (in-package "ACL2")
 
@@ -685,6 +697,8 @@
             ((vtg-coll k) (let* ((vtb (vtg-cop e vtb)) (vtb (vtg-tr 3 e 0 vtb))) (vtg-node 6 (+ 1 (vtg-nk e)) vtb)))
             ; a fn: (:mkclo tm caps..)
             ((equal k 14) (let* ((vtb (vtg-fnhd e vtb)) (vtb (vtg-caps e 0 vtb))) (vtg-node 0 (+ 2 (vtg-ncap e)) vtb)))
+            ; a lazy seq: (:prim op (:mkclo tm caps..))
+            ((equal k 15) (let* ((vtb (vtg-cop e vtb)) (vtb (vtg-fnhd e vtb)) (vtb (vtg-caps e 0 vtb)) (vtb (vtg-node 0 (+ 2 (vtg-ncap e)) vtb))) (vtg-node 6 2 vtb)))
             (t (vtg-other e vtb)))))))
 
 (verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-deref vtg-hd vtg-pk vtg-nil vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop vtg-fnhd vtg-caps))))
@@ -766,7 +780,7 @@
                    ((equal k 12) (and (vtg-okt nil e) (if (vtg-lind e 1) (and (vtg-frag 3 e 0) (vtg-frag 5 e 0)) (vtg-frag 1 e 0))))
                    ((equal k 16) (vtg-frag 3 e 0))
                    ((vtg-coll k) (vtg-frag 3 e 0))
-                   ((equal k 14) (vtg-fnok e))
+                   ((or (equal k 14) (equal k 15)) (vtg-fnok e))
                    ((equal k 6) (and (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 3 e 1)))
                    ((equal k 19) (and (< (len (vtg-c e)) *vtg40*) (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 6 e 0)))
                    ((equal k 13) (vtg-frag 7 e 0))
@@ -894,6 +908,10 @@
 (defthm ex-tr-fn-kind
   (implies (and (consp e) (equal (ex-kind e) 14)) (equal (ex-tr :m e 0 cm) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm))))
   :hints (("Goal" :expand ((ex-tr :m e 0 cm)))))
+; a lazy seq's
+(defthm ex-tr-lazy-kind
+  (implies (and (consp e) (equal (ex-kind e) 15)) (equal (ex-tr :m e 0 cm) (list :prim (ex-cop e) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm)))))
+  :hints (("Goal" :expand ((ex-tr :m e 0 cm)))))
 ; how many a loop's inits and a recur's args are, the loop's slots and their reads
 (defun vtg-lin-ind (e i c)
   (declare (irrelevant c))
@@ -953,6 +971,7 @@
        (equal (vtg-rethrow e (vtg-st s c sv cs)) (vtg-st (cons (list :throw (ex-cloc (len c) (vtg-np cs) (vtg-nm cs))) s) c sv cs))
        (equal (vtg-blankcs e (vtg-st s c sv cs)) (vtg-st s (ex-blank (ex-clr :cs e 0) c) sv cs))
        (equal (vtg-node 9 2 (vtg-st (list* y x s) c sv cs)) (vtg-st (cons (list :try x y) s) c sv cs))
+       (equal (vtg-node 6 2 (vtg-st (list* y x s) c sv cs)) (vtg-st (cons (list :prim x y) s) c sv cs))
        (equal (vtg-cop e (vtg-st s c sv cs)) (vtg-st (cons (ex-cop e) s) c sv cs))
        (equal (vtg-fnhd e (vtg-st s c sv cs)) (vtg-st (revappend (list :mkclo (ex-c e)) s) c sv cs)))
   :hints (("Goal" :expand ((:free (n l acc) (vtg-popn n l acc))))))
@@ -1157,10 +1176,10 @@
                 (implies (equal flg 6) (and (equal (vtg-kind e) 19) (< (len (ex-c e)) *vtg40*)))
                 (implies (equal flg 7) (equal (vtg-kind e) 13))
                 (implies (equal flg 8) (and (equal (vtg-kind e) 18) (< (len (ex-c e)) *vtg40*)))
-                (implies (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) (quote (1 2 3 4 5 6 7 8 9 11 12 13 14 16 17 18 19 21 22))))
+                (implies (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) (quote (1 2 3 4 5 6 7 8 9 11 12 13 14 15 16 17 18 19 21 22))))
                 (implies (and (not (member flg '(1 2 3 5 6 7 8))) (equal (vtg-kind e) 12)) (vtg-okt nil e))
                 (implies (and (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) '(18 19))) (< (len (ex-c e)) *vtg40*))
-                (implies (and (not (member flg '(1 2 3 5 6 7 8))) (equal (vtg-kind e) 14)) (vtg-fnok e))))
+                (implies (and (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) '(14 15))) (vtg-fnok e))))
   :rule-classes :forward-chaining :hints (("Goal" :expand ((vtg-frag flg e i)))))
 
 ; ex-tr's translation x with the captures read in place
@@ -1245,7 +1264,7 @@
                  (vtg-ind 1 e 0 s c sv cs)))
               ((equal k 16) (vtg-ind 3 e 0 s c sv cs))
               ((vtg-coll k) (vtg-ind 3 e 0 (cons (ex-cop e) s) c sv cs))
-              ((equal k 14) nil)
+              ((or (equal k 14) (equal k 15)) nil)
               ((and (equal k 6) (not (equal (vtg-pk e) 0))) (vtg-ind 3 e 1 (revappend (ex-phd e) s) c sv cs))
               ((equal k 6)
                (let* ((k0 (vtg-kid e 0)) (c1 (append (ex-blank (ex-clr :m k0 0) c) (list nil)))
@@ -1401,6 +1420,7 @@
             ((equal k 16) (+ 2 (vtg-steps 3 e 0)))
             ((vtg-coll k) (+ 3 (vtg-steps 3 e 0)))
             ((equal k 14) (+ 3 (* 2 (vtg-ncap e))))
+            ((equal k 15) (+ 5 (* 2 (vtg-ncap e))))
             ((equal k 6) (if (not (equal (vtg-pk e) 0)) (+ 4 (vtg-steps 3 e 1)) (+ 13 (vtg-steps 0 (vtg-kid e 0) 0) (vtg-steps 3 e 1))))
             ((equal k 19) (+ 7 (vtg-steps 0 (vtg-kid e 0) 0) (vtg-steps 6 e 0)))
             ((equal k 13) (+ 1 (vtg-steps 7 e 0)))
@@ -1450,7 +1470,7 @@
             ((equal k 12) (if (vtg-lind e 1) (+ 1 (vtg-size 3 e 0) (vtg-size 5 e 0)) (+ 1 (vtg-size 1 e 0))))
             ((equal k 16) (+ 1 (vtg-size 3 e 0)))
             ((vtg-coll k) (+ 1 (vtg-size 3 e 0)))
-            ((equal k 14) (+ 1 (vtg-ncap e)))
+            ((or (equal k 14) (equal k 15)) (+ 1 (vtg-ncap e)))
             ((equal k 6) (if (not (equal (vtg-pk e) 0)) (+ 1 (vtg-size 3 e 1)) (+ 1 (vtg-size 0 (vtg-kid e 0) 0) (vtg-size 3 e 1))))
             ((equal k 19) (+ 1 (vtg-size 0 (vtg-kid e 0) 0) (vtg-size 6 e 0)))
             ((equal k 13) (+ 1 (vtg-size 7 e 0)))
