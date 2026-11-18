@@ -598,6 +598,28 @@ end module clotran_rt_decl
 (def ^:private err-return
   ["if (st /= 0) then" "   call clotran_frame_done(b)" "   return" "end if"])
 
+;; THE IR (model/aot-ir.lisp). gen's code is a list of statements, each either Fortran text or an
+;; instruction as data -- the kinds model/aot-ir.lisp gives a meaning and aot-cc emits, proved
+;; against the interpreter there (aot-cc-correct). ir-lines prints each instruction as its one
+;; Fortran template; nothing else reads them.
+;;   [:const d v] [:get d s] [:clr s] [:put s d] [:copy d s] [:deref d s] [:if s then else]
+(declare ir-lines)
+(defn- ind [code] (map #(str "   " %) (ir-lines code)))
+(defn- ir-lines [code]
+  (mapcat (fn [x]
+            (if (string? x)
+              [x]
+              (let [[op a b c] x]
+                (case op
+                  :const (emit-const (str "b + " a) b)
+                  :get [(str "call clotran_frame_get(b + " a ", b + 1, " b "_c_int)")]
+                  :clr [(str "call clotran_frame_clear(b + 1, " a "_c_int)")]
+                  :put [(str "call clotran_frame_put(b + 1, " a "_c_int, b + " b ")")]
+                  :copy [(str "call clotran_copy(b + " a ", b + " b ")")]
+                  :deref [(str "call clotran_deref(b + " a ", b + " b ")")]
+                  :if (concat [(str "if (clotran_bool(b + " a ") /= 0) then")] (ind b) ["else"] (ind c) ["end if"])))))
+          code))
+
 (declare gen gp)
 
 (defn- arith-inline
@@ -642,7 +664,7 @@ end module clotran_rt_decl
              (str "else if (" (tags 3) ") then")
              (str "   " dr)
              "else"]
-            (map #(str "   " %) slow)
+            (ind slow)
             ["end if"])))
 
 (defn- site
@@ -673,7 +695,7 @@ end module clotran_rt_decl
   [nd st]
   (let [p (pooled nd) s (get (:pool st) (pkey p))]
     (if (and (= :var (:kind p)) (not (linked? (:who st) (:value p))))
-      (let [[t st] (fresh st)] [[(str "call clotran_deref(b + " t ", b + " s ")")] t st])
+      (let [[t st] (fresh st)] [[[:deref t s]] t st])
       [[] s st])))
 
 (defn- slow-call
@@ -785,7 +807,7 @@ end module clotran_rt_decl
           [c a st]
           (let [[slow st] (slow-call nd [[a at]] r :long st)]
             [(concat c [(str "if (" in-range ") then") (str "   " r " = " conv) "else"]
-                     (map #(str "   " %) slow) ["end if"])
+                     (ind slow) ["end if"])
              r st])))
 
       :alength
@@ -802,7 +824,7 @@ end module clotran_rt_decl
                   (str "   " r " = " (av-name aslot (ats 0)) "(" i " + 1)")
                   "else"
                   (str "   call clotran_frame_get(b + " as ", b + 1, " aslot "_c_int)")]
-                 (map #(str "   " %) slow)
+                 (ind slow)
                  ["end if"])
          r st])
 
@@ -819,7 +841,7 @@ end module clotran_rt_decl
                   (str "   " r " = " v)
                   "else"
                   (str "   call clotran_frame_get(b + " as ", b + 1, " aslot "_c_int)")]
-                 (map #(str "   " %) slow)
+                 (ind slow)
                  ["end if"])
          r st])
 
@@ -831,7 +853,7 @@ end module clotran_rt_decl
           [(concat c1 c2 [(str r " = " a " " fop " " b)]) r st]
           (let [[slow st] (slow-call nd [[a :long] [b :long]] r :long st)]
             [(concat c1 c2 [(str "if (" (ovf sym a b) ") then")]
-                     (map #(str "   " %) slow)
+                     (ind slow)
                      ["else" (str "   " r " = " a " " fop " " b) "end if"])
              r st])))
 
@@ -850,7 +872,7 @@ end module clotran_rt_decl
           (let [edge (if (= kind :inc) "huge(0_c_int64_t)" "(-huge(0_c_int64_t) - 1_c_int64_t)")
                 [slow st] (slow-call nd [[a :long]] r :long st)]
             [(concat c1 [(str "if (" a " == " edge ") then")]
-                     (map #(str "   " %) slow)
+                     (ind slow)
                      ["else" (str "   " r " = " a op "1_c_int64_t") "end if"])
              r st])))
 
@@ -901,7 +923,7 @@ end module clotran_rt_decl
                     (str "else if (" tagx " == 3_c_int) then")
                     (str "   " r " = " (ord (coerce x nt :double) realx))
                     "else"]
-                   (map #(str "   " %) slow)
+                   (ind slow)
                    ["end if"])
            r st])))))
 
@@ -978,8 +1000,8 @@ end module clotran_rt_decl
   marks that read, :p2 true, as the interpreter's F_MOVEC does), so a
   local never holds the head of a seq a later call is walking."
   [s nd]
-  (cond-> [(str "call clotran_frame_get(b + " s ", b + 1, " (:i2 nd) "_c_int)")]
-    (true? (:p2 nd)) (conj (str "call clotran_frame_clear(b + 1, " (:i2 nd) "_c_int)"))))
+  (cond-> [[:get s (:i2 nd)]]
+    (true? (:p2 nd)) (conj [:clr (:i2 nd)])))
 
 (defn- gen-into
   "Generate a node so that its value ends up in slot `dst`. A constant,
@@ -1044,8 +1066,8 @@ end module clotran_rt_decl
                   ;; the temporary is cleared once the local has it (as
                   ;; gen-into's), or a loop's first binding held the head
                   ;; of the seq the loop walks: protocols' internal-reduce
-                  [(into code (cond-> (conj (vec c) (str "call clotran_frame_put(b + 1, " slot "_c_int, b + " s ")"))
-                                (seq c) (conj (str "call clotran_set_nil(b + " s ")"))))
+                  [(into code (cond-> (conj (vec c) [:put slot s])
+                                (seq c) (conj [:const s nil])))
                    (assoc-in st [:env :slots slot] :any)]))))
           [[] st] (range n)))
 
@@ -1128,7 +1150,7 @@ end module clotran_rt_decl
       (let [t (infer nd (:env st))]
         (case (:op nd)
           :const (let [[s st] (fresh st)]
-                   [(emit-const (str "b + " s) (:p1 nd)) s st])
+                   [[[:const s (:p1 nd)]] s st])
 
           :local (let [[s st] (fresh st)]
                    (if (prim? t)
@@ -1143,27 +1165,21 @@ end module clotran_rt_decl
                     ;; ts: the test's own slot, let go once a branch is
                     ;; taken -- (if-let [s (seq coll)] ...) otherwise held
                     ;; the seq's head through the branch, all of seq-reduce
-                    [tc cond st ts] (if (= :bool tt)
-                                      (gp test :bool st)
-                                      (let [[c s st] (gen test st)]
-                                        [c (str "clotran_bool(b + " s ") /= 0") st (when (seq c) s)]))
-                    let-go (when ts [(str "   call clotran_set_nil(b + " ts ")")])
+                    ;; the test: a Fortran logical (typed), or the slot it landed in (boxed)
+                    [tc cond st s] (if (= :bool tt)
+                                     (gp test :bool st)
+                                     (let [[c s st] (gen test st)] [c nil st s]))
+                    let-go (when (and s (seq tc)) [[:const s nil]])
                     [r st] (fresh st)
                     [thc ths st] (gen th st)
                     [elc els st] (if el (gen el st) (gen {:op :const :p1 nil} st))
                     ;; a recur branch produces nothing anyone reads
-                    copy (fn [br s] (when-not (= :recur (:op br))
-                                      [(str "   call clotran_copy(b + " r ", b + " s ")")]))]
-                [(concat tc
-                         [(str "if (" cond ") then")]
-                         let-go
-                         (map #(str "   " %) thc)
-                         (copy th ths)
-                         ["else"]
-                         let-go
-                         (map #(str "   " %) elc)
-                         (copy (or el {:op :const}) els)
-                         ["end if"])
+                    copy (fn [br s] (when-not (= :recur (:op br)) [[:copy r s]]))
+                    thb (concat let-go thc (copy th ths))
+                    elb (concat let-go elc (copy (or el {:op :const}) els))]
+                [(concat tc (if s
+                              [[:if s thb elb]]
+                              (concat [(str "if (" cond ") then")] (ind thb) ["else"] (ind elb) ["end if"])))
                  r st])
 
           :call (if (and (prim? t) (head-op (first (:children nd))))
@@ -1321,7 +1337,7 @@ end module clotran_rt_decl
                       st (update st :flags conj flag)
                       [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
                   (let [loop-lines (concat ["do" (str "   " flag " = 0") "   call clotran_poll()"]
-                                           (map #(str "   " %) bc)
+                                           (ind bc)
                                            [(str "   if (" flag " == 0) exit") "end do"])
                         released (when outermost? (release-around loop-lines))
                         st (cond-> (assoc st :loop outer-loop :env outer-env :hoisted outer-hoisted
@@ -1373,7 +1389,7 @@ end module clotran_rt_decl
   (let [[c s st :as r] (gen-op nd st)]
     (if (and (seq c) (some #{s} (vals (:pool st))))
       (let [[t st] (fresh st)]
-        [(conj (vec c) (str "call clotran_copy(b + " t ", b + " s ")")) t st])
+        [(conj (vec c) [:copy t s]) t st])
       r)))
 
 (defn- decls-text
@@ -1508,10 +1524,10 @@ end module clotran_rt_decl
                                 [tc tres st] (gen body (assoc st :env {:slots h} :hoisted {}))]
                             [(concat ["hok = .true."] gc
                                      ["if (hok) then"]
-                                     (map #(str "   " %) (concat setup tc))
+                                     (ind (concat setup tc))
                                      [(str "   call clotran_copy(b + " r ", b + " tres ")")
                                       "else"]
-                                     (map #(str "   " %) inner)
+                                     (ind inner)
                                      ["end if"])
                              st]))
                         [(concat uc [(str "call clotran_copy(b + " r ", b + " ures ")")]) st]
@@ -1524,7 +1540,7 @@ end module clotran_rt_decl
              ;; go, so the caller does not hold a seq this fn walks
              ["call clotran_clear_args(argbase, nargs)"]
              ["do" (str "   " flag " = 0") "   call clotran_poll()"]
-             (map #(str "   " %) code)
+             (ind code)
              [(str "   if (" flag " == 0) exit") "end do"
               (str "call clotran_copy(dst, b + " res ")")])
      st]))
@@ -1637,7 +1653,7 @@ end module clotran_rt_decl
         single? (>= reg 0)
         fixed (map branches fixed-ix)
         varg (when (>= var 0) (nth branches var))
-        indent #(map (fn [l] (str "   " l)) %)
+        indent ind
         body (if single?
                (second (first branches))
                (concat
@@ -1708,6 +1724,57 @@ end module clotran_rt_decl
                proc (binding [*aot-nslots* (nth tmpl 3)] (fn-procedure sym (str ns-name "/" fn-name) tmpl form offset pool
                                   {:prefix (str "cc" (or idx 0))}))]
            (assoc proc :ns ns-name :name fn-name :fingerprint fingerprint)))))))
+
+;;; ---- the IR, for scripts/fuzz-aot-gen's third part ---------------------------------------
+;;;
+;;; The first arity's body of a (fn ...) form as gen emits it, beside the same tree as
+;;; model/exec.lisp's node (kind i2 kids c s2 mark rstart rn), the pool as aot-cc's alist and the
+;;; first temporary, all as ACL2 text: the fuzzer asks ACL2's aot-cc for the same answer. nil when
+;;; some of the code is still Fortran text (a kind or a typed path not yet modelled).
+
+(defn- acl2-val [v]
+  (cond (nil? v) "nil" (true? v) "t" (false? v) ":false" (int? v) (str v)
+        (double? v) (str "(:d " (pr-str (str v)) ")")
+        :else (str "(:o " (pr-str (pr-str v)) ")")))
+
+(defn- acl2-node [nd]
+  (let [k (get {:const 1 :local 2 :var 3 :if 4 :do 5 :call 6 :let 11 :loop 12 :fn 14 :recur 16} (:op nd) 99)]
+    (str "(" k " " (or (:i2 nd) 0) " (" (str/join " " (map acl2-node (:children nd))) ") "
+         (if (#{1 3} k) (acl2-val (:p1 nd)) "nil") " " (if (= k 11) (:p1 nd) 0) " "
+         (if (and (= k 2) (true? (:p2 nd))) "t" "nil") " 0 0)")))
+
+(defn- acl2-ir [code]
+  (when (every? vector? code)
+    (let [xs (map (fn [[op a b c]]
+                    (case op
+                      :const (str "(:const " a " " (acl2-val b) ")")
+                      :if (let [t (acl2-ir b) e (acl2-ir c)] (when (and t e) (str "(:if " a " " t " " e ")")))
+                      :clr (str "(:clr " a ")")
+                      (str "(" op " " a " " b ")")))
+                  code)]
+      (when (every? some? xs) (str "(" (str/join " " xs) ")")))))
+
+(defn ir-check
+  "[tree pool n want] as ACL2 text, or nil (see above). `who` names the fn (linked? reads it)."
+  [form who]
+  (let [{:keys [tmpl pool]} (loader/analyse form 'f)
+        [_ arities _ nslots] tmpl
+        [_ _ _ body] (first arities)
+        held (remove #(= :site (:kind %)) pool)
+        pslots (into {} (map-indexed (fn [i p] [(pkey p) (+ 2 i)]) held))
+        n (+ 2 (count held))
+        st {:next n :high (dec n) :pool pslots :pidx {} :flags ["recur0"] :loop "recur0" :fn-loop "recur0"
+            :who who :offset 0 :pool-list pool :counter (atom 0) :prefix "cc_ir" :env {:slots {}} :hoisted {} :params #{}}
+        [code s st] (binding [*aot-nslots* nslots *int-temps* (atom #{})] (gen body st))
+        ir (acl2-ir code)]
+    (when ir
+      (str "(" (acl2-node body) " ("
+           ;; the raw values, the last entry of a key first: pslots keeps the last of equal keys
+           (str/join " " (for [[p sl] (reverse (map-indexed (fn [i p] [p (get pslots (pkey p))]) held))
+                               :when (#{:var :const} (:kind p))]
+                           (str "((" (if (= :var (:kind p)) 3 1) " " (acl2-val (:value p)) ") " sl " "
+                                (if (and (= :var (:kind p)) (linked? who (:value p))) "t" "nil") ")")))
+           ") " n " (" ir " " s " " (:next st) "))"))))
 
 (defn- manifest-text
   "clotran_manifest, the symbol every package answers its EDN through

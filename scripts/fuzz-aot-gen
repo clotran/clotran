@@ -19,7 +19,7 @@
 ;;
 ;; -x is the NEGATIVE CONTROL: the generated side reads a case as a do, a
 ;; kind the compiler emits, a double constant as a long, and its arity 0 as
-;; variadic when it is fixed and back; the answers must part.
+;; variadic when it is fixed and back, and drops gen's IR clearings (slice 4); the answers must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -177,7 +177,57 @@
             :kinds (cond-> [] (not= (first got) (first want)) (conj "scan") (not= (second got) (second want)) (conj "recur-under")
                      (not= (take-nth 2 gty) (take-nth 2 wty)) (conj "type") (not= (take-nth 2 (rest gty)) (take-nth 2 (rest wty))) (conj "ok") (not= gar war) (conj "arity"))}))))
 
-(def bad (remove :ok results))
+;; ---- slice 4: the IR compiler.cljf's gen emits, against ACL2's aot-cc ---------------------
+;; Random (fn [a b c] body) forms of the kinds aot-cc models (const local var if do let); clotran
+;; analyses each and gen emits it (clotran.compiler/ir-check: the tree, the pool, the IR); a case
+;; whose code is still partly Fortran text (a typed path, not yet modelled) is not compared, and
+;; is counted. ACL2's aot-cc of the same tree and pool must answer the same IR, slot and next
+;; temporary. -x drops every (:clr s) from gen's IR -- a local's clearing lost -- and must part.
+
+(defn ir-form [d locals]
+  (let [leaf #(pick (concat ['nil 'nil :k :k2 "s" 1 2.5 true 'inc 'clojure.core/str 'clojure.core/map 'nil] locals locals locals))]
+    (if (<= d 0)
+      (leaf)
+      (case (rnd 6)
+        0 (leaf)
+        1 (apply list 'if (ir-form (dec d) locals) (ir-form (dec d) locals) (when (pos? (rnd 3)) [(ir-form (dec d) locals)]))
+        2 (apply list 'do (repeatedly (rnd 4) #(ir-form (dec d) locals)))
+        (let [k (inc (rnd 3))
+              [bs ls] (reduce (fn [[bs ls] _] (let [x (symbol (str "x" (count ls)))] [(conj bs x (ir-form (dec d) ls)) (conj ls x)]))
+                              [[] locals] (range k))]
+          (list 'let bs (ir-form (dec d) ls)))))))
+
+(def ir-forms (vec (repeatedly n #(vector (list 'fn '[a b c] (ir-form (+ 1 (rnd 4)) '[a b c])) (pick ["user/f" "clojure.fz/f"])))))
+(def ir-file (str work "/ir.clj"))
+(spit ir-file (str "(require 'clotran.compiler)\n"
+                   (str/join (map-indexed (fn [k [f who]] (str "(println \"IR " k " \" (or (clotran.compiler/ir-check '" (pr-str f) " " (pr-str who) ") \"-\"))\n")) ir-forms))))
+(def ir-out (:out (p/shell {:out :string :err :string :continue true} "./clotran" ir-file)))
+(def ir-got (into {} (for [l (str/split-lines ir-out) :let [[_ k t] (re-matches #"IR (\d+) (.*)" l)] :when k] [(parse-long k) (str/trim t)])))
+(when (not= (count ir-got) n)
+  (println (str "fuzz-aot-gen: clotran answered " (count ir-got) " of " n " IR cases; its output ends:"))
+  (println (subs ir-out (max 0 (- (count ir-out) 2000))))
+  (System/exit 1))
+(def ir-kept (into (sorted-map) (remove #(= "-" (val %)) ir-got)))
+(defn drop-clr [t] (str/replace t #"\(:clr \d+\) ?" ""))
+(def ir-driver
+  (str "(include-book \"aot-ir\")\n(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
+       (str/join (for [[k t] ir-kept]
+                   ;; the tree's text has no :clr, so dropping them in the whole case drops gen's
+                   (str "(let ((c '" (if broken (drop-clr t) t) ")) (cw \"IRC ~x0 ~x1~%\" " k
+                        " (if (equal (aot-cc 0 (nth 0 c) 0 (nth 2 c) (nth 1 c)) (nth 3 c)) 1 0)))\n")))
+       "(good-bye)\n"))
+(def ir-acl2 (:out (p/shell {:dir "model" :in ir-driver :out :string :err :string} acl2)))
+(def ir-res (into {} (for [[_ k v] (re-seq #"IRC (\d+) (\d)" ir-acl2)] [(parse-long k) (parse-long v)])))
+(when (not= (count ir-res) (count ir-kept))
+  (println (str "fuzz-aot-gen: ACL2 answered " (count ir-res) " of " (count ir-kept) " IR cases; its output ends:"))
+  (println (subs ir-acl2 (max 0 (- (count ir-acl2) 2000))))
+  (System/exit 1))
+(def ir-bad (keep (fn [[k v]] (when (zero? v) k)) ir-res))
+(println (str n " IR forms: " (count ir-kept) " emitted wholly as IR and compared, " (- n (count ir-kept)) " partly Fortran text (typed, not yet modelled); "
+              (count ir-bad) " differ from ACL2's aot-cc"))
+(doseq [k (take 2 ir-bad)] (println "  IR case" k (pr-str (first (nth ir-forms k))) (get ir-kept k)))
+
+(def bad (concat (remove :ok results) (map (fn [k] {:k k :kinds ["ir"]}) ir-bad)))
 (println (str n " trees, seed " seed (when broken " (negative control: a case read as a do, a double as a long, arity 0 flipped)")))
 (println (str "  " (count (filter #(= 1 (first (:want %))) results)) " declined by the scan, "
               (reduce + (map #(count (second (:want %))) results)) " nodes, "

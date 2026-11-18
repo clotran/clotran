@@ -169,7 +169,7 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      cljf reads is the one exec runs (the same analyzer tree; assumed, as in slice 2).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
-   then may the row be Modeled. DESIGN (lane 3t, not started):
+   then may the row be Modeled. 4a LANDED (below); 4b-4e owed. DESIGN (lane 3t):
    - THE IR (model/aot-ir.lisp): what gen's statements do, not their spelling. A program is a
      list of instructions over a state (frame fr, boxed temporaries bt, typed temporaries tt,
      the recur flag, an error): (:get d s) (:put s d) (:const d c) (:box d t x) (:unbox x t d),
@@ -195,6 +195,44 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      instruction, read in review.
    - Order: 4a const local var if do let (boxed); 4b loop recur; 4c typed temps and prims with
      the hatch (A-OP enters here); 4d calls and closures; 4e the entry and versions.
+   - 4a LANDED (lane 3u). model/aot-ir.lisp: the IR as built so far -- (:const d v) (:get d s)
+     (:clr s) (:put s d) (:copy d s) (:deref d s) (:if s then else) -- over (fr bt), fr ex-ev's
+     frame and bt the procedure's slots (the pool's from b+2, then the temporaries); aot-ir-run
+     its meaning (fr bt ok), stopping at an instruction it does not know; COST aot-ir-cost (the
+     instructions run, at most aot-ir-size). aot-cc (fl e i n pool) = (code slot next): gen's case
+     for const local var if do let (fl 1), gen's copy of a pool slot that came with code (fl 0),
+     gen-seq (fl 2), bind-slots' boxed path then the body (fl 3); every other kind, and every
+     typed path, is (:owed e). The pool is an alist ((kind c) slot linked), as fn-procedure's
+     pslots: a Var or an unspellable constant, its slot, whether the Var is direct-linked.
+     PROVED (model/aot-ir-proof.lisp): aot-cc-correct -- on aot-s4 (kinds const local var if do
+     let; an if 2 or 3 kids, a let i2 + 1; a Var has a pool entry), the first temporary n above
+     every pool slot (aot-pslt), the pool holding what the host put there (aot-poolok: the
+     constant, the Var as (:var v), or a direct-linked Var's value): the code runs to the end,
+     the slot aot-cc names holds ex-ev's value, the frame is ex-ev's, and no slot below n moved.
+     Clearing marks are emitted and modelled ((:clr s) is ex-ev's update-nth n2 nil), so 4a does
+     not need slice 2's no-marks assumption. Induction aot-cc-ind; one lemma per case
+     (aot-cc-cl-*); where a value lands proved separately (aot-cc-slot: a fresh temporary in
+     [n, next), or a pool slot and then, from gen, no code). COST aot-cc-cost: the compile makes
+     at most 2 + 6 acl2-count(e) calls.
+     THE CLJF: compiler.cljf's gen now builds these instructions as data (vectors) for the
+     modelled paths; ir-lines prints each by its one Fortran template (named glue, read in
+     review), and the mixed lists are printed wherever text was handled (ind, the loop, the
+     arity body). The Fortran it writes is byte-identical: compile-fn's text compared on core.clj's
+     494 defns (428 compiled), old cljf against new, every hash equal. ir-check exports a fn's
+     first body as exec's node, the pool alist and gen's IR as ACL2 text.
+     CHECKED: fuzz-aot-gen's third part -- random (fn [a b c] ...) of const local var if do let,
+     analysed by clotran and emitted by gen; a case still partly Fortran text (a typed binding or
+     test: 4c) is counted and not compared; ACL2's aot-cc of the same tree and pool must answer
+     the same (code slot next). -s 1: 56 of 100 compared, 0 differ; -x drops gen's (:clr s) and
+     45 of 66 part.
+     ASSUMED (named, not proved): the host's pool is what ir-check reads (fn-procedure's pslots;
+     a key the cljf conflates by pkey -- '(9) and [9] -- is two keys in the model, and the fuzz
+     generates none); the slots and the frame do not alias (the frame lives at b+1, or past the
+     temporaries when frameless); clotran_bool is truthy; a Var's deref is its value
+     (aot-deref); the typed/boxed choice is the cljf's (infer), not modelled until 4c.
+     NOT DONE: 4b (loop recur: the flag loop, the recur's writes), 4c (typed temporaries, prims,
+     the overflow branch to the hatch; A-OP), 4d (calls, closures, gen-into), 4e (the entry and
+     versions). The row stays Owed.
 5. purefort's candidates/versions/can-fail, the same way.
 
-The Owed row stays Owed until slice 4; slice 1 is its own Generated row.
+The Owed row stays Owed until slice 4 is done (4a of 4a-4e landed); slice 1 is its own Generated row.
