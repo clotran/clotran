@@ -996,49 +996,39 @@
     integer(int64), value :: k_
     integer(int64), intent(out) :: r1
     integer(int64), intent(out) :: r2
-    type(gc_value) :: a_150
+    type(gc_value) :: a_148
     integer(int64) :: b_105
     integer(int64) :: b_91
-    logical :: cast_158
+    logical :: cast_156
     integer(int64) :: cb_33
     integer(int64) :: cn_34
-    logical :: d_169
+    logical :: d_167
     logical :: dj_98
-    type(gc_value) :: e_111
-    type(gc_value) :: e_116
-    type(gc_value) :: e_127
+    type(gc_value) :: e_125
     type(gc_value) :: e_23
     type(gc_value) :: e_28
     type(gc_value) :: e_6
     type(gc_value) :: e_87
-    integer(int64) :: fl_110
-    integer(int64) :: fl_115
-    integer(int64) :: fl_126
+    integer(int64) :: fl_124
     integer(int64) :: fl_22
     integer(int64) :: fl_27
     integer(int64) :: fl_5
     integer(int64) :: fl_86
     logical :: fresh_74
-    integer(int64) :: h_151
+    integer(int64) :: h_149
     logical :: hit_35
-    integer(int64) :: j_112
-    integer(int64) :: j_117
-    integer(int64) :: j_128
+    integer(int64) :: j_126
     integer(int64) :: j_24
     integer(int64) :: j_29
     integer(int64) :: j_7
     integer(int64) :: j_88
-    integer(int64) :: k_114
-    integer(int64) :: k_119
-    integer(int64) :: k_130
+    integer(int64) :: k_128
     integer(int64) :: k_26
     integer(int64) :: k_31
     integer(int64) :: k_9
     integer(int64) :: k_90
     integer(int64) :: kd_4
-    integer(int64) :: m_113
-    integer(int64) :: m_118
-    integer(int64) :: m_129
+    integer(int64) :: m_127
     integer(int64) :: m_25
     integer(int64) :: m_30
     integer(int64) :: m_8
@@ -1049,24 +1039,28 @@
     integer(int64) :: mv_106
     integer(int64) :: mv_107
     integer(int64) :: mv_11
-    integer(int64) :: mv_122
-    integer(int64) :: mv_123
-    integer(int64) :: mv_133
-    integer(int64) :: mv_134
-    integer(int64) :: mv_137
-    integer(int64) :: mv_138
+    integer(int64) :: mv_110
+    integer(int64) :: mv_111
+    integer(int64) :: mv_114
+    integer(int64) :: mv_115
+    integer(int64) :: mv_120
+    integer(int64) :: mv_121
+    integer(int64) :: mv_131
+    integer(int64) :: mv_132
+    integer(int64) :: mv_135
+    integer(int64) :: mv_136
+    integer(int64) :: mv_139
     integer(int64) :: mv_14
-    integer(int64) :: mv_141
-    integer(int64) :: mv_142
-    integer(int64) :: mv_146
-    integer(int64) :: mv_147
+    integer(int64) :: mv_140
+    integer(int64) :: mv_144
+    integer(int64) :: mv_145
     integer(int64) :: mv_15
-    integer(int64) :: mv_159
-    integer(int64) :: mv_160
-    integer(int64) :: mv_163
-    integer(int64) :: mv_164
-    integer(int64) :: mv_172
-    integer(int64) :: mv_173
+    integer(int64) :: mv_157
+    integer(int64) :: mv_158
+    integer(int64) :: mv_161
+    integer(int64) :: mv_162
+    integer(int64) :: mv_170
+    integer(int64) :: mv_171
     integer(int64) :: mv_18
     integer(int64) :: mv_19
     integer(int64) :: mv_41
@@ -1087,67 +1081,71 @@
     integer(int64) :: nk_32
     integer(int64) :: o0_109
     integer(int64) :: o0_13
-    integer(int64) :: o0_140
-    integer(int64) :: o0_144
-    integer(int64) :: o0_162
+    integer(int64) :: o0_138
+    integer(int64) :: o0_142
+    integer(int64) :: o0_160
     integer(int64) :: o0_44
     integer(int64) :: o0_66
     integer(int64) :: o0_78
     integer(int64) :: o1_102
-    integer(int64) :: o1_125
-    integer(int64) :: o1_136
-    integer(int64) :: o1_149
+    integer(int64) :: o1_113
+    integer(int64) :: o1_117
+    integer(int64) :: o1_123
+    integer(int64) :: o1_134
+    integer(int64) :: o1_147
     integer(int64) :: o1_17
-    integer(int64) :: o1_175
+    integer(int64) :: o1_173
     integer(int64) :: o1_70
     integer(int64) :: o1_82
     integer(int64) :: o2_21
     integer(int64) :: ocb_92
     integer(int64) :: ocn_93
     integer(int64) :: oh_56
-    integer(int64) :: oi_167
-    integer(int64) :: old_121
-    integer(int64) :: old_132
+    integer(int64) :: oi_165
+    integer(int64) :: old_119
+    integer(int64) :: old_130
     integer(int64) :: old_73
     integer(int64) :: ow_60
     integer(int64) :: s0_49
     integer(int64) :: s1_50
     integer(int64) :: s2_51
-    integer(int64) :: s_120
-    integer(int64) :: s_131
+    integer(int64) :: s_118
+    integer(int64) :: s_129
     integer(int64) :: s_72
     integer(int64) :: sd_52
     integer(int64) :: t0_108
     integer(int64) :: t0_12
-    integer(int64) :: t0_139
-    integer(int64) :: t0_143
-    integer(int64) :: t0_161
+    integer(int64) :: t0_137
+    integer(int64) :: t0_141
+    integer(int64) :: t0_159
     integer(int64) :: t0_43
     integer(int64) :: t0_65
     integer(int64) :: t0_77
     integer(int64) :: t1_101
-    integer(int64) :: t1_124
-    integer(int64) :: t1_135
-    integer(int64) :: t1_148
+    integer(int64) :: t1_112
+    integer(int64) :: t1_116
+    integer(int64) :: t1_122
+    integer(int64) :: t1_133
+    integer(int64) :: t1_146
     integer(int64) :: t1_16
-    integer(int64) :: t1_174
+    integer(int64) :: t1_172
     integer(int64) :: t1_69
     integer(int64) :: t1_81
     integer(int64) :: t2_20
     logical :: t_1
     logical :: t_103
     integer(int64) :: t_104
-    logical :: t_145
+    logical :: t_143
+    logical :: t_150
+    logical :: t_151
     logical :: t_152
     logical :: t_153
     logical :: t_154
     logical :: t_155
-    logical :: t_156
-    logical :: t_157
-    integer(int64) :: t_165
-    logical :: t_168
-    integer(int64) :: t_170
-    integer(int64) :: t_171
+    integer(int64) :: t_163
+    logical :: t_166
+    integer(int64) :: t_168
+    integer(int64) :: t_169
     logical :: t_2
     logical :: t_3
     logical :: t_36
@@ -1169,7 +1167,7 @@
     logical :: t_97
     integer(int64) :: tc_62
     integer(int64) :: th_55
-    integer(int64) :: ti_166
+    integer(int64) :: ti_164
     integer(int64) :: tw_59
     do
       call aot_tick(as)
@@ -1465,54 +1463,42 @@
                   r2 = o0_109
                 else
                   if ((4_int64 < k_)) then
-                    fl_110 = 8_int64
-                    e_111 = e_
-                    j_112 = 0_int64
-                    m_113 = m_
-                    k_114 = k_
-                    fl_ = fl_110
-                    e_ = e_111
-                    j_ = j_112
-                    m_ = m_113
-                    k_ = k_114
-                    cycle
+                    call aot_ty(as, 8_int64, e_, 0_int64, m_, k_, mv_110, mv_111)
+                    t1_112 = mv_110
+                    o1_113 = mv_111
+                    r1 = t1_112
+                    r2 = aot_and(o0_109, o1_113)
                   else
-                    fl_115 = 7_int64
-                    e_116 = e_
-                    j_117 = 0_int64
-                    m_118 = m_
-                    k_119 = k_
-                    fl_ = fl_115
-                    e_ = e_116
-                    j_ = j_117
-                    m_ = m_118
-                    k_ = k_119
-                    cycle
+                    call aot_ty(as, 7_int64, e_, 0_int64, m_, k_, mv_114, mv_115)
+                    t1_116 = mv_114
+                    o1_117 = mv_115
+                    r1 = t1_116
+                    r2 = aot_and(o0_109, o1_117)
                   end if
                 end if
               case (7_int64)
                 if ((j_ < m_)) then
-                  s_120 = (aot_s2(e_) + j_)
-                  old_121 = aot_raw(as, s_120)
-                  call aot_put(as, s_120, aot_jn(aot_get(as, s_120), aot_rget(as, s_120)))
-                  call aot_ty(as, 7_int64, e_, (1_int64 + j_), m_, k_, mv_122, mv_123)
-                  t1_124 = mv_122
-                  o1_125 = mv_123
-                  call aot_put(as, s_120, old_121)
-                  r1 = t1_124
-                  r2 = o1_125
+                  s_118 = (aot_s2(e_) + j_)
+                  old_119 = aot_raw(as, s_118)
+                  call aot_put(as, s_118, aot_jn(aot_get(as, s_118), aot_rget(as, s_118)))
+                  call aot_ty(as, 7_int64, e_, (1_int64 + j_), m_, k_, mv_120, mv_121)
+                  t1_122 = mv_120
+                  o1_123 = mv_121
+                  call aot_put(as, s_118, old_119)
+                  r1 = t1_122
+                  r2 = o1_123
                 else
                   if ((k_ < 5_int64)) then
-                    fl_126 = 5_int64
-                    e_127 = e_
-                    j_128 = 0_int64
-                    m_129 = m_
-                    k_130 = (1_int64 + k_)
-                    fl_ = fl_126
-                    e_ = e_127
-                    j_ = j_128
-                    m_ = m_129
-                    k_ = k_130
+                    fl_124 = 5_int64
+                    e_125 = e_
+                    j_126 = 0_int64
+                    m_127 = m_
+                    k_128 = (1_int64 + k_)
+                    fl_ = fl_124
+                    e_ = e_125
+                    j_ = j_126
+                    m_ = m_127
+                    k_ = k_128
                     cycle
                   else
                     r1 = 1_int64
@@ -1521,123 +1507,123 @@
                 end if
               case (8_int64)
                 if ((j_ < m_)) then
-                  s_131 = (aot_s2(e_) + j_)
-                  old_132 = aot_raw(as, s_131)
-                  call aot_put(as, s_131, 1_int64)
-                  call aot_ty(as, 8_int64, e_, (1_int64 + j_), m_, k_, mv_133, mv_134)
-                  t1_135 = mv_133
-                  o1_136 = mv_134
-                  call aot_put(as, s_131, old_132)
-                  r1 = t1_135
-                  r2 = o1_136
+                  s_129 = (aot_s2(e_) + j_)
+                  old_130 = aot_raw(as, s_129)
+                  call aot_put(as, s_129, 1_int64)
+                  call aot_ty(as, 8_int64, e_, (1_int64 + j_), m_, k_, mv_131, mv_132)
+                  t1_133 = mv_131
+                  o1_134 = mv_132
+                  call aot_put(as, s_129, old_130)
+                  r1 = t1_133
+                  r2 = o1_134
                 else
-                  call aot_ty(as, 0_int64, ast_kid(e_, m_), 0_int64, 0_int64, 0_int64, mv_137, mv_138)
-                  t0_139 = mv_137
-                  o0_140 = mv_138
+                  call aot_ty(as, 0_int64, ast_kid(e_, m_), 0_int64, 0_int64, 0_int64, mv_135, mv_136)
+                  t0_137 = mv_135
+                  o0_138 = mv_136
                   call aot_lcopy(as, aot_s2(e_), 0_int64, m_)
-                  r1 = t0_139
-                  r2 = o0_140
+                  r1 = t0_137
+                  r2 = o0_138
                 end if
               case (3_int64)
                 if ((j_ < m_)) then
-                  call aot_ty(as, 0_int64, ast_kid(e_, j_), 0_int64, 0_int64, 0_int64, mv_141, mv_142)
-                  t0_143 = mv_141
-                  o0_144 = mv_142
+                  call aot_ty(as, 0_int64, ast_kid(e_, j_), 0_int64, 0_int64, 0_int64, mv_139, mv_140)
+                  t0_141 = mv_139
+                  o0_142 = mv_140
                   if ((aot_rs(e_) == as%cb)) then
-                    t_145 = (j_ < as%cn)
+                    t_143 = (j_ < as%cn)
                   else
-                    t_145 = .false.
+                    t_143 = .false.
                   end if
-                  if (t_145) then
-                    call aot_rjn(as, (aot_rs(e_) + j_), t0_143)
+                  if (t_143) then
+                    call aot_rjn(as, (aot_rs(e_) + j_), t0_141)
                   else
                   end if
-                  call aot_ty(as, 3_int64, e_, (1_int64 + j_), m_, 0_int64, mv_146, mv_147)
-                  t1_148 = mv_146
-                  o1_149 = mv_147
+                  call aot_ty(as, 3_int64, e_, (1_int64 + j_), m_, 0_int64, mv_144, mv_145)
+                  t1_146 = mv_144
+                  o1_147 = mv_145
                   r1 = 0_int64
-                  r2 = aot_and(o0_144, o1_149)
+                  r2 = aot_and(o0_142, o1_147)
                 else
                   r1 = 0_int64
                   r2 = 1_int64
                 end if
               case (4_int64)
                 if ((j_ < m_)) then
-                  a_150 = ast_kid(e_, j_)
-                  h_151 = aot_hop(e_)
+                  a_148 = ast_kid(e_, j_)
+                  h_149 = aot_hop(e_)
                   if ((j_ == 1_int64)) then
-                    if ((h_151 == 7_int64)) then
-                      t_153 = (h_151 == 7_int64)
+                    if ((h_149 == 7_int64)) then
+                      t_151 = (h_149 == 7_int64)
                     else
-                      if ((h_151 == 8_int64)) then
-                        t_152 = (h_151 == 8_int64)
+                      if ((h_149 == 8_int64)) then
+                        t_150 = (h_149 == 8_int64)
                       else
-                        t_152 = (h_151 == 9_int64)
+                        t_150 = (h_149 == 9_int64)
                       end if
-                      t_153 = t_152
+                      t_151 = t_150
                     end if
-                    if (t_153) then
-                      if ((ast_kind(a_150) == 6_int64)) then
-                        if ((aot_hop(a_150) == 20_int64)) then
-                          t_154 = (.not. (aot_kw(ast_kid(a_150, 2_int64)) == 0_int64))
+                    if (t_151) then
+                      if ((ast_kind(a_148) == 6_int64)) then
+                        if ((aot_hop(a_148) == 20_int64)) then
+                          t_152 = (.not. (aot_kw(ast_kid(a_148, 2_int64)) == 0_int64))
                         else
-                          t_154 = .false.
+                          t_152 = .false.
                         end if
-                        t_155 = t_154
+                        t_153 = t_152
                       else
-                        t_155 = .false.
+                        t_153 = .false.
                       end if
-                      t_156 = t_155
+                      t_154 = t_153
                     else
-                      t_156 = .false.
+                      t_154 = .false.
                     end if
-                    t_157 = t_156
+                    t_155 = t_154
                   else
-                    t_157 = .false.
+                    t_155 = .false.
                   end if
-                  cast_158 = t_157
-                  call aot_ty(as, 0_int64, a_150, 0_int64, 0_int64, 0_int64, mv_159, mv_160)
-                  t0_161 = mv_159
-                  o0_162 = mv_160
-                  if (cast_158) then
-                    t_165 = 1_int64
+                  cast_156 = t_155
+                  call aot_ty(as, 0_int64, a_148, 0_int64, 0_int64, 0_int64, mv_157, mv_158)
+                  t0_159 = mv_157
+                  o0_160 = mv_158
+                  if (cast_156) then
+                    t_163 = 1_int64
                   else
-                    t_165 = (-1_int64)
+                    t_163 = (-1_int64)
                   end if
-                  call aot_ty(as, 0_int64, ast_kid(a_150, t_165), 0_int64, 0_int64, 0_int64, mv_163, mv_164)
-                  ti_166 = mv_163
-                  oi_167 = mv_164
-                  if (cast_158) then
-                    t_168 = (ti_166 == aot_kw(ast_kid(a_150, 2_int64)))
+                  call aot_ty(as, 0_int64, ast_kid(a_148, t_163), 0_int64, 0_int64, 0_int64, mv_161, mv_162)
+                  ti_164 = mv_161
+                  oi_165 = mv_162
+                  if (cast_156) then
+                    t_166 = (ti_164 == aot_kw(ast_kid(a_148, 2_int64)))
                   else
-                    t_168 = .false.
+                    t_166 = .false.
                   end if
-                  d_169 = t_168
+                  d_167 = t_166
                   select case (j_)
                   case (1_int64)
-                    if (d_169) then
-                      t_170 = ti_166
+                    if (d_167) then
+                      t_168 = ti_164
                     else
-                      t_170 = t0_161
+                      t_168 = t0_159
                     end if
-                    as%a0 = t_170
-                    if (d_169) then
-                      t_171 = 1_int64
+                    as%a0 = t_168
+                    if (d_167) then
+                      t_169 = 1_int64
                     else
-                      t_171 = 0_int64
+                      t_169 = 0_int64
                     end if
-                    as%ad = t_171
+                    as%ad = t_169
                   case (2_int64)
-                    as%a1 = t0_161
+                    as%a1 = t0_159
                   case (3_int64)
-                    as%a2 = t0_161
+                    as%a2 = t0_159
                   case default
                   end select
-                  call aot_ty(as, 4_int64, e_, (1_int64 + j_), m_, 0_int64, mv_172, mv_173)
-                  t1_174 = mv_172
-                  o1_175 = mv_173
+                  call aot_ty(as, 4_int64, e_, (1_int64 + j_), m_, 0_int64, mv_170, mv_171)
+                  t1_172 = mv_170
+                  o1_173 = mv_171
                   r1 = 0_int64
-                  r2 = aot_and(o0_162, aot_and(oi_167, o1_175))
+                  r2 = aot_and(o0_160, aot_and(oi_165, o1_173))
                 else
                   r1 = 0_int64
                   r2 = 1_int64

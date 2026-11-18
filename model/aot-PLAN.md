@@ -86,34 +86,43 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      constant :doubles/:longs, the array cast's hint), aot_i2, aot_s2,
      aot_rs, aot_rn (exec.inc's reads of the same fields); the frame size
      is the template's nslots (*aot-nslots*), a slot past it typed any.
-   - THE STATEMENT OWED (aot-ty-proof.lisp), designed:
-     TYPED SUBSET (aot-sub): nodes of kinds const local var if do call
-     let loop recur fn only, in exec-clrmap's shape bounds; no local
-     marked for clearing (exec-clr proves a cleared slot is never read
-     again; the statement does not use it); A-CONST: a constant whose
-     read says long/double/bool has that host tag (aot-tag, an
-     unconstrained function: the host's class of a value); A-HEAD: a call
-     whose read names op k has a const or Var head whose value the host
-     reads as k (aot-opof, unconstrained); ok = 1 (aot-ty's second answer:
-     each let/loop slot untyped where bound, a loop's slots above the
-     enclosing loop's, each recur to the current loop with its count).
-     A-OP (a defun-sk, as exec-vm's ex-ifnok): a call whose callee the
-     host reads as op k, its operands fitting the types aot-ty kept (the
-     array cast's operand exempt: the cast checked it), answers in ex-ev
-     a value of aot-optab's type, or not a value.
-     THEOREM aot-ty-sound: with those, frame fr fitting the env (every
-     slot's value of its type), r = (ex-ev :m e 0 nil fr fuel): if r is
-     a value, it is of the type aot-ty gives e (long: aot-tag long, ...)
-     and its frame still fits; if r is a recur, every slot fits its type
-     or is one of the current loop's and fits what aot-ty joined there;
-     throws and :out say nothing. Proof plan: ex-ind's induction with the
-     stobj threaded as aot-ty threads it; lemmas: aot-ty leaves tv, cb,
-     cn, a0..ad as it found them (every put paired with its restore), rc
-     monotone below cb+cn (the ok's loop-above condition), a loop's final
-     round is the env every iteration starts in (settled, or all any).
-     COST (owed): ns, the nodes visited, at most wt(e): a node 1 + its
-     parts, a loop's body 7 times (six rounds and the boxed one), an
-     array cast's operand twice -- 7^depth of nested loops, as the cljf.
+   - Model change, lane 3r (no change to the answer): a loop round ok is joined with
+     the next round ok (aot.lisp fl 5), so ok=1 says every round of every loop was ok -- a
+     loop inside an intermediate round then cannot zero the recur types of the loop around
+     it (aot-ty-rc-le needs it). It rejects (ok=0) only a let rebinding a loop slot typed in
+     an early round, which the analyzer, giving each scope its own slots, does not build.
+   - PROVED (model/aot-ty-proof.lisp, lane 3r): aot-ty-restore (tv cb cn exact, rc length;
+     the operand registers but in a call argument walk); aot-ty-rc-grows (ok => rc only
+     grows below cb+cn); the rounds: aot-star (the env the final round types the body in)
+     with aot-star-ty (answer and ok are that walk), aot-star-settled (that walk leaves the
+     loop slots rc below their types: settled, or all any when boxed), aot-star-env (the
+     env only rises, and only on the loop slots); the frame-fit steps aot-ffr-* (bind,
+     unbind with fresh, an ok walk, settle, widen, narrow); and the COST, aot-ty-cost: ns,
+     the nodes visited, at most aot-wt -- every state-dependent choice at its dearest: a
+     loop body 7 times (six rounds, the boxed one), an array cast operand twice, a recur
+     its count or the loop (cb cn) -- so 7^d walks of a node under d nested loops.
+   - THE THEOREM OWED, aot-ty-sound, drafted with its induction in
+     model/aot-ty-sound.draft (not in MODEL_BOOKS): (aot-cl flg e i tmp fr fuel s) for
+     every ex-ev flag, its aot-ty walk aot-tyof (:m/:iter 0, :do 1, :let 2 or 6, :rec 3,
+     :call 4). HYPOTHESES, exactly: aot-sub (kinds const local var if do call let loop recur
+     fn; fields in 40 bits; no local marked for clearing; A-CONST: a constant fits its read
+     type, aot-tag unconstrained; A-HEAD: a call whose op read is not 0 has a const or Var
+     head whose value aot-opof reads as it; A-OP, aot-opok, a defun-sk: such a call, its
+     operands 1..3 fitting types ta tb tc -- the first may instead be an array cast whose
+     ta is its keyword type -- answers in ex-ev (:call at its last operand) a value of
+     aot-optab type or none); cb cn natural, len tv <= len rc; ok = 1; the frame fits tv
+     (aot-ffr); per flag: :do i < nk; :let i <= i2 and kind 11/12; :rec rstart = cb, nk = cn,
+     rn = nk, tmp fits rc (aot-rfit); :call tmp the callee and i-1 operands fitting the
+     registers (the cast exemption with ad = 1); :iter the walk at the final round env
+     leaves rc settled. CONCLUSION: a value fits the type (for :call, optab of the
+     registers) and the frame fits tv after (but a loop own slots, in the :let chain of a
+     loop); a recur leaves the current loop slots fitting rc, the rest tv. The model
+     differs from the old cljf only on trees the analyzer does not build: a let writes its
+     slot and restores it; recur types accumulate over a loop rounds; a recur joins only
+     the innermost loop. WHAT REMAINS: aot-rfit-append (the first lemma of the draft)
+     ran away -- generalization; give it :do-not (generalize eliminate-destructors), as
+     aot-ty-cost needed; then the case lemmas, one per ex-ev case, each with the
+     ex-ev :expand of its own call and its IH instances as aot-ind writes them.
 3. ARITY/VERSION CHOICE -- proved to pick ex-tr's arity (exec's arfit).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only

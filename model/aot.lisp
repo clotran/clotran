@@ -136,8 +136,9 @@
 ;
 ; ok (1) is no part of the answer: it says the tree is one aot-ty-proof's theorem covers --
 ; each let's and loop's slots untyped where they are bound, a loop's slots above the current
-; loop's, every recur to the current loop with its count of arguments. The answer is the
-; same either way.
+; loop's, every recur to the current loop with its count of arguments -- in every round of
+; every loop (a round's ok and the next's are joined, so a loop inside one round never zeroes
+; the recur types of the loop around it). The answer is the same either way.
 
 (defun aot-n40 (v) (declare (xargs :guard t)) (if (and (natp v) (< v *anp40*)) v 0))
 (defthm aot-n40-p (and (natp (aot-n40 v)) (< (aot-n40 v) *anp40*))
@@ -370,8 +371,8 @@
       (let ((b (aot-s2 e)))
         (mv-let (t0 o0 aots) (aot-ty 0 (aot-kid e m) 0 0 0 aots)
           (cond ((aot-settled b 0 m aots) (let ((aots (aot-lcopy b 0 m aots))) (mv t0 o0 aots)))
-                ((< 4 k) (aot-ty 8 e 0 m k aots))
-                (t (aot-ty 7 e 0 m k aots))))))
+                ((< 4 k) (mv-let (t1 o1 aots) (aot-ty 8 e 0 m k aots) (mv t1 (aot-and o0 o1) aots)))
+                (t (mv-let (t1 o1 aots) (aot-ty 7 e 0 m k aots) (mv t1 (aot-and o0 o1) aots)))))))
      ((equal fl 7)
       (if (< j m)
           (let* ((s (+ (aot-s2 e) j)) (old (aot-raw s aots))
