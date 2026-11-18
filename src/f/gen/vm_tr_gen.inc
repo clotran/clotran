@@ -12,7 +12,8 @@
   ! vtg-clause-ex-clause); vtg_arcl: vm_compile_fn's arity-error clause (ex-arcl);
   ! vtg_scope: vm_clause's scope, ex-fbcm or ex-fbcm0 (vtg-scope-fbcm). vtg_scan:
   ! whether the VM takes a body (vm_scan; vtg-scan-frag, vtg-scan-tlr-ok);
-  ! vtg_rds: whether a body reads or binds a slot (vm_clause's sl).
+  ! vtg_rds: whether a body reads or binds a slot; vtg_sl: vm_clause's sl decision;
+  ! vtg_fncl: vm_compile_fn's clause list, each arity's then ex-arcl (vtg-fncl-clauses).
   pure function vtg_coll(k_) result(r)
     integer(int64), value :: k_
     logical :: r
@@ -1332,3 +1333,68 @@
     r = t_26
     return
   end function vtg_rds
+
+  subroutine vtg_ars(tb, ars_, j_, tm_, ns_, self_)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: ars_
+    integer(int64), value :: j_
+    type(gc_value), value :: tm_
+    integer(int64), value :: ns_
+    integer(int64), value :: self_
+    type(gc_value) :: ars_2
+    integer(int64) :: j_1
+    integer(int64) :: j_3
+    integer(int64) :: ns_5
+    integer(int64) :: self_6
+    type(gc_value) :: tm_4
+    do
+      j_1 = max(0_int64, j_)
+      if ((j_1 < vtg_nar(ars_))) then
+        call vtg_arity(tb, vtg_ar(ars_, j_1), tm_, ns_, self_)
+        ars_2 = ars_
+        j_3 = (1_int64 + j_1)
+        tm_4 = tm_
+        ns_5 = ns_
+        self_6 = self_
+        ars_ = ars_2
+        j_ = j_3
+        tm_ = tm_4
+        ns_ = ns_5
+        self_ = self_6
+        cycle
+      else
+      end if
+      exit
+    end do
+  end subroutine vtg_ars
+
+  subroutine vtg_fncl(tb, ars_, tm_, ns_, self_, name_)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: ars_
+    type(gc_value), value :: tm_
+    integer(int64), value :: ns_
+    integer(int64), value :: self_
+    type(gc_value), value :: name_
+    call vtg_ars(tb, ars_, 0_int64, tm_, ns_, self_)
+    call vtg_arcl(tb, name_)
+    call vtg_node(tb, 0_int64, (1_int64 + vtg_nar(ars_)))
+  end subroutine vtg_fncl
+
+  function vtg_sl(body_, self_) result(r)
+    type(gc_value), value :: body_
+    integer(int64), value :: self_
+    integer(int64) :: r
+    logical :: t_1
+    if ((.not. (self_ < 0_int64))) then
+      t_1 = vtg_rds(0_int64, body_, 0_int64, self_)
+    else
+      t_1 = .false.
+    end if
+    if (t_1) then
+      r = 1_int64
+      return
+    else
+      r = 0_int64
+      return
+    end if
+  end function vtg_sl

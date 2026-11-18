@@ -20,11 +20,20 @@
 ; ex-clause0; ex-fbtc0-mx, ex-clause0's body answers as ex-clause's
 ; (ex-fbtc) at every args env, by vmshift's x2-drop-mx, ex-cs-sh and
 ; ex-fbody-drop/ex-floop-drop.
-; NAMED, not proved (the sl decision): ex-fbtc0-mx's hypothesis (not (x2-rd
-; (ex-fnp tm ar) (ex-fbinr tm ar))) -- the body's translation never reads
-; the self slot's position -- is what vm_clause's choice of sl 0 (self_slot
-; < 0, or vtg_rds of it false -- vmtrg.lisp's vtg-rds, generated) is
-; taken to establish: no theorem yet ties vtg-rds to it.
+; The sl decision, PROVED (exec-PLAN Lane 3 item 9): vm_clause's sl is
+; vtg-sl, generated -- 1 when the body reads or binds the self slot
+; (vmtrg's vtg-rds), else 0 -- and vtg-sl-fbinr: on a body vtg-scan takes,
+; sl 0 gives ex-fbtc0-mx's hypothesis (not (x2-rd (ex-fnp tm ar) (ex-fbinr
+; tm ar))), the body's translation never reading the self slot's position
+; (ex-tr-nord: ex-tr reads no position whose slot the tree never reads nor
+; binds, the position's entry blanked or not), so vtg-sl-fbtc0-mx: the
+; sl-0 clause answers as ex-clause's. NAMED: vm_clause's self_slot is
+; ex-fself tm (-1 when it has none).
+;
+; vtg-fncl: vm_compile_fn's clause list, generated -- each arity's clause
+; in order (vtg_arity, vm_clause, a shim), then vtg-arcl, one list:
+; vtg-fncl-clauses, (append (ex-clauses tm ars) (list (ex-arcl name))).
+; Named in the section below.
 ;
 ; vtg-arcl: the last clause, a call of no arity the fn has --
 ; (0 (:prim :clotran.vm/arity (:const name) (:local 0)) :rest), ex-arcl.
@@ -320,3 +329,259 @@
 ; its cost: vtg_binds np + 1, a capture 2, the self bind, three calls
 (defun vtg-scope-steps (np nin sl) (+ 3 (nfix np) 1 (* 2 (nfix nin)) (if (equal sl 0) 0 1)))
 (defthm vtg-scope-steps-bound (<= (vtg-scope-steps np nin sl) (+ 5 (* 2 (+ (nfix np) (nfix nin))))) :rule-classes :linear)
+; ---- THE FN'S CLAUSES (Lane 3 item 9) ---------------------------------------------------------
+;
+; vm_compile_fn's loop, generated: vtg-fncl pushes the fn's clause list --
+; each arity's clause in order (vtg-ars: vtg_arity, vm_clause, a shim), then
+; the arity clause (vtg-arcl), made one list (vtg_node 0): ex-clauses's
+; order then ex-arcl, the list ex-arcl-mxcl takes (vtg-fncl-clauses). And
+; vm_clause's sl decision, generated: vtg-sl -- 1 when the self slot is
+; one the body reads or binds (vtg-rds), else 0 -- vtg-sl-fbtc0-mx: at 0
+; the sl-0 clause answers as ex-clause (below).
+; NAMED: vtg_arity is vm_clause on the arity read by vtg_ar (gcv_nth), its
+; tm the template's capture pairs (capv, as vtg_nin's), ns and self the
+; template's frame size and self slot, which the model's ex-clause reads
+; from tm; the clause it builds is vtg_clause's (vtg-clause-ex-clause, at
+; sl 0 ex-clause0, which answers as it: vtg-sl-fbtc0-mx); a refusal pushes
+; nil and clears tb%c%ok, and vm_compile_fn drops the whole list (the fn
+; stays the tree's).
+(defun vtg-ar (ars j) (declare (xargs :guard (natp j))) (vtg-nth j ars))
+(defun vtg-nar (ars) (declare (xargs :guard t)) (vtg-int (len ars)))
+(defun vtg-arity (ar tm ns self vtb)
+  (declare (xargs :stobjs vtb :guard t) (ignorable ns self))
+  (vtg-push (ec-call (ex-clause tm ar)) vtb))
+(defun vtg-ars (ars j tm ns self vtb)
+  (declare (xargs :stobjs vtb :guard (and (natp j) (< j *vtg40*)) :measure (nfix (- (vtg-nar ars) (nfix j)))))
+  (let ((j (nfix j)))
+    (if (< j (vtg-nar ars)) (let ((vtb (vtg-arity (vtg-ar ars j) tm ns self vtb))) (vtg-ars ars (+ 1 j) tm ns self vtb)) vtb)))
+(defun vtg-fncl (ars tm ns self name vtb)
+  (declare (xargs :stobjs vtb :guard t))
+  (let* ((vtb (vtg-ars ars 0 tm ns self vtb))
+         (vtb (vtg-arcl name vtb)))
+    (vtg-node 0 (+ 1 (vtg-nar ars)) vtb)))
+(defun vtg-sl (body self)
+  (declare (xargs :guard (integerp self)))
+  (if (and (<= 0 self) (vtg-rds 0 body 0 self)) 1 0))
+
+(defthm vtg-arity-st (equal (vtg-arity ar tm ns self (vtg-st s c sv cs)) (vtg-st (cons (ex-clause tm ar) s) c sv cs))
+  :hints (("Goal" :in-theory (enable vtg-st))))
+(defun vtg-ars-ind (j os s tm)
+  (declare (xargs :measure (len os)))
+  (if (consp os) (vtg-ars-ind (+ 1 j) (cdr os) (cons (ex-clause tm (car os)) s) tm) (list j s)))
+(defthm vtg-ars-st
+  (implies (and (natp j) (true-listp ars) (< (len ars) *vtg40*) (equal os (nthcdr j ars)))
+           (equal (vtg-ars ars j tm ns self (vtg-st s c sv cs))
+                  (vtg-st (revappend (ex-clauses tm os) s) c sv cs)))
+  :hints (("Goal" :induct (vtg-ars-ind j os s tm) :in-theory (e/d (vtg-nar vtg-ar vtg-int vtg-nthcdr-cdr) (ex-clause vtg-arity vtg-nthcdr-parts vtg-nthcdr-end))
+                  :expand ((vtg-ars ars j tm ns self (vtg-st s c sv cs))))
+          (and stable-under-simplificationp '(:use ((:instance vtg-nthcdr-parts (i j) (l ars))
+                                                    (:instance vtg-nthcdr-end (i j) (l ars)))))))
+(defthm vtg-len-clauses (and (equal (len (ex-clauses tm ars)) (len ars)) (true-listp (ex-clauses tm ars))))
+(defthm vtg-fncl-clauses
+  (implies (and (true-listp ars) (< (len ars) *vtg40*))
+           (equal (vtg-fncl ars tm ns self name (vtg-st s c sv cs))
+                  (vtg-st (cons (append (ex-clauses tm ars) (list (ex-arcl name))) s) c sv cs)))
+  :hints (("Goal" :in-theory (e/d (vtg-nar vtg-int) (vtg-ars vtg-arcl ex-clauses ex-arcl))
+                  :use ((:instance vtg-node-rev (op 0) (n (+ 1 (len ars))) (l (append (ex-clauses tm ars) (list (ex-arcl name)))))))))
+; its cost: a clause's call (vm_clause's own work vtg-clause-steps-bound,
+; its host's) and 3 steps an arity, the arity clause's 11, the list's node
+(defun vtg-fncl-steps (n) (+ 13 (* 3 (nfix n))))
+(defthm vtg-fncl-steps-bound (<= (vtg-fncl-steps n) (+ 13 (* 3 (nfix n)))) :rule-classes :linear)
+(in-theory (disable vtg-arity vtg-ars vtg-fncl vtg-sl))
+; ---- THE SL DECISION GIVES EX-FBTC0-MX'S HYPOTHESIS ---------------------------------------------
+(defthm vtg-fnos-nil (implies (vtg-fnos os) (not (member-equal nil os))))
+(defthm ex-pos-nth (implies (< (ex-pos y cm) (len cm)) (equal (nth (ex-pos y cm) cm) y)))
+(defthm ex-locals-rd
+  (implies (and (natp np) (< np (len cm)) (not (member-equal (nth np cm) os))) (not (x2-rd-args np (ex-locals os cm))))
+  :hints (("Goal" :induct (ex-locals os cm) :in-theory (enable ex-locals))))
+(defthm ex-lfcaps-rd
+  (implies (and (natp np) (< np (len cm)) (not (member-equal (nth np cm) os))) (not (x2-rd-args np (ex-lfcaps os s n cm))))
+  :hints (("Goal" :induct (ex-lfcaps os s n cm) :in-theory (enable ex-lfcaps))))
+(defthm ex-slots-nomem (implies (and (natp s) (not (and (<= s x) (< x (+ s (nfix n)))))) (not (member-equal x (ex-slots s n))))
+  :hints (("Goal" :in-theory (enable ex-slots))))
+(defthm ex-slots-nonil (not (member-equal nil (ex-slots s n))) :hints (("Goal" :in-theory (enable ex-slots))))
+(defthm ex-locals-nil (equal (ex-locals nil cm) nil) :hints (("Goal" :in-theory (enable ex-locals))))
+(defthm vtg-nth-past (implies (<= (len l) (nfix j)) (equal (nth j l) nil)))
+(defthm ex-kid-past (implies (and (natp j) (<= (ex-nk e) j)) (not (consp (ex-kid-of e j)))) :hints (("Goal" :in-theory (enable ex-kid-of ex-nk))))
+(defthm ex-tr-atom (implies (not (consp e)) (equal (ex-tr flg e i cm) '(:const nil))) :hints (("Goal" :expand ((ex-tr flg e i cm)))))
+(defthm ex-slots-mem (implies (member-equal x (ex-slots s n)) (and (natp x) (<= (nfix s) x) (< x (+ (nfix s) (nfix n)))))
+  :rule-classes :forward-chaining :hints (("Goal" :in-theory (enable ex-slots))))
+(defthm ex-blank-nth (implies (and (natp np) (< np (len cm))) (equal (nth np (ex-blank ls cm)) (if (member-equal (nth np cm) ls) nil (nth np cm))))
+  :hints (("Goal" :in-theory (enable ex-blank))))
+(defthm ex-len-blank2 (equal (len (ex-blank ls cm)) (len cm)) :hints (("Goal" :in-theory (enable ex-blank))))
+(defthm ex-nth-append-lo (implies (and (natp np) (< np (len a))) (equal (nth np (append a b)) (nth np a))))
+; what vtg-rds leaves out, each part
+(defthm vtg-rds-kids
+  (implies (and (not (vtg-rds 1 e i x)) (natp i) (natp j) (<= i j) (< j (vtg-nk e))) (not (vtg-rds 0 (vtg-kid e j) 0 x)))
+  :hints (("Goal" :induct (vtg-tli i (vtg-nk e)) :expand ((vtg-rds 1 e i x)) :in-theory (disable vtg-kid-ex))))
+(defthm vtg-rds-thens
+  (implies (and (not (vtg-rds 2 e i x)) (natp i) (natp j) (<= i j) (< j (vtg-ncs e))) (not (vtg-rds 0 (vtg-cthen e j) 0 x)))
+  :hints (("Goal" :induct (vtg-tli i (vtg-ncs e)) :expand ((vtg-rds 2 e i x)) :in-theory (disable vtg-cthen-ex vtg-ncs-ex))))
+(defthm vtg-rds-catches
+  (implies (and (not (vtg-rds 3 e i x)) (natp i) (natp j) (<= i j) (< j (vtg-ncs e)))
+           (and (not (vtg-rds 0 (vtg-cbody e j) 0 x)) (not (equal (vtg-cslot e j) x))))
+  :hints (("Goal" :induct (vtg-tli i (vtg-ncs e)) :expand ((vtg-rds 3 e i x)) :in-theory (disable vtg-cbody-ex vtg-ncs-ex vtg-cslot-ex))))
+(defun vtg-osind (j os) (declare (xargs :measure (len os))) (if (consp os) (vtg-osind (+ 1 j) (cdr os)) j))
+(defthm vtg-rds-caps-nthcdr
+  (implies (and (not (vtg-rds 5 e j x)) (natp j) (vtg-fnos os) (< (len (ex-outers (nth 2 (ex-c e)))) *vtg40*)
+                (equal os (nthcdr j (ex-outers (nth 2 (ex-c e))))))
+           (not (member-equal x os)))
+  :hints (("Goal" :induct (vtg-osind j os) :in-theory (e/d (vtg-ncap vtg-capo vtg-int vtg-nthcdr-cdr) (vtg-nthcdr-parts vtg-nthcdr-end))
+                  :expand ((vtg-rds 5 e j x)))
+          (and stable-under-simplificationp '(:use ((:instance vtg-nthcdr-parts (i j) (l (ex-outers (nth 2 (ex-c e)))))
+                                                    (:instance vtg-nthcdr-end (i j) (l (ex-outers (nth 2 (ex-c e))))))))))
+(defthm vtg-rds-caps
+  (implies (and (not (vtg-rds 5 e 0 x)) (vtg-fnok e)) (not (member-equal x (ex-outers (nth 2 (ex-c e))))))
+  :hints (("Goal" :in-theory (enable vtg-fnok) :use ((:instance vtg-rds-caps-nthcdr (j 0) (os (ex-outers (nth 2 (ex-c e)))))))))
+; in ex-tr's reads: a node vtg-scan takes, what it leaves to its parts
+(defmacro vtg-ex-off () ''(vtg-scan vtg-rds vtg-kid-ex vtg-cthen-ex vtg-cbody-ex vtg-cslot-ex vtg-ncs-ex vtg-okt-reads))
+(defthm vtg-ex-scan-kid
+  (implies (and (vtg-scan 0 e 0 hi) (natp j) (< j (ex-nk e)) (not (member (ex-kind e) '(1 2 3 13 14 15))))
+           (vtg-scan 0 (ex-kid-of e j) 0 hi))
+  :hints (("Goal" :use ((:instance vtg-scan-kid0) (:instance vtg-scan-kind-nil (i 0)) (:instance vtg-coll (k (vtg-kind e))))
+                  :in-theory (disable vtg-scan-kid0 vtg-scan-kind-nil vtg-scan vtg-rds))))
+(defthm vtg-ex-scan-body13
+  (implies (and (vtg-scan 0 e 0 hi) (equal (ex-kind e) 13)) (vtg-scan 0 (ex-kid-of e (ex-i2 e)) 0 hi))
+  :hints (("Goal" :use ((:instance vtg-scan-body13)) :in-theory (disable vtg-scan-body13 vtg-scan vtg-rds))))
+(defthm vtg-ex-scan-then
+  (implies (and (vtg-scan 0 e 0 hi) (equal (ex-kind e) 19) (natp j) (< j (len (ex-c e)))) (vtg-scan 0 (ex-cthen e j) 0 hi))
+  :hints (("Goal" :use ((:instance vtg-scan-then0)) :in-theory (disable vtg-scan-then0 vtg-scan vtg-rds))))
+(defthm vtg-ex-scan-catch
+  (implies (and (vtg-scan 0 e 0 hi) (equal (ex-kind e) 18) (natp j) (< j (len (ex-c e)))) (vtg-scan 0 (ex-cbody e j) 0 hi))
+  :hints (("Goal" :use ((:instance vtg-scan-catch0)) :in-theory (disable vtg-scan-catch0 vtg-scan vtg-rds))))
+
+(defthm vtg-ex-rds-kid
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (natp j) (< j (ex-nk e)) (not (member (ex-kind e) '(2 14 15))))
+           (not (vtg-rds 0 (ex-kid-of e j) 0 x)))
+  :hints (("Goal" :use ((:instance vtg-rds-kids (i 0))) :expand ((vtg-rds 0 e 0 x))
+                  :in-theory (disable vtg-rds-kids vtg-scan ex-kid-of))))
+(defthm vtg-ex-rds-then
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (equal (ex-kind e) 19) (natp j) (< j (len (ex-c e))))
+           (not (vtg-rds 0 (ex-cthen e j) 0 x)))
+  :hints (("Goal" :use ((:instance vtg-rds-thens (i 0))) :expand ((vtg-rds 0 e 0 x))
+                  :in-theory (disable vtg-rds-thens vtg-scan ex-cthen))))
+(defthm vtg-ex-rds-catch
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (equal (ex-kind e) 18) (natp j) (< j (len (ex-c e))))
+           (and (not (vtg-rds 0 (ex-cbody e j) 0 x)) (not (equal (ex-cslot e j) x))))
+  :hints (("Goal" :use ((:instance vtg-rds-catches (i 0)) (:instance vtg-okn-cslot)) :expand ((vtg-rds 0 e 0 x))
+                  :in-theory (disable vtg-rds-catches vtg-scan ex-cbody ex-cslot vtg-okn-cslot))))
+(defthm vtg-ex-rds-binds
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (member (ex-kind e) '(11 12 13)) (natp x))
+           (not (and (<= (ex-s2 e) x) (< x (+ (ex-s2 e) (ex-i2 e))))))
+  :hints (("Goal" :expand ((vtg-rds 0 e 0 x)) :in-theory (disable vtg-scan))))
+(defthm vtg-ex-rds-local
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (equal (ex-kind e) 2)) (not (equal (ex-i2 e) x)))
+  :hints (("Goal" :expand ((vtg-rds 0 e 0 x)) :in-theory (disable vtg-scan))))
+(defthm vtg-ex-rds-self (implies (and (vtg-scan 0 e i hi) (equal (ex-kind e) 2)) (vtg-rds 0 e 0 (ex-i2 e)))
+  :hints (("Goal" :expand ((vtg-rds 0 e 0 (ex-i2 e)) (vtg-scan 0 e i hi)))))
+(defthm vtg-ex-kind-lt (implies (vtg-scan 0 e i hi) (< (ex-kind e) 25)) :rule-classes (:rewrite :linear)
+  :hints (("Goal" :use ((:instance vtg-scan-kind-nil)) :in-theory (disable vtg-scan-kind-nil vtg-scan))))
+(defthm vtg-ex-fn-nonil
+  (implies (and (vtg-scan 0 e i hi) (or (equal (ex-kind e) 14) (equal (ex-kind e) 15))) (not (member-equal nil (ex-outers (nth 2 (ex-c e))))))
+  :hints (("Goal" :use ((:instance vtg-okn-fnok)) :in-theory (e/d (vtg-fnok) (vtg-scan vtg-okn-fnok)))))
+(defthm vtg-ex-local-natp (implies (vtg-scan 0 e 0 hi) (and (natp (ex-i2 e)) (natp (ex-s2 e))))
+  :rule-classes :forward-chaining :hints (("Goal" :in-theory (e/d (vtg-ok ex-i2 ex-s2) (vtg-scan)))))
+(defthm vtg-ex-try-fin
+  (implies (and (vtg-scan 0 e 0 hi) (equal (ex-kind e) 18) (not (vtg-scan 0 (ex-kid-of e 1) 0 hi))) (not (consp (ex-kid-of e 1))))
+  :hints (("Goal" :use ((:instance vtg-ex-scan-kid (j 1)) (:instance ex-kid-past (j 1))) :in-theory (disable vtg-ex-scan-kid ex-kid-past vtg-scan ex-kid-of))))
+(defthm vtg-ex-rds-fn
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (or (equal (ex-kind e) 14) (equal (ex-kind e) 15)))
+           (and (not (member-equal x (ex-outers (nth 2 (ex-c e))))) (not (member-equal nil (ex-outers (nth 2 (ex-c e)))))))
+  :hints (("Goal" :expand ((vtg-rds 0 e 0 x)) :use ((:instance vtg-okn-fnok)) :in-theory (e/d (vtg-fnok) (vtg-scan vtg-okn-fnok)))))
+(defthm vtg-scan-lffns
+  (implies (and (vtg-scan 4 e i hi) (natp i) (natp j) (<= i j) (< j (vtg-i2 e)) (equal (vtg-kind e) 13))
+           (and (vtg-okn (vtg-kid e j)) (equal (vtg-kind (vtg-kid e j)) 14)))
+  :hints (("Goal" :induct (vtg-tli i (vtg-i2 e)) :expand ((vtg-scan 4 e i hi)) :in-theory (disable vtg-kid-ex vtg-reads-ex vtg-okt-reads))))
+(defthm vtg-ex-lffn
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (equal (ex-kind e) 13) (natp j) (< j (ex-i2 e)))
+           (and (not (member-equal x (ex-lfos e j))) (not (member-equal nil (ex-lfos e j)))))
+  :hints (("Goal" :use ((:instance vtg-scan-lffns (i 0)) (:instance vtg-ex-rds-kid) (:instance vtg-scan-i2nk (i 0))
+                        (:instance vtg-okn-fnok (e (ex-kid-of e j)))
+                        (:instance vtg-rds-caps (e (ex-kid-of e j))))
+                  :expand ((vtg-scan 0 e 0 hi) (vtg-rds 0 (ex-kid-of e j) 0 x))
+                  :in-theory (e/d (ex-lfos vtg-fnok) (vtg-scan-lffns vtg-ex-rds-kid vtg-okn-fnok vtg-rds-caps vtg-scan-i2nk ex-kid-of vtg-rds vtg-okt-reads)))))
+(defthm vtg-ex-lffn-nil
+  (implies (and (vtg-scan 0 e 0 hi) (equal (ex-kind e) 13) (natp j) (< j (ex-i2 e))) (not (member-equal nil (ex-lfos e j))))
+  :hints (("Goal" :use ((:instance vtg-scan-lffns (i 0)) (:instance vtg-scan-i2nk (i 0)) (:instance vtg-okn-fnok (e (ex-kid-of e j))))
+                  :expand ((vtg-scan 0 e 0 hi))
+                  :in-theory (e/d (ex-lfos vtg-fnok) (vtg-scan-lffns vtg-okn-fnok vtg-scan-i2nk ex-kid-of vtg-rds vtg-okt-reads)))))
+(defthm vtg-ex-lfargs
+  (implies (and (vtg-scan 0 e 0 hi) (equal (ex-kind e) 13) (natp np) (< np (len cm))
+                (or (null (nth np cm)) (not (vtg-rds 0 e 0 (nth np cm)))))
+           (not (x2-rd-args np (ex-lfargs e j cm))))
+  :hints (("Goal" :induct (ex-lfargs e j cm) :in-theory (e/d (ex-lfargs) (ex-lfos vtg-scan vtg-rds ex-lfcaps-rd))
+                  :expand ((ex-lfargs e j cm)))
+          (and stable-under-simplificationp '(:use ((:instance ex-lfcaps-rd (os (ex-lfos e (nfix j))) (s (ex-s2 e)) (n (ex-i2 e)))
+                                                    (:instance vtg-ex-lffn (j (nfix j)) (x (nth np cm))) (:instance vtg-ex-lffn-nil (j (nfix j))))))))
+(defthm vtg-ex-nk2
+  (implies (and (vtg-scan 0 e i hi) (or (equal (ex-kind e) 4) (equal (ex-kind e) 19))) (<= 2 (ex-nk e)))
+  :rule-classes (:rewrite :linear) :hints (("Goal" :use vtg-scan-nk2 :in-theory (disable vtg-scan-nk2 vtg-scan))))
+(defthm vtg-ex-nk1
+  (implies (and (vtg-scan 0 e i hi) (or (equal (ex-kind e) 6) (equal (ex-kind e) 17) (equal (ex-kind e) 18))) (<= 1 (ex-nk e)))
+  :rule-classes (:rewrite :linear) :hints (("Goal" :use vtg-scan-nk1 :in-theory (disable vtg-scan-nk1 vtg-scan))))
+(defthm vtg-ex-i2nk
+  (implies (and (vtg-scan 0 e i hi) (or (equal (ex-kind e) 11) (equal (ex-kind e) 12) (equal (ex-kind e) 13))) (< (ex-i2 e) (ex-nk e)))
+  :rule-classes (:rewrite :linear) :hints (("Goal" :use vtg-scan-i2nk :in-theory (disable vtg-scan-i2nk vtg-scan))))
+(defthm vtg-ex-slots-nox
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (member (ex-kind e) (quote (11 12 13))) (natp x))
+           (not (member-equal x (ex-slots (ex-s2 e) (ex-i2 e)))))
+  :hints (("Goal" :use ((:instance vtg-ex-rds-binds) (:instance ex-slots-mem (s (ex-s2 e)) (n (ex-i2 e))))
+                  :in-theory (disable vtg-ex-rds-binds ex-slots-mem vtg-scan vtg-rds))))
+(defthm vtg-ex-try-fin-rds
+  (implies (and (vtg-scan 0 e 0 hi) (not (vtg-rds 0 e 0 x)) (equal (ex-kind e) 18) (vtg-rds 0 (ex-kid-of e 1) 0 x)) (not (consp (ex-kid-of e 1))))
+  :hints (("Goal" :use ((:instance vtg-ex-rds-kid (j 1)) (:instance ex-kid-past (j 1))) :in-theory (disable vtg-ex-rds-kid ex-kid-past vtg-scan vtg-rds ex-kid-of))))
+(defun ex-flok (flg e)
+  (case flg (:do (equal (ex-kind e) 5)) (:let (or (equal (ex-kind e) 11) (equal (ex-kind e) 12))) (:lin (equal (ex-kind e) 12))
+    (:rec (equal (ex-kind e) 16)) (:call (equal (ex-kind e) 6)) (:coll (member (ex-kind e) '(7 8 9 22 23 10 20 24 21)))
+    ((:cs :fin) (equal (ex-kind e) 18)) (:ct (equal (ex-kind e) 19)) (otherwise t)))
+(defthm ex-tr-nord-flag
+  (implies (and (vtg-scan 0 e 0 hi) (ex-flok flg e) (natp np) (< np (len cm))
+                (or (null (nth np cm)) (and (natp (nth np cm)) (not (vtg-rds 0 e 0 (nth np cm))))))
+           (not (ex-trrd flg np (ex-tr flg e i cm))))
+  :rule-classes nil
+  :hints (("Goal" :induct (ex-tr flg e i cm)
+                  :in-theory (e/d ((:induction ex-tr) ex-trtry ex-trfin ex-trcall)
+                                  (vtg-scan vtg-rds ex-kid-of ex-lffns ex-lfok ex-trlf ex-lfargs ex-lfshape ex-trh ex-trcs ex-clr ex-lind
+                                   ex-slots ex-blank ex-locals ex-cthen ex-cbody ex-cslot ex-lfcaps-rd))
+                  :expand ((:free (flg cm) (ex-tr flg e i cm))))))
+(defthm ex-tr-nord
+  (implies (and (vtg-scan 0 e 0 hi) (natp np) (< np (len cm))
+                (or (null (nth np cm)) (and (natp (nth np cm)) (not (vtg-rds 0 e 0 (nth np cm))))))
+           (not (x2-rd np (ex-tr :m e i cm))))
+  :hints (("Goal" :use ((:instance ex-tr-nord-flag (flg :m))))))
+
+; the clause: the parameters' reads sit before the self slot's position
+(defthm ex-pos-app-lt (implies (member-equal p a) (< (ex-pos p (append a b)) (len a))) :rule-classes :linear)
+(defthm ex-locals-before
+  (implies (and (subsetp-equal ls a) (<= (len a) (nfix np))) (not (x2-rd-args np (ex-locals ls (append a b)))))
+  :hints (("Goal" :induct (len ls) :in-theory (e/d (ex-locals) (binary-append)))))
+(defthm vtg-len-slots2 (equal (len (ex-slots s n)) (nfix n)) :hints (("Goal" :in-theory (enable ex-slots))))
+(defthm ex-nth-fbcm (equal (nth (ex-fnp tm ar) (ex-fbcm tm ar)) (ex-fself tm))
+  :hints (("Goal" :in-theory (enable ex-fbcm ex-fparams))))
+(defthm ex-nth-fcmb
+  (equal (nth (ex-fnp tm ar) (ex-fcmb tm ar)) (if (member-equal (ex-fself tm) (ex-lsl (ex-flp ar))) nil (ex-fself tm)))
+  :hints (("Goal" :in-theory (e/d (ex-fcmb ex-fcm) (ex-fnp ex-fbcm ex-lsl ex-flp)))))
+(defthm ex-anp-fnp (<= (ex-anp ar) (ex-fnp tm ar)) :rule-classes :linear)
+(defthm ex-fparams-locals-fnp (not (x2-rd-args (ex-fnp tm ar) (ex-locals (ex-fparams ar) (ex-fbcm tm ar))))
+  :hints (("Goal" :in-theory (e/d (ex-fbcm) (ex-fnp ex-fparams))
+                  :use ((:instance ex-locals-before (ls (ex-fparams ar)) (a (ex-fparams ar))
+                                   (b (append (ex-inners (nth 2 tm)) (list (ex-fself tm)))) (np (ex-fnp tm ar)))))
+          (and stable-under-simplificationp (quote (:in-theory (enable ex-fparams))))))
+(defthm ex-fself-natp-or-nil (or (null (ex-fself tm)) (natp (ex-fself tm))) :rule-classes :type-prescription)
+
+; vm_clause's sl decision: a body vtg-scan takes whose self slot vtg-sl
+; answers 0 for (none, -1, or one it never reads nor binds) gives
+; ex-fbtc0-mx's hypothesis -- its translation never reads the self slot's
+; position -- so the sl-0 clause answers as ex-clause's
+(defthm vtg-sl-fbinr
+  (implies (and (vtg-scan 0 (ex-abody ar) 0 hi)
+                (equal (vtg-sl (ex-abody ar) (if (natp (ex-fself tm)) (ex-fself tm) -1)) 0))
+           (not (x2-rd (ex-fnp tm ar) (ex-fbinr tm ar))))
+  :hints (("Goal" :in-theory (e/d (ex-fbinr vtg-sl) (ex-fnp ex-fbcm ex-fcmb ex-tr ex-lsl ex-flp ex-abody ex-fparams vtg-scan vtg-rds))
+                  :expand ((:free (x y) (x2-rd (ex-fnp tm ar) (list :loop x y)))))))
+(defthm vtg-sl-fbtc0-mx
+  (implies (and (vtg-scan 0 (ex-abody ar) 0 hi)
+                (equal (vtg-sl (ex-abody ar) (if (natp (ex-fself tm)) (ex-fself tm) -1)) 0)
+                (equal (len env) (ex-anp ar)) (true-listp env))
+           (equal (mx2 (ex-fbtc0 tm ar) env caps defs fuel) (mx2 (ex-fbtc tm ar) env caps defs fuel)))
+  :hints (("Goal" :use (vtg-sl-fbinr ex-fbtc0-mx) :in-theory (disable vtg-sl-fbinr ex-fbtc0-mx ex-fbtc0 ex-fbtc mx2))))

@@ -798,7 +798,7 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | letfn | ex-tr's ex-trlf: n lets of `(:mkgrp (j . shape) caps..)`, then the body | yes -- **generated now** (item 5, vtg-tr flg 7, vtg_lfinit, vtg_lfbinds), no new semantic hypothesis; named: vm.inc's init `(:prim NODE (:const j) caps.. (:local d)..(:local d+j-1))` -- the runtime's kind 6, vm_node_hook N_LETFN: fn j's closure, the group's captures patched among it and the earlier lets' closures (exec_letfn's refresh_captures, one group, its fns identical), a group capture `(:const nil)` -- where the model's is :mkgrp, x2-seal's j-th |
 | try | ex-tr's kind 18 (ex-trtry) | **generated now** (item 5(b)): vtg-tr flg 8 and vtg_catest, vtg_rethrow; the implicit rethrows a distinct prim, named |
 | N_DEF, N_DEFTYPE, N_NEWTYPE, N_SETBANG | `(:prim (:host k C) kids..)` | **generated now** (item 7(c), vtg-coll takes 10 20 23 24), no new semantic hypothesis (ex-collok); named: vtg_cop's op the node, vm_node_hook's def_finish / deftype_finish / setbang_finish / new_cached on the kids' values (exec_core's action 27), a def's and deftype's kids core_kid's (vtg_nk / vtg_kid); vm_scan takes them |
-| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)). **Generated now** (vmtrcl): the clause vtg_clause (vtg-clause-ex-clause: ex-clause, sl 1), the arity-error clause vtg_arcl (ex-arcl; ex-arcl-mxcl: appended to a callee's clauses it answers ex-mxcl's, its prim's throw for :arity), and the scope vtg_scope (vtg-scope-fbcm: ex-fbcm at sl 1, ex-fbcm0 at sl 0; named: vtg_nin/vtg_inr read capv, vtg_capin is c%capt). Named, still hand-written: vm_clause's arity read (nf, variadic, start, body), its vm_scan and the sl decision; vm_compile_fn's arities' loop (vm_clause of each arity in order, then vtg_arcl: ex-clauses's order then ex-arcl) and the program's reservation, compile, fuse and JIT -- host actions |
+| `vm_clause`, `vm_compile_fn` (the entry) | ex-fbtc, ex-clause, ex-def | partly: captures in place and the self slot a let after the parameters in both; the self let's value is `(:mkclo tm (:capt 0)..)` in the model, `(:capt ncap)` in vm.inc (named); the loop only on a recur to the fn in both (ex-tlr; vm_clause's test vtg_tlr, generated: item 3 (b)). **Generated now** (vmtrcl): the clause vtg_clause (vtg-clause-ex-clause: ex-clause, sl 1), the arity-error clause vtg_arcl (ex-arcl; ex-arcl-mxcl: appended to a callee's clauses it answers ex-mxcl's, its prim's throw for :arity), and the scope vtg_scope (vtg-scope-fbcm: ex-fbcm at sl 1, ex-fbcm0 at sl 0; named: vtg_nin/vtg_inr read capv, vtg_capin is c%capt). Also generated now: vm_scan (item 8, vtg_scan, vtg-scan-frag), the sl decision (item 9, vtg_sl, vtg-sl-fbtc0-mx: proved) and the arities' loop (item 9, vtg_fncl, vtg-fncl-clauses). Named, still hand-written: vm_clause's arity read (nf, variadic, start, body) and context; the program's reservation, compile, fuse and JIT -- host actions |
 | `vm_run`, `vm_call_hook`, `vm_node_hook`, `vm_deref_hook` (the hooks) | vmx2's prim/invoke, exec-vm's ex-collok | host actions under named hypotheses; stay hand-written |
 
 **Generated now**: model/vmtrg.lisp, `vtg-tr` (with loop/recur: item 3), `vtg-lind` and `vtg-tlr` (vm_clause's loop test),
@@ -1189,6 +1189,28 @@ position.
    entry or capture). fuzz-vmtr-gen's scan cases run both against ACL2's
    on its trees with a bound and a slot drawn (kind 99, short shapes and
    out-of-range slots the refusals); -x takes an untranslated kind.
+9. **The entry's loop and the sl decision: generated** (vmtrcl).
+   `vtg-fncl` is vm_compile_fn's clause list -- each arity's clause in
+   order (vtg-ars over vtg_nar / vtg_ar, each `vtg_arity`, vm_clause), then
+   vtg-arcl, one list (vtg_node 0): vtg-fncl-clauses, `(append
+   (ex-clauses tm ars) (list (ex-arcl name)))`, the list ex-arcl-mxcl
+   takes; vm_compile_fn's hand loop, gcv_conj and vec_to_list gone.
+   `vtg-sl` is vm_clause's sl -- 1 when the body reads or binds the self
+   slot (vtg-rds), else 0 -- and the hypothesis item 2 named is PROVED:
+   ex-tr-nord (ex-tr reads no scope position whose slot the tree neither
+   reads nor binds, the position's entry blanked or not, on a tree
+   vtg-scan takes), so vtg-sl-fbinr: sl 0 gives ex-fbtc0-mx's hypothesis,
+   and vtg-sl-fbtc0-mx: the sl-0 clause answers as ex-clause's at every
+   args env. Named: vtg_arity is vm_clause (its clause vtg_clause's,
+   vtg-clause-ex-clause / ex-clause0), its tm the capture pair vector
+   capv (as vtg_nin's) and ns, self the template's frame size and self
+   slot where the model's ex-clause reads tm; a refusal pushes nil and
+   clears tb%c%ok, vm_compile_fn dropping the list; self_slot is ex-fself
+   (-1 none). Changed: sl no longer also asks self_slot < the frame's
+   bound -- a body vtg_scan takes reads and binds only slots below it, so
+   the answer is the same. Cost vtg-fncl-steps-bound (13 + 3 an arity, the
+   clauses' own). fuzz-vmtr-gen's fncl cases (vtg_arity a mock) run
+   vtg_fncl against the theorem's list; -x parts them.
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to
 ex-defs-ok0, exec-clrvm).

@@ -42,6 +42,9 @@
 ;; and a slot s drawn (0..12, 0..10): kind 99, an if of one child, a let
 ;; short of its body and a slot past hi among the refusals.
 ;;
+;; Then a fn's clause list, vtg_fncl, against vtg-fncl-clauses' list: the
+;; arities' clauses (vtg_arity a shim pushing a_j) then ex-arcl.
+;;
 ;; -x is the NEGATIVE CONTROL: the Fortran side takes a node's items in the
 ;; wrong order, and a kind not translated is taken, and the answers must
 ;; part (the translation's, the clauses', the scan's).
@@ -121,6 +124,7 @@
      :tm (str "(777 nil " (if (seq inners) (str "(" (str/join " " (mapcat (fn [i] [100 i]) inners)) ")") "nil") " nil " (if self self "nil") ")")}))
 (def ccases (vec (repeatedly n gen-clause)))
 (def anames [nil 0 1 7 42])
+(def fncases (vec (for [a anames] {:name a :n (rnd 4)})))
 (def scases (vec (for [c cases] {:t (:t c) :cm [] :np (rnd 13) :m (rnd 11)})))
 
 (defn acl2-tree [{:keys [k i2 s2 c mark kids thens]}]
@@ -163,6 +167,7 @@
        (str/join (map-indexed (fn [j t] (str "(cw \"~%TLR " j " ~x0 END~%\" (ex-tlr :m '" (acl2-tree t) " 0))\n")) tcases))
        (str/join (map-indexed (fn [j c] (str "(cw \"~%CL " j " ~f0 END~%\" (ex-clause" (if (= (:sl c) 1) "" "0") " '" (:tm c) " '(" (:nf c) " " (if (:var c) "t" "nil") " " (:start c) " " (acl2-tree (:t c)) ")))\n")) ccases))
        (str/join (map-indexed (fn [j a] (str "(cw \"~%AR " j " ~f0 END~%\" (ex-arcl '" (if (nil? a) "nil" a) "))\n")) anames))
+       (str/join (map-indexed (fn [j {:keys [name n]}] (str "(cw \"~%FN " j " ~f0 END~%\" (append '(" (str/join " " (map #(str "a" %) (range n))) ") (list (ex-arcl '" (if (nil? name) "nil" name) "))))\n")) fncases))
        (str/join (map-indexed (fn [j c] (str "(cw \"~%SC " j " ~x0 ~x1 END~%\" (vtg-scan 0 '" (acl2-tree (:t c)) " 0 " (:np c) ") (vtg-rds 0 '" (acl2-tree (:t c)) " 0 " (:m c) "))\n")) scases))
        "(good-bye)\n"))
 (def acl2 (let [a (or (System/getenv "ACL2") (str (fs/parent (fs/parent (fs/parent (fs/canonicalize *file*)))) "/acl2/saved_acl2"))]
@@ -174,6 +179,7 @@
 (def cexpected (into {} (for [[_ c l] (re-seq #"CL (\d+) (.*?) END" (norm out))]
                           [(parse-long c) (str/replace l (norm (:tm (nth ccases (parse-long c)))) "tm")])))
 (def sexpected (into {} (for [[_ c l] (re-seq #"SC (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
+(def fexpected (into {} (for [[_ c l] (re-seq #"FN (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
 (def aexpected (into {} (for [[_ c l] (re-seq #"AR (\d+) (.*?) END" (norm out))] [(parse-long c) l])))
 (when (or (not= (count expected) n) (not= (count texpected) n) (not= (count cexpected) n) (not= (count aexpected) (count anames)) (not= (count sexpected) n))
   (println (str "fuzz-vmtr-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
@@ -215,6 +221,10 @@
 (spit scase-file (str/join (map ftn-case scases)))
 (def sgot (let [r (apply p/shell {:continue true :out :string :err :string} exe scase-file "scan" (when broken ["broken"]))] (mapv norm (str/split-lines (str/trim (:out r))))))
 (def sbad (vec (for [k (range n) :when (not= (get sgot k) (sexpected k))] k)))
+(def fcase-file (str work "/fcases.txt"))
+(spit fcase-file (str/join (map #(ftn-case {:t (node 1 :c (:name %)) :cm [] :np (:n %) :m 0}) fncases)))
+(def fgot (let [r (apply p/shell {:continue true :out :string :err :string} exe fcase-file "fncl" (when broken ["broken"]))] (mapv norm (str/split-lines (str/trim (:out r))))))
+(def fbad (vec (for [k (range (count fncases)) :when (not= (get fgot k) (fexpected k))] k)))
 (defn kinds [t] (cons (:k t) (mapcat kinds (:kids t))))
 (println (str n " cases, seed " seed (when broken " (negative control: a node's items reversed)")))
 (println (str "  nodes by kind: " (str/join ", " (for [[k c] (sort (frequencies (mapcat (comp kinds :t) cases)))] (str k ":" c)))
@@ -235,4 +245,6 @@
 (println (str "generated scan vtg_scan / vtg_rds against ACL2's vtg-scan / vtg-rds: " (count sbad) " of " n " differ ("
               (count (filter #(str/starts-with? % "t") (vals sexpected))) " taken, " (count (filter #(str/ends-with? % " t") (vals sexpected))) " reading s)"))
 (doseq [k (take 3 sbad)] (println "  case" k (acl2-tree (:t (nth scases k))) "hi" (:np (nth scases k)) "s" (:m (nth scases k)) "ACL2" (sexpected k) "generated" (get sgot k)))
-(System/exit (if (or (seq tbad) (if broken (or (empty? bad) (empty? cbad) (empty? abad) (empty? sbad)) (or (seq bad) (seq cbad) (seq abad) (seq sbad)))) 1 0))
+(println (str "generated clause list vtg_fncl against vtg-fncl-clauses' list: " (count fbad) " of " (count fncases) " differ"))
+(doseq [k (take 3 fbad)] (println "  case" (nth fncases k) "ACL2" (fexpected k) "generated" (get fgot k)))
+(System/exit (if (or (seq tbad) (if broken (or (empty? bad) (empty? cbad) (empty? abad) (empty? sbad) (empty? fbad)) (or (seq bad) (seq cbad) (seq abad) (seq sbad) (seq fbad)))) 1 0))

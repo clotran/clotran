@@ -14,7 +14,7 @@
 ! ex-fbcm0), against ex-clause (at sl 0 ex-clause0);
 ! with `arcl` vtg_arcl of the root's constant, against ex-arcl.
 !
-!   vmtr_check CASEFILE [tlr|clause|arcl|scan] [broken]
+!   vmtr_check CASEFILE [tlr|clause|arcl|scan|fncl] [broken]
 !
 ! CASEFILE: per case a line `nnodes np m ncm cm..` (np, m vtb-cs: the
 ! clause's parameters and captures, a capture read in place), then a line a node, 1..nnodes,
@@ -43,7 +43,7 @@ module vmtr_mock
   integer, allocatable :: nkind(:), ni2(:), ns2(:), nc(:), nmark(:), nnk(:), noff(:), kids(:)
   ! a clause's captures' inner slots (vtg_nin / vtg_inr's template)
   integer(int64), allocatable :: inr(:)
-  logical :: broken = .false., tlr = .false., clause = .false., arcl = .false., scan = .false.
+  logical :: broken = .false., tlr = .false., clause = .false., arcl = .false., scan = .false., fncl = .false.
 contains
   logical function ok(x)
     type(gc_value), intent(in) :: x
@@ -570,6 +570,25 @@ contains
     type(gc_value), intent(in) :: x
     vtg_refk = broken
   end function vtg_refk
+  ! vmtrcl's vtg-fncl: arity j a value of id 2000 + j, the arities' count
+  ! n the id 1000 + n; vtg_arity pushes `aj` (the fuzzer's ACL2 side the
+  ! same symbols, vtg-fncl-clauses' list)
+  integer(int64) function vtg_nar(x)
+    type(gc_value), intent(in) :: x
+    vtg_nar = max(0, x%id - 1000)
+  end function vtg_nar
+  function vtg_ar(x, j) result(k)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: j
+    type(gc_value) :: k
+    k%id = 2000 + int(j)
+  end function vtg_ar
+  subroutine vtg_arity(tb, ar, tm, ns, self)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: ar, tm
+    integer(int64), value :: ns, self
+    call push(tb, 'a' // itoa(int(ar%id - 2000, int64)))
+  end subroutine vtg_arity
   include 'vm_tr_gen.inc'
 end module vmtr_mock
 
@@ -581,7 +600,7 @@ program vmtr_check
   integer(int64) :: nf, var, st, sl, self
   integer, allocatable :: row(:)
   type(vtg_state) :: tb, sc
-  type(gc_value) :: root
+  type(gc_value) :: root, ars
   call get_command_argument(1, arg)
   do j = 2, command_argument_count()
      call get_command_argument(j, arg(2048:))
@@ -590,6 +609,7 @@ program vmtr_check
      if (trim(arg(2048:)) == 'clause') clause = .true.
      if (trim(arg(2048:)) == 'arcl') arcl = .true.
      if (trim(arg(2048:)) == 'scan') scan = .true.
+     if (trim(arg(2048:)) == 'fncl') fncl = .true.
   end do
   open (newunit=u, file=trim(arg(1:2047)), status='old', action='read')
   allocate (row(4096))
@@ -637,6 +657,11 @@ program vmtr_check
         ! np the frame's bound hi, m the slot s: vtg_scan's answer, vtg_rds's
         write (*, '(a, 1x, a)') merge('t  ', 'nil', vtg_scan(0_int64, root, 0_int64, tb%np)), &
              merge('t  ', 'nil', vtg_rds(0_int64, root, 0_int64, tb%m))
+     else if (fncl) then
+        ! np the arities' count: vtg_fncl's list
+        ars%id = 1000 + int(tb%np)
+        call vtg_fncl(tb, ars, root, 0_int64, -1_int64, root)
+        write (*, '(a)') tb%stk(tb%top)%s
      else if (arcl) then
         call vtg_arcl(tb, root)
         write (*, '(a)') tb%stk(tb%top)%s

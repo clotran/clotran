@@ -1260,11 +1260,10 @@
     ! it, (:mkclo template (:capt 0) ..): equal under the runtime's
     ! decoding), and only when the body reads it: a let a call costs fib
     ! a fifth (scripts/bench), and its slot is a position no name reaches
-    ! otherwise (the sl decision is named: vmtrcl.lisp)
-    sl = 0
-    if (self_slot >= 0 .and. self_slot <= ubound(c%map, 1)) then
-       if (vtg_rds(0_int64, body, 0_int64, int(self_slot, int64))) sl = 1
-    end if
+    ! otherwise -- vtg_sl, generated (vmtrcl.lisp's vtg-sl over vtg-rds;
+    ! vtg-sl-fbtc0-mx: on a body vtg_scan took, sl 0 answers as sl 1. NAMED:
+    ! self_slot is the template's self slot, ex-fself, -1 for none)
+    sl = int(vtg_sl(body, int(self_slot, int64)))
     ! the scope by vtg_scope (generated: vmtrcl.lisp's vtg-scope-fbcm, ex-fbcm
     ! at sl 1, ex-fbcm0 at sl 0): the parameters, the captures in place, the self
     tb%c => c
@@ -1302,7 +1301,8 @@
     type(vm_state) :: t
     type(vc_state) :: cce
     type(vtg_state) :: tb
-    integer :: base, i, na, p0, c0
+    integer :: base, na, p0, c0
+    type(vm_tr_ctx), allocatable, target :: cc
     integer(gc_ip) :: sz, pend, j
     f = -1
     clause0 = -1
@@ -1311,28 +1311,21 @@
     na = gcv_count(arities)
     ! slots: 1 the clauses, 2 3 scratch, 4 kw, 5 kw
     base = vs_enter(vst, 5)
-    call vs_set(vst, base + 1, gcv_empty(roots))
-    do i = 0, na - 1
-       x = vm_clause(gcv_nth(arities, i), nslots, capv, self_slot, [roots, vs_get(vst, base + 1)])
-       if (x%tag == GCT_NIL) then
-          vm_n_refused = vm_n_refused + 1
-          call vs_leave(vst, base)
-          return
-       end if
-       call vs_set(vst, base + 2, x)
-       x = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-       call vs_set(vst, base + 1, x)
-    end do
-    ! the last clause: a call of no arity the fn has, clj's ArityException,
-    ! by vtg_arcl (generated: vmtrcl.lisp's ex-arcl, ex-arcl-mxcl)
-    ! (0 (:prim :clotran.vm/arity (:const name) (:local 0)) :rest)
-    call vtg_arcl(tb, display)
+    ! the clauses, one list, by vtg_fncl (generated: vmtrcl.lisp's
+    ! vtg-fncl-clauses): each arity's clause in order (vtg_arity, vm_clause),
+    ! then the arity clause, a call of no arity the fn has -- clj's
+    ! ArityException, (0 (:prim :clotran.vm/arity (:const name) (:local 0))
+    ! :rest) (vtg_arcl: ex-arcl, ex-arcl-mxcl); a refusal clears cc%ok
+    allocate(cc)
+    tb%c => cc
+    call vtg_fncl(tb, arities, capv, int(nslots, int64), int(self_slot, int64), display)
     x = vs_get(vst, vst%vs_top)
     call vs_leave(vst, base + 5)
-    call vs_set(vst, base + 2, x)
-    x = gcv_conj(vs_get(vst, base + 1), vs_get(vst, base + 2), [roots, vs_get(vst, base + 1), vs_get(vst, base + 2)])
-    call vs_set(vst, base + 1, x)
-    x = vec_to_list(vs_get(vst, base + 1), roots)
+    if (.not. cc%ok) then
+       vm_n_refused = vm_n_refused + 1
+       call vs_leave(vst, base)
+       return
+    end if
     call vs_set(vst, base + 1, x)
     ! its place in the program, reserved: the code, the clauses, the id
     sz = vmicg_size_clauses(vs_get(vst, base + 1))
@@ -1403,6 +1396,32 @@
     vm_n_ok = vm_n_ok + 1
     call vs_leave(vst, base)
   end function vm_compile_fn
+
+  ! vmtrcl's vtg-fncl's reads and shim: the arities' count and arity j
+  ! (vtg_nar, vtg_ar), and vtg_arity -- arity ar's clause by vm_clause, its
+  ! frame size and self slot passed where the model's ex-clause reads tm
+  ! (NAMED: tm here is the capture pair vector capv, as vtg_nin's); on a
+  ! refusal it pushes nil and clears tb%c%ok, and vm_compile_fn drops the
+  ! whole list
+  integer(int64) function vtg_nar(ars)
+    type(gc_value), intent(in) :: ars
+    vtg_nar = gcv_count(ars)
+  end function vtg_nar
+  function vtg_ar(ars, j) result(ar)
+    type(gc_value), intent(in) :: ars
+    integer(int64), intent(in) :: j
+    type(gc_value) :: ar
+    ar = gcv_nth(ars, int(j))
+  end function vtg_ar
+  subroutine vtg_arity(tb, ar, tm, ns, self)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: ar, tm
+    integer(int64), value :: ns, self
+    type(gc_value) :: cl
+    cl = vm_clause(ar, int(ns), tm, int(self), [ar, tm])
+    if (cl%tag == GCT_NIL) tb%c%ok = .false.
+    call anb_push(cl)
+  end subroutine vtg_arity
 
   ! ---- THE RUN -----------------------------------------------------------
 
