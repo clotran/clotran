@@ -405,7 +405,6 @@ end module clotran_rt_decl
 
 (defn- prim? [t] (#{:long :double :bool} t))
 (defn- num? [t] (#{:long :double} t))
-(defn- join [a b] (cond (= a :none) b (= b :none) a (= a b) a :else :any))
 
 (def ^:private op-kinds
   '{+ :arith, - :arith, * :arith, / :div, inc :inc, dec :dec,
@@ -478,86 +477,43 @@ end module clotran_rt_decl
       (assoc args 0 (second (:children a)))
       args)))
 
-(defn- const-type [v]
-  (cond (and (int? v) (spellable? v)) :long
-        (and (double? v) (spellable? v)) :double
-        (or (true? v) (false? v)) :bool
-        :else :any))
 
-(defn- call-type [nd env]
-  (let [[kind _] (head-op (first (:children nd)))
-        ts (mapv #(infer % env) (op-args nd kind env))
-        n (count ts)]
-    (case kind
-      :arith (if (and (= n 2) (every? num? ts))
-               (if (every? #{:long} ts) :long :double)
-               :any)
-      :div (if (and (= n 2) (every? num? ts) (some #{:double} ts)) :double :any)
-      (:inc :dec) (if (and (= n 1) (num? (first ts))) (first ts) :any)
-      ;; one boxed operand is fine: its tag is checked at run time
-      :cmp (if (and (= n 2) (some num? ts) (every? #(or (num? %) (= :any %)) ts)) :bool :any)
-      :eq (if (and (= n 2) (num? (first ts)) (= (first ts) (second ts))) :bool :any)
-      :pred (if (and (= n 1) (num? (first ts))) :bool :any)
-      ;; an array is typed only through a hinted parameter, so its
-      ;; argument is always a local
-      :aget (if (and (= n 2) (#{:doubles :longs} (ts 0)) (= :long (ts 1)))
-              (if (= :doubles (ts 0)) :double :long) :any)
-      :aset (if (and (= n 3) (#{:doubles :longs} (ts 0)) (= :long (ts 1))
-                     (if (= :doubles (ts 0)) (num? (ts 2)) (= :long (ts 2))))
-              (if (= :doubles (ts 0)) :double :long) :any)
-      :alength (if (and (= n 1) (#{:doubles :longs} (ts 0))) :long :any)
-      (:to-int :to-long) (if (and (= n 1) (num? (ts 0))) :long :any)
-      :to-double (if (and (= n 1) (num? (ts 0))) :double :any)
-      :math1 (if (and (= n 1) (num? (ts 0))) :double :any)
-      :math2 (if (and (= n 2) (every? num? ts)) :double :any)
-      :any)))
+;; THE INFERENCE IS GENERATED: clotran-aot-ty is model/aot.lisp's aot-ty
+;; (src/f/gen/aot_gen.inc) -- infer, call-type, bind-types and loop-env
+;; as they were written here, on the node's OBJ_AST: Clojure's
+;; primitive-local rules, a let's slots typed from their inits, a loop's
+;; slots joined with what its recurs carry until they settle (at most six
+;; rounds, else boxed), a call typed by its op (head-op's kind, read by
+;; Eval.f90's aot_hop) from its first three operands' types, an array
+;; cast's operand seen through (op-args). aot-ty-proof.lisp proves a node
+;; it types long, double or bool evaluates under the tree's meaning to
+;; such a value, or throws, or leaves the model (aot-ty-sound; its
+;; assumptions named there and in model/aot-PLAN.md). Here only the
+;; plumbing: the env's slots as a vector of codes, the codes as keywords.
+(def ^:dynamic *aot-nslots*
+  "The frame's size (the template's nslots), so the inference's slot
+  array holds every slot a let in the body binds."
+  0)
+(def ^:private ty-codes [:none :any :long :double :bool :doubles :longs])
+(def ^:private ty-code (zipmap ty-codes (range)))
 
-(defn- bind-types
-  "The types a let's slots take from their inits, in order, each init
-  seeing the bindings before it."
-  [nd env]
-  (let [kids (:children nd) n (:i2 nd) base (:p1 nd)]
-    (reduce (fn [e i] (assoc-in e [:slots (+ base i)] (infer (nth kids i) e)))
-            env (range n))))
-
-(defn- loop-env
-  "A loop's slots: the join of each init's type and every recur's
-  argument type for that slot, iterated until it settles. A slot that
-  does not settle is boxed."
-  [nd env]
-  (let [kids (:children nd) n (:i2 nd) base (:p1 nd)]
-    (loop [e (bind-types nd env) k 0]
-      (let [acc (atom {})
-            _ (infer (nth kids n) (assoc e :recurs acc))
-            rts (get @acc base [])
-            e' (reduce (fn [e i]
-                         (update-in e [:slots (+ base i)]
-                                    (fn [t] (reduce join t (map #(nth % i :any) rts)))))
-                       e (range n))]
-        (cond (= e' e) e
-              (> k 4) (reduce (fn [e i] (assoc-in e [:slots (+ base i)] :any)) e (range n))
-              :else (recur e' (inc k)))))))
+(defn- env-codes [env]
+  (let [s (:slots env)]
+    (if (seq s) (mapv #(ty-code (get s % :any) 1) (range (inc (apply max (keys s))))) [])))
 
 (defn- infer
   "The type a node's value is PROVEN to have, given the types of the
   slots in scope."
   [nd env]
-  (case (:op nd)
-    :const (const-type (:p1 nd))
-    :local (get-in env [:slots (:i2 nd)] :any)
-    :do (if (seq (:children nd)) (last (mapv #(infer % env) (:children nd))) :any)
-    :if (let [[t th el] (:children nd)]
-          (infer t env)
-          (join (infer th env) (if el (infer el env) :any)))
-    :let (infer (nth (:children nd) (:i2 nd)) (bind-types nd env))
-    :loop (infer (nth (:children nd) (:i2 nd)) (loop-env nd env))
-    :recur (do (when-let [a (:recurs env)]
-                 (swap! a update (nth (:p1 nd) 1) (fnil conj [])
-                        (mapv #(infer % env) (:children nd))))
-               :none)
-    :call (call-type nd env)
-    :any))
+  (if (map? nd) (ty-codes (clotran-aot-ty (:node nd) (env-codes env) *aot-nslots* false)) :any))
 
+(defn- loop-env
+  "A loop's slots at their settled types (a slot that does not settle is
+  boxed), on top of env."
+  [nd env]
+  (let [base (:p1 nd)
+        ts (clotran-aot-ty (:node nd) (env-codes env) *aot-nslots* true)]
+    (reduce (fn [e i] (assoc-in e [:slots (+ base i)] (ty-codes (nth ts i)))) env (range (:i2 nd)))))
 ;;; ---- emitting -------------------------------------------------------
 
 (defn- fort-ident
@@ -1732,8 +1688,8 @@ end module clotran_rt_decl
                      (let [nm (fort-ident (str fn-name))]
                        (str "cf" idx "_" (subs nm 0 (min 50 (count nm)))))
                      (str "cf_" (fort-ident (str ns-name)) "_" (fort-ident (str fn-name))))
-               proc (fn-procedure sym (str ns-name "/" fn-name) tmpl form offset pool
-                                  {:prefix (str "cc" (or idx 0))})]
+               proc (binding [*aot-nslots* (nth tmpl 3)] (fn-procedure sym (str ns-name "/" fn-name) tmpl form offset pool
+                                  {:prefix (str "cc" (or idx 0))}))]
            (assoc proc :ns ns-name :name fn-name :fingerprint fingerprint)))))))
 
 (defn- manifest-text

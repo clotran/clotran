@@ -5537,6 +5537,197 @@
     end if
   end function aot_bod
 
+  ! ---- the type inference's reads (model/aot.lisp, slice 2; aot_gen.inc's aot_ty) ----
+  ! The tree semantics' fields: a let's or loop's first slot, a recur's
+  ! target slots and count, each a 40-bit natural as the model reads it
+  integer(int64) function aot_n40(v)
+    integer(int64), intent(in) :: v
+    aot_n40 = 0
+    if (v >= 0 .and. v < 2_int64**40) aot_n40 = v
+  end function aot_n40
+
+  integer(int64) function aot_i2(nd)
+    type(gc_value), intent(in) :: nd
+    aot_i2 = 0
+    if (gc_kind(nd) == OBJ_AST) aot_i2 = aot_n40(int(gc_i2(nd), int64))
+  end function aot_i2
+
+  integer(int64) function aot_s2(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: p
+    aot_s2 = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    p = gc_slot(nd, 2)
+    if (p%tag == GCT_INT) aot_s2 = aot_n40(int(p%ival, int64))
+  end function aot_s2
+
+  ! a recur's [_ start count] (exec.inc's action 10)
+  integer(int64) function aot_rinfo(nd, i)
+    type(gc_value), intent(in) :: nd
+    integer, intent(in) :: i
+    type(gc_value) :: p
+    aot_rinfo = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) /= N_RECUR) return
+    p = gc_slot(nd, 2)
+    if (.not. gcv_is(p)) return
+    if (gcv_count(p) <= i) return
+    p = gcv_nth(p, i)
+    if (p%tag == GCT_INT) aot_rinfo = aot_n40(int(p%ival, int64))
+  end function aot_rinfo
+
+  integer(int64) function aot_rs(nd)
+    type(gc_value), intent(in) :: nd
+    aot_rs = aot_rinfo(nd, 1)
+  end function aot_rs
+
+  integer(int64) function aot_rn(nd)
+    type(gc_value), intent(in) :: nd
+    aot_rn = aot_rinfo(nd, 2)
+  end function aot_rn
+
+  ! compiler.cljf's const-type: 2 an int? that is spellable (not
+  ! Long/MIN_VALUE), 3 a double? (not a float) that is finite, 4 true or
+  ! false, else 1
+  integer(int64) function aot_cty(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: v
+    real(gc_dp) :: x
+    aot_cty = 1
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) /= N_CONST) return
+    v = gc_slot(nd, 2)
+    select case (v%tag)
+    case (GCT_INT)
+       if (v%ival /= -huge(0_int64) - 1) aot_cty = 2
+    case (GCT_REAL)
+       if (v%ref /= W_FLOAT) then
+          x = gc_rval(v)
+          if (x == x .and. abs(x) <= huge(x)) aot_cty = 3
+       end if
+    case (GCT_BOOL)
+       aot_cty = 4
+    end select
+  end function aot_cty
+
+  ! a constant :doubles (5) or :longs (6): an array cast's hint
+  integer(int64) function aot_kw(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: v
+    character(len=:), allocatable :: s
+    aot_kw = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) /= N_CONST) return
+    v = gc_slot(nd, 2)
+    if (v%tag /= GCT_KEY) return
+    call gc_text(v, s)
+    if (s == "doubles") aot_kw = 5
+    if (s == "longs") aot_kw = 6
+  end function aot_kw
+
+  ! compiler.cljf's head-op, as a code (model/aot.lisp's aot-optab): the
+  ! call head's folded builtin's name, or the name of the clojure.core Var
+  ! it reads (a Var is clojure.core's for a name exactly when its namespace
+  ! is clojure.core and its name that one); 20 the builtin array cast
+  integer(int64) function aot_hop(nd)
+    type(gc_value), intent(in) :: nd
+    type(gc_value) :: h, v
+    character(len=:), allocatable :: s, ns
+    logical :: builtin
+    aot_hop = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    if (gc_i1(nd) /= N_CALL) return
+    if (gcv_count(gc_slot(nd, 1)) < 1) return
+    h = gcv_nth(gc_slot(nd, 1), 0)
+    if (gc_kind(h) /= OBJ_AST) return
+    builtin = .false.
+    if (gc_i1(h) == N_CONST) then
+       v = strip_meta(gc_slot(h, 2))
+       if (gc_kind(v) /= OBJ_BUILTIN) return
+       call gc_text(gc_slot(v, 1), s)
+       builtin = .true.
+    else if (gc_i1(h) == N_VAR) then
+       v = gc_slot(h, 2)
+       if (gc_kind(v) /= OBJ_VAR) return
+       if (gc_kind(gc_slot(v, 3)) /= OBJ_NS) return
+       call gc_text(gc_slot(gc_slot(v, 3), 1), ns)
+       if (ns /= "clojure.core") return
+       call gc_text(gc_slot(v, 4), s)
+    else
+       return
+    end if
+    select case (s)
+    case ("+", "-", "*")
+       aot_hop = 1
+    case ("/")
+       aot_hop = 2
+    case ("inc", "dec")
+       aot_hop = 3
+    case ("<", ">", "<=", ">=", "==")
+       aot_hop = 4
+    case ("=")
+       aot_hop = 5
+    case ("zero?", "pos?", "neg?")
+       aot_hop = 6
+    case ("aget")
+       aot_hop = 7
+    case ("aset")
+       aot_hop = 8
+    case ("alength")
+       aot_hop = 9
+    case ("int", "long")
+       aot_hop = 10
+    case ("double")
+       aot_hop = 11
+    case ("clotran-math-sqrt", "clotran-math-sin", "clotran-math-cos", "clotran-math-tan", "clotran-math-exp", &
+         "clotran-math-log", "clotran-math-log10", "clotran-math-asin", "clotran-math-acos", "clotran-math-atan", &
+         "clotran-math-sinh", "clotran-math-cosh", "clotran-math-tanh")
+       aot_hop = 12
+    case ("clotran-math-pow", "clotran-math-atan2")
+       aot_hop = 13
+    case ("clotran-array-cast")
+       if (builtin) aot_hop = 20
+    end select
+  end function aot_hop
+
+  ! clotran-aot-ty: the generated inference (aot_ty) on a node, its slots'
+  ! types the env vector's codes (1 past it), nslots the frame's size;
+  ! with lp, the loop's settled slot types (lo) instead of its type
+  function aot_infer(nd, env, nslots, lp, roots) result(out)
+    type(gc_value), intent(in) :: nd, env
+    integer, intent(in) :: nslots
+    logical, intent(in) :: lp
+    type(gc_value), intent(in) :: roots(:)
+    type(gc_value) :: out, c
+    type(aot_state) :: as
+    integer(int64) :: n, i, t, o, b, m
+    n = max(int(nslots, int64), 1_int64)
+    if (gcv_is(env)) n = max(n, int(gcv_count(env), int64))
+    allocate(as%tv(0:n - 1), as%rc(0:n - 1), as%lo(0:n - 1))
+    as%tv = 1
+    as%rc = 0
+    as%lo = 1
+    if (gcv_is(env)) then
+       do i = 0, gcv_count(env) - 1
+          c = gcv_nth(env, int(i))
+          if (c%tag == GCT_INT) as%tv(i) = c%ival
+       end do
+    end if
+    call aot_ty(as, 0_int64, nd, 0_int64, 0_int64, 0_int64, t, o)
+    if (.not. lp) then
+       out = gc_int(t)
+       return
+    end if
+    b = aot_s2(nd)
+    m = aot_i2(nd)
+    out = gcv_empty(roots)
+    do i = 0, m - 1
+       t = 1
+       if (b + i < n) t = as%lo(b + i)
+       out = gcv_conj(out, gc_int(t), [roots, out])
+    end do
+  end function aot_infer
+
   ! The tail check of a body standing as tt says (anpass.lisp's anp-tc: 1
   ! a fn's, 0 the top level's): fails the analysis as clj's compiler
   ! does, and answers whether it passed.

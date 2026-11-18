@@ -264,16 +264,24 @@
               "  ! tail check passes recurs only as the last thing it does (tr-tail)."]}
     "aot"
     {:out "src/f/gen/aot_gen.inc" :include true :book "aot"
-     :fns [aot-ch aot-cop aot-fr aot-sc]
-     :stobjs {} :stobj-types {} :fields {} :array-names {} :prefix {} :value-arrays #{}
-     :value-formals {aot-ch #{x} aot-fr #{x} aot-sc #{x}}
+     :fns [aot-ch aot-cop aot-fr aot-sc aot-code aot-jn aot-and aot-num aot-arr aot-optab aot-get aot-raw aot-put
+           aot-rget aot-rjn aot-rz aot-lput aot-tick aot-rzero aot-settled aot-lcopy aot-ty]
+     :stobjs {aots "as"} :stobj-types {"as" "aot_state"}
+     :fields {aot-cb ["as" "cb"] aot-cn ["as" "cn"] aot-a0 ["as" "a0"] aot-a1 ["as" "a1"] aot-a2 ["as" "a2"]
+              aot-ad ["as" "ad"] aot-ns ["as" "ns"]}
+     :array-names {"as" ["tv" "rc" "lo"]} :prefix {"as" "aot-"} :value-arrays #{}
+     :value-formals {aot-ch #{x} aot-fr #{x} aot-sc #{x} aot-ty #{e}}
      :value-fns #{aot-ch}
-     :bool-fns #{aot-cop aot-fr aot-sc}
+     :bool-fns #{aot-cop aot-fr aot-sc aot-num aot-arr aot-settled}
      ;; a node is a value of clotran's heap, read by analyze.inc's shims and Eval.f90's aot_nbods, aot_bod
      :val-type "gc_value"
      :rt {ast-kind ["ast_kind" [:val] :int] ast-nkids ["ast_nkids" [:val] :int] ast-kid ["ast_kid" [:val :int] :val]
           ast-s3 ["ast_s3" [:val] :val] ast-nalts ["ast_nalts" [:val] :int] ast-alt ["ast_alt" [:val :int] :val]
-          aot-nbods ["aot_nbods" [:val] :int] aot-bod ["aot_bod" [:val :int] :val]}
+          aot-nbods ["aot_nbods" [:val] :int] aot-bod ["aot_bod" [:val :int] :val]
+          aot-k ["ast_kind" [:val] :int] aot-nk ["ast_nkids" [:val] :int] aot-kid ["ast_kid" [:val :int] :val]
+          aot-i2 ["aot_i2" [:val] :int] aot-s2 ["aot_s2" [:val] :int] aot-rs ["aot_rs" [:val] :int]
+          aot-rn ["aot_rn" [:val] :int] aot-cty ["aot_cty" [:val] :int] aot-hop ["aot_hop" [:val] :int]
+          aot-kw ["aot_kw" [:val] :int]}
      :header ["  ! GENERATED from model/aot.lisp by scripts/acl2-fortran -b aot. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the ahead-of-time compiler's eligibility scan (aot_sc: some"
@@ -282,7 +290,11 @@
               "  ! analyze.inc's ast_* shims and Eval.f90's aot_nbods, aot_bod. B_AOTSCAN"
               "  ! (clotran-aot-scan) answers it to decline-reason. aot-proof.lisp proves a node"
               "  ! with no such recur makes none in any run (aot-handed-norec), that a passing"
-              "  ! scan leaves none (aot-sc-sound, aot-scan-norec), and counts it (aot-sc-steps-bound)."]}
+              "  ! scan leaves none (aot-sc-sound, aot-scan-norec), and counts it (aot-sc-steps-bound)."
+              "  ! And the compiler's type inference (aot_ty: infer, call-type, bind-types, loop-env)"
+              "  ! over aot_state, reading aot_hop, aot_cty, aot_kw, aot_i2, aot_s2, aot_rs, aot_rn;"
+              "  ! B_AOTTY (clotran-aot-ty, analyze.inc's aot_infer) answers it. Its proof is owed"
+              "  ! (model/aot-PLAN.md, slice 2)."]}
     "anlocal"
     {:out "src/f/gen/anlocal_gen.inc" :include true
      :fns [anl-odd anl-shape anl-name-code anl-pans anl-pw anl-params

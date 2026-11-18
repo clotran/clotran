@@ -37,7 +37,23 @@
 (declare gen-node)
 (defn gen-kids [d k] (vec (repeatedly k #(gen-node (dec d)))))
 (defn gen-fn [d] (node 14 :bods (vec (repeatedly (rnd 3) #(when (pos? (rnd 6)) (gen-node (dec d)))))))
+(declare gen-node0)
+(defn typed-fields [nd]
+  (let [k (:kind nd) nk (count (:kids nd))]
+    (merge {:i2 (rnd 20) :s2 (* 4 (rnd 5)) :rs (* 4 (rnd 5)) :rn nk :cty (inc (rnd 4)) :hop 0 :kw (pick [0 0 5 6])}
+           (case k
+             (11 12) {:i2 (max 0 (dec nk))}
+             16 {:rn (if (pos? (rnd 5)) nk (rnd 4))}
+             6 {:hop (pick [0 1 2 3 4 5 6 7 8 9 10 11 12 13 20 1 1 4 7 7 8])}
+             {}))))
+(defn typed [nd] (merge (typed-fields nd) nd))
+(defn cast-call [d] (assoc (typed (node 6 :kids [(typed (node 1)) (gen-node (dec d)) (assoc (typed (node 1)) :kw (pick [5 6]))])) :hop 20))
 (defn gen-node [d]
+  (let [nd (gen-node0 d) nd (merge (typed-fields nd) nd)]
+    (if (and (= 6 (:kind nd)) (#{7 8 9} (:hop nd)) (> (count (:kids nd)) 1) (pos? (rnd 2)) (> d 1))
+      (assoc-in nd [:kids 1] (cast-call d))
+      nd)))
+(defn gen-node0 [d]
   (if (<= d 0)
     (node (pick [1 2 3 16 16]))
     (let [k (pick [1 2 3 4 5 6 11 12 12 14 15 16 16 16 21 22 10 13 18 19 19 20 7 8 99])]
@@ -49,6 +65,7 @@
         19 (node 19 :kids [(gen-node (dec d)) (gen-node (dec d))] :alts (vec (repeatedly (rnd 4) #(when (pos? (rnd 5)) (gen-node (dec d))))))
         10 (node 10 :kids (gen-kids d (rnd 2)) :s3 (when (pos? (rnd 2)) (gen-node (dec d))))
         20 (node 20 :alts (vec (repeatedly (rnd 3) #(gen-fn d))))
+        6 (node 6 :kids (gen-kids d (inc (rnd 4))))
         (node k :kids (gen-kids d (rnd 4)))))))
 
 ;; ids in a walk; the table, a row a node
@@ -59,11 +76,11 @@
                 (let [id (inc (count @rows))]
                   (swap! rows conj nil)
                   (let [kids (mapv walk (:kids nd)) s3 (walk (:s3 nd)) alts (mapv walk (:alts nd)) bods (mapv walk (:bods nd))]
-                    (swap! rows assoc (dec id) (assoc nd :kid-ids kids :s3-id s3 :alt-ids alts :bod-ids bods))
+                    (swap! rows assoc (dec id) (assoc (if (:cty nd) nd (typed nd)) :kid-ids kids :s3-id s3 :alt-ids alts :bod-ids bods))
                     id))))]
       (let [r (walk root)] [r @rows]))))
 
-(def cases (vec (repeatedly n #(let [[r rows] (number (gen-node (+ 1 (rnd 6))))] {:root r :rows rows}))))
+(def cases (vec (repeatedly n #(let [[r rows] (number (gen-node (+ 1 (rnd 6))))] {:root r :rows rows :env (vec (repeatedly 64 (fn [] (pick [1 1 1 1 2 2 3 4 5 6 0]))))}))))
 
 ;; ---- ACL2 -------------------------------------------------------------------------------
 
@@ -73,13 +90,26 @@
       (str "(list :ast " id " " (:kind row) " 0 " (l (:kid-ids row)) " " (acl2-node rows (:s3-id row))
            " nil " (l (:alt-ids row)) " 0 " (l (:bod-ids row)) ")"))))
 
+(defn ex-node [rows id]
+  (if (zero? id) "nil"
+    (let [r (nth rows (dec id))]
+      (str "(list " (:kind r) " " (:i2 r) " (list " (str/join " " (map (partial ex-node rows) (:kid-ids r))) ") nil " (:s2 r) " nil " (:rs r) " " (:rn r) " nil " (:cty r) " " (:hop r) " " (:kw r) ")"))))
+
+;; ACL2 types each node in the case's environment, the stobj set as aot_check sets it
+(def fz-defs (str "(defun fz-fill (i env aots) (declare (xargs :stobjs aots :mode :program)) (if (< i 64) (let* ((aots (update-aot-tvi i (nth i env) aots)) (aots (update-aot-rci i 0 aots)) (aots (update-aot-loi i 1 aots))) (fz-fill (+ 1 i) env aots)) aots))\n"
+  "(defun fz-run (nd env aots) (declare (xargs :stobjs aots :mode :program)) (let* ((aots (resize-aot-tv 64 aots)) (aots (resize-aot-rc 64 aots)) (aots (resize-aot-lo 64 aots)) (aots (fz-fill 0 env aots)) (aots (update-aot-cb 0 aots)) (aots (update-aot-cn 0 aots)) (aots (update-aot-a0 1 aots)) (aots (update-aot-a1 1 aots)) (aots (update-aot-a2 1 aots)) (aots (update-aot-ad 0 aots))) (aot-ty 0 nd 0 0 0 aots)))\n"))
+
 (def driver
-  (str "(include-book \"aot\")\n"
+  (str "(include-book \"aot\")\n" fz-defs
        "(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
        (str/join (map-indexed (fn [k c]
                                 (let [ns (map #(acl2-node (:rows c) %) (range 1 (inc (count (:rows c)))))]
                                   (str "(cw \"CASE ~x0 ~x1 ~x2~%\" " k " (if (aot-sc 0 " (acl2-node (:rows c) (:root c)) " 0 0) 1 0) (list "
                                        (str/join " " (map #(str "(if (aot-fr 0 " % " 0 0) 1 0)") ns)) "))\n")))
+                              cases))
+       (str/join (map-indexed (fn [k c]
+                                (str/join (map (fn [i] (str "(mv-let (ty ok aots) (fz-run " (ex-node (:rows c) i) " '" (pr-str (seq (:env c))) " aots) (prog2$ (cw \"TY ~x0 ~x1 ~x2 ~x3~%\" " k " " i " ty ok) (mv ty ok aots)))\n"))
+                                           (range 1 (inc (count (:rows c)))))))
                               cases))
        "(good-bye)\n"))
 
@@ -89,6 +119,8 @@
 (def expected
   (into {} (for [[_ k a b] (re-seq #"CASE (\d+) (\d) \(([^)]*)\)" out)]
              [(parse-long k) [(parse-long a) (mapv parse-long (remove str/blank? (str/split b #"\s+")))]])))
+(def expected-ty
+  (reduce (fn [m [_ k i t o]] (assoc-in m [(parse-long k) (parse-long i)] [(parse-long t) (parse-long o)])) {} (re-seq #"TY (\d+) (\d+) (\d+) (\d+)" out)))
 (when (not= (count expected) n)
   (println (str "fuzz-aot-gen: ACL2 answered " (count expected) " of " n " cases; its output ends:"))
   (println (subs out (max 0 (- (count out) 2000))))
@@ -109,26 +141,32 @@
     (spit f (str (count (:rows c)) " " (:root c) "\n"
                  (str/join "\n" (for [row (:rows c)]
                                   (let [vs (concat [(:kind row) (:s3-id row) (count (:kid-ids row))] (:kid-ids row)
-                                                   [(count (:alt-ids row))] (:alt-ids row) [(count (:bod-ids row))] (:bod-ids row))]
+                                                   [(count (:alt-ids row))] (:alt-ids row) [(count (:bod-ids row))] (:bod-ids row)
+                                                   [(:i2 row) (:s2 row) (:rs row) (:rn row) (:cty row) (:hop row) (:kw row)])]
                                     (str (count vs) " " (str/join " " vs)))))
-                 "\n"))
+                 "\n64 " (str/join " " (:env c)) "\n"))
     f))
 
 (def results
   (vec (for [[k c] (map-indexed vector cases)]
          (let [r (apply p/shell {:continue true :out :string :err :string} exe (case-file k c) (when broken ["broken"]))
-               [l1 l2] (remove str/blank? (str/split-lines (:out r)))
+               [l1 l2 l3] (remove str/blank? (str/split-lines (:out r)))
+               gty (mapv parse-long (remove str/blank? (str/split (or l3 "") #"\s+")))
+               wty (vec (mapcat #(get-in expected-ty [k %]) (range 1 (inc (count (:rows c))))))
                got [(some-> l1 str/trim parse-long) (mapv parse-long (remove str/blank? (str/split (or l2 "") #"\s+")))]
                want (expected k)]
-           {:k k :got got :want want :ok (= got want)
-            :kinds (cond-> [] (not= (first got) (first want)) (conj "scan") (not= (second got) (second want)) (conj "recur-under"))}))))
+           {:k k :got got :want want :ok (and (= got want) (= gty wty)) :wty wty
+            :kinds (cond-> [] (not= (first got) (first want)) (conj "scan") (not= (second got) (second want)) (conj "recur-under")
+                     (not= (take-nth 2 gty) (take-nth 2 wty)) (conj "type") (not= (take-nth 2 (rest gty)) (take-nth 2 (rest wty))) (conj "ok"))}))))
 
 (def bad (remove :ok results))
 (println (str n " trees, seed " seed (when broken " (negative control: a case read as a do)")))
 (println (str "  " (count (filter #(= 1 (first (:want %))) results)) " declined by the scan, "
               (reduce + (map #(count (second (:want %))) results)) " nodes, "
               (reduce + (map #(reduce + (second (:want %))) results)) " with a recur under them"))
-(println (str "generated eligibility scan against ACL2's: " (count bad) " cases differ"))
+(let [ws (mapcat :wty results) ts (take-nth 2 ws)]
+  (println (str "  types (none any long double bool doubles longs): " (pr-str (map #(count (filter #{%} ts)) (range 7))) ", ok " (count (filter #{1} (take-nth 2 (rest ws)))) " of " (count ts))))
+(println (str "generated eligibility scan and type inference against ACL2's: " (count bad) " cases differ"))
 (doseq [[nm c] (sort (frequencies (mapcat :kinds bad)))] (println (str "  " nm ": " c)))
 (doseq [b (take 2 bad)] (println "  case" (:k b) "ACL2" (pr-str (:want b)) "generated" (pr-str (:got b))))
 (System/exit (if (if broken (empty? bad) (seq bad)) 1 0))

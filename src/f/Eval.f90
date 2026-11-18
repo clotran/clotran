@@ -288,6 +288,8 @@ module Eval
   integer, parameter :: B_CLASSCAST = 477
   ! (clotran-aot-scan node): the compiler's eligibility scan, generated (aot_gen.inc)
   integer, parameter :: B_AOTSCAN = 478
+  ! (clotran-aot-ty node env nslots loop?): the compiler's type inference, generated (aot_gen.inc)
+  integer, parameter :: B_AOTTY = 479
   ! A number's WIDTH, in an integer's or a real's otherwise unused ref:
   ! what it boxes as in clj. Equality and hashing never read it.
   integer, parameter :: W_LONG = 0, W_BYTE = 1, W_SHORT = 2, W_INT = 3, W_FLOAT = 1
@@ -623,6 +625,15 @@ module Eval
      type(gc_value), allocatable :: mk(:)
      integer(int64) :: nmk = 0, err = 0
   end type anp_state
+
+  ! The compiler's type inference's environment (model/aot.lisp's stobj aots;
+  ! src/f/gen/aot_gen.inc), one per clotran-aot-ty call: tv a slot's type code,
+  ! rc the recurs' joined types, lo a loop's settled types, cb cn the current
+  ! loop's slots, a0 a1 a2 ad the current call's operand types, ns the count.
+  type :: aot_state
+     integer(int64), allocatable :: tv(:), rc(:), lo(:)
+     integer(int64) :: cb = 0, cn = 0, a0 = 1, a1 = 1, a2 = 1, ad = 0, ns = 0
+  end type aot_state
 
   ! The analyzer's locals (model/anlocal.lisp's stobj anls;
   ! src/f/gen/anlocal_gen.inc), one per context, for the top-level form
@@ -1331,6 +1342,7 @@ contains
     call bind_builtin(core, "clotran-ast", B_ASTDATA)
     call bind_builtin(core, "clotran-ast-pool", B_ASTPOOL)
     call bind_builtin(core, "clotran-aot-scan", B_AOTSCAN)
+    call bind_builtin(core, "clotran-aot-ty", B_AOTTY)
     call bind_builtin(core, "clotran-monitor-enter", B_MONENTER)
     call bind_builtin(core, "clotran-monitor-exit", B_MONEXIT)
     call bind_builtin(core, "clotran-clone-binding-frame", B_CLONETB)
@@ -14218,6 +14230,12 @@ contains
        ! recur under it not past a loop, fn or lazy seq -- decline-reason's
        ! recur clause. Generated from model/aot.lisp (aot_gen.inc).
        out = gc_bool(aot_sc(0_int64, gcv_nth(args, 0), 0_int64, 0_int64))
+    case (B_AOTTY)
+       ! (clotran-aot-ty node env nslots loop?): the type compiler.cljf's infer
+       ! asked of a node, its env a vector of type codes by slot; with loop?, a
+       ! loop's settled slot types (loop-env). Generated from model/aot.lisp.
+       out = aot_infer(gcv_nth(args, 0), gcv_nth(args, 1), int_of(gcv_nth(args, 2)), &
+            truthy(gcv_nth(args, 3)), [args])
     case (B_ASTPOOL)
        ! (clotran-ast-pool 'form) -- clotran-ast's :pool and :fingerprint
        ! without exporting the tree: what clotran.loader needs to install

@@ -18,7 +18,13 @@ module aot_mock
   end type gc_value
   integer, allocatable :: nkind(:), ns3(:), kidoff(:), nk(:), altoff(:), na(:), bodoff(:), nb(:)
   integer, allocatable :: kids(:), alts(:), bods(:)
-  logical :: broken = .false.
+  logical :: broken = .false., typed = .false.
+  ! slice 2: i2 s2 rs rn cty hop kw per node
+  integer(int64), allocatable :: xf(:, :)
+  type :: aot_state
+     integer(int64), allocatable :: tv(:), rc(:), lo(:)
+     integer(int64) :: cb = 0, cn = 0, a0 = 1, a1 = 1, a2 = 1, ad = 0, ns = 0
+  end type aot_state
 contains
   logical function ok(nd)
     type(gc_value), intent(in) :: nd
@@ -29,7 +35,7 @@ contains
     type(gc_value), intent(in) :: nd
     ast_kind = 0
     if (ok(nd)) ast_kind = nkind(nd%id)
-    if (broken .and. ast_kind == 19) ast_kind = 5
+    if (broken .and. ast_kind == 19 .and. .not. typed) ast_kind = 5
   end function ast_kind
 
   integer(int64) function ast_nkids(nd)
@@ -87,6 +93,50 @@ contains
     end if
   end function aot_bod
 
+  ! slice 2's reads: the fields the case file gives each node
+  integer(int64) function aot_i2(nd)
+    type(gc_value), intent(in) :: nd
+    aot_i2 = 0
+    if (ok(nd)) aot_i2 = xf(1, nd%id)
+  end function aot_i2
+
+  integer(int64) function aot_s2(nd)
+    type(gc_value), intent(in) :: nd
+    aot_s2 = 0
+    if (ok(nd)) aot_s2 = xf(2, nd%id)
+  end function aot_s2
+
+  integer(int64) function aot_rs(nd)
+    type(gc_value), intent(in) :: nd
+    aot_rs = 0
+    if (ok(nd)) aot_rs = xf(3, nd%id)
+  end function aot_rs
+
+  integer(int64) function aot_rn(nd)
+    type(gc_value), intent(in) :: nd
+    aot_rn = 0
+    if (ok(nd)) aot_rn = xf(4, nd%id)
+  end function aot_rn
+
+  integer(int64) function aot_cty(nd)
+    type(gc_value), intent(in) :: nd
+    aot_cty = 1
+    if (ok(nd)) aot_cty = xf(5, nd%id)
+    if (broken .and. aot_cty == 3) aot_cty = 2
+  end function aot_cty
+
+  integer(int64) function aot_hop(nd)
+    type(gc_value), intent(in) :: nd
+    aot_hop = 0
+    if (ok(nd)) aot_hop = xf(6, nd%id)
+  end function aot_hop
+
+  integer(int64) function aot_kw(nd)
+    type(gc_value), intent(in) :: nd
+    aot_kw = 0
+    if (ok(nd)) aot_kw = xf(7, nd%id)
+  end function aot_kw
+
   include "aot_gen.inc"
 end module aot_mock
 
@@ -95,7 +145,9 @@ program aot_check
   use aot_mock
   implicit none
   character(len=4096) :: path, arg
-  integer :: u, nn, root, i, j, a, cnt, vals(4096), tk, ta, tb
+  integer :: u, nn, root, i, j, a, cnt, vals(4096), tk, ta, tb, ne
+  integer(int64) :: env(0:63), ty, okf
+  type(aot_state) :: as
   type(gc_value) :: r
   call get_command_argument(1, path)
   call get_command_argument(2, arg)
@@ -103,7 +155,7 @@ program aot_check
   open(newunit=u, file=trim(path), status="old", action="read")
   read(u, *) nn, root
   allocate(nkind(nn), ns3(nn), kidoff(nn), nk(nn), altoff(nn), na(nn), bodoff(nn), nb(nn))
-  allocate(kids(nn * 64 + 1), alts(nn * 64 + 1), bods(nn * 64 + 1))
+  allocate(kids(nn * 64 + 1), alts(nn * 64 + 1), bods(nn * 64 + 1), xf(7, nn))
   tk = 1
   ta = 1
   tb = 1
@@ -129,13 +181,33 @@ program aot_check
      bodoff(i) = tb
      bods(tb:tb + a - 1) = vals(j + 1:j + a)
      tb = tb + a
+     j = j + a + 1
+     xf(:, i) = 0
+     xf(5, i) = 1
+     if (cnt >= j + 6) xf(:, i) = vals(j:j + 6)
   end do
-  close(u)
+  env = 1
+  read(u, *, end=9) ne, env(0:ne - 1)
+9 close(u)
   r%id = root
   write(*, '(i0)') merge(1, 0, aot_sc(0_int64, r, 0_int64, 0_int64))
   do i = 1, nn
      r%id = i
      write(*, '(i0, 1x)', advance="no") merge(1, 0, aot_fr(0_int64, r, 0_int64, 0_int64))
+  end do
+  write(*, *)
+  ! slice 2: each node typed in the environment the case gives
+  allocate(as%tv(0:63), as%rc(0:63), as%lo(0:63))
+  typed = .true.
+  do i = 1, nn
+     as%tv = env
+     as%rc = 0
+     as%lo = 1
+     as%cb = 0
+     as%cn = 0
+     r%id = i
+     call aot_ty(as, 0_int64, r, 0_int64, 0_int64, 0_int64, ty, okf)
+     write(*, '(i0, 1x, i0, 1x)', advance="no") ty, okf
   end do
   write(*, *)
 end program aot_check

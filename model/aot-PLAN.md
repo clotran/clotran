@@ -58,9 +58,62 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
    Generated src/f/gen/aot_gen.inc; builtin `clotran-aot-scan`;
    decline-reason's recur clause calls it. fuzz-aot-gen: generated vs
    ACL2 on random trees, -x the negative control. LANDED this lane.
-2. TYPE INFERENCE -- aot-ty over the tree with a named head-op read and a
-   bounded fixpoint; proved: a node typed :long/:double/:bool evaluates
-   under ex-tr (when it ends) to that kind of value.
+2. TYPE INFERENCE -- model/aot.lisp's aot-ty (infer, call-type,
+   bind-types, loop-env as compiler.cljf wrote them), on exec.lisp's tree
+   (the one ex-ev runs) with three host reads more, over the stobj aots
+   (a slot's type code; the current loop's recur types; a loop's settled
+   types; the current call's operand types). Generated into
+   src/f/gen/aot_gen.inc (aot_ty), answered by the builtin `clotran-aot-ty`
+   (Eval.f90, aot_infer in analyze.inc) to compiler.cljf's infer and
+   loop-env; the hand-written walk is deleted. GENERATED AND FUZZED THIS
+   LANE; ITS PROOF IS OWED (below). Checked before the walk was deleted:
+   old and new compared at every call on core.clj's 494 defns (428
+   compiled), compiler-check's 249 calls and `scripts/fuzz -m compiled`
+   -s 11: no difference. fuzz-aot-gen runs the generated aot_ty against
+   ACL2's on random trees in random environments (types and ok); -x reads
+   a double constant as a long and must part.
+   - Codes: 0 none, 1 any, 2 long, 3 double, 4 bool, 5 doubles, 6 longs.
+   - Model choices that differ from the cljf only on trees the analyzer
+     does not build: a let's slot is written and the old word written
+     back (the cljf rebuilt a map); a loop's recur types accumulate over
+     its rounds instead of restarting each round (equal: the round's env
+     already holds the earlier rounds' join, and join is a flat lattice's);
+     a recur joins only into the innermost loop's slots (cljf: its atom).
+   - Host reads, named: aot_hop (head-op: a folded builtin's name, or the
+     Var's name when its namespace is clojure.core -- identity against
+     ns-resolve, for an interned Var), aot_cty (const-type: an int? not
+     Long/MIN_VALUE, a finite double? not a float, a boolean), aot_kw (a
+     constant :doubles/:longs, the array cast's hint), aot_i2, aot_s2,
+     aot_rs, aot_rn (exec.inc's reads of the same fields); the frame size
+     is the template's nslots (*aot-nslots*), a slot past it typed any.
+   - THE STATEMENT OWED (aot-ty-proof.lisp), designed:
+     TYPED SUBSET (aot-sub): nodes of kinds const local var if do call
+     let loop recur fn only, in exec-clrmap's shape bounds; no local
+     marked for clearing (exec-clr proves a cleared slot is never read
+     again; the statement does not use it); A-CONST: a constant whose
+     read says long/double/bool has that host tag (aot-tag, an
+     unconstrained function: the host's class of a value); A-HEAD: a call
+     whose read names op k has a const or Var head whose value the host
+     reads as k (aot-opof, unconstrained); ok = 1 (aot-ty's second answer:
+     each let/loop slot untyped where bound, a loop's slots above the
+     enclosing loop's, each recur to the current loop with its count).
+     A-OP (a defun-sk, as exec-vm's ex-ifnok): a call whose callee the
+     host reads as op k, its operands fitting the types aot-ty kept (the
+     array cast's operand exempt: the cast checked it), answers in ex-ev
+     a value of aot-optab's type, or not a value.
+     THEOREM aot-ty-sound: with those, frame fr fitting the env (every
+     slot's value of its type), r = (ex-ev :m e 0 nil fr fuel): if r is
+     a value, it is of the type aot-ty gives e (long: aot-tag long, ...)
+     and its frame still fits; if r is a recur, every slot fits its type
+     or is one of the current loop's and fits what aot-ty joined there;
+     throws and :out say nothing. Proof plan: ex-ind's induction with the
+     stobj threaded as aot-ty threads it; lemmas: aot-ty leaves tv, cb,
+     cn, a0..ad as it found them (every put paired with its restore), rc
+     monotone below cb+cn (the ok's loop-above condition), a loop's final
+     round is the env every iteration starts in (settled, or all any).
+     COST (owed): ns, the nodes visited, at most wt(e): a node 1 + its
+     parts, a loop's body 7 times (six rounds and the boxed one), an
+     array cast's operand twice -- 7^depth of nested loops, as the cljf.
 3. ARITY/VERSION CHOICE -- proved to pick ex-tr's arity (exec's arfit).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
