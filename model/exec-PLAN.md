@@ -792,7 +792,8 @@ hooks" (docs/model-coverage.md). exec-vmtr's ex-tr is proved
 | N_CALL | a call whose head is read at translation (exec-vmtr's ex-pcall / ex-pk): a constant builtin's `(:prim f args..)`, a direct-linked Var's whose fn wraps builtin f `(:prim f args..)` (item 4); else ex-trcall: `:ifn` then `:applyv` | partly: both **generated now** (vtg_pk, vtg_hd, vtg_node 6) under named hypotheses -- exec-vm's ex-bipok (the runtime's prim of a builtin is its :invoke; a builtin is an IFn), ex-wrapok (a fn the runtime says wraps f at n is an IFn, and its call on n values answers prim f's, unless out of fuel); vtg_pk's tests (vm.inc's OBJ_BUILTIN not B_APPLY, and vm_linked_builtin / wrapper_of, where the model asks prim :clotran.vm/builtin, and i2 1 with prim :clotran.vm/wraps); apply's constant :callv. Also generated now (item 4(b)): a Var not direct-linked wrapping f, `(:prim :clotran.vm/callw (:const v) args..)` (vtg_pk 3, vtg_hd pushing callw and the Var's constant), under named ex-callwok (the runtime's callw of v on n values is prim f's) and vtg_pk's test (vm_wraps where the model asks prim :clotran.vm/wraps; vm_var_ref's constant where the model's is v). Also generated now (item 4(c)): an IFn constant's or Var's call, not apply, `(:callv h args..)` (vtg_pk 4, vtg_node 7), no new semantic hypothesis (the head answers v whenever the args do; v an IFn so the cast passes; not apply so no spread), named: vtg_pk's is_ifn (of the Var's value at translation) where the model asks prim :ifn. And generated now (item 4(c), the rest): every other call -- a local's or other expression's head, a non-IFn's, apply's -- is ex-trcall's `(:let h (:if (:prim :ifn p) (:applyv p args..) (:throw (:const :not-fn))))` (vtg_top, vtg_cast, vtg_notfn, vtg_node 8), no new semantic hypothesis (ex-ifnok, ex-apok as before); named: vm.inc's prim :ifn is VmRuntime's kind 9 (vrt-prim-kind's kifn) is_ifn, its not-fn throw `(:prim :clotran.vm/notfn p)` kind 10 refuse_not_fn, apply's spread the runtime's :invoke of B_APPLY (rt_applyp false). vm_tr's hand-written :callv is gone: N_CALL is wholly generated |
 | N_VAR | `(:prim :clotran.vm/deref (:const v))` (item 3, done) | yes -- **generated now** (vtg_deref): the host's deref under a named hypothesis, exec-vm's ex-derefok (it answers the Var's value, the tree's v); named: vm.inc's constant is the Var, or the direct-linked node (vm_var_ref), where the model's is v; ex-vwf asks a Var's v not shaped as prim's throw, (:throw . x) |
 | N_VECTOR/MAP/SET/NEW/DOT | `(:prim op ..)`, op ex-cop (`:vector`, `:map`, `:set`, `(:host k C)`) | **generated now** (item 7, vtg-tr k 7 8 9 21 22: vtg_cop, flg 3 from 0, vtg_node 6), no new semantic hypothesis (ex-collok); named: vtg_cop's op is the node itself, the runtime's kind 6 (vm_node_hook builds it), where the model's is ex-cop |
-| N_FN, N_LAZY | `(:mkclo tm ..)`, `(:prim op (:mkclo tm ..))` | the op differs: vm.inc's `(:prim NODE captures..)`, vm_node_hook building the closure; still vm_tr's |
+| N_FN | `(:mkclo tm caps..)` | **generated now** (item 7(b), vtg-tr k 14: vtg_fnhd, vtg-caps over vtg_ncap / vtg_capo, vtg_node 0), no new semantic hypothesis; named: vtg_fnhd's items are vm.inc's :prim and the node itself (vm_node_hook building the closure) where the model's are :mkclo and tm; vtg_ncap / vtg_capo read slot 2's pair vector where the model's is ex-outers |
+| N_LAZY | `(:prim op (:mkclo tm caps..))` | the shape differs: vm.inc's one flat `(:prim NODE caps..)`; still vm_tr's |
 | case* | ex-tr's `(:let test W)`, W ex-trcs's walk over prim :case | yes -- **generated now** (item 5, vtg-tr flg 6, vtg_cstest; vtg-tlrw walks its thens), no new semantic hypothesis (ex-caseok); named: vtg_ncs/vtg_cthen read gca_entries' order where the model's is ex-c's list, and vm.inc's test `(:prim NODE (:const then_j) p)` -- the runtime's kind 6, vm_node_hook: case_branch's probe takes entry j -- where the model's is `(:prim :case (:const t) p)` |
 | letfn | ex-tr's ex-trlf: n lets of `(:mkgrp (j . shape) caps..)`, then the body | yes -- **generated now** (item 5, vtg-tr flg 7, vtg_lfinit, vtg_lfbinds), no new semantic hypothesis; named: vm.inc's init `(:prim NODE (:const j) caps.. (:local d)..(:local d+j-1))` -- the runtime's kind 6, vm_node_hook N_LETFN: fn j's closure, the group's captures patched among it and the earlier lets' closures (exec_letfn's refresh_captures, one group, its fns identical), a group capture `(:const nil)` -- where the model's is :mkgrp, x2-seal's j-th |
 | try | ex-tr's kind 18 (ex-trtry) | **generated now** (item 5(b)): vtg-tr flg 8 and vtg_catest, vtg_rethrow; the implicit rethrows a distinct prim, named |
@@ -1101,11 +1102,24 @@ position.
    vm_node_hook builds the vector, set (vec_to_set), map (vec_to_map), new
    (new_cached) or dot call (dot_dispatch) from the parts' values -- where
    the model's is ex-cop's :vector, :map, :set or (:host k C).
-   fuzz-vmtr-gen draws all five kinds. (b) open: a fn and a lazy seq (14,
-   15): ex-tr's `(:mkclo tm caps..)` and `(:prim op (:mkclo ..))` against
-   vm.inc's `(:prim NODE caps..)` -- the same captures in the template's
-   order, the op the node; next. (c) open: def, deftype, a new of a type,
-   set! (10 20 23 24): ex-tr has them, vm_scan refuses them.
+   fuzz-vmtr-gen draws all five kinds. (b) a fn (14) -- done: ex-tr's
+   `(:mkclo tm caps..)`, caps ex-locals of the template's outer slots
+   (ex-outers), each read in place, generated: vmtrg's vtg-tr k 14
+   (vtg_fnhd, vtg-caps walking vtg_ncap / vtg_capo, vtg_node 0;
+   vtg-caps-st, vtg-tr-ex-tr and vtg-steps-bound hold, 3 steps and 2 a
+   capture). vm_tr's N_FN branch is gone. No new semantic hypothesis
+   (exec-vm's agreement already takes :mkclo). Named, not proved:
+   vtg_fnhd's items are vm.inc's :prim and the N_FN node itself -- the
+   runtime's kind 6, vm_node_hook building the closure from the captured
+   values (make_closure_from's two shapes) -- where the model's are :mkclo
+   and tm; vtg_ncap / vtg_capo read the template's pair vector (slot 2)
+   where the model's is ex-outers of its list. A lazy seq (15) stays
+   vm_tr's: ex-tr's `(:prim op (:mkclo tm caps..))` nests the closure,
+   vm.inc's `(:prim NODE caps..)` is flat -- generating it needs vm.inc's
+   encoding nested too (vm_node_hook's N_LAZY wrapping a closure value
+   made by an N_FN-like prim): a host change, no observable one, not
+   taken here. (c) open: def, deftype, a new of a type, set! (10 20 23
+   24): ex-tr has them, vm_scan refuses them.
 The hooks stay host actions; the gap to the analyzer's tree is the
 analyzer row's (anbuild builds the tree ex-tr reads only up to
 ex-defs-ok0, exec-clrvm).

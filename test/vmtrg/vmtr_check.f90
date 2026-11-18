@@ -335,8 +335,41 @@ contains
   logical function vtg_rdcap(x, lo, hi)
     type(gc_value), intent(in) :: x
     integer(int64), intent(in) :: lo, hi
+    integer(int64) :: j
     vtg_rdcap = .false.
+    do j = 0, vtg_ncap(x) - 1
+       if (vtg_capo(x, j) >= lo .and. vtg_capo(x, j) < hi) vtg_rdcap = .true.
+    end do
   end function vtg_rdcap
+  ! a fn (kind 14): its row's kids its outer slots; its template (0 0 (o_0 0 ..))
+  integer(int64) function vtg_ncap(x)
+    type(gc_value), intent(in) :: x
+    vtg_ncap = 0
+    if (vtg_kind(x) == 14) vtg_ncap = nnk(x%id)
+  end function vtg_ncap
+  integer(int64) function vtg_capo(x, j)
+    type(gc_value), intent(in) :: x
+    integer(int64), intent(in) :: j
+    vtg_capo = 0
+    if (j >= 0 .and. j < vtg_ncap(x)) vtg_capo = kids(noff(x%id) + int(j))
+  end function vtg_capo
+  subroutine vtg_fnhd(tb, x)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: x
+    character(len=:), allocatable :: t
+    integer(int64) :: j
+    call push(tb, ':mkclo')
+    if (vtg_ncap(x) == 0) then
+       call push(tb, '(0 0 nil)')
+    else
+       t = '(0 0 ('
+       do j = 0, vtg_ncap(x) - 1
+          if (j > 0) t = t // ' '
+          t = t // itoa(vtg_capo(x, j)) // ' ' // itoa(j)
+       end do
+       call push(tb, t // '))')
+    end if
+  end subroutine vtg_fnhd
   subroutine vtg_dead(tb)
     type(vtg_state), intent(inout) :: tb
     tb%cm = [tb%cm, -1_int64]

@@ -47,7 +47,10 @@
   !                         generated, vtg_cop: NAMED against ex-tr's
   !                         (:prim ex-cop parts..), ex-cop :vector, :map,
   !                         :set or (:host k C))
-  !   fn, lazy-seq          (:prim NODE captures..) (vm_node_hook)
+  !   fn                    (:prim NODE captures..) (vm_node_hook;
+  !                         generated, vtg_fnhd / vtg_caps: NAMED against
+  !                         ex-tr's (:mkclo tm captures..))
+  !   lazy-seq              (:prim NODE captures..) (vm_node_hook; vm_tr's)
   !   a call of a builtin   (:prim builtin args)
   !   any other call        an IFn constant's or Var's (:callv head args);
   !                         else ex-trcall's, head first and cast: (:let head
@@ -630,14 +633,14 @@
          .or. gc_i1(nd) == N_LET .or. gc_i1(nd) == N_DO .or. gc_i1(nd) == N_LOOP .or. gc_i1(nd) == N_RECUR &
          .or. gc_i1(nd) == N_CALL .or. gc_i1(nd) == N_CASE .or. gc_i1(nd) == N_LETFN .or. gc_i1(nd) == N_TRY &
          .or. gc_i1(nd) == N_VECTOR .or. gc_i1(nd) == N_MAP .or. gc_i1(nd) == N_SET .or. gc_i1(nd) == N_NEW &
-         .or. gc_i1(nd) == N_DOT) then
+         .or. gc_i1(nd) == N_DOT .or. gc_i1(nd) == N_FN) then
        e = vm_tr_gen(c, nd, roots)
        return
     end if
     base = vs_enter(vst, 6)
     call vs_set(vst, base + 1, nd)
     select case (gc_i1(nd))
-    case (N_FN, N_LAZY)
+    case (N_LAZY)
        ! the captured slots' values, in the template's order
        call vs_set(vst, base + 2, gcv_empty(roots))
        x = gcv_nth(gc_slot(nd, 2), 2)
@@ -661,7 +664,7 @@
 
   ! ---- THE GENERATED TRANSLATION'S HOST (model/vmtrg.lisp) ---------------
   ! A constant, a local, a Var, if, do, let*, loop, recur, throw, every call, case*, letfn,
-  ! try and a vector, map, set, new or dot call are translated by vtg_tr
+  ! try, a vector, map, set, new or dot call and a fn are translated by vtg_tr
   ! (src/f/gen/vm_tr_gen.inc), generated from model/vmtrg.lisp, which
   ! proves it pushes exactly exec-vmtr's ex-tr (vtg-tr-ex-tr). What it
   ! calls is here, each the shim vmtrg.lisp states: the tree's reads, the
@@ -729,6 +732,22 @@
        if (s >= lo .and. s < hi) yes = .true.
     end do
   end function vtg_rdcap
+  ! a fn's captures (vmtrg's vtg-ncap, vtg-capo): its template's (outer,
+  ! inner) pairs, how many, and capture j's outer slot -- NAMED: the model
+  ! reads ex-outers of the template's list, here slot 2's vector
+  integer(int64) function vtg_ncap(nd)
+    type(gc_value), intent(in) :: nd
+    vtg_ncap = 0
+    if (gc_kind(nd) /= OBJ_AST) return
+    vtg_ncap = gcv_count(gcv_nth(gc_slot(nd, 2), 2)) / 2
+  end function vtg_ncap
+  integer(int64) function vtg_capo(nd, j)
+    type(gc_value), intent(in) :: nd
+    integer(int64), intent(in) :: j
+    vtg_capo = 0
+    if (j < 0 .or. j >= vtg_ncap(nd)) return
+    vtg_capo = int_of(gcv_nth(gcv_nth(gc_slot(nd, 2), 2), int(2 * j)))
+  end function vtg_capo
   ! a case's table (slot 2: each [test then-node] by its key): how many
   ! entries, and entry j's then node, in gca_entries' order (vmtrg's
   ! vtg-ncs, vtg-cthen -- NAMED: the model reads ex-c's list in its order;
@@ -1009,6 +1028,16 @@
     type(gc_value), value :: nd
     call anb_push(nd)
   end subroutine vtg_cop
+  ! a fn's head items (vmtrg's vtg-fnhd): :prim and the N_FN node itself,
+  ! the op of the runtime's kind 6 (vm_node_hook builds the closure from the
+  ! captured values) -- NAMED: the model's :mkclo and the template, ex-tr's
+  ! (:mkclo tm caps..)
+  subroutine vtg_fnhd(tb, nd)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: nd
+    call anb_push(vm_kw("prim"))
+    call anb_push(nd)
+  end subroutine vtg_fnhd
   ! a case's entry j's test items (vmtrg's vtg-cstest): the N_CASE node
   ! itself, the op of the runtime's kind 6 (vm_node_hook: case_branch's
   ! probe takes entry j), and (:const then_j) -- NAMED: the model's :case and

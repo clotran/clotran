@@ -2,7 +2,7 @@
 ; scripts/acl2-fortran -b vmtrg): exec-vmtr's ex-tr at the level the
 ; Fortran is generated from, guard-verified, for the kinds whose encoding
 ; vm.inc and ex-tr share -- a constant, a local, a Var, if, do, let*, loop,
-; recur, throw, every call, case*, letfn, try and a collection --
+; recur, throw, every call, case*, letfn, try, a collection and a fn --
 ; every other kind the host's (vtg-other: vm.inc's hand-written vm_tr,
 ; which calls back here for these kinds). exec-PLAN's Lane 3 says what
 ; is left.
@@ -179,6 +179,21 @@
 ; deftype, a new of a type and set! (10 20 23 24) stay vtg_other's (vm_tr
 ; refuses them). Tests: fuzz-vmtr-gen draws collections (c nil or a number).
 ; Cost: 3 steps and the kids' (vtg-steps).
+;
+; A FN (item 7(b)) is ex-tr's kind 14, (:mkclo tm caps..), tm its template
+; (ex-c), caps the reads of its outer slots in the template's capture order
+; (ex-locals of ex-outers, each read in place as vtg-local reads it;
+; vtg_fnhd, vtg-caps over vtg_ncap / vtg_capo, vtg_node 0). No new semantic
+; hypothesis: exec-vm's agreement already takes :mkclo. Named, not proved:
+; vtg_fnhd's items are vm.inc's :prim and the N_FN node itself, the
+; runtime's kind 6 (vm_node_hook building the closure from the captured
+; values, make_closure_from's two shapes), where the model's are :mkclo and
+; tm; vtg_ncap / vtg_capo read the template's (outer, inner) pairs, slot 2's
+; vector, where the model's is ex-outers of its list. A lazy seq (15),
+; ex-tr's (:prim op (:mkclo ..)), stays vm_tr's: vm.inc's is one flat
+; (:prim NODE caps..). Tests: fuzz-vmtr-gen draws fns (templates (0 0 (o 0
+; ..))). Cost: 3 steps and 2 a capture (vtg-steps; vtg-size counts a
+; capture a node).
 
 (in-package "ACL2")
 
@@ -202,9 +217,17 @@
 ; whether a fn's or lazy seq's captures name a slot in lo .. hi-1 (vtg_rdcap:
 ; vm_reads_in's N_FN case on the template's capture pairs)
 (defun vtg-rdcap (e lo hi) (declare (xargs :guard t)) (ec-call (ex-rdin (ec-call (ex-outers (vtg-nth 2 (vtg-c e)))) lo hi)))
+; a fn's captures (vtg_ncap, vtg_capo: its template's (outer, inner) pairs):
+; how many, capture j's outer slot
+(defun vtg-ncap (e) (declare (xargs :guard t)) (vtg-int (len (ec-call (ex-outers (vtg-nth 2 (vtg-c e)))))))
+(defun vtg-capo (e j) (declare (xargs :guard (natp j))) (vtg-int (vtg-nth j (ec-call (ex-outers (vtg-nth 2 (vtg-c e)))))))
 
 (defthm vtg-int-range (and (natp (vtg-int x)) (< (vtg-int x) *vtg40*))
   :rule-classes ((:type-prescription :corollary (natp (vtg-int x))) (:linear :corollary (< (vtg-int x) *vtg40*))))
+(defthm vtg-ncap-range (and (natp (vtg-ncap e)) (< (vtg-ncap e) *vtg40*))
+  :rule-classes ((:type-prescription :corollary (natp (vtg-ncap e))) (:linear :corollary (< (vtg-ncap e) *vtg40*))))
+(defthm vtg-capo-range (and (natp (vtg-capo e j)) (< (vtg-capo e j) *vtg40*))
+  :rule-classes ((:type-prescription :corollary (natp (vtg-capo e j))) (:linear :corollary (< (vtg-capo e j) *vtg40*))))
 (defthm vtg-nth-count (<= (acl2-count (vtg-nth n x)) (acl2-count x)) :rule-classes :linear)
 (defthm vtg-nth-count-cons (implies (consp x) (< (acl2-count (vtg-nth n x)) (acl2-count x))) :rule-classes :linear)
 (defthm vtg-kid-count (implies (consp e) (< (acl2-count (vtg-kid e j)) (acl2-count e))) :rule-classes (:linear :rewrite)
@@ -288,6 +311,9 @@
 ; pushes the node itself, the runtime's kind 6, vm_node_hook building it)
 (defun vtg-coll (k) (declare (xargs :guard t)) (or (equal k 7) (equal k 8) (equal k 9) (equal k 21) (equal k 22)))
 (defun vtg-cop (e vtb) (declare (xargs :stobjs vtb :guard t)) (vtg-push (ec-call (ex-cop e)) vtb))
+; a fn's head items :mkclo and its template (vtg_fnhd -- NAMED: vm.inc
+; pushes :prim and the N_FN node itself, the runtime's kind 6)
+(defun vtg-fnhd (e vtb) (declare (xargs :stobjs vtb :guard t)) (update-vtb-stk (list* (vtg-c e) :mkclo (vtb-stk vtb)) vtb))
 ; a slot's read: its position in the scope, the fn's captures read in
 ; place -- cs is (np . m), the clause's np parameters and m captures, the
 ; captures' positions np .. np+m-1 of the scope -- as exec-vmcs's ex-cs
@@ -436,6 +462,11 @@
                   :measure (nfix (- (nfix n) (nfix j)))))
   (let ((j (nfix j)))
     (if (< j (nfix n)) (let ((vtb (vtg-local (+ s j) vtb))) (vtg-locs s (+ 1 j) n vtb)) vtb)))
+; a fn's captures from j, each its outer slot's read, in the template's order
+(defun vtg-caps (e j vtb)
+  (declare (xargs :stobjs vtb :guard (and (natp j) (< j *vtg40*)) :measure (nfix (- (vtg-ncap e) (nfix j)))))
+  (let ((j (nfix j)))
+    (if (< j (vtg-ncap e)) (let ((vtb (vtg-local (vtg-capo e j) vtb))) (vtg-caps e (+ 1 j) vtb)) vtb)))
 
 ; flg 0: node e; flg 1: a let*'s or a dependent loop's bindings from i, then
 ; its body; flg 2: a do's children from i; flg 3: a loop's inits or a
@@ -652,9 +683,11 @@
                  vtb)))
             ; a collection: (:prim op args..), the args as a recur's
             ((vtg-coll k) (let* ((vtb (vtg-cop e vtb)) (vtb (vtg-tr 3 e 0 vtb))) (vtg-node 6 (+ 1 (vtg-nk e)) vtb)))
+            ; a fn: (:mkclo tm caps..)
+            ((equal k 14) (let* ((vtb (vtg-fnhd e vtb)) (vtb (vtg-caps e 0 vtb))) (vtg-node 0 (+ 2 (vtg-ncap e)) vtb)))
             (t (vtg-other e vtb)))))))
 
-(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-deref vtg-hd vtg-pk vtg-nil vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop))))
+(verify-guards vtg-tr :hints (("Goal" :in-theory (disable vtg-blank vtg-bind vtg-binds vtg-locs vtg-dead vtg-save vtg-restore vtg-node vtg-local vtg-const vtg-deref vtg-hd vtg-pk vtg-nil vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop vtg-fnhd vtg-caps))))
 
 ; whether the clause's body recurs to the fn -- exec-vmtr's ex-tlr, a recur
 ; in a tail place no loop is round: vm_clause's loop round the body only
@@ -687,6 +720,9 @@
   (cond ((atom x) t)
         (flg (and (vtg-okt nil (car x)) (vtg-okt t (cdr x))))
         (t (and (vtg-ok x) (vtg-okt t (vtg-nth 2 x))))))
+; a fn's outer slots in the reads' range
+(defun vtg-fnos (os) (if (atom os) t (and (natp (car os)) (< (car os) *vtg40*) (vtg-fnos (cdr os)))))
+(defun vtg-fnok (e) (and (vtg-fnos (ex-outers (nth 2 (ex-c e)))) (< (len (ex-outers (nth 2 (ex-c e)))) *vtg40*)))
 (defun vtg-frag (flg e i)
   (declare (xargs :measure (vtg-m flg e i) :well-founded-relation o<))
   (cond ((not (vtg-ok e)) nil)
@@ -730,6 +766,7 @@
                    ((equal k 12) (and (vtg-okt nil e) (if (vtg-lind e 1) (and (vtg-frag 3 e 0) (vtg-frag 5 e 0)) (vtg-frag 1 e 0))))
                    ((equal k 16) (vtg-frag 3 e 0))
                    ((vtg-coll k) (vtg-frag 3 e 0))
+                   ((equal k 14) (vtg-fnok e))
                    ((equal k 6) (and (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 3 e 1)))
                    ((equal k 19) (and (< (len (vtg-c e)) *vtg40*) (vtg-frag 0 (vtg-kid e 0) 0) (vtg-frag 6 e 0)))
                    ((equal k 13) (vtg-frag 7 e 0))
@@ -853,6 +890,10 @@
                          (equal (ex-tr :coll e i cm) (cons (ex-tr :m (ex-kid-of e i) 0 cm) (ex-tr :coll e (1+ i) (ex-blank (ex-clr :m (ex-kid-of e i) 0) cm)))))
                 (implies (and (natp i) (<= (ex-nk e) i)) (equal (ex-tr :coll e i cm) nil))))
   :hints (("Goal" :in-theory (disable ex-kid-of ex-clr ex-blank ex-cop) :expand ((ex-tr :m e 0 cm) (ex-tr :coll e i cm)))))
+; a fn's translation
+(defthm ex-tr-fn-kind
+  (implies (and (consp e) (equal (ex-kind e) 14)) (equal (ex-tr :m e 0 cm) (list* :mkclo (ex-c e) (ex-locals (ex-outers (nth 2 (ex-c e))) cm))))
+  :hints (("Goal" :expand ((ex-tr :m e 0 cm)))))
 ; how many a loop's inits and a recur's args are, the loop's slots and their reads
 (defun vtg-lin-ind (e i c)
   (declare (irrelevant c))
@@ -912,7 +953,8 @@
        (equal (vtg-rethrow e (vtg-st s c sv cs)) (vtg-st (cons (list :throw (ex-cloc (len c) (vtg-np cs) (vtg-nm cs))) s) c sv cs))
        (equal (vtg-blankcs e (vtg-st s c sv cs)) (vtg-st s (ex-blank (ex-clr :cs e 0) c) sv cs))
        (equal (vtg-node 9 2 (vtg-st (list* y x s) c sv cs)) (vtg-st (cons (list :try x y) s) c sv cs))
-       (equal (vtg-cop e (vtg-st s c sv cs)) (vtg-st (cons (ex-cop e) s) c sv cs)))
+       (equal (vtg-cop e (vtg-st s c sv cs)) (vtg-st (cons (ex-cop e) s) c sv cs))
+       (equal (vtg-fnhd e (vtg-st s c sv cs)) (vtg-st (revappend (list :mkclo (ex-c e)) s) c sv cs)))
   :hints (("Goal" :expand ((:free (n l acc) (vtg-popn n l acc))))))
 ; n items pushed in order, made one list (op 0) or node
 (defun vtg-pind (l s k) (if (consp l) (vtg-pind (cdr l) (cons (car l) s) (+ 1 k)) (list s k)))
@@ -938,6 +980,12 @@
            (equal (vtg-node op n (vtg-st (revappend l (revappend a s)) c sv cs))
                   (vtg-st (cons (if (equal op 0) (append a l) (cons (vtg-op op) (append a l))) s) c sv cs)))
   :hints (("Goal" :use ((:instance vtg-node-rev (l (append a l)))) :do-not-induct t :in-theory (disable vtg-node-rev))))
+; the same with two items pushed before them (a fn's :mkclo and template)
+(defthm vtg-node-rev3
+  (implies (and (equal n (+ 2 (len l))) (true-listp l))
+           (equal (vtg-node 0 n (vtg-st (revappend l (list* h2 h1 s)) c sv cs))
+                  (vtg-st (cons (list* h1 h2 l) s) c sv cs)))
+  :hints (("Goal" :use ((:instance vtg-node-rev2 (op 0) (a (list h1 h2)))) :in-theory (disable vtg-node-rev2))))
 (defthm ex-blank-nil-true (implies (true-listp c) (true-listp (append c (list n)))))
 (defthm vtg-len-blank (equal (len (ex-blank ls c)) (len c)))
 (defthm vtg-len-app (equal (len (append a b)) (+ (len a) (len b))))
@@ -960,6 +1008,7 @@
        (equal (ex-cs nil (list :prim op (list :const v)) np m) (list :prim op (list :const v)))
        (equal (ex-cs nil (list* :prim op x) np m) (list* :prim op (ex-cs t x np m)))
        (equal (ex-cs nil (list* :mkgrp op x) np m) (list* :mkgrp op (ex-cs t x np m)))
+       (equal (ex-cs nil (list* :mkclo op x) np m) (list* :mkclo op (ex-cs t x np m)))
        (equal (ex-cs nil (list :if x y z) np m) (list :if (ex-cs nil x np m) (ex-cs nil y np m) (ex-cs nil z np m)))
        (equal (ex-cs nil (list :let x y) np m) (list :let (ex-cs nil x np m) (ex-cs nil y np m)))
        (equal (ex-cs nil (list :loop x y) np m) (list :loop (ex-cs t x np m) (ex-cs nil y np m)))
@@ -1062,7 +1111,7 @@
 (in-theory (disable ex-trcs ex-cthen ex-trlf ex-lfshape ex-lfargs ex-trtry ex-trh ex-cbody ex-cop))
 (in-theory (disable ex-cs vtg-np vtg-nm ex-lind ex-rd vtg-rd))
 (in-theory (disable ex-tr vtg-st vtg-const vtg-deref vtg-hd vtg-pk vtg-nil vtg-top vtg-cast vtg-notfn vtg-local vtg-save vtg-restore vtg-blank vtg-bind vtg-binds vtg-dead vtg-node vtg-frag vtg-ok
-                    vtg-locs vtg-lind vtg-okt vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop))
+                    vtg-locs vtg-lind vtg-okt vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop vtg-fnhd vtg-caps vtg-fnok))
 
 (defun vtg-locs-ind (s j n stk c cs)
   (declare (xargs :measure (nfix (- (nfix n) (nfix j)))))
@@ -1077,6 +1126,27 @@
   :hints (("Goal" :induct (vtg-locs-ind s j n stk c cs) :in-theory (disable vtg-local vtg-np vtg-nm)
                   :expand ((ex-slots (+ s j) (- n j)) (vtg-locs s j n (vtg-st stk c sv cs))))))
 
+; a fn's captures read: ex-locals of its outer slots, the captures in place
+(defun vtg-caps-ind (j os stk c cs)
+  (declare (xargs :measure (len os)))
+  (if (consp os) (vtg-caps-ind (+ 1 j) (cdr os) (cons (ex-cs nil (list :local (ex-pos (car os) c)) (vtg-np cs) (vtg-nm cs)) stk) c cs) (list j stk c cs)))
+(defthm vtg-nthcdr-cdr (implies (natp j) (equal (nthcdr (+ 1 j) l) (cdr (nthcdr j l)))) :hints (("Goal" :in-theory (enable nthcdr))))
+(defthm vtg-caps-nthcdr
+  (implies (and (natp j) (vtg-fnos os) (< (len (ex-outers (nth 2 (ex-c e)))) *vtg40*) (equal os (nthcdr j (ex-outers (nth 2 (ex-c e))))))
+           (equal (vtg-caps e j (vtg-st stk c sv cs))
+                  (vtg-st (revappend (ex-cs t (ex-locals os c) (vtg-np cs) (vtg-nm cs)) stk) c sv cs)))
+  :hints (("Goal" :induct (vtg-caps-ind j os stk c cs) :in-theory (e/d (vtg-ncap vtg-capo vtg-int) (vtg-local vtg-np vtg-nm vtg-nthcdr-parts vtg-nthcdr-end))
+                  :expand ((vtg-caps e j (vtg-st stk c sv cs)) (ex-locals os c) (:free (x y) (ex-cs t (cons x y) (vtg-np cs) (vtg-nm cs)))))
+          (and stable-under-simplificationp '(:use ((:instance vtg-nthcdr-parts (i j) (l (ex-outers (nth 2 (ex-c e))))) (:instance vtg-nthcdr-end (i j) (l (ex-outers (nth 2 (ex-c e))))))))))
+(in-theory (disable vtg-nthcdr-cdr))
+(defthm vtg-caps-st
+  (implies (vtg-fnok e)
+           (equal (vtg-caps e 0 (vtg-st stk c sv cs))
+                  (vtg-st (revappend (ex-cs t (ex-locals (ex-outers (nth 2 (ex-c e))) c) (vtg-np cs) (vtg-nm cs)) stk) c sv cs)))
+  :hints (("Goal" :use ((:instance vtg-caps-nthcdr (j 0) (os (ex-outers (nth 2 (ex-c e)))))) :in-theory (enable vtg-fnok))))
+(defthm vtg-ncap-is (implies (vtg-fnok e) (equal (vtg-ncap e) (len (ex-outers (nth 2 (ex-c e))))))
+  :hints (("Goal" :in-theory (enable vtg-ncap vtg-int vtg-fnok))))
+
 (defthm vtg-frag-facts
   (implies (vtg-frag flg e i)
            (and (vtg-ok e)
@@ -1087,9 +1157,10 @@
                 (implies (equal flg 6) (and (equal (vtg-kind e) 19) (< (len (ex-c e)) *vtg40*)))
                 (implies (equal flg 7) (equal (vtg-kind e) 13))
                 (implies (equal flg 8) (and (equal (vtg-kind e) 18) (< (len (ex-c e)) *vtg40*)))
-                (implies (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) (quote (1 2 3 4 5 6 7 8 9 11 12 13 16 17 18 19 21 22))))
+                (implies (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) (quote (1 2 3 4 5 6 7 8 9 11 12 13 14 16 17 18 19 21 22))))
                 (implies (and (not (member flg '(1 2 3 5 6 7 8))) (equal (vtg-kind e) 12)) (vtg-okt nil e))
-                (implies (and (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) '(18 19))) (< (len (ex-c e)) *vtg40*))))
+                (implies (and (not (member flg '(1 2 3 5 6 7 8))) (member (vtg-kind e) '(18 19))) (< (len (ex-c e)) *vtg40*))
+                (implies (and (not (member flg '(1 2 3 5 6 7 8))) (equal (vtg-kind e) 14)) (vtg-fnok e))))
   :rule-classes :forward-chaining :hints (("Goal" :expand ((vtg-frag flg e i)))))
 
 ; ex-tr's translation x with the captures read in place
@@ -1174,6 +1245,7 @@
                  (vtg-ind 1 e 0 s c sv cs)))
               ((equal k 16) (vtg-ind 3 e 0 s c sv cs))
               ((vtg-coll k) (vtg-ind 3 e 0 (cons (ex-cop e) s) c sv cs))
+              ((equal k 14) nil)
               ((and (equal k 6) (not (equal (vtg-pk e) 0))) (vtg-ind 3 e 1 (revappend (ex-phd e) s) c sv cs))
               ((equal k 6)
                (let* ((k0 (vtg-kid e 0)) (c1 (append (ex-blank (ex-clr :m k0 0) c) (list nil)))
@@ -1328,6 +1400,7 @@
             ((equal k 12) (if (vtg-lind e 1) (+ 4 (vtg-steps 3 e 0) (vtg-steps 5 e 0)) (+ 2 (vtg-steps 1 e 0))))
             ((equal k 16) (+ 2 (vtg-steps 3 e 0)))
             ((vtg-coll k) (+ 3 (vtg-steps 3 e 0)))
+            ((equal k 14) (+ 3 (* 2 (vtg-ncap e))))
             ((equal k 6) (if (not (equal (vtg-pk e) 0)) (+ 4 (vtg-steps 3 e 1)) (+ 13 (vtg-steps 0 (vtg-kid e 0) 0) (vtg-steps 3 e 1))))
             ((equal k 19) (+ 7 (vtg-steps 0 (vtg-kid e 0) 0) (vtg-steps 6 e 0)))
             ((equal k 13) (+ 1 (vtg-steps 7 e 0)))
@@ -1377,6 +1450,7 @@
             ((equal k 12) (if (vtg-lind e 1) (+ 1 (vtg-size 3 e 0) (vtg-size 5 e 0)) (+ 1 (vtg-size 1 e 0))))
             ((equal k 16) (+ 1 (vtg-size 3 e 0)))
             ((vtg-coll k) (+ 1 (vtg-size 3 e 0)))
+            ((equal k 14) (+ 1 (vtg-ncap e)))
             ((equal k 6) (if (not (equal (vtg-pk e) 0)) (+ 1 (vtg-size 3 e 1)) (+ 1 (vtg-size 0 (vtg-kid e 0) 0) (vtg-size 3 e 1))))
             ((equal k 19) (+ 1 (vtg-size 0 (vtg-kid e 0) 0) (vtg-size 6 e 0)))
             ((equal k 13) (+ 1 (vtg-size 7 e 0)))

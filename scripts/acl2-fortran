@@ -359,13 +359,13 @@
               "  ! meaning is the VM's; exec-cost.lisp counts the turns."]}
     "vmtrg"
     {:out "src/f/gen/vm_tr_gen.inc" :include true :book "vmtrcl"
-     :fns [vtg-coll vtg-rd vtg-lind vtg-locs vtg-tr vtg-tlrw vtg-tlr vtg-clause vtg-arcl]
+     :fns [vtg-coll vtg-rd vtg-lind vtg-locs vtg-caps vtg-tr vtg-tlrw vtg-tlr vtg-clause vtg-arcl]
      ;; the shims (vm.inc vtg_*): the output stack and the scope
-     :host [vtg-const vtg-deref vtg-hd vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop
+     :host [vtg-const vtg-deref vtg-hd vtg-nil vtg-local vtg-node vtg-bind vtg-binds vtg-dead vtg-blank vtg-save vtg-restore vtg-other vtg-top vtg-cast vtg-notfn vtg-cstest vtg-lfinit vtg-lfbinds vtg-catest vtg-rethrow vtg-blankcs vtg-cop vtg-fnhd
             vtg-num vtg-key vtg-self]
      :stobjs {vtb "tb"} :stobj-types {"tb" "vtg_state"}
      :fields {} :array-names {} :prefix {} :value-arrays #{}
-     :value-formals {vtg-tr #{e} vtg-tlrw #{e} vtg-tlr #{e} vtg-cstest #{e} vtg-lfinit #{e} vtg-catest #{e} vtg-rethrow #{e} vtg-blankcs #{e} vtg-cop #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-deref #{e} vtg-hd #{e} vtg-blank #{x} vtg-other #{x}
+     :value-formals {vtg-tr #{e} vtg-tlrw #{e} vtg-tlr #{e} vtg-cstest #{e} vtg-lfinit #{e} vtg-catest #{e} vtg-rethrow #{e} vtg-blankcs #{e} vtg-cop #{e} vtg-fnhd #{e} vtg-caps #{e} vtg-rd #{e} vtg-lind #{e} vtg-const #{v} vtg-deref #{e} vtg-hd #{e} vtg-blank #{x} vtg-other #{x}
                      vtg-clause #{body tm} vtg-arcl #{name} vtg-self #{tm}}
      :value-fns #{}
      :reentrant #{vtg-tr}
@@ -376,11 +376,12 @@
           vtg-nk ["vtg_nk" [:val] :int] vtg-c ["vtg_c" [:val] :val] vtg-kid ["vtg_kid" [:val :int] :val]
           vtg-rdcap ["vtg_rdcap" [:val :int :int] :bool] vtg-pk ["vtg_pk" [:val] :int]
           vtg-ncs ["vtg_ncs" [:val] :int] vtg-cthen ["vtg_cthen" [:val :int] :val]
-          vtg-cbody ["vtg_cbody" [:val :int] :val] vtg-cslot ["vtg_cslot" [:val :int] :int]}
+          vtg-cbody ["vtg_cbody" [:val :int] :val] vtg-cslot ["vtg_cslot" [:val :int] :int]
+          vtg-ncap ["vtg_ncap" [:val] :int] vtg-capo ["vtg_capo" [:val :int] :int]}
      :header ["  ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:"
               "  ! change the model, prove it, and generate again. Included in Eval.f90's"
               "  ! contains part: the VM's translation of a constant, a local, if, do, let*,"
-              "  ! loop, recur, throw, every call, case*, letfn, try, a vector, map, set, new or dot (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --"
+              "  ! loop, recur, throw, every call, case*, letfn, try, a vector, map, set, new or dot, a fn (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --"
               "  ! guard-verified, reading the tree through vm.inc's vtg_* reads and building"
               "  ! the expression on the value stack through its vtg_* shims. vmtrg.lisp"
               "  ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds"

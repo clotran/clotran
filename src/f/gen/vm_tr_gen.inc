@@ -1,7 +1,7 @@
   ! GENERATED from model/vmtrg.lisp by scripts/acl2-fortran -b vmtrg. Do not edit:
   ! change the model, prove it, and generate again. Included in Eval.f90's
   ! contains part: the VM's translation of a constant, a local, if, do, let*,
-  ! loop, recur, throw, every call, case*, letfn, try, a vector, map, set, new or dot (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --
+  ! loop, recur, throw, every call, case*, letfn, try, a vector, map, set, new or dot, a fn (vtg_tr; every other kind vm.inc's vm_tr, through vtg_other) --
   ! guard-verified, reading the tree through vm.inc's vtg_* reads and building
   ! the expression on the value stack through its vtg_* shims. vmtrg.lisp
   ! proves it pushes exactly exec-vmtr's ex-tr on a tree of these kinds
@@ -219,6 +219,28 @@
       exit
     end do
   end subroutine vtg_locs
+
+  subroutine vtg_caps(tb, e_, j_)
+    type(vtg_state), intent(inout) :: tb
+    type(gc_value), value :: e_
+    integer(int64), value :: j_
+    type(gc_value) :: e_2
+    integer(int64) :: j_1
+    integer(int64) :: j_3
+    do
+      j_1 = max(0_int64, j_)
+      if ((j_1 < vtg_ncap(e_))) then
+        call vtg_local(tb, vtg_capo(e_, j_1))
+        e_2 = e_
+        j_3 = (1_int64 + j_1)
+        e_ = e_2
+        j_ = j_3
+        cycle
+      else
+      end if
+      exit
+    end do
+  end subroutine vtg_caps
 
   recursive subroutine vtg_tr(tb, flg_, e_, i_)
     type(vtg_state), intent(inout) :: tb
@@ -592,7 +614,13 @@
                     call vtg_tr(tb, 3_int64, e_, 0_int64)
                     call vtg_node(tb, 6_int64, (1_int64 + vtg_nk(e_)))
                   else
-                    call vtg_other(tb, e_)
+                    if ((k_23 == 14_int64)) then
+                      call vtg_fnhd(tb, e_)
+                      call vtg_caps(tb, e_, 0_int64)
+                      call vtg_node(tb, 0_int64, (2_int64 + vtg_ncap(e_)))
+                    else
+                      call vtg_other(tb, e_)
+                    end if
                   end if
                 end select
               end if
