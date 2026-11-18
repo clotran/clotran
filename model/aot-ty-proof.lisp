@@ -1,7 +1,7 @@
 ; WHAT THE TYPE INFERENCE NEEDS, AND WHAT IT COSTS (model/aot.lisp aot-ty, slice 2 of
 ; model/aot-PLAN.md): the lemmas the soundness theorem against exec.lisp ex-ev stands on,
-; and the cost. The theorem itself (aot-ty-sound) is drafted in aot-ty-sound.draft, NOT YET
-; PROVED; aot-PLAN.md slice 2 states it and its hypotheses exactly.
+; and the cost. The theorem itself (aot-ty-sound) is proved in aot-ty-sound.lisp; aot-PLAN.md
+; slice 2 states it and its hypotheses exactly.
 ;
 ;   aot-ty-restore   every walk leaves the slot types (tv), the current loop (cb cn) and rc length
 ;                    as it found them, and -- but a call argument walk (flag 4) -- the operand

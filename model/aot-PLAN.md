@@ -101,11 +101,11 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      the nodes visited, at most aot-wt -- every state-dependent choice at its dearest: a
      loop body 7 times (six rounds, the boxed one), an array cast operand twice, a recur
      its count or the loop (cb cn) -- so 7^d walks of a node under d nested loops.
-   - THE THEOREM OWED, aot-ty-sound, drafted with its induction in
-     model/aot-ty-sound.draft (not in MODEL_BOOKS): (aot-cl flg e i tmp fr fuel s) for
+   - PROVED (lane 3s), model/aot-ty-sound.lisp: aot-ty-sound, (aot-cl flg e i tmp fr fuel s) for
      every ex-ev flag, its aot-ty walk aot-tyof (:m/:iter 0, :do 1, :let 2 or 6, :rec 3,
      :call 4). HYPOTHESES, exactly: aot-sub (kinds const local var if do call let loop recur
-     fn; fields in 40 bits; no local marked for clearing; A-CONST: a constant fits its read
+     fn; fields in 40 bits; no local marked for clearing; ex-wf's shape of an if (2 or 3
+     kids) and of a let or loop (i2 + 1 kids: the inits and the body); A-CONST: a constant fits its read
      type, aot-tag unconstrained; A-HEAD: a call whose op read is not 0 has a const or Var
      head whose value aot-opof reads as it; A-OP, aot-opok, a defun-sk: such a call, its
      operands 1..3 fitting types ta tb tc -- the first may instead be an array cast whose
@@ -119,10 +119,23 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      loop); a recur leaves the current loop slots fitting rc, the rest tv. The model
      differs from the old cljf only on trees the analyzer does not build: a let writes its
      slot and restores it; recur types accumulate over a loop rounds; a recur joins only
-     the innermost loop. WHAT REMAINS: aot-rfit-append (the first lemma of the draft)
-     ran away -- generalization; give it :do-not (generalize eliminate-destructors), as
-     aot-ty-cost needed; then the case lemmas, one per ex-ev case, each with the
-     ex-ev :expand of its own call and its IH instances as aot-ind writes them.
+     the innermost loop. Headline: aot-ty-sound-m (a node walked ok in an env its frame
+     fits answers in ex-ev a value of the type aot-ty gives it, the frame still fitting).
+     The proof: induction aot-ind (ex-ev's recursion with the state aot-ty walks each part
+     in); one lemma per ex-ev case (aot-cl-*), its IHs as aot-ind writes them; a call's
+     operand step through aot-s3 (the registers after operand i) and aot-regok, so the
+     cast's case split stays in two small lemmas. Certifies in ~80 s.
+   - THE ASSUMPTIONS, how far the host reads justify them: the 40-bit fields, the kinds
+     and the shapes are what anpass's reads and ex-wf already say of an analyzer tree;
+     no clearing marks is assumed (whether the trees compiler.cljf sees carry them is not
+     checked here). A-CONST: aot_cty computes the type FROM the constant
+     (int? not Long/MIN_VALUE, finite double, boolean), so it holds of the host by
+     construction; in the model aot-tag is a stub, so it stays a hypothesis. A-HEAD:
+     aot_hop is nonzero only for a folded builtin const or a Var whose namespace is
+     clojure.core, so the head is a const or Var by the read; that its VALUE is that op
+     (aot-opof) assumes the core Var is not redefined -- a runtime assumption, kept. A-OP
+     is the spec of the core ops (aot-optab against what +, aget, Math/... answer); it is
+     not reducible to the reads and stays the one semantic assumption.
 3. ARITY/VERSION CHOICE -- proved to pick ex-tr's arity (exec's arfit).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
