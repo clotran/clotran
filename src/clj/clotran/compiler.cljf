@@ -603,6 +603,7 @@ end module clotran_rt_decl
 ;; against the interpreter there (aot-cc-correct). ir-lines prints each instruction as its one
 ;; Fortran template; nothing else reads them.
 ;;   [:const d v] [:get d s] [:clr s] [:put s d] [:copy d s] [:deref d s] [:if s then else]
+;;   [:loop flag body] [:recur flag]
 (declare ir-lines)
 (defn- ind [code] (map #(str "   " %) (ir-lines code)))
 (defn- ir-lines [code]
@@ -617,7 +618,9 @@ end module clotran_rt_decl
                   :put [(str "call clotran_frame_put(b + 1, " a "_c_int, b + " b ")")]
                   :copy [(str "call clotran_copy(b + " a ", b + " b ")")]
                   :deref [(str "call clotran_deref(b + " a ", b + " b ")")]
-                  :if (concat [(str "if (clotran_bool(b + " a ") /= 0) then")] (ind b) ["else"] (ind c) ["end if"])))))
+                  :if (concat [(str "if (clotran_bool(b + " a ") /= 0) then")] (ind b) ["else"] (ind c) ["end if"])
+                  :loop (concat ["do" (str "   " a " = 0") "   call clotran_poll()"] (ind b) [(str "   if (" a " == 0) exit") "end do"])
+                  :recur [(str a " = 1")]))))
           code))
 
 (declare gen gp)
@@ -1336,14 +1339,13 @@ end module clotran_rt_decl
                       flag (str "recur" (count (:flags st)))
                       st (update st :flags conj flag)
                       [bc bs st] (gen (nth kids n) (assoc st :loop flag))]
-                  (let [loop-lines (concat ["do" (str "   " flag " = 0") "   call clotran_poll()"]
-                                           (ind bc)
-                                           [(str "   if (" flag " == 0) exit") "end do"])
-                        released (when outermost? (release-around loop-lines))
+                  (let [lp [:loop flag bc]
+                        ;; a released loop's baton guards are text around the printed lines
+                        released (when outermost? (release-around (ir-lines [lp])))
                         st (cond-> (assoc st :loop outer-loop :env outer-env :hoisted outer-hoisted
                                           :releasing (not outermost?))
                              released (-> (declare-var "nme" :tag) (declare-var "nrel" :tag)))]
-                    [(concat ic hc (or released loop-lines)) bs st]))
+                    [(concat ic hc (or released [lp])) bs st]))
 
           ;; RECUR: every argument is computed BEFORE any slot is
           ;; rebound -- (recur (+ i 1) (+ acc i)) reads the old i twice
@@ -1370,13 +1372,12 @@ end module clotran_rt_decl
                                         st])
                                      (let [[c s st] (gen k st)]
                                        [(into code c)
-                                        (cond-> (conj vs (str "call clotran_frame_put(b + 1, " slot
-                                                              "_c_int, b + " s ")"))
-                                          (seq c) (conj (str "call clotran_set_nil(b + " s ")")))
+                                        (cond-> (conj vs [:put slot s])
+                                          (seq c) (conj [:const s nil]))
                                         st]))))
                                [[] [] st] (map-indexed vector (:children nd)))
                        [r st] (fresh st)]
-                   [(concat code vals [(str (:loop st) " = 1")]) r st]))))))
+                   [(concat code vals [[:recur (:loop st)]]) r st]))))))
 
 (defn- gen
   "One node, as a VALUE: gen-op's [code slot state], with one promise
@@ -1740,15 +1741,20 @@ end module clotran_rt_decl
 (defn- acl2-node [nd]
   (let [k (get {:const 1 :local 2 :var 3 :if 4 :do 5 :call 6 :let 11 :loop 12 :fn 14 :recur 16} (:op nd) 99)]
     (str "(" k " " (or (:i2 nd) 0) " (" (str/join " " (map acl2-node (:children nd))) ") "
-         (if (#{1 3} k) (acl2-val (:p1 nd)) "nil") " " (if (= k 11) (:p1 nd) 0) " "
-         (if (and (= k 2) (true? (:p2 nd))) "t" "nil") " 0 0)")))
+         (if (#{1 3} k) (acl2-val (:p1 nd)) "nil") " " (if (#{11 12} k) (:p1 nd) 0) " "
+         (if (and (= k 2) (true? (:p2 nd))) "t" "nil") " "
+         (if (= k 16) (str (nth (:p1 nd) 1) " " (nth (:p1 nd) 2)) "0 0") ")")))
 
-(defn- acl2-ir [code]
+;; a flag's name is the printer's: a loop is (:loop body), and a recur (:recur) when it raises its
+;; innermost loop's flag, lp -- the fn body's own when it is in no loop
+(defn- acl2-ir [code lp]
   (when (every? vector? code)
     (let [xs (map (fn [[op a b c]]
                     (case op
                       :const (str "(:const " a " " (acl2-val b) ")")
-                      :if (let [t (acl2-ir b) e (acl2-ir c)] (when (and t e) (str "(:if " a " " t " " e ")")))
+                      :if (let [t (acl2-ir b lp) e (acl2-ir c lp)] (when (and t e) (str "(:if " a " " t " " e ")")))
+                      :loop (when-let [t (acl2-ir b a)] (str "(:loop " t ")"))
+                      :recur (if (= a lp) "(:recur)" (str "(:recur " (pr-str a) ")"))
                       :clr (str "(:clr " a ")")
                       (str "(" op " " a " " b ")")))
                   code)]
@@ -1766,7 +1772,7 @@ end module clotran_rt_decl
         st {:next n :high (dec n) :pool pslots :pidx {} :flags ["recur0"] :loop "recur0" :fn-loop "recur0"
             :who who :offset 0 :pool-list pool :counter (atom 0) :prefix "cc_ir" :env {:slots {}} :hoisted {} :params #{}}
         [code s st] (binding [*aot-nslots* nslots *int-temps* (atom #{})] (gen body st))
-        ir (acl2-ir code)]
+        ir (acl2-ir code "recur0")]
     (when ir
       (str "(" (acl2-node body) " ("
            ;; the raw values, the last entry of a key first: pslots keeps the last of equal keys

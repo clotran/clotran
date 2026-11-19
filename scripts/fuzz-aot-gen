@@ -19,7 +19,7 @@
 ;;
 ;; -x is the NEGATIVE CONTROL: the generated side reads a case as a do, a
 ;; kind the compiler emits, a double constant as a long, and its arity 0 as
-;; variadic when it is fixed and back, and drops gen's IR clearings (slice 4); the answers must part.
+;; variadic when it is fixed and back, and drops gen's IR clearings and recur flags (slice 4); the answers must part.
 (require '[babashka.process :as p] '[clojure.string :as str] '[babashka.fs :as fs])
 
 (def broken (some #{"-x"} *command-line-args*))
@@ -178,18 +178,26 @@
                      (not= (take-nth 2 gty) (take-nth 2 wty)) (conj "type") (not= (take-nth 2 (rest gty)) (take-nth 2 (rest wty))) (conj "ok") (not= gar war) (conj "arity"))}))))
 
 ;; ---- slice 4: the IR compiler.cljf's gen emits, against ACL2's aot-cc ---------------------
-;; Random (fn [a b c] body) forms of the kinds aot-cc models (const local var if do let); clotran
+;; Random (fn [a b c] body) forms of the kinds aot-cc models (const local var if do let loop recur,
+;; a recur in tail position, a loop's body mostly over its own locals: one that reads an outer boxed
+;; local hoists it, a typed temporary, 4c); clotran
 ;; analyses each and gen emits it (clotran.compiler/ir-check: the tree, the pool, the IR); a case
 ;; whose code is still partly Fortran text (a typed path, not yet modelled) is not compared, and
 ;; is counted. ACL2's aot-cc of the same tree and pool must answer the same IR, slot and next
-;; temporary. -x drops every (:clr s) from gen's IR -- a local's clearing lost -- and must part.
+;; temporary. -x drops every (:clr s) and (:recur) from gen's IR -- a local's clearing lost, a loop
+;; never going round -- and must part.
 
+(declare tail-form)
 (defn ir-form [d locals]
   (let [leaf #(pick (concat ['nil 'nil :k :k2 "s" 1 2.5 true 'inc 'clojure.core/str 'clojure.core/map 'nil] locals locals locals))]
     (if (<= d 0)
       (leaf)
-      (case (rnd 6)
+      (case (rnd 7)
         0 (leaf)
+        6 (let [k (inc (rnd 2))
+                xs (map #(symbol (str "l" (count locals) "_" %)) (range k))
+                bs (vec (mapcat (fn [x] [x (ir-form (dec d) locals)]) xs))]
+            (list 'loop bs (tail-form (dec d) (if (zero? (rnd 4)) (into locals xs) (vec xs)) k)))
         1 (apply list 'if (ir-form (dec d) locals) (ir-form (dec d) locals) (when (pos? (rnd 3)) [(ir-form (dec d) locals)]))
         2 (apply list 'do (repeatedly (rnd 4) #(ir-form (dec d) locals)))
         (let [k (inc (rnd 3))
@@ -197,18 +205,38 @@
                               [[] locals] (range k))]
           (list 'let bs (ir-form (dec d) ls)))))))
 
-(def ir-forms (vec (repeatedly n #(vector (list 'fn '[a b c] (ir-form (+ 1 (rnd 4)) '[a b c])) (pick ["user/f" "clojure.fz/f"])))))
+;; a form in tail position of a loop (or the fn) of k slots: a recur may stand there
+(defn tail-form [d locals k]
+  (if (<= d 0)
+    (if (zero? (rnd 2)) (ir-form 0 locals) (cons 'recur (repeatedly k #(ir-form 0 locals))))
+    (case (rnd 5)
+      0 (ir-form d locals)
+      1 (list 'if (ir-form (dec d) locals) (tail-form (dec d) locals k) (tail-form (dec d) locals k))
+      2 (list 'do (ir-form (dec d) locals) (tail-form (dec d) locals k))
+      3 (cons 'recur (repeatedly k #(ir-form (dec d) locals)))
+      (let [x (symbol (str "t" (count locals)))]
+        (list 'let [x (ir-form (dec d) locals)] (tail-form (dec d) (conj locals x) k))))))
+
+(def ir-forms (vec (repeatedly n #(vector (list 'fn '[a b c] (if (zero? (rnd 4)) (tail-form (+ 1 (rnd 4)) '[a b c] 3) (ir-form (+ 1 (rnd 4)) '[a b c])))
+                                          (pick ["user/f" "clojure.fz/f"])))))
 (def ir-file (str work "/ir.clj"))
 (spit ir-file (str "(require 'clotran.compiler)\n"
-                   (str/join (map-indexed (fn [k [f who]] (str "(println \"IR " k " \" (or (clotran.compiler/ir-check '" (pr-str f) " " (pr-str who) ") \"-\"))\n")) ir-forms))))
-(def ir-out (:out (p/shell {:out :string :err :string :continue true} "./clotran" ir-file)))
+                   (str/join (map-indexed (fn [k [f who]] (str "(println \"IR " k " \" (or (try (clotran.compiler/ir-check '" (pr-str f) " " (pr-str who) ") (catch clotran.host.throwable e (str \"THREW \" (ex-message e)))) \"-\"))\n")) ir-forms))))
+(def ir-run (p/shell {:out :string :err :string :continue true} "./clotran" ir-file))
+(def ir-out (:out ir-run))
 (def ir-got (into {} (for [l (str/split-lines ir-out) :let [[_ k t] (re-matches #"IR (\d+) (.*)" l)] :when k] [(parse-long k) (str/trim t)])))
 (when (not= (count ir-got) n)
   (println (str "fuzz-aot-gen: clotran answered " (count ir-got) " of " n " IR cases; its output ends:"))
   (println (subs ir-out (max 0 (- (count ir-out) 2000))))
+  (println (subs (:err ir-run) (max 0 (- (count (:err ir-run)) 2000))))
   (System/exit 1))
-(def ir-kept (into (sorted-map) (remove #(= "-" (val %)) ir-got)))
-(defn drop-clr [t] (str/replace t #"\(:clr \d+\) ?" ""))
+;; gen throwing is counted and shown, not compared: a loop of type :none (one that only recurs) as
+;; a recur's argument throws in the typed path's case, before 4b and apart from the IR ("No matching
+;; clause: :none", as the cljf before slice 4b did); 4c, the typed paths, owns it
+(def ir-threw (filter #(str/starts-with? (val %) "THREW") ir-got))
+(def ir-kept (into (sorted-map) (remove #(or (= "-" (val %)) (str/starts-with? (val %) "THREW")) ir-got)))
+;; -x: gen's clearings lost, and its recurs' flag never raised
+(defn drop-clr [t] (-> t (str/replace #"\(:clr \d+\) ?" "") (str/replace "(:recur)" "")))
 (def ir-driver
   (str "(include-book \"aot-ir\")\n(set-fmt-hard-right-margin 100000 state)\n(set-fmt-soft-right-margin 100000 state)\n"
        (str/join (for [[k t] ir-kept]
@@ -225,6 +253,10 @@
 (def ir-bad (keep (fn [[k v]] (when (zero? v) k)) ir-res))
 (println (str n " IR forms: " (count ir-kept) " emitted wholly as IR and compared, " (- n (count ir-kept)) " partly Fortran text (typed, not yet modelled); "
               (count ir-bad) " differ from ACL2's aot-cc"))
+(println (str "  gen threw on " (count ir-threw) (when (seq ir-threw) (str ", first: case " (key (first ir-threw)) " " (val (first ir-threw))))))
+(println (str "  compared: " (count (filter #(str/includes? % "(:loop") (vals ir-kept))) " with a loop, "
+              (count (filter #(str/includes? % "(:recur") (vals ir-kept))) " with a recur, "
+              (count (filter #(re-find #"\(:recur \"" %) (vals ir-kept))) " a recur raising another loop's flag"))
 (doseq [k (take 2 ir-bad)] (println "  IR case" k (pr-str (first (nth ir-forms k))) (get ir-kept k)))
 
 (def bad (concat (remove :ok results) (map (fn [k] {:k k :kinds ["ir"]}) ir-bad)))

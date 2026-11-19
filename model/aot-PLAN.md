@@ -169,7 +169,7 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      cljf reads is the one exec runs (the same analyzer tree; assumed, as in slice 2).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
-   then may the row be Modeled. 4a LANDED (below); 4b-4e owed. DESIGN (lane 3t):
+   then may the row be Modeled. 4a and 4b LANDED (below); 4c-4e owed. DESIGN (lane 3t):
    - THE IR (model/aot-ir.lisp): what gen's statements do, not their spelling. A program is a
      list of instructions over a state (frame fr, boxed temporaries bt, typed temporaries tt,
      the recur flag, an error): (:get d s) (:put s d) (:const d c) (:box d t x) (:unbox x t d),
@@ -230,9 +230,44 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      generates none); the slots and the frame do not alias (the frame lives at b+1, or past the
      temporaries when frameless); clotran_bool is truthy; a Var's deref is its value
      (aot-deref); the typed/boxed choice is the cljf's (infer), not modelled until 4c.
-     NOT DONE: 4b (loop recur: the flag loop, the recur's writes), 4c (typed temporaries, prims,
-     the overflow branch to the hatch; A-OP), 4d (calls, closures, gen-into), 4e (the entry and
-     versions). The row stays Owed.
+     (4a's run and statement were restated by 4b: below.)
+   - 4b LANDED (lane 3v). The IR's state grows the innermost loop's recur flag and fuel:
+     aot-ir-run (code fr bt rp fuel) = (fr bt ok rp). (:loop body) runs rounds of body, each with
+     the flag lowered, while a round raises it, each further round on fuel - 1 as ex-ev's :iter, ok nil
+     when they outrun it; after the loop the outer flag is as it was (aot-ir-loop-rp: each Fortran
+     loop has its own variable). (:recur) raises the flag. aot-cc: a loop is bind-slots' boxed path
+     (fl 3, shared with let) then (:loop body); a recur (fl 4) every argument's code, then the writes
+     -- each slot's (:put start+i s), its temporary let go -- then (:recur), the slot gen's fresh r.
+     PROVED (aot-ir-proof): aot-cc-correct restated -- on aot-s4 (now with loop, its i2 + 1 kids, and
+     recur, rn its kids), when ex-ev answers (not (:out)), the code run on the same fuel runs to the
+     end, and ex-ev's value is in the slot or ex-ev's (:recur) is the flag raised, the frame is
+     ex-ev's (for a recur: ex-write of the argument values, aot-wvals, after their code: aot-writes-run),
+     and no slot below n moved. No tail-position hypothesis: a recur out of tail position makes ex-ev
+     answer (:out). The loop case is aot-cc-ind's: the body's hypothesis, and the loop's own on fuel - 1
+     from the state the round left (the loop instruction opened once, aot-cc-cl-loop). COST:
+     aot-ir-cost, the instructions run at most aot-ir-size with fuel + 1 rounds a loop (a loop counts
+     aot-lmul: (k)(1 + its body)); aot-cc-cost, at most 2 + 6 acl2-count(e) calls, as before.
+     THE CLJF: gen's :loop answers [:loop flag body] and a boxed recur argument [:put slot s] [:const s
+     nil] then [:recur flag] (flag the innermost loop's, gen's (:loop st)); ir-lines prints the loop's
+     do / flag = 0 / clotran_poll / body / exit test / end do and the recur's flag = 1. A released
+     loop (release-around's baton guards) is still printed text; the outermost boxed loop is not
+     released in practice (its body's runtime calls are top-level statements). The Fortran is
+     byte-identical: core.clj's 494 defns (428 compiled), old cljf against new, every hash equal.
+     The flag's NAME is the printer's: ir-check prints a loop as (:loop body) and a recur as (:recur)
+     when it names its innermost loop's flag (the fn's own, recur0, in no loop), else (:recur "name"),
+     which aot-cc never emits -- so that recurs target the right loop is checked, not modelled.
+     CHECKED: fuzz-aot-gen's third part generates loops (one or two boxed-or-typed bindings, a body
+     mostly over its own locals) with recurs in tail position (if, do, let), and fn-level recurs;
+     -s 1 -n 300: 165 compared, 47 with a loop, 51 with a recur, 0 differ; -x also drops (:recur).
+     gen THROWS on a loop that only recurs used as a recur's argument ("No matching clause: :none",
+     the typed path; the cljf before 4b did too): counted and shown by the fuzzer, not compared -- owed
+     to 4c.
+     NOT MODELLED in 4b: hoist-invariants (a loop body's read of an outer boxed local, read and
+     unboxed once before the loop: typed temporaries, 4c -- such a loop is not compared); typed loop
+     slots and typed recur arguments (4c); the fn body's own loop and its recurs' frame (4e).
+     ASSUMED, as 4a, plus: the printer gives each loop its own flag variable, declared (gen's :flags).
+     NOT DONE: 4c (typed temporaries, prims, the overflow branch to the hatch; A-OP; hoisting), 4d
+     (calls, closures, gen-into), 4e (the entry and versions). The row stays Owed.
 5. purefort's candidates/versions/can-fail, the same way.
 
-The Owed row stays Owed until slice 4 is done (4a of 4a-4e landed); slice 1 is its own Generated row.
+The Owed row stays Owed until slice 4 is done (4a and 4b of 4a-4e landed); slice 1 is its own Generated row.
