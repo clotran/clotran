@@ -363,4 +363,8 @@
  (let [p 6.75] (loop [i 0 acc (unchecked-subtract -3 -9223372036854775808)] (if (< i 2) (recur (inc i) (long (let [x (long p)] -9223372036854775808))) acc)))
  ((fn [n] (loop [i 0 acc -9223372036854775808] (if (< i 2) (recur (inc i) (do (str n) -9223372036854775808)) acc))) 1)
  (loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (let [x (str i)] :k))) [acc :k]))
+ ;; a loop that only recurs (typed :none) as a typed recur's argument: gen threw
+ ;; "No matching clause: :none" reading it back as a long (scripts/fuzz-aot-gen)
+ (loop [x 1] (recur (loop [y 0] (recur (if (> y 3) (throw (ex-info "out" {})) (inc y))))))
+ (loop [x 1.5 q true] (if q (recur (loop [y 0] (recur (if (> y 3) (throw (ex-info "out" {})) (inc y)))) (loop [] (recur))) x))
 ]

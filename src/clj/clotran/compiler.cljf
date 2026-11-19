@@ -959,6 +959,12 @@ end module clotran_rt_decl
       (and (= :call (:op nd)) (prim? t) (head-op (first (:children nd))))
       (let [[c e st] (gp-call nd t st)] [c (coerce e t want) st])
 
+      ;; A node that never answers -- a loop that only recurs, typed :none
+      ;; -- where a primitive is wanted (a typed recur's argument): its code
+      ;; runs, and the expression after it is never read.
+      (= t :none)
+      (let [[c _ st] (gen nd st)] [c (lit (if (= want :bool) false 0) want) st])
+
       ;; Anything else whose type is PROVEN: generate it as a value and
       ;; read the primitive back out. The proof is what makes the read
       ;; safe.

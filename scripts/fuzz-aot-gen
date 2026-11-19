@@ -230,9 +230,8 @@
   (println (subs ir-out (max 0 (- (count ir-out) 2000))))
   (println (subs (:err ir-run) (max 0 (- (count (:err ir-run)) 2000))))
   (System/exit 1))
-;; gen throwing is counted and shown, not compared: a loop of type :none (one that only recurs) as
-;; a recur's argument throws in the typed path's case, before 4b and apart from the IR ("No matching
-;; clause: :none", as the cljf before slice 4b did); 4c, the typed paths, owns it
+;; gen throwing is a finding (kind "gen-threw"): it once threw "No matching clause: :none" on a loop
+;; that only recurs used as a typed recur's argument (test/clj/fuzz-regressions.edn has it)
 (def ir-threw (filter #(str/starts-with? (val %) "THREW") ir-got))
 (def ir-kept (into (sorted-map) (remove #(or (= "-" (val %)) (str/starts-with? (val %) "THREW")) ir-got)))
 ;; -x: gen's clearings lost, and its recurs' flag never raised
@@ -259,7 +258,7 @@
               (count (filter #(re-find #"\(:recur \"" %) (vals ir-kept))) " a recur raising another loop's flag"))
 (doseq [k (take 2 ir-bad)] (println "  IR case" k (pr-str (first (nth ir-forms k))) (get ir-kept k)))
 
-(def bad (concat (remove :ok results) (map (fn [k] {:k k :kinds ["ir"]}) ir-bad)))
+(def bad (concat (remove :ok results) (map (fn [k] {:k k :kinds ["ir"]}) ir-bad) (map (fn [[k _]] {:k k :kinds ["gen-threw"]}) ir-threw)))
 (println (str n " trees, seed " seed (when broken " (negative control: a case read as a do, a double as a long, arity 0 flipped)")))
 (println (str "  " (count (filter #(= 1 (first (:want %))) results)) " declined by the scan, "
               (reduce + (map #(count (second (:want %))) results)) " nodes, "

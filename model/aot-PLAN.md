@@ -259,9 +259,10 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      CHECKED: fuzz-aot-gen's third part generates loops (one or two boxed-or-typed bindings, a body
      mostly over its own locals) with recurs in tail position (if, do, let), and fn-level recurs;
      -s 1 -n 300: 165 compared, 47 with a loop, 51 with a recur, 0 differ; -x also drops (:recur).
-     gen THROWS on a loop that only recurs used as a recur's argument ("No matching clause: :none",
-     the typed path; the cljf before 4b did too): counted and shown by the fuzzer, not compared -- owed
-     to 4c.
+     gen THREW on a loop that only recurs used as a typed recur's argument ("No matching clause:
+     :none", gp unboxing a :none; the cljf before 4b did too). FIXED (lane 3w): gp of a node typed
+     none emits its code and a literal never read; test/clj/fuzz-regressions.edn has the case, and
+     fuzz-aot-gen now fails on any gen throw (kind "gen-threw").
      NOT MODELLED in 4b: hoist-invariants (a loop body's read of an outer boxed local, read and
      unboxed once before the loop: typed temporaries, 4c -- such a loop is not compared); typed loop
      slots and typed recur arguments (4c); the fn body's own loop and its recurs' frame (4e).
