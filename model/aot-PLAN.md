@@ -169,7 +169,7 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      cljf reads is the one exec runs (the same analyzer tree; assumed, as in slice 2).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
-   then may the row be Modeled. 4a and 4b LANDED (below); 4c-4e owed. DESIGN (lane 3t):
+   then may the row be Modeled. 4a, 4b and 4c-i LANDED (below); 4c-ii (prims, the hatch, hoisting), 4d, 4e owed. DESIGN (lane 3t):
    - THE IR (model/aot-ir.lisp): what gen's statements do, not their spelling. A program is a
      list of instructions over a state (frame fr, boxed temporaries bt, typed temporaries tt,
      the recur flag, an error): (:get d s) (:put s d) (:const d c) (:box d t x) (:unbox x t d),
@@ -267,8 +267,44 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      unboxed once before the loop: typed temporaries, 4c -- such a loop is not compared); typed loop
      slots and typed recur arguments (4c); the fn body's own loop and its recurs' frame (4e).
      ASSUMED, as 4a, plus: the printer gives each loop its own flag variable, declared (gen's :flags).
-     NOT DONE: 4c (typed temporaries, prims, the overflow branch to the hatch; A-OP; hoisting), 4d
-     (calls, closures, gen-into), 4e (the entry and versions). The row stays Owed.
+   - 4c-i LANDED (lane 3w): THE TYPED PATHS WITHOUT PRIMS. The exported tree carries gen's types
+     (fields 12 and 13: aot-at, a node's infer at gen's env, recorded by ir-check through *ann*; aot-bt,
+     a loop's settled slot types or a recur's targets'). IR: (:tput s t x) (:tset d t x) (:box d t x)
+     (:tif x th el) over typed operands (:lit v t) (:sv s t mark) (:tv d t) (:unbox d t) (aot-xrun).
+     aot-cc: a typed local read is (:box n t (:sv ...)); an if whose test is bool tests gp's operand
+     (:tif); a typed let or loop binding is gp then (:tput); a typed recur argument is gp into a typed
+     temporary (fl 6) then (:tput slot t (:tv d t)) among the writes; gp (fl 5) is gen's: a typed
+     constant into a temporary (a bool in place), a typed local its variable, a node typed none its
+     code and a literal never read, else gen's value unboxed. DESIGN CHANGE in gen: a typed temporary
+     is named by the slot it reserves (fresh), ti<d>, not by a counter of its own -- so the model's
+     typed temporary IS that slot, and aot-cc needs no second counter. Cost: one more frame slot per
+     typed temporary (frame_enter's count); the Fortran is no longer byte-identical to 4b's (names and
+     slot numbers), checked by check-compiler, fuzz -m compiled and crosscheck instead.
+     THE REFINEMENT (assumed, named): a typed slot's Fortran variable l<s>/d<s>/q<s> is modelled as
+     the frame slot s, and a typed temporary as the slot it reserves -- sound because gen never reads
+     or writes those slots boxed while they are typed (each slot has one type in a procedure: the
+     analyzer gives each scope its own slots; flush-typed writes them back before the interpreter or
+     a closure reads the frame -- 4d), and a marked read of a typed local, which the model clears as
+     ex-ev does, is the slot's last (the Fortran variable is not cleared). A value is itself, typed or
+     boxed, so box and unbox are the identity.
+     PROVED (aot-ir-proof, restated): aot-cc-correct on the same subset, for ANY types gen annotates
+     but one hypothesis, A-NONE (aot-noval in aot-s4ok: a node annotated none answers no value --
+     slice 2's aot-ty-sound at type 0, at gen's env; that the annotation is aot-ty's answer is
+     checked by fuzz-aot-gen, not proved). New case lemmas aot-cc-cl-tif-then/-else/-tif,
+     -let-tmid, -5-leaf/-none/-else/-untyped/-node, -6; a recur argument either way through aot-ca
+     and aot-cacl (the writes, aot-wvals and aot-writes-run, over aot-ca). gp's statement: the
+     operand, read after its code, is ex-ev's value and its read ex-ev's frame; a typed argument's
+     frame is claimed only when no recur was raised (the parent is then out). COST: aot-ir-cost with
+     :tif as :if; aot-cc-cost still at most 2 + 6 acl2-count(e) calls (fl 5 at most 3 + 6c, fl 6 4 + 6c).
+     CHECKED: fuzz-aot-gen part 3 -s 1 -n 300: 285 compared (was 165), 120 with a typed path, 0
+     differ; -x also reads a typed test as boxed and parts.
+     NOT DONE in 4c: PRIMS (gp-call: arith, inc/dec, cmp, eq, pred, casts, math, aget/aset/alength)
+     with the overflow branch to the escape hatch and A-OP; the typed :call (gen-op's prim then box);
+     HOISTING (hoist-invariants, still text: a loop body reading an outer boxed bound local is not
+     compared); coerce (long to double, prims only); the fn-level typed recur's frame write (hinted
+     parameters, 4e). A case with any of these is printed text and counted, not compared.
+     NOT DONE: 4c-ii (prims, hatch, A-OP, hoisting), 4d (calls, closures, gen-into), 4e (the entry and
+     versions). The row stays Owed.
 5. purefort's candidates/versions/can-fail, the same way.
 
-The Owed row stays Owed until slice 4 is done (4a and 4b of 4a-4e landed); slice 1 is its own Generated row.
+The Owed row stays Owed until slice 4 is done (4a, 4b and 4c-i of 4a-4e landed); slice 1 is its own Generated row.

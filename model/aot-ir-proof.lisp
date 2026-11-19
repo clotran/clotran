@@ -10,6 +10,14 @@
 ;
 ; COST: the compile makes at most 2 + 6 acl2-count(e) calls -- linear in the tree (aot-cc-cost);
 ; a run takes at most aot-ir-size instructions with fuel + 1 rounds a loop (aot-ir-cost).
+;
+; 4c's first part, the TYPED paths without prims: a typed local read (boxed from its variable), a
+; typed if test, typed let and loop bindings, typed recur arguments (each into a typed temporary,
+; then written), and gp (fl 5: its operand, read after its code, is ex-ev's value and its read
+; ex-ev's frame -- a marked local's read clears it in the model, as ex-ev does) and fl 6. The types
+; are gen's annotation and the theorem holds for any of them but one hypothesis: A-NONE (aot-noval),
+; a node annotated none answers no value. Every case is one lemma again (aot-cc-cl-tif-*,
+; -let-tmid, -5-*, -6); a recur argument either way through aot-ca and aot-cacl.
 
 (in-package "ACL2")
 (set-prover-step-limit 30000000)
@@ -33,6 +41,10 @@
          (cond ((aot-isop x :if)
                 (let ((r (aot-ir-run (if (truthy (nth (nfix (cadr x)) bt)) (caddr x) (cadddr x)) fr bt rp fuel)))
                   (if (caddr r) (aot-ir-run code (car r) (cadr r) (cadddr r) fuel) r)))
+               ((aot-isop x :tif)
+                (let* ((xr (aot-xrun (cadr x) fr bt))
+                       (r (aot-ir-run (if (truthy (car xr)) (caddr x) (cadddr x)) (cdr xr) bt rp fuel)))
+                  (if (caddr r) (aot-ir-run code (car r) (cadr r) (cadddr r) fuel) r)))
                ((aot-isop x :loop)
                 (let ((r (aot-ir-run (cadr x) fr bt nil fuel)))
                   (cond ((not (caddr r)) r)
@@ -44,6 +56,13 @@
                (t (let ((s (aot-ir-step x fr bt)))
                     (if s (aot-ir-run code (car s) (cadr s) rp fuel) (list fr bt nil rp)))))))
 (in-theory (disable aot-ir-run))
+; a typed operand, by its form; an operand aot-cc has not built yet stays closed
+(defthm aot-xrun-forms
+  (and (equal (aot-xrun (list :lit v ty) fr bt) (cons v fr))
+       (equal (aot-xrun (list :sv s ty m) fr bt) (cons (nth (nfix s) fr) (if m (update-nth (nfix s) nil fr) fr)))
+       (equal (aot-xrun (list :tv d ty) fr bt) (cons (nth (nfix d) bt) fr))
+       (equal (aot-xrun (list :unbox d ty) fr bt) (cons (nth (nfix d) bt) fr))))
+(in-theory (disable aot-xrun))
 ; a loop that ends leaves the flag as it found it (each Fortran loop has its own)
 (defthm aot-ir-loop-rp
   (implies (caddr (aot-ir-run (list (list :loop b)) fr bt rp fuel))
@@ -115,7 +134,7 @@
   (implies (and (aot-pent e pool) (aot-pslt pool n)) (and (integerp (cadr (aot-pent e pool))) (<= 0 (cadr (aot-pent e pool)))))
   :hints (("Goal" :use aot-pent-slot :in-theory (disable aot-pent-slot))))
 (defthm aot-pent-kind (implies (and (not (equal (ex-kind e) 1)) (not (equal (ex-kind e) 3))) (not (aot-pent e pool))))
-(in-theory (disable aot-pent ex-kind ex-i2 ex-c ex-mark ex-s2 ex-nk ex-rstart ex-rn))
+(in-theory (disable aot-pent ex-kind ex-i2 ex-c ex-mark ex-s2 ex-nk ex-rstart ex-rn aot-at aot-bt aot-typ aot-bty))
 (in-theory (disable (:definition aot-cc)))
 ; where the value lands: a fresh temporary, or a pool slot (and then, from gen, with no code)
 (defthm aot-cc-atom-natp
@@ -138,7 +157,10 @@
 (defthm aot-slok-fresh (implies (and (natp s) (<= n s) (< s m)) (aot-slok s n m pool)))
 (defthm aot-slok-pool (implies (aot-inpool s pool) (aot-slok s n m pool)))
 (in-theory (disable aot-slok))
-(defmacro aot-sl (fl e i n) `(aot-slok (cadr (aot-cc ,fl ,e ,i ,n pool)) ,n (caddr (aot-cc ,fl ,e ,i ,n pool)) pool))
+;; fl 5 answers an operand, not a slot
+(defmacro aot-sl (fl e i n)
+  (let ((s `(aot-slok (cadr (aot-cc ,fl ,e ,i ,n pool)) ,n (caddr (aot-cc ,fl ,e ,i ,n pool)) pool)))
+    (if (symbolp fl) `(or (equal ,fl 5) ,s) s)))
 (defthm aot-sl-0 (implies (and (natp n) (aot-sl 1 e 0 n)) (aot-sl 0 e i n))
   :hints (("Goal" :expand ((aot-cc 0 e i n pool)) :in-theory (disable aot-slok-grow))))
 (defthm aot-sl-1
@@ -155,18 +177,23 @@
                   (implies (consp e) (aot-sl 0 (ex-kid-of e (nfix (- (ex-nk e) 1))) 0 n))))
            (aot-sl 2 e i n))
   :hints (("Goal" :expand ((aot-cc 2 e i n pool)))))
+(defthm aot-sl-6 (implies (natp n) (aot-sl 6 e i n)) :hints (("Goal" :expand ((aot-cc 6 e i n pool)))))
 (defthm aot-sl-4
   (implies (and (natp n)
-                (implies (and (consp e) (< (nfix i) (ex-nk e)))
+                (implies (and (consp e) (< (nfix i) (ex-nk e)) (aot-typ (nth (nfix i) (aot-bt e))))
+                         (aot-sl 4 e (+ 1 (nfix i)) (caddr (aot-cc 6 (ex-kid-of e (nfix i)) (nth (nfix i) (aot-bt e)) n pool))))
+                (implies (and (consp e) (< (nfix i) (ex-nk e)) (not (aot-typ (nth (nfix i) (aot-bt e)))))
                          (aot-sl 4 e (+ 1 (nfix i)) (caddr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))))
            (aot-sl 4 e i n))
   :hints (("Goal" :expand ((aot-cc 4 e i n pool)))))
 (defthm aot-sl-3
-  (implies (and (natp n) (not (equal fl 0)) (not (equal fl 1)) (not (equal fl 2)) (not (equal fl 4))
+  (implies (and (natp n) (not (equal fl 0)) (not (equal fl 1)) (not (equal fl 2)) (not (equal fl 4)) (not (equal fl 5)) (not (equal fl 6))
                 (if (and (consp e) (< (nfix i) (ex-i2 e)))
-                    (aot-sl 3 e (+ 1 (nfix i)) (caddr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))
+                    (if (aot-typ (aot-bty e (nfix i)))
+                        (aot-sl 3 e (+ 1 (nfix i)) (caddr (aot-cc 5 (ex-kid-of e (nfix i)) (aot-bty e (nfix i)) n pool)))
+                      (aot-sl 3 e (+ 1 (nfix i)) (caddr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool))))
                   (implies (consp e) (aot-sl 0 (ex-kid-of e (ex-i2 e)) 0 n))))
-           (aot-sl fl e i n))
+           (aot-slok (cadr (aot-cc fl e i n pool)) n (caddr (aot-cc fl e i n pool)) pool))
   :hints (("Goal" :expand ((aot-cc fl e i n pool)))))
 (defthm aot-cc-slot1
   (implies (natp n) (aot-sl fl e i n))
@@ -184,16 +211,43 @@
   (let* ((cc (aot-cc fl e i n pool)) (s (cadr cc)) (m (caddr cc)))
     (implies (natp n)
              (and (natp m) (<= n m)
-                  (or (and (natp s) (<= n s) (< s m)) (aot-inpool s pool))
+                  (implies (not (equal fl 5)) (or (and (natp s) (<= n s) (< s m)) (aot-inpool s pool)))
                   (implies (and (equal fl 0) (consp (car cc))) (and (natp s) (<= n s) (< s m))))))
   :hints (("Goal" :in-theory (e/d (aot-slok) (aot-cc-slot-0)) :use (aot-cc-slot1 aot-cc-slot-0))))
 
 (defthm aot-cc-slot-int
-  (implies (and (natp n) (aot-pslt pool n)) (and (integerp (cadr (aot-cc fl e i n pool))) (<= 0 (cadr (aot-cc fl e i n pool)))))
-  :rule-classes ((:rewrite :corollary (implies (and (natp n) (aot-pslt pool n)) (integerp (cadr (aot-cc fl e i n pool)))))
-                 (:linear :corollary (implies (and (natp n) (aot-pslt pool n)) (<= 0 (cadr (aot-cc fl e i n pool))))))
+  (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5))) (and (integerp (cadr (aot-cc fl e i n pool))) (<= 0 (cadr (aot-cc fl e i n pool)))))
+  :rule-classes ((:rewrite :corollary (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5))) (integerp (cadr (aot-cc fl e i n pool)))))
+                 (:linear :corollary (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5))) (<= 0 (cadr (aot-cc fl e i n pool))))))
   :hints (("Goal" :use (aot-cc-slot (:instance aot-inpool-lt (s (cadr (aot-cc fl e i n pool))))) :in-theory (disable aot-cc-slot aot-inpool-lt))))
 (in-theory (disable aot-cc-slot))
+; a typed temporary: always fresh
+(defthm aot-cc-slot-6
+  (let* ((cc (aot-cc 6 e i n pool)) (s (cadr cc)) (m (caddr cc)))
+    (implies (natp n) (and (natp s) (<= n s) (< s m) (consp (car cc)))))
+  :rule-classes ((:rewrite :corollary (implies (natp n) (and (integerp (cadr (aot-cc 6 e i n pool))) (consp (car (aot-cc 6 e i n pool))))))
+                 (:linear :corollary (implies (natp n) (and (<= n (cadr (aot-cc 6 e i n pool))) (< (cadr (aot-cc 6 e i n pool)) (caddr (aot-cc 6 e i n pool)))))))
+  :hints (("Goal" :expand ((aot-cc 6 e i n pool)))))
+
+; a recur's argument i: a typed temporary or gen's value
+(defun aot-ca (e i n pool)
+  (if (aot-typ (nth (nfix i) (aot-bt e))) (aot-cc 6 (ex-kid-of e (nfix i)) (nth (nfix i) (aot-bt e)) n pool) (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))
+(defthm aot-ca-slot
+  (let* ((r (aot-ca e i n pool)) (s (cadr r)) (m (caddr r)))
+    (implies (and (natp n) (aot-pslt pool n))
+             (and (natp m) (<= n m) (natp s)
+                  (or (and (<= n s) (< s m)) (aot-inpool s pool))
+                  (implies (or (aot-typ (nth (nfix i) (aot-bt e))) (consp (car r))) (and (<= n s) (< s m))))))
+  :rule-classes nil
+  :hints (("Goal" :use ((:instance aot-cc-slot (fl 0) (e (ex-kid-of e (nfix i))) (i 0))
+                        (:instance aot-cc-slot (fl 6) (e (ex-kid-of e (nfix i))) (i (nth (nfix i) (aot-bt e))))
+                        (:instance aot-inpool-lt (s (cadr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))))
+           :in-theory (disable aot-inpool-lt))))
+(defthm aot-ca-next (and (natp (caddr (aot-ca e i n pool))) (<= (nfix n) (caddr (aot-ca e i n pool))))
+  :rule-classes ((:type-prescription :corollary (natp (caddr (aot-ca e i n pool))))
+                 (:linear :corollary (<= (nfix n) (caddr (aot-ca e i n pool))))))
+(defthm aot-ca-nfix (equal (aot-ca e (nfix i) n pool) (aot-ca e i n pool)) :hints (("Goal" :in-theory (enable aot-ca))))
+(in-theory (disable aot-ca))
 
 ; ---- A RECUR'S WRITES ------------------------------------------------------------------------
 ;
@@ -204,19 +258,21 @@
 (defun aot-wvals (e i n pool bt)
   (declare (xargs :measure (nfix (- (ex-nk e) (nfix i)))))
   (if (and (consp e) (< (nfix i) (ex-nk e)))
-      (let ((r (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))
+      (let ((r (aot-ca e i n pool)))
         (cons (nth (cadr r) bt) (aot-wvals e (+ 1 (nfix i)) (caddr r) pool bt)))
     nil))
 
 (defthm aot-cc-4-step
   (implies (and (consp e) (< (nfix i) (ex-nk e)))
            (equal (aot-cc 4 e i n pool)
-                  (let* ((r (aot-cc 0 (ex-kid-of e (nfix i)) 0 (nfix n) pool)) (r2 (aot-cc 4 e (+ 1 (nfix i)) (caddr r) pool)))
+                  (let* ((ty (nth (nfix i) (aot-bt e))) (r (aot-ca e i (nfix n) pool)) (r2 (aot-cc 4 e (+ 1 (nfix i)) (caddr r) pool)))
                     (list (append (car r) (car r2)) (cadr r2) (caddr r2)
-                          (append (list (list :put (+ (ex-rstart e) (nfix i)) (cadr r)))
-                                  (if (consp (car r)) (list (list :const (cadr r) nil)) nil)
+                          (append (if (aot-typ ty)
+                                      (list (list :tput (+ (ex-rstart e) (nfix i)) ty (list :tv (cadr r) ty)))
+                                    (append (list (list :put (+ (ex-rstart e) (nfix i)) (cadr r)))
+                                            (if (consp (car r)) (list (list :const (cadr r) nil)) nil)))
                                   (cadddr r2))))))
-  :hints (("Goal" :expand ((aot-cc 4 e i n pool)))))
+  :hints (("Goal" :expand ((aot-cc 4 e i n pool)) :in-theory (enable aot-ca))))
 (defthm aot-cc-4-end
   (implies (not (and (consp e) (< (nfix i) (ex-nk e))))
            (equal (aot-cc 4 e i n pool)
@@ -227,14 +283,14 @@
   (implies (and (natp n) (aot-pslt pool n) (natp d) (< d n) (not (aot-inpool d pool)))
            (equal (aot-wvals e i n pool (update-nth d v bt)) (aot-wvals e i n pool bt)))
   :hints (("Goal" :induct (aot-wvals e i n pool bt))
-          ("Subgoal *1/1" :use ((:instance aot-cc-slot (fl 0) (e (ex-kid-of e (nfix i))) (i 0))))))
+          ("Subgoal *1/1" :use ((:instance aot-ca-slot)))))
 
 (defun aot-w-ind (e i n pool bt fr)
   (declare (xargs :measure (nfix (- (ex-nk e) (nfix i)))))
   (if (and (consp e) (< (nfix i) (ex-nk e)))
-      (let* ((r (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) (s (cadr r)))
+      (let* ((r (aot-ca e i n pool)) (s (cadr r)))
         (aot-w-ind e (+ 1 (nfix i)) (caddr r) pool
-                   (if (consp (car r)) (update-nth s nil bt) bt)
+                   (if (and (not (aot-typ (nth (nfix i) (aot-bt e)))) (consp (car r))) (update-nth s nil bt) bt)
                    (update-nth (+ (ex-rstart e) (nfix i)) (nth s bt) fr)))
     (list n pool bt fr)))
 
@@ -245,8 +301,7 @@
                   (equal (car r) (ex-write (+ (ex-rstart e) (nfix i)) (aot-wvals e i n pool bt) fr))
                   (aot-same n (cadr r) bt))))
   :hints (("Goal" :induct (aot-w-ind e i n pool bt fr))
-          ("Subgoal *1/1" :use ((:instance aot-cc-slot (fl 0) (e (ex-kid-of e (nfix i))) (i 0))
-                                (:instance aot-cc-slot-0 (e (ex-kid-of e (nfix i))) (i 0))))))
+          ("Subgoal *1/1" :use ((:instance aot-ca-slot)))))
 
 (defthm aot-wvals-true-listp (true-listp (aot-wvals e i n pool bt)))
 (defthm aot-wvals-len (implies (consp e) (equal (len (aot-wvals e i n pool bt)) (nfix (- (ex-nk e) (nfix i))))))
@@ -257,9 +312,13 @@
 
 ; ---- THE SUBSET ------------------------------------------------------------------------------
 
+; A-NONE: a node gen types none (it never answers) answers no value -- slice 2's aot-ty-sound at
+; type 0, at gen's env; that the annotation is aot-ty's is the fuzzer's check, not proved
+(defun-sk aot-noval (e) (forall (fr fuel) (not (equal (car (car (ex-ev :m e 0 nil fr fuel))) :val))))
 (defun aot-s4ok (e pool)
   (let ((k (ex-kind e)) (nk (ex-nk e)))
     (and (consp e) (member k '(1 2 3 4 5 11 12 16))
+         (implies (equal (aot-at e) 0) (aot-noval e))
          (implies (equal k 4) (or (equal nk 2) (equal nk 3)))
          (implies (or (equal k 11) (equal k 12)) (equal nk (+ 1 (ex-i2 e))))
          (implies (equal k 16) (equal (ex-rn e) nk))
@@ -287,6 +346,8 @@
   (implies (aot-s4 0 e 0 pool) (and (consp e) (member (ex-kind e) '(1 2 3 4 5 11 12 16))))
   :rule-classes :forward-chaining :hints (("Goal" :use ((:instance aot-s4-ok (j 0))) :in-theory (disable aot-s4-ok))))
 
+(defthm aot-s4-none (implies (and (aot-s4 0 e 0 pool) (equal (aot-at e) 0)) (aot-noval e))
+  :hints (("Goal" :use ((:instance aot-s4-ok (j 0))) :in-theory (disable aot-s4-ok aot-noval))))
 (defthm aot-s4-var (implies (and (aot-s4 0 e 0 pool) (equal (ex-kind e) 3)) (aot-pent e pool))
   :hints (("Goal" :use ((:instance aot-s4-ok (j 0))) :in-theory (disable aot-s4-ok))))
 
@@ -318,13 +379,21 @@
     (implies (not (equal (car x) (list :out)))
              (and (caddr r)
                   (aot-same n (cadr r) bt)
-                  (if (equal fl 4)
+                  (cond
+                   ; gp: the operand, read after the code, is ex-ev's value (and its read ex-ev's frame)
+                   ((equal fl 5)
+                    (let ((xr (aot-xrun (cadr cc) (car r) (cadr r))))
+                      (if (cadddr r)
+                          (and (equal (car x) (list :recur)) (equal (cadr x) (car r)))
+                        (and (equal (car x) (cons :val (car xr))) (equal (cadr x) (cdr xr))))))
+                   ((equal fl 4)
                       (and (not (cadddr r))
                            (equal (car x) (list :recur))
                            (equal (cadr x) (ex-write (ex-rstart e) (take (min (ex-rn e) (ex-nk e)) (append tmp (aot-wvals e i n pool (cadr r))))
-                                                     (car r))))
+                                                     (car r)))))
+                   (t
                     (and (equal (car x) (if (cadddr r) (list :recur) (cons :val (nth (cadr cc) (cadr r)))))
-                         (equal (cadr x) (car r))))))))
+                         (implies (or (not (equal fl 6)) (not (cadddr r))) (equal (cadr x) (car r))))))))))
 (defun aot-cc-cl (fl e i n pool fr bt fuel tmp)
   (implies (aot-cchyp fl e i n pool bt) (aot-ccconcl fl e i n pool fr bt fuel tmp)))
 (in-theory (disable aot-cchyp aot-ccconcl aot-cc-cl))
@@ -341,6 +410,14 @@
                ((equal k 5) (if (zp nk) nil (aot-cc-ind 2 e 0 n pool fr bt fuel nil)))
                ((or (equal k 11) (equal k 12)) (aot-cc-ind 3 e 0 n pool fr bt fuel nil))
                ((equal k 16) (aot-cc-ind 4 e 0 n pool fr bt fuel nil))
+               ((and (equal k 4) (equal (aot-at (ex-kid-of e 0)) 4))
+                (let* ((tr (aot-cc 5 (ex-kid-of e 0) 4 n pool)) (r (caddr tr))
+                       (r0 (aot-ir-run (car tr) fr bt nil fuel))
+                       (xr (aot-xrun (cadr tr) (car r0) (cadr r0)))
+                       (m (caddr (aot-cc 0 (ex-kid-of e 1) 0 (+ 1 r) pool))))
+                  (list (aot-cc-ind 5 (ex-kid-of e 0) 4 n pool fr bt fuel nil)
+                        (aot-cc-ind 0 (ex-kid-of e 1) 0 (+ 1 r) pool (cdr xr) (cadr r0) fuel nil)
+                        (aot-cc-ind 0 (ex-kid-of e 2) 0 m pool (cdr xr) (cadr r0) fuel nil))))
                ((equal k 4)
                 (let* ((tr (aot-cc 0 (ex-kid-of e 0) 0 n pool)) (tc (car tr)) (ts (cadr tr)) (r (caddr tr))
                        (r0 (aot-ir-run tc fr bt nil fuel))
@@ -356,12 +433,23 @@
                      (aot-cc-ind 2 e (+ 1 i) (caddr r) pool (car r0) (cadr r0) fuel tmp)))
            (if (consp e) (aot-cc-ind 0 (ex-kid-of e (nfix (- nk 1))) 0 n pool fr bt fuel nil) nil)))
       (4 (if (and (consp e) (< i nk))
-             (let* ((r (aot-cc 0 (ex-kid-of e i) 0 n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel)))
-               (list (aot-cc-ind 0 (ex-kid-of e i) 0 n pool fr bt fuel nil)
+             (let* ((ty (nth i (aot-bt e))) (r (aot-ca e i n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel)))
+               (list (if (aot-typ ty)
+                         (aot-cc-ind 6 (ex-kid-of e i) ty n pool fr bt fuel nil)
+                       (aot-cc-ind 0 (ex-kid-of e i) 0 n pool fr bt fuel nil))
                      (aot-cc-ind 4 e (+ 1 i) (caddr r) pool (car r0) (cadr r0) fuel
                                  (append tmp (list (nth (cadr r) (cadr r0)))))))
            nil))
+      (5 (if (and (consp e) (not (and (member k '(1 2 6)) (aot-typ (aot-at e)))))
+             (aot-cc-ind 0 e 0 n pool fr bt fuel nil)
+           nil))
+      (6 (aot-cc-ind 5 e i n pool fr bt fuel nil))
       (otherwise
+       (if (and (consp e) (< i (ex-i2 e)) (aot-typ (aot-bty e i)))
+           (let* ((r (aot-cc 5 (ex-kid-of e i) (aot-bty e i) n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel))
+                  (xr (aot-xrun (cadr r) (car r0) (cadr r0))))
+             (list (aot-cc-ind 5 (ex-kid-of e i) (aot-bty e i) n pool fr bt fuel nil)
+                   (aot-cc-ind 3 e (+ 1 i) (caddr r) pool (update-nth (+ (ex-s2 e) i) (car xr) (cdr xr)) (cadr r0) fuel tmp)))
        (if (and (consp e) (< i (ex-i2 e)))
            (let* ((r (aot-cc 0 (ex-kid-of e i) 0 n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel)))
              (list (aot-cc-ind 0 (ex-kid-of e i) 0 n pool fr bt fuel nil)
@@ -374,7 +462,7 @@
                      (if (and (equal k 12) (not (zp fuel)))
                          (aot-cc-ind 3 e i n pool (car r0) (cadr r0) (1- fuel) tmp)
                        nil)))
-           nil))))))
+           nil)))))))
 
 ; ---- THE CASES -------------------------------------------------------------------------------
 
@@ -432,7 +520,7 @@
 
 ; an if: the test, then the branch it takes
 (defthm aot-cc-cl-if-then
-  (implies (and (equal (ex-kind e) 4) (truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))))
+  (implies (and (equal (ex-kind e) 4) (not (equal (aot-at (ex-kid-of e 0)) 4)) (truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))))
                 (let* ((tr (aot-cc 0 (ex-kid-of e 0) 0 n pool)) (tc (car tr)) (ts (cadr tr)) (r (caddr tr))
                        (r0 (aot-ir-run tc fr bt nil fuel))
                        (bt1 (if (consp tc) (update-nth ts nil (cadr r0)) (cadr r0))))
@@ -443,7 +531,7 @@
            :do-not '(generalize fertilize))))
 
 (defthm aot-cc-cl-if-else
-  (implies (and (equal (ex-kind e) 4) (not (truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
+  (implies (and (equal (ex-kind e) 4) (not (equal (aot-at (ex-kid-of e 0)) 4)) (not (truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
                 (let* ((tr (aot-cc 0 (ex-kid-of e 0) 0 n pool)) (tc (car tr)) (ts (cadr tr)) (r (caddr tr))
                        (r0 (aot-ir-run tc fr bt nil fuel))
                        (bt1 (if (consp tc) (update-nth ts nil (cadr r0)) (cadr r0)))
@@ -454,8 +542,39 @@
   :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 1 e i n pool) (ex-ev :m e 0 nil fr fuel))
            :do-not '(generalize fertilize))))
 
+; a TYPED test (4c): its operand, read after its code, decides
+(defthm aot-cc-cl-tif-then
+  (implies (and (equal (ex-kind e) 4) (equal (aot-at (ex-kid-of e 0)) 4) (truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))))
+                (let* ((tr (aot-cc 5 (ex-kid-of e 0) 4 n pool)) (r (caddr tr))
+                       (r0 (aot-ir-run (car tr) fr bt nil fuel)) (xr (aot-xrun (cadr tr) (car r0) (cadr r0))))
+                  (and (aot-cc-cl 5 (ex-kid-of e 0) 4 n pool fr bt fuel nil)
+                       (aot-cc-cl 0 (ex-kid-of e 1) 0 (+ 1 r) pool (cdr xr) (cadr r0) fuel nil))))
+           (aot-cc-cl 1 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 1 e i n pool) (ex-ev :m e 0 nil fr fuel))
+           :do-not '(generalize fertilize))))
+(defthm aot-cc-cl-tif-else
+  (implies (and (equal (ex-kind e) 4) (equal (aot-at (ex-kid-of e 0)) 4) (not (truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel)))))
+                (let* ((tr (aot-cc 5 (ex-kid-of e 0) 4 n pool)) (r (caddr tr))
+                       (r0 (aot-ir-run (car tr) fr bt nil fuel)) (xr (aot-xrun (cadr tr) (car r0) (cadr r0)))
+                       (m (caddr (aot-cc 0 (ex-kid-of e 1) 0 (+ 1 r) pool))))
+                  (and (aot-cc-cl 5 (ex-kid-of e 0) 4 n pool fr bt fuel nil)
+                       (aot-cc-cl 0 (ex-kid-of e 2) 0 m pool (cdr xr) (cadr r0) fuel nil))))
+           (aot-cc-cl 1 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 1 e i n pool) (ex-ev :m e 0 nil fr fuel))
+           :do-not '(generalize fertilize))))
+(defthm aot-cc-cl-tif
+  (implies (and (equal (ex-kind e) 4) (equal (aot-at (ex-kid-of e 0)) 4)
+                (let* ((tr (aot-cc 5 (ex-kid-of e 0) 4 n pool)) (r (caddr tr))
+                       (r0 (aot-ir-run (car tr) fr bt nil fuel)) (xr (aot-xrun (cadr tr) (car r0) (cadr r0)))
+                       (m (caddr (aot-cc 0 (ex-kid-of e 1) 0 (+ 1 r) pool))))
+                  (and (aot-cc-cl 5 (ex-kid-of e 0) 4 n pool fr bt fuel nil)
+                       (aot-cc-cl 0 (ex-kid-of e 1) 0 (+ 1 r) pool (cdr xr) (cadr r0) fuel nil)
+                       (aot-cc-cl 0 (ex-kid-of e 2) 0 m pool (cdr xr) (cadr r0) fuel nil))))
+           (aot-cc-cl 1 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :cases ((truthy (val (car (ex-ev :m (ex-kid-of e 0) 0 nil fr fuel))))) :in-theory (disable aot-cc-cl))))
+
 (defthm aot-cc-cl-if
-  (implies (and (equal (ex-kind e) 4)
+  (implies (and (equal (ex-kind e) 4) (not (equal (aot-at (ex-kid-of e 0)) 4))
                 (let* ((tr (aot-cc 0 (ex-kid-of e 0) 0 n pool)) (tc (car tr)) (ts (cadr tr)) (r (caddr tr))
                        (r0 (aot-ir-run tc fr bt nil fuel))
                        (bt1 (if (consp tc) (update-nth ts nil (cadr r0)) (cadr r0)))
@@ -481,32 +600,55 @@
            (aot-cc-cl 2 e i n pool fr bt fuel tmp))
   :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 2 e i n pool) (ex-ev :do e i tmp fr fuel)))))
 
+; an argument, typed or boxed, by its value's conclusion (aot-ca: fl 6 or fl 0)
+(defun aot-cacl (e i n pool fr bt fuel)
+  (let* ((r (aot-ca e i n pool)) (rr (aot-ir-run (car r) fr bt nil fuel)) (x (ex-ev :m (ex-kid-of e (nfix i)) 0 nil fr fuel)))
+    (implies (and (natp n) (aot-s4 0 (ex-kid-of e (nfix i)) 0 pool) (aot-pslt pool n) (aot-poolok pool bt) (not (equal (car x) (list :out))))
+             (and (caddr rr) (aot-same n (cadr rr) bt)
+                  (equal (car x) (if (cadddr rr) (list :recur) (cons :val (nth (cadr r) (cadr rr)))))
+                  (implies (not (cadddr rr)) (equal (cadr x) (car rr)))))))
+(defthm aot-cacl-of
+  (implies (if (aot-typ (nth (nfix i) (aot-bt e)))
+               (aot-cc-cl 6 (ex-kid-of e (nfix i)) (nth (nfix i) (aot-bt e)) n pool fr bt fuel nil)
+             (aot-cc-cl 0 (ex-kid-of e (nfix i)) 0 n pool fr bt fuel nil))
+           (aot-cacl e i n pool fr bt fuel))
+  :hints (("Goal" :in-theory (enable aot-cc-cl aot-cchyp aot-ccconcl aot-ca))))
 (defthm aot-cc-cl-rec-mid
   (implies (and (< (nfix i) (ex-nk e))
-                (let* ((r (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel)))
-                  (and (aot-cc-cl 0 (ex-kid-of e (nfix i)) 0 n pool fr bt fuel nil)
+                (let* ((r (aot-ca e i n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel)))
+                  (and (aot-cacl e i n pool fr bt fuel)
                        (aot-cc-cl 4 e (+ 1 (nfix i)) (caddr r) pool (car r0) (cadr r0) fuel
                                   (append tmp (list (nth (cadr r) (cadr r0))))))))
            (aot-cc-cl 4 e i n pool fr bt fuel tmp))
   :hints (("Goal" :in-theory (aot-cc-theory) :expand ((ex-ev :rec e i tmp fr fuel)
                                                      (aot-wvals e i n pool (cadr (aot-ir-run (car (aot-cc 4 e i n pool)) fr bt nil fuel))))
-           :use ((:instance aot-cc-slot (fl 0) (e (ex-kid-of e (nfix i))) (i 0))))
+           :use ((:instance aot-ca-slot)))
           (and stable-under-simplificationp
-               '(:use ((:instance aot-nth-same (j (cadr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))
-                        (n (caddr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)))
-                        (x (cadr (aot-ir-run (car (aot-cc 4 e (+ 1 (nfix i)) (caddr (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) pool))
-                                             (car (aot-ir-run (car (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) fr bt nil fuel))
-                                             (cadr (aot-ir-run (car (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) fr bt nil fuel))
+               '(:use ((:instance aot-nth-same (j (cadr (aot-ca e i n pool)))
+                        (n (caddr (aot-ca e i n pool)))
+                        (x (cadr (aot-ir-run (car (aot-cc 4 e (+ 1 (nfix i)) (caddr (aot-ca e i n pool)) pool))
+                                             (car (aot-ir-run (car (aot-ca e i n pool)) fr bt nil fuel))
+                                             (cadr (aot-ir-run (car (aot-ca e i n pool)) fr bt nil fuel))
                                              nil fuel)))
-                        (y (cadr (aot-ir-run (car (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) fr bt nil fuel)))))))))
+                        (y (cadr (aot-ir-run (car (aot-ca e i n pool)) fr bt nil fuel)))))))))
+(defthm aot-cacl-nfix (equal (aot-cacl e (nfix i) n pool fr bt fuel) (aot-cacl e i n pool fr bt fuel)) :hints (("Goal" :in-theory (e/d (aot-cacl aot-ca) (aot-ca-nfix)))))
+(in-theory (disable aot-cacl))
 
 (defthm aot-cc-cl-rec-end
   (implies (not (< (nfix i) (ex-nk e))) (aot-cc-cl 4 e i n pool fr bt fuel tmp))
   :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 4 e i n pool) (ex-ev :rec e i tmp fr fuel)
                                                      (:free (bt) (aot-wvals e i n pool bt))))))
 
+(defthm aot-cc-cl-let-tmid
+  (implies (and (< (nfix i) (ex-i2 e)) (aot-typ (aot-bty e (nfix i)))
+                (let* ((r (aot-cc 5 (ex-kid-of e (nfix i)) (aot-bty e (nfix i)) n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel))
+                       (xr (aot-xrun (cadr r) (car r0) (cadr r0))))
+                  (and (aot-cc-cl 5 (ex-kid-of e (nfix i)) (aot-bty e (nfix i)) n pool fr bt fuel nil)
+                       (aot-cc-cl 3 e (+ 1 (nfix i)) (caddr r) pool (update-nth (+ (ex-s2 e) (nfix i)) (car xr) (cdr xr)) (cadr r0) fuel tmp))))
+           (aot-cc-cl 3 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 3 e i n pool) (ex-ev :let e i tmp fr fuel)))))
 (defthm aot-cc-cl-let-mid
-  (implies (and (< (nfix i) (ex-i2 e))
+  (implies (and (< (nfix i) (ex-i2 e)) (not (aot-typ (aot-bty e (nfix i))))
                 (let* ((r (aot-cc 0 (ex-kid-of e (nfix i)) 0 n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel)))
                   (and (aot-cc-cl 0 (ex-kid-of e (nfix i)) 0 n pool fr bt fuel nil)
                        (aot-cc-cl 3 e (+ 1 (nfix i)) (caddr r) pool
@@ -558,6 +700,30 @@
           (and stable-under-simplificationp
                '(:use ((:instance aot-poolok-same (bt2 (cadr (aot-ir-run (car (aot-cc 0 (ex-kid-of e (ex-i2 e)) 0 n pool)) fr bt nil fuel)))))))))
 
+; GP: a typed constant or local is its operand; a node typed none, its code and a literal it never
+; reaches (A-NONE); anything else gen's value, unboxed
+(defthm aot-cc-cl-5-leaf
+  (implies (and (member (ex-kind e) '(1 2)) (aot-typ (aot-at e))) (aot-cc-cl 5 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory aot-typ) :expand ((aot-cc 5 e i n pool) (ex-ev :m e 0 nil fr fuel)))))
+(defthm aot-cc-cl-5-none
+  (implies (and (equal (aot-at e) 0) (aot-cc-cl 0 e 0 n pool fr bt fuel nil)) (aot-cc-cl 5 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory aot-typ) :expand ((aot-cc 5 e i n pool))
+           :use ((:instance aot-noval-necc) (:instance aot-s4-none)))))
+(defthm aot-cc-cl-5-else
+  (implies (and (not (and (member (ex-kind e) '(1 2 6)) (aot-typ (aot-at e)))) (not (equal (aot-at e) 0))
+                (aot-cc-cl 0 e 0 n pool fr bt fuel nil))
+           (aot-cc-cl 5 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory aot-typ) :expand ((aot-cc 5 e i n pool)))))
+(defthm aot-cc-cl-5-untyped
+  (implies (and (not (aot-typ (aot-at e))) (aot-cc-cl 0 e 0 n pool fr bt fuel nil)) (aot-cc-cl 5 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :cases ((equal (aot-at e) 0)) :in-theory (disable aot-cc-cl))))
+(defthm aot-cc-cl-5-node
+  (implies (and (not (member (ex-kind e) '(1 2 6))) (aot-cc-cl 0 e 0 n pool fr bt fuel nil)) (aot-cc-cl 5 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :cases ((equal (aot-at e) 0)) :in-theory (disable aot-cc-cl))))
+(defthm aot-cc-cl-6
+  (implies (aot-cc-cl 5 e (nfix i) n pool fr bt fuel nil) (aot-cc-cl 6 e i n pool fr bt fuel tmp))
+  :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 6 e i n pool)))))
+
 (defthm aot-cc-cl-3-badi (implies (not (natp i)) (aot-cc-cl 3 e i n pool fr bt fuel tmp))
   :hints (("Goal" :in-theory (aot-cc-theory))))
 ; a let's or loop's body, as aot-cc-ind gives its hypotheses
@@ -571,7 +737,7 @@
   :hints (("Goal" :cases ((not (natp i)) (equal (ex-kind e) 12)) :in-theory (disable aot-cc-cl))))
 
 (defthm aot-cc-cl-badkind
-  (implies (not (member (ex-kind e) '(1 2 3 4 5 11 12 16))) (aot-cc-cl fl e i n pool fr bt fuel tmp))
+  (implies (and (not (member (ex-kind e) '(1 2 3 4 5 11 12 16))) (not (equal fl 6))) (aot-cc-cl fl e i n pool fr bt fuel tmp))
   :hints (("Goal" :in-theory (aot-cc-theory) :use (aot-s4-kind))))
 (defthm aot-cc-cl-1-leaf
   (implies (not (member (ex-kind e) '(4 5 11 12 16))) (aot-cc-cl 1 e i n pool fr bt fuel tmp))
@@ -581,13 +747,13 @@
   :hints (("Goal" :in-theory (aot-cc-theory) :expand ((aot-cc 1 e i n pool) (ex-ev :m e 0 nil fr fuel) (ex-ev :do e 0 nil fr fuel)))))
 (defthm aot-cc-cl-badn (implies (not (natp n)) (aot-cc-cl fl e i n pool fr bt fuel tmp)) :hints (("Goal" :in-theory (aot-cc-theory))))
 (defthm aot-cc-cl-other
-  (implies (and (member fl '(0 1 2 3 4)) (not (consp e))) (aot-cc-cl fl e i n pool fr bt fuel tmp))
+  (implies (and (member fl '(0 1 2 3 4 5)) (not (consp e))) (aot-cc-cl fl e i n pool fr bt fuel tmp))
   :hints (("Goal" :in-theory (aot-cc-theory))))
 
 ; ---- THE THEOREM -----------------------------------------------------------------------------
 
 (defthm aot-cc-sound
-  (implies (member fl '(0 1 2 3 4)) (aot-cc-cl fl e i n pool fr bt fuel tmp))
+  (implies (member fl '(0 1 2 3 4 5 6)) (aot-cc-cl fl e i n pool fr bt fuel tmp))
   :hints (("Goal" :induct (aot-cc-ind fl e i n pool fr bt fuel tmp) :do-not '(generalize fertilize eliminate-destructors)
            :in-theory (disable aot-cc-slot))))
 
@@ -680,11 +846,18 @@
   (implies (natp i) (<= (acl2-count (ex-kid-of e i)) (aot-kc e i))) :rule-classes :linear
   :hints (("Goal" :use aot-kc-split :in-theory (disable aot-kc-split))))
 
+(defthm aot-ac-consp (implies (consp x) (<= 1 (acl2-count x))) :rule-classes :linear)
+(defthm aot-nth-past (implies (and (natp i) (<= (len l) i)) (equal (nth i l) nil))
+  :hints (("Goal" :induct (nth i l) :in-theory (enable nth))))
+(defthm aot-kid-past (implies (and (natp i) (<= (ex-nk e) i)) (equal (ex-kid-of e i) nil))
+  :hints (("Goal" :in-theory (enable ex-kid-of ex-nk))))
 (defthm aot-cc-cnt-bound
   (and (implies (equal fl 0) (<= (aot-cc-cnt fl e i) (+ 2 (* 6 (acl2-count e)))))
        (implies (equal fl 1) (<= (aot-cc-cnt fl e i) (+ 1 (* 6 (acl2-count e)))))
        (implies (and (equal fl 2) (natp i) (< i (ex-nk e))) (<= (aot-cc-cnt fl e i) (* 6 (aot-kc e i))))
        (implies (and (equal fl 4) (natp i)) (<= (aot-cc-cnt fl e i) (+ 1 (* 6 (aot-kc e i)))))
+       (implies (equal fl 5) (<= (aot-cc-cnt fl e i) (+ 3 (* 6 (acl2-count e)))))
+       (implies (equal fl 6) (<= (aot-cc-cnt fl e i) (+ 4 (* 6 (acl2-count e)))))
        (implies (and (equal fl 3) (natp i) (<= i (ex-i2 e)))
                 (<= (aot-cc-cnt fl e i) (+ 3 (* 6 (aot-kc e i)) (* 3 (- (ex-i2 e) i))))))
   :rule-classes nil
