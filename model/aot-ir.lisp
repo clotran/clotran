@@ -45,6 +45,10 @@
 ; next) -- a typed constant into a temporary (a bool one in place), a typed local its variable, a node
 ; typed none its code and a literal never read, else gen's value unboxed; fl 6 puts gp's operand in
 ; a typed temporary (a typed recur argument). 4c-ii: a typed call is gp-call (fl 7), the prims below.
+; 4c-iii: gp-call reads its operands in the order the tree runs them -- with two, the first is read
+; into a typed temporary (a slot kept for it) before the second's code when there is any, since that
+; code may clear a local the first reads (a marked read: (+ x (inc x)) clears x in inc) -- and the
+; meaning the code is compared with is aot-ev, exec's ex-ev with the host's apply of a builtin.
 
 (in-package "ACL2")
 (include-book "exec")
@@ -68,13 +72,15 @@
 ; lets it run -- on doubles the IEEE op
 (defun aot-opx (p w vals)
   (let ((a (car vals)) (b (cadr vals)))
-    (if (and (equal w 2) (integerp a) (or (member p '(5 6 13 14 15 19 20)) (integerp b)))
+    (cond
+     ((equal p 21) a)    ; (double x): x as read, a long already widened by (:real)
+     ((and (equal w 2) (integerp a) (or (member p '(5 6 13 14 15 19 20)) (integerp b)))
         (case p (1 (+ a b)) (2 (- a b)) (3 (* a b)) (5 (+ a 1)) (6 (- a 1))
           (7 (aot-bool (< a b))) (8 (aot-bool (> a b))) (9 (aot-bool (<= a b))) (10 (aot-bool (>= a b)))
           ((11 12) (aot-bool (equal a b))) (13 (aot-bool (equal a 0))) (14 (aot-bool (> a 0))) (15 (aot-bool (< a 0)))
           ((19 20) a)
-          (otherwise (aot-dop p vals)))
-      (aot-dop p vals))))
+          (otherwise (aot-dop p vals))))
+     (t (aot-dop p vals)))))
 ; the guard (prim-ok): the op cannot overflow or leave its range
 (defun aot-pg (p w vals)
   (let ((a (car vals)) (b (cadr vals)) (h *aot-h*))
@@ -91,6 +97,106 @@
 ; the escape hatch: the host's generic call of f on vals (clotran_call_slots, the interpreter's own
 ; path): (:val . v), or what it throws
 (defstub aot-hcall (* *) => *)
+
+; ---- THE MEANING THE CODE IS COMPARED WITH: exec's, with the host's apply (4c-iii) -------------
+; aot-ev is exec.lisp's ex-ev on the kinds the compile covers (const local var if do call let loop
+; recur), every case as ex-ev writes it, but for a call past its last argument whose callee is no
+; closure: there ex-ev answers (:out) (exec does not model the host's apply of a builtin), aot-ev
+; the host's generic call aot-hcall -- the escape hatch's own call -- when it answers a value.
+; Whatever else aot-ev does not model -- a throw (an IFn test that fails, a host call that throws,
+; a part's throw), a closure's entry (4d), any other kind -- is (:out): outside the theorems. On a
+; tree with no call the two are the same case for case (by construction, not proved).
+(defun aot-happ (tmp fr)
+  (let ((h (aot-hcall (car tmp) (cdr tmp))))
+    (if (and (not (ex-clo-shape (car tmp))) (consp h) (eq (car h) :val)) (list h fr 1) (list (list :out) fr 0))))
+(defun aot-ev (flg e i tmp fr fuel)
+  (declare (xargs :measure (make-ord 3 (1+ (nfix fuel))
+                                     (make-ord 2 (1+ (acl2-count e))
+                                               (make-ord 1 (1+ (ex-rank flg)) (ex-left flg e i))))
+                  :well-founded-relation o<
+                  :hints (("Goal" :in-theory (disable ex-kid-of ex-linked ex-write truthy valp val take update-nth aot-happ)))))
+  (let ((k (ex-kind e)) (nk (ex-nk e)) (n2 (ex-i2 e)) (i (nfix i)))
+    (case flg
+      (:iter (if (not (consp e))
+                 (list (list :out) fr 0)
+               (let* ((r (aot-ev :m e 0 nil fr fuel)) (res (car r)))
+                 (cond ((not (eq (car res) :recur)) r)
+                       ((zp fuel) (list (list :out) fr 0))
+                       (t (let ((r2 (aot-ev :iter e 0 nil (cadr r) (1- fuel))))
+                            (list (car r2) (cadr r2) (c+ (caddr r) (caddr r2)))))))))
+      (:do (cond ((not (consp e)) (list (list :out) fr 0))
+                 ((zp nk) (list (cons :val nil) fr 1))
+                 ((< i (- nk 1))
+                  (let ((r (aot-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                    (if (not (valp (car r)))
+                        (list (list :out) fr 0)
+                      (let ((r2 (aot-ev :do e (1+ i) tmp (cadr r) fuel)))
+                        (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (caddr r2))))))))
+                 (t (let ((r (aot-ev :m (ex-kid-of e (- nk 1)) 0 nil fr fuel)))
+                      (list (car r) (cadr r) (c+ 1 (caddr r)))))))
+      (:let (cond ((not (consp e)) (list (list :out) fr 0))
+                  ((< i n2)
+                   (let ((r (aot-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                     (if (not (valp (car r)))
+                         (list (list :out) fr 0)
+                       (let ((r2 (aot-ev :let e (1+ i) tmp (update-nth (+ (ex-s2 e) i) (val (car r)) (cadr r)) fuel)))
+                         (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
+                  ((equal k 12)
+                   (let ((r (aot-ev :iter (ex-kid-of e n2) 0 nil fr fuel)))
+                     (list (car r) (cadr r) (c+ 1 (caddr r)))))
+                  ((equal k 11)
+                   (let ((r (aot-ev :m (ex-kid-of e n2) 0 nil fr fuel)))
+                     (list (car r) (cadr r) (c+ 1 (caddr r)))))
+                  (t (list (list :out) fr 0))))
+      (:rec (cond ((not (consp e)) (list (list :out) fr 0))
+                  ((< i nk)
+                   (let ((r (aot-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                     (if (not (valp (car r)))
+                         (list (list :out) fr 0)
+                       (let ((r2 (aot-ev :rec e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
+                         (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
+                  (t (list (list :recur) (ex-write (ex-rstart e) (take (min (ex-rn e) nk) tmp) fr) 1))))
+      (:call (cond ((not (consp e)) (list (list :out) fr 0))
+                   ((< i nk)
+                    (let ((r (aot-ev :m (ex-kid-of e i) 0 nil fr fuel)))
+                      (if (not (valp (car r)))
+                          (list (list :out) fr 0)
+                        (let ((r2 (aot-ev :call e (1+ i) (append tmp (list (val (car r)))) (cadr r) fuel)))
+                          (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))
+                   (t (aot-happ tmp fr))))
+      ((:coll :fin) (list (list :out) fr 0))     ; not modelled here
+      (otherwise
+       (cond ((not (consp e)) (list (list :out) fr 0))
+             ((equal k 1) (list (cons :val (ex-c e)) fr 1))
+             ((equal k 2) (list (cons :val (nth n2 fr)) (if (ex-mark e) (update-nth n2 nil fr) fr) 1))
+             ((equal k 4)
+              (let ((r (aot-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                (cond ((not (valp (car r))) (list (list :out) fr 0))
+                      ((truthy (val (car r)))
+                       (let ((r2 (aot-ev :m (ex-kid-of e 1) 0 nil (cadr r) fuel)))
+                         (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))
+                      ((< 2 nk)
+                       (let ((r2 (aot-ev :m (ex-kid-of e 2) 0 nil (cadr r) fuel)))
+                         (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))
+                      (t (list (cons :val nil) (cadr r) (c+ 1 (c+ (caddr r) 1)))))))
+             ((equal k 5) (aot-ev :do e 0 nil fr fuel))
+             ((or (equal k 11) (equal k 12)) (aot-ev :let e 0 nil fr fuel))
+             ((equal k 16) (let ((r (aot-ev :rec e 0 nil fr fuel)))
+                             (list (car r) (cadr r) (c+ 1 (caddr r)))))
+             ((equal k 3) (list (cons :val (ex-c e)) fr 1))
+             ((equal k 6)
+              (if (ex-linked (ex-kid-of e 0))
+                  (if (not (ex-ifn (ex-c (ex-kid-of e 0))))
+                      (list (list :out) fr 0)
+                    (let ((r2 (aot-ev :call e 1 (list (ex-c (ex-kid-of e 0))) fr fuel)))
+                      (list (car r2) (cadr r2) (c+ 1 (c+ 1 (caddr r2))))))
+                (let ((r (aot-ev :m (ex-kid-of e 0) 0 nil fr fuel)))
+                  (cond ((not (valp (car r))) (list (list :out) fr 0))
+                        ((not (ex-ifn (val (car r)))) (list (list :out) fr 0))
+                        (t (let ((r2 (aot-ev :call e 1 (list (val (car r))) (cadr r) fuel)))
+                             (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))))
+             (t (list (list :out) fr 0)))))))
+
 (defun aot-wblk (blk vals bt)
   (if (atom vals) bt (aot-wblk (+ 1 (nfix blk)) (cdr vals) (update-nth (nfix blk) (car vals) bt))))
 
@@ -240,6 +346,12 @@
   (or (member p '(16 17 18)) (zp p) (< 36 p) (and (member p '(7 8 9 10 11)) (not (and (member a0 (quote (2 3))) (member a1 (quote (2 3))))))))
 ; a let's or loop's i-th binding's type: the loop's settled one, or the init's own
 (defun aot-bty (e i) (if (equal (ex-kind e) 12) (nth i (aot-bt e)) (aot-at (ex-kid-of e i))))
+; the type a typed op's operands are read at (gp-call's w)
+(defun aot-pw (p ty a0 a1)
+  (cond ((member p '(1 2 3 5 6)) ty)
+        ((or (equal p 4) (< 21 p)) 3)
+        ((member p '(7 8 9 10 11)) (if (or (equal a0 3) (equal a1 3)) 3 2))
+        (t a0)))
 (defun aot-ccleft (fl e i) (nfix (- (if (member fl (quote (0 1 2 4))) (ex-nk e) (ex-i2 e)) (nfix i))))
 
 (defun aot-cc (fl e i n pool)
@@ -326,15 +438,16 @@
           (if (or (not (consp e)) (aot-unprim p (aot-at k1) (aot-at k2)))
               (list (list (list :owed e)) (list :lit nil ty) (+ 1 n))
           (let* ((a0 (aot-at k1)) (a1 (aot-at k2)) (two (< 2 nk))
-                (w (cond ((member p '(1 2 3 5 6)) ty)
-                         ((or (equal p 4) (< 21 p)) 3)
-                         ((member p '(7 8 9 10 11)) (if (or (equal a0 3) (equal a1 3)) 3 2))
-                         (t a0)))
+                (w (aot-pw p ty a0 a1))
                 (w2 (if (equal p 12) a1 w))
-                (r1 (aot-cc 5 k1 w n pool))
-                (r2 (if two (aot-cc 5 k2 w2 (caddr r1) pool) (list nil nil (caddr r1))))
-                (xs (if two (list (aot-coerce (cadr r1) a0 w) (aot-coerce (cadr r2) a1 w2)) (list (aot-coerce (cadr r1) a0 w))))
-                (c (append (car r1) (car r2))) (m (caddr r2)))
+                (r1 (aot-cc 5 k1 w n pool)) (n1 (caddr r1))
+                ; two operands: a slot n1 kept for the first, which is read into it before the second's
+                ; code when there is any (the order ex-ev reads them in: that code may clear its local)
+                (r2 (if two (aot-cc 5 k2 w2 (+ 1 n1) pool) (list nil nil n1)))
+                (snap (and two (consp (car r2))))
+                (x1 (aot-coerce (cadr r1) a0 w))
+                (xs (if two (list (if snap (list :tv n1 w) x1) (aot-coerce (cadr r2) a1 w2)) (list x1)))
+                (c (append (car r1) (if snap (list (list :tset n1 w x1)) nil) (car r2))) (m (caddr r2)))
            (cond ((equal p 21) (list (car r1) (aot-coerce (cadr r1) a0 3) (caddr r1)))
                  ((and (equal p 20) (equal a0 2)) (list (car r1) (cadr r1) (caddr r1)))
                  ((< 21 p) (list c (list :op p 3 xs) m))

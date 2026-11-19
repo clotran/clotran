@@ -843,9 +843,20 @@ end module clotran_rt_decl
         ats (mapv #(ann! % :t (infer % (:env st))) args)
         p (prim-code sym)
         fop (fortran-op sym)
+        ;; the operands, read in the order the tree runs them (aot-cc fl 7): with two, a slot is
+        ;; kept for the first, and it is read into it before the second's code when there is any
+        ;; -- that code may clear a local the first reads
         opnds (fn [wants st]
-                (reduce (fn [[c xs st] [a w]] (let [[c1 x st] (gp a w st)] [(into c c1) (conj xs x) st]))
-                        [[] [] st] (map vector args wants)))
+                (let [wants (vec wants)
+                      [c0 x0 st] (gp (args 0) (wants 0) st)]
+                  (if (< (count args) 2)
+                    [(vec c0) [x0] st]
+                    (let [[k st] (fresh st)
+                          [c1 x1 st] (gp (args 1) (wants 1) st)]
+                      (if (seq c1)
+                        [(-> [] (into c0) (conj [:tset k (wants 0) x0]) (into c1)) [[:tv k (wants 0)] x1]
+                         (declare-var st (tmp-name k (wants 0)) (wants 0))]
+                        [(-> [] (into c0) (into c1)) [x0 x1] st])))))
         ;; set once into a temporary of type rt, no guard
         into-tmp (fn [rt w wants st]
                    (let [[c xs st] (opnds wants st) [[_ d :as tv] st] (tmpv st rt)]

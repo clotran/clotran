@@ -169,7 +169,7 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      cljf reads is the one exec runs (the same analyzer tree; assumed, as in slice 2).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
-   then may the row be Modeled. 4a, 4b, 4c-i and 4c-ii's prims LANDED (below); the arrays, the boxed compare and hoisting, 4d, 4e owed. DESIGN (lane 3t):
+   then may the row be Modeled. 4a, 4b, 4c-i, 4c-ii's prims and 4c-iii (the prims composed with aot-cc-correct) LANDED (below); the arrays, the boxed compare and hoisting, 4d, 4e owed. DESIGN (lane 3t):
    - THE IR (model/aot-ir.lisp): what gen's statements do, not their spelling. A program is a
      list of instructions over a state (frame fr, boxed temporaries bt, typed temporaries tt,
      the recur flag, an error): (:get d s) (:put s d) (:const d c) (:box d t x) (:unbox x t d),
@@ -355,6 +355,45 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      and HOISTING (hoist-invariants, which only that compare reads) -- still text, not compared; the
      composition above; the fn-level typed recur's frame write (4e). Then 4d (calls, closures, gen-into,
      flush-typed) and 4e (the entry and versions). The row stays Owed.
+   - 4c-iii LANDED (lane 3y): THE PRIMS COMPOSED with aot-cc-correct.
+     THE MEANING: aot-ev (aot-ir.lisp), exec's ex-ev on the kinds the compile covers (const local var if
+     do call let loop recur), every case as ex-ev writes it, but past a call's last argument whose callee
+     is no closure: there ex-ev answers (:out), aot-ev the host's generic call (aot-hcall, the hatch's own
+     call) when it answers a value. Whatever else it does not model -- a throw, a closure's entry (4d), any
+     other kind -- is (:out), outside the theorems. exec.lisp is NOT changed: its machine (ex-turn) stalls
+     at a host apply too, and every exec-vm/clr book reads ex-ev's (:out) there; a sibling meaning keeps
+     that whole tower as it is. On a tree with no call aot-ev is ex-ev case for case -- by construction,
+     NOT PROVED (aot-ev-is-ex-ev was attempted and looped the rewriter; owed).
+     THE ORDER FIX (model and gen together): gp-call read a typed operand where it is used, after the code
+     of the operand to its right -- (+ x (inc x)) read x after inc's code cleared it (the marked read). The
+     prior lane suggested dropping the model's clearing of typed reads; that would have needed a frame
+     relation and a liveness/scope argument (no later part reads or rebinds the slot). Instead gp-call now
+     reads its operands in ex-ev's order: with two, a slot is kept for the first (gen's fresh, the model's
+     n1) and the first operand is read into it ((:tset n1 w x1), the operand then (:tv n1 w)) before the
+     second's code WHEN that code is not empty; with no code between, it is read in place. The clearing
+     stays exactly ex-ev's, and nothing new is assumed. Cost: one reserved frame slot per two-operand op,
+     and one Fortran assignment when the right operand has code (a literal operand is a temporary, so
+     (+ x 1) now writes ti<k> = l<x> first); the Fortran is not byte-identical to 4c-ii's.
+     THE SUBSET grows the typed call (aot-tcok): typed, an op gen reads (aot-pop not 0, not aot-unprim: no
+     array, no compare with a boxed operand), nk = 1 + its operand count, its head a constant or Var in
+     the pool (A-HEAD), A-PRIM at its operands' annotated types and read types, A-FMUL, and a guarded op
+     read as long has long-typed operands. A-PRIM is restated on the RAW values (what aot-ev's call is
+     made on): (aot-prim-ok f p w ts ws) -- the host's call answers (aot-opx p w (aot-cvl vals ts ws)), the
+     op on the operands as the Fortran reads them (a long read as a double widened, aot-cv); aot-opx gains
+     (double x) as x as read. One more annotation hypothesis beside A-NONE: A-LONG (aot-lval), a node gen
+     types long answers a 64-bit integer (slice 2's aot-ty-sound at type 2, the annotation fuzzed, not
+     proved) -- the guard and A-PRIM read longs.
+     PROVED (aot-ir-proof): aot-cc-correct, the same statement, now against aot-ev and on the subset with
+     typed calls; gp-call is fl 7 of the same induction (aot-cc-ind), one lemma per shape: aot-cc-cl-7-dbl
+     ((double x)), -l2l (a long's long), -math (a Math member, in place), -tset (an unguarded op set once),
+     -prim (a guarded op: aot-7prim-step, the guard passing by aot-pg-inr and A-PRIM, failing through the
+     hatch's own call, which IS aot-ev's); the operands through aot-7ops-one/-two over aot-ops2 (the
+     snapshot) and aot-gp-read (gp's conclusion as rewrites). aot-prim-proof keeps the instruction's
+     mechanics (aot-prim-run, replacing aot-prim-correct/aot-op-correct, whose A-PRIM read coerced values)
+     and the guard lemmas (aot-pg-inr, aot-pg-host, aot-pg-safe); it now comes BEFORE aot-ir-proof and
+     carries aot-same. COST: unchanged (aot-cc-cost; the snapshot is not a compile call).
+     CHECKED: fuzz-aot-gen part 3 compares gen's IR, snapshot included, with aot-cc: -s 1 -n 300, 229
+     compared, 0 differ; -x parts.
 5. purefort's candidates/versions/can-fail, the same way.
 
-The Owed row stays Owed until slice 4 is done (4a, 4b, 4c-i and 4c-ii's prims of 4a-4e landed); slice 1 is its own Generated row.
+The Owed row stays Owed until slice 4 is done (4a, 4b, 4c-i, 4c-ii's prims and 4c-iii of 4a-4e landed); slice 1 is its own Generated row.
