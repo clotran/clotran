@@ -23,7 +23,7 @@
 (set-prover-step-limit 30000000)
 (include-book "aot-ir")
 
-(in-theory (disable ex-ev ex-kid-of c+))
+(in-theory (disable ex-ev ex-kid-of c+ aot-prim-step))
 (defthm aot-ex-ev-m-i
   (implies (syntaxp (not (and (equal i (quote (quote 0))) (equal tmp (quote (quote nil))))))
            (equal (ex-ev :m e i tmp fr fuel) (ex-ev :m e 0 nil fr fuel)))
@@ -157,10 +157,10 @@
 (defthm aot-slok-fresh (implies (and (natp s) (<= n s) (< s m)) (aot-slok s n m pool)))
 (defthm aot-slok-pool (implies (aot-inpool s pool) (aot-slok s n m pool)))
 (in-theory (disable aot-slok))
-;; fl 5 answers an operand, not a slot
+;; fl 5 and fl 7 answer an operand, not a slot
 (defmacro aot-sl (fl e i n)
   (let ((s `(aot-slok (cadr (aot-cc ,fl ,e ,i ,n pool)) ,n (caddr (aot-cc ,fl ,e ,i ,n pool)) pool)))
-    (if (symbolp fl) `(or (equal ,fl 5) ,s) s)))
+    (if (symbolp fl) `(or (equal ,fl 5) (equal ,fl 7) ,s) s)))
 (defthm aot-sl-0 (implies (and (natp n) (aot-sl 1 e 0 n)) (aot-sl 0 e i n))
   :hints (("Goal" :expand ((aot-cc 0 e i n pool)) :in-theory (disable aot-slok-grow))))
 (defthm aot-sl-1
@@ -187,7 +187,7 @@
            (aot-sl 4 e i n))
   :hints (("Goal" :expand ((aot-cc 4 e i n pool)))))
 (defthm aot-sl-3
-  (implies (and (natp n) (not (equal fl 0)) (not (equal fl 1)) (not (equal fl 2)) (not (equal fl 4)) (not (equal fl 5)) (not (equal fl 6))
+  (implies (and (natp n) (not (equal fl 0)) (not (equal fl 1)) (not (equal fl 2)) (not (equal fl 4)) (not (equal fl 5)) (not (equal fl 6)) (not (equal fl 7))
                 (if (and (consp e) (< (nfix i) (ex-i2 e)))
                     (if (aot-typ (aot-bty e (nfix i)))
                         (aot-sl 3 e (+ 1 (nfix i)) (caddr (aot-cc 5 (ex-kid-of e (nfix i)) (aot-bty e (nfix i)) n pool)))
@@ -211,14 +211,14 @@
   (let* ((cc (aot-cc fl e i n pool)) (s (cadr cc)) (m (caddr cc)))
     (implies (natp n)
              (and (natp m) (<= n m)
-                  (implies (not (equal fl 5)) (or (and (natp s) (<= n s) (< s m)) (aot-inpool s pool)))
+                  (implies (and (not (equal fl 5)) (not (equal fl 7))) (or (and (natp s) (<= n s) (< s m)) (aot-inpool s pool)))
                   (implies (and (equal fl 0) (consp (car cc))) (and (natp s) (<= n s) (< s m))))))
   :hints (("Goal" :in-theory (e/d (aot-slok) (aot-cc-slot-0)) :use (aot-cc-slot1 aot-cc-slot-0))))
 
 (defthm aot-cc-slot-int
-  (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5))) (and (integerp (cadr (aot-cc fl e i n pool))) (<= 0 (cadr (aot-cc fl e i n pool)))))
-  :rule-classes ((:rewrite :corollary (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5))) (integerp (cadr (aot-cc fl e i n pool)))))
-                 (:linear :corollary (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5))) (<= 0 (cadr (aot-cc fl e i n pool))))))
+  (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5)) (not (equal fl 7))) (and (integerp (cadr (aot-cc fl e i n pool))) (<= 0 (cadr (aot-cc fl e i n pool)))))
+  :rule-classes ((:rewrite :corollary (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5)) (not (equal fl 7))) (integerp (cadr (aot-cc fl e i n pool)))))
+                 (:linear :corollary (implies (and (natp n) (aot-pslt pool n) (not (equal fl 5)) (not (equal fl 7))) (<= 0 (cadr (aot-cc fl e i n pool))))))
   :hints (("Goal" :use (aot-cc-slot (:instance aot-inpool-lt (s (cadr (aot-cc fl e i n pool))))) :in-theory (disable aot-cc-slot aot-inpool-lt))))
 (in-theory (disable aot-cc-slot))
 ; a typed temporary: always fresh
@@ -444,6 +444,7 @@
              (aot-cc-ind 0 e 0 n pool fr bt fuel nil)
            nil))
       (6 (aot-cc-ind 5 e i n pool fr bt fuel nil))
+      (7 nil)   ; a typed call: no call is in the subset (4c-ii: aot-prim-proof states the prims apart)
       (otherwise
        (if (and (consp e) (< i (ex-i2 e)) (aot-typ (aot-bty e i)))
            (let* ((r (aot-cc 5 (ex-kid-of e i) (aot-bty e i) n pool)) (r0 (aot-ir-run (car r) fr bt nil fuel))
@@ -851,8 +852,16 @@
   :hints (("Goal" :induct (nth i l) :in-theory (enable nth))))
 (defthm aot-kid-past (implies (and (natp i) (<= (ex-nk e) i)) (equal (ex-kid-of e i) nil))
   :hints (("Goal" :in-theory (enable ex-kid-of ex-nk))))
+; a call (4c-ii): its kind, 6, and its three first kids fit in it with room
+(defthm aot-kc-call
+  (implies (and (consp e) (equal (ex-kind e) 6))
+           (<= (+ 2 (acl2-count (ex-kid-of e 0)) (acl2-count (ex-kid-of e 1)) (acl2-count (ex-kid-of e 2))) (acl2-count e)))
+  :rule-classes :linear
+  :hints (("Goal" :use ((:instance aot-ac-3 (l (nth 2 e)))) :in-theory (e/d (ex-kid-of ex-kids ex-kind) (aot-ac-3))
+                  :expand ((acl2-count e) (acl2-count (cdr e)) (acl2-count (cddr e)) (nth 2 e) (nth 1 (cdr e)) (nth 0 (cddr e))))))
 (defthm aot-cc-cnt-bound
   (and (implies (equal fl 0) (<= (aot-cc-cnt fl e i) (+ 2 (* 6 (acl2-count e)))))
+       (implies (and (equal fl 7) (consp e) (equal (ex-kind e) 6)) (<= (aot-cc-cnt fl e i) (* 6 (acl2-count e))))
        (implies (equal fl 1) (<= (aot-cc-cnt fl e i) (+ 1 (* 6 (acl2-count e)))))
        (implies (and (equal fl 2) (natp i) (< i (ex-nk e))) (<= (aot-cc-cnt fl e i) (* 6 (aot-kc e i))))
        (implies (and (equal fl 4) (natp i)) (<= (aot-cc-cnt fl e i) (+ 1 (* 6 (aot-kc e i)))))

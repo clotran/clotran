@@ -582,13 +582,13 @@ end module clotran_rt_decl
     :double (str "clotran_real(b + " slot ")")
     :bool (str "(clotran_bool(b + " slot ") /= 0)")))
 
-(declare xt)
+(declare xt prim-fast prim-lines)
 (defn- coerce
   "A long where a double is wanted is widened, as Clojure's Numbers
   does. Nothing else is ever asked for."
   [expr from to]
   (cond (= from to) expr
-        (and (= from :long) (= to :double)) (str "real(" (xt expr) ", c_double)")
+        (and (= from :long) (= to :double)) [:real expr]
         :else (throw (ex-info "bad coerce" {:from from :to to}))))
 
 (defn- lit
@@ -610,9 +610,10 @@ end module clotran_rt_decl
 ;;   [:const d v] [:get d s] [:clr s] [:put s d] [:copy d s] [:deref d s] [:if s then else]
 ;;   [:loop flag body] [:recur flag]
 ;;   [:tput slot t x] [:tset d t x] [:box d t x] [:tif x then else]   (4c: x a typed operand, xt)
+;;   [:prim d t p w xs hd hs blk res site]   (4c-ii: a guarded op, its hatch; prim-lines)
 (defn- xt
   "A typed operand's Fortran: text as it is, or [:lit v t] [:sv slot t mark] [:tv d t] [:unbox d t]
-  (model/aot-ir.lisp's aot-xrun)."
+  [:real x] (a long widened) [:op p w xs] (an unguarded op, prim-fast) (model/aot-ir.lisp's aot-xrun)."
   [x]
   (if (string? x)
     x
@@ -621,7 +622,9 @@ end module clotran_rt_decl
         :lit (if (and (= t :long) (= a clotran.host.int8/MIN_VALUE)) "-huge(0_c_int64_t) - 1_c_int64_t" (lit a t))
         :sv (slot-var a t)
         :tv (tmp-name a t)
-        :unbox (unbox t a)))))
+        :unbox (unbox t a)
+        :real (str "real(" (xt a) ", c_double)")
+        :op (prim-fast a t (nth x 3))))))
 (declare ir-lines)
 (defn- ind [code] (map #(str "   " %) (ir-lines code)))
 (defn- ir-lines [code]
@@ -642,7 +645,8 @@ end module clotran_rt_decl
                   :tset [(str (tmp-name a b) " = " (xt c))]
                   :box [(box a b (xt c))]
                   :loop (concat ["do" (str "   " a " = 0") "   call clotran_poll()"] (ind b) [(str "   if (" a " == 0) exit") "end do"])
-                  :recur [(str a " = 1")]))))
+                  :recur [(str a " = 1")]
+                  :prim (prim-lines x)))))
           code))
 
 (declare gen gp gpt)
@@ -757,89 +761,120 @@ end module clotran_rt_decl
              [(str r " = " (unbox rt res))])
      st]))
 
-(defn- lit-long
-  "The value of a long LITERAL as `lit` writes it, or nil for anything
-  else."
-  [e]
-  (some-> (re-matches #"\((-?\d+)_c_int64_t\)" e) second parse-long))
+;; THE PRIMS AS IR (model/aot-ir.lisp, 4c-ii). An op is named by its code, the place of its
+;; symbol here (aot-ir.lisp's aot-pkind reads the same numbering): an unguarded op is the
+;; operand [:op p w xs] (w the type its operands are read at), a guarded one the instruction
+;; [:prim d t p w xs hd hs blk res site] -- the op into the typed temporary d when its guard
+;; passes, else the escape hatch: the generic call (slow-call's), the operands boxed from blk,
+;; the head read (hd the pool slot a Var is dereffed from into hs, or nil and hs the head's
+;; slot), its answer in res and read back into d.
+(def ^:private prim-syms
+  '[+ - * / inc dec < > <= >= == = zero? pos? neg? aget aset alength int long double
+    clotran-math-sqrt clotran-math-sin clotran-math-cos clotran-math-tan clotran-math-exp
+    clotran-math-log clotran-math-log10 clotran-math-asin clotran-math-acos clotran-math-atan
+    clotran-math-sinh clotran-math-cosh clotran-math-tanh clotran-math-pow clotran-math-atan2])
+(def ^:private prim-code (zipmap prim-syms (map inc (range))))
+(def ^:private prim-sym (zipmap (map inc (range)) prim-syms))
 
-(defn- ovf
-  "True when a long add, subtract or multiply is about to overflow.
-  Checked BEFORE the operation, because signed overflow in Fortran is
-  not defined. A multiply is judged in double precision, with a margin
-  below 2^63; a product that is merely large takes the generic path,
-  which answers it exactly.
+(defn- prim-fast
+  "An op's Fortran on its operands' (xt): aot-ir.lisp's aot-opx."
+  [p w xs]
+  (let [s (prim-sym p) [a b] (map xt xs)]
+    (cond (<= 1 p 4) (str a " " (fortran-op s) " " b)
+          (<= 5 p 6) (str a (if (= p 5) " + " " - ") (if (= w :double) "1.0_c_double" "1_c_int64_t"))
+          (<= 7 p 12) (str a " " (fortran-op s) " " b)
+          (<= 13 p 15) (str a (case s zero? " == " pos? " > " neg? " < ") (lit 0 w))
+          (<= 19 p 20) (if (= w :long) a (str "int(" a ", c_int64_t)"))
+          (= p 35) (str "(" a " ** " b ")")
+          (= p 36) (str "atan2(" a ", " b ")")
+          :else (str (fortran-math s) "(" a ")"))))
 
-  When the right operand is a LITERAL its sign is known, and only the
-  half of the test that can run is written. Writing both let gfortran
-  fold the other half -- -huge - 1 - 1 -- and refuse the file for an
-  overflow in code that could never execute."
-  [sym a b]
-  (let [h "huge(0_c_int64_t)"
-        k (lit-long b)]
-    (case sym
-      (+ -) (let [pos (str "(" a " > " h (if (= sym '+) " - " " + ") b ")")
-                  neg (str "(" a " < -" h " - 1_c_int64_t " (if (= sym '+) "- " "+ ") b ")")]
-              (cond
-              (nil? k) (if (= sym '+)
-                         (str "(" b " > 0 .and. " pos ") .or. (" b " < 0 .and. " neg ")")
-                         (str "(" b " < 0 .and. " pos ") .or. (" b " > 0 .and. " neg ")"))
-              (zero? k) ".false."
-              ;; + overflows upward only for a positive b; - for a negative
-              (= (pos? k) (= sym '+)) pos
-              :else neg))
-      * (str "abs(real(" a ", c_double) * real(" b ", c_double)) > 9.0e18_c_double"))))
+(defn- prim-ok
+  "A guarded op's guard: true when the op cannot overflow or leave its range (aot-ir.lisp's
+  aot-pg). Checked BEFORE the op, as signed overflow in Fortran is not defined; nothing in the
+  guard itself can overflow either (aot-pg-safe): b's sign is folded with max/min, so no
+  operand -- a literal one included -- makes a constant expression gfortran refuses."
+  [p w xs]
+  (let [[a b] (map xt xs) h "huge(0_c_int64_t)" lo (str "-" h " - 1_c_int64_t")]
+    (case (prim-sym p)
+      + (str a " <= " h " - max(" b ", 0_c_int64_t) .and. " a " >= " lo " - min(" b ", 0_c_int64_t)")
+      - (str a " <= " h " + min(" b ", 0_c_int64_t) .and. " a " >= " lo " + max(" b ", 0_c_int64_t)")
+      ;; judged in double precision, with a margin below 2^63 (A-FMUL); a product that is merely
+      ;; large takes the generic path, which answers it exactly
+      * (str "abs(real(" a ", c_double) * real(" b ", c_double)) <= 9.0e18_c_double")
+      inc (str a " /= " h)
+      dec (str a " /= " lo)
+      ;; CASTS, by RT's own range rules: out of range takes the generic call, which throws
+      int (if (= w :long)
+            (str a " >= -2147483648_c_int64_t .and. " a " <= 2147483647_c_int64_t")
+            (str a " >= -2147483648.0_c_double .and. " a " <= 2147483647.0_c_double"))
+      long (str "abs(" a ") < 9.2e18_c_double"))))
+
+(defn- prim-lines [[_ d t p w xs hd hs blk res site]]
+  (let [xs' (map xt xs) v (tmp-name d t)]
+    (concat [(str "if (" (prim-ok p w xs) ") then")
+             (str "   " v " = " (prim-fast p w xs))
+             "else"]
+            (ind (concat (map-indexed (fn [i e] (box (+ blk i) w e)) xs')
+                         (when hd [[:deref hs hd]])
+                         (when site [(str "call clotran_site(cf_pool, " site "_c_int)")])
+                         [(str "st = clotran_call_slots(b + " res ", b + " hs ", b + " (dec blk) ", " (count xs) "_c_int)")]
+                         err-return
+                         [(str v " = " (unbox t res))]))
+            ["end if"])))
+
+(defn- hatch
+  "The escape hatch's slots, allocated as slow-call allocates them: [hd hs blk res site]."
+  [nd n st]
+  (let [[hc hs st] (pooled-read (first (:children nd)) st)
+        [blk st] (fresh st)
+        st (nth (iterate #(second (fresh %)) st) (dec n))
+        [res st] (fresh st)]
+    [[(when (seq hc) (nth (first hc) 2)) hs blk res
+      (some->> (get (:pidx st) {:kind :site :value (:node nd)}) (+ (:offset st)))]
+     st]))
 
 (defn- gp-call
-  "A numeric op, primitive in and out. Answers [code expr state] with
-  expr a Fortran variable of type t."
+  "A numeric op, primitive in and out. Answers [code operand state], the operand a typed one
+  (xt): an unguarded op's [:op ...], or the typed temporary a guarded op or one set once lands in."
   [nd t st]
   (let [[kind sym] (head-op (first (:children nd)))
         args (op-args nd kind (:env st))
-        ats (mapv #(infer % (:env st)) args)
-        fop (fortran-op sym)]
+        ats (mapv #(ann! % :t (infer % (:env st))) args)
+        p (prim-code sym)
+        fop (fortran-op sym)
+        opnds (fn [wants st]
+                (reduce (fn [[c xs st] [a w]] (let [[c1 x st] (gp a w st)] [(into c c1) (conj xs x) st]))
+                        [[] [] st] (map vector args wants)))
+        ;; set once into a temporary of type rt, no guard
+        into-tmp (fn [rt w wants st]
+                   (let [[c xs st] (opnds wants st) [[_ d :as tv] st] (tmpv st rt)]
+                     [(conj c [:tset d rt [:op p w xs]]) tv st]))
+        ;; guarded, the hatch when the guard fails
+        guarded (fn [rt w wants st]
+                  (let [[c xs st] (opnds wants st) [[_ d :as tv] st] (tmpv st rt) [h st] (hatch nd (count xs) st)]
+                    [(conj c (into [:prim d rt p w xs] h)) tv st]))]
     (case kind
+      :to-double
+      (let [[c a st] (gp (args 0) (ats 0) st)]
+        [c (coerce a (ats 0) :double) st])
+
+      (:math1 :math2)
+      (let [[c xs st] (opnds (repeat (count args) :double) st)]
+        [c [:op p :double xs] st])
+
+      (:to-int :to-long)
+      (let [at (ats 0)]
+        (if (and (= at :long) (= kind :to-long))
+          (gp (args 0) at st)
+          (let [[_ tv _ :as r] (guarded :long at [at] st)]
+            (when (and (= kind :to-int) *int-temps*) (swap! *int-temps* conj (xt tv)))
+            r)))
+
       ;; ARRAYS, through the Fortran pointer the version guard set up. An
       ;; index out of range takes the generic call, which raises what
       ;; Clojure raises; the array for it is read from the frame, where
-      ;; the parameter still is.
-      ;; CASTS, by RT's own range rules: a value out of range takes the
-      ;; generic call, which throws what Clojure throws. (aget a i)
-      ;; inlines to (aget a (int i)), so without these no index was ever
-      ;; typed.
-      :to-double
-      (let [[c a st] (gpt (args 0) (ats 0) st)]
-        [c (coerce a (ats 0) :double) st])
-
-      :math1
-      (let [[c a st] (gpt (args 0) :double st)]
-        [c (str (fortran-math sym) "(" a ")") st])
-
-      :math2
-      (let [[c1 a st] (gpt (args 0) :double st)
-            [c2 b st] (gpt (args 1) :double st)]
-        [(concat c1 c2)
-         (if (= sym 'clotran-math-pow) (str "(" a " ** " b ")") (str (fortran-math sym) "(" a ", " b ")"))
-         st])
-
-      (:to-int :to-long)
-      (let [at (ats 0)
-            [c a st] (gpt (args 0) at st)
-            [r st] (tmp st :long)
-            _ (when (and (= kind :to-int) *int-temps*) (swap! *int-temps* conj r))
-            in-range (cond
-                       (and (= at :long) (= kind :to-long)) nil
-                       (= at :long) (str a " >= -2147483648_c_int64_t .and. " a " <= 2147483647_c_int64_t")
-                       (= kind :to-int) (str a " >= -2147483648.0_c_double .and. " a " <= 2147483647.0_c_double")
-                       :else (str "abs(" a ") < 9.2e18_c_double"))
-            conv (if (= at :long) a (str "int(" a ", c_int64_t)"))]
-        (if (nil? in-range)
-          [c a st]
-          (let [[slow st] (slow-call nd [[a at]] r :long st)]
-            [(concat c [(str "if (" in-range ") then") (str "   " r " = " conv) "else"]
-                     (ind slow) ["end if"])
-             r st])))
-
+      ;; the parameter still is. (Still Fortran text: 4c-ii owes them.)
       :alength
       [[] (str "an" (:i2 (args 0))) st]
 
@@ -875,61 +910,19 @@ end module clotran_rt_decl
                  ["end if"])
          r st])
 
-      :arith
-      (let [[c1 a st] (gpt (args 0) t st)
-            [c2 b st] (gpt (args 1) t st)
-            [r st] (tmp st t)]
-        (if (= t :double)
-          [(concat c1 c2 [(str r " = " a " " fop " " b)]) r st]
-          (let [[slow st] (slow-call nd [[a :long] [b :long]] r :long st)]
-            [(concat c1 c2 [(str "if (" (ovf sym a b) ") then")]
-                     (ind slow)
-                     ["else" (str "   " r " = " a " " fop " " b) "end if"])
-             r st])))
-
-      :div
-      (let [[c1 a st] (gpt (args 0) :double st)
-            [c2 b st] (gpt (args 1) :double st)
-            [r st] (tmp st :double)]
-        [(concat c1 c2 [(str r " = " a " / " b)]) r st])
-
-      (:inc :dec)
-      (let [[c1 a st] (gpt (args 0) t st)
-            [r st] (tmp st t)
-            op (if (= kind :inc) " + " " - ")]
-        (if (= t :double)
-          [(concat c1 [(str r " = " a op "1.0_c_double")]) r st]
-          (let [edge (if (= kind :inc) "huge(0_c_int64_t)" "(-huge(0_c_int64_t) - 1_c_int64_t)")
-                [slow st] (slow-call nd [[a :long]] r :long st)]
-            [(concat c1 [(str "if (" a " == " edge ") then")]
-                     (ind slow)
-                     ["else" (str "   " r " = " a op "1_c_int64_t") "end if"])
-             r st])))
-
-      :pred
-      (let [at (ats 0)
-            [c1 a st] (gpt (args 0) at st)
-            [r st] (tmp st :bool)
-            zero (lit 0 at)]
-        [(concat c1 [(str r " = " a (case sym zero? " == " pos? " > " neg? " < ") zero)])
-         r st])
-
-      :eq
-      (let [[c1 a st] (gpt (args 0) (ats 0) st)
-            [c2 b st] (gpt (args 1) (ats 1) st)
-            [r st] (tmp st :bool)]
-        [(concat c1 c2 [(str r " = " a " == " b)]) r st])
+      :arith (if (= t :double) (into-tmp t t [t t] st) (guarded t t [t t] st))
+      :div (into-tmp :double :double [:double :double] st)
+      (:inc :dec) (if (= t :double) (into-tmp t t [t] st) (guarded t t [t] st))
+      :pred (into-tmp :bool (ats 0) [(ats 0)] st)
+      :eq (into-tmp :bool (ats 0) [(ats 0) (ats 1)] st)
 
       :cmp
       (if (every? num? ats)
-        (let [w (if (some #{:double} ats) :double :long)
-              [c1 a st] (gpt (args 0) w st)
-              [c2 b st] (gpt (args 1) w st)
-              [r st] (tmp st :bool)]
-          [(concat c1 c2 [(str r " = " a " " fop " " b)]) r st])
+        (let [w (if (some #{:double} ats) :double :long)]
+          (into-tmp :bool w [w w] st))
         ;; One operand is boxed. Check its tag: a long or a double is
         ;; compared unboxed, anything else takes the generic call. The
-        ;; ORDER is kept -- (< i n) is not (< n i).
+        ;; ORDER is kept -- (< i n) is not (< n i). (Still Fortran text.)
         (let [bi (if (num? (ats 0)) 1 0)
               ni (- 1 bi)
               nt (ats ni)
@@ -951,7 +944,7 @@ end module clotran_rt_decl
                                           (ord x (str "real(" intx ", c_double)"))
                                           (ord x intx)))
                     (str "else if (" tagx " == 3_c_int) then")
-                    (str "   " r " = " (ord (coerce x nt :double) realx))
+                    (str "   " r " = " (ord (xt (coerce x nt :double)) realx))
                     "else"]
                    (ind slow)
                    ["end if"])
@@ -1097,7 +1090,7 @@ end module clotran_rt_decl
                       v (slot-var slot t)
                       ;; a let of an (int x) holds an int (*int-temps*); a
                       ;; loop's slot does not, a recur may rebind it a long
-                      _ (when (and *int-temps* (nil? (get types slot)) (contains? @*int-temps* e))
+                      _ (when (and *int-temps* (nil? (get types slot)) (contains? @*int-temps* (xt e)))
                           (swap! *int-temps* conj v))]
                   [(into code (conj (vec c) [:tput slot t e]))
                    (-> st (declare-var v t) (assoc-in [:env :slots slot] t))])
@@ -1226,7 +1219,7 @@ end module clotran_rt_decl
                   ;; once for whoever wants the value
                   (let [[c e st] (gp-call nd t st)
                         [s st] (fresh st)]
-                    [(conj (vec c) (box s t e)) s st])
+                    [(conj (vec c) [:box s t e]) s st])
                   (if-let [opc (let [[_ s] (head-op (first (:children nd)))]
                                  (get boxed-ops [s (count (rest (:children nd)))]))]
                     ;; a numeric op on BOXED operands: answered by the
@@ -1780,15 +1773,19 @@ end module clotran_rt_decl
          (if (#{1 3} k) (acl2-val (:p1 nd)) "nil") " " (if (#{11 12} k) (:p1 nd) 0) " "
          (if (and (= k 2) (true? (:p2 nd))) "t" "nil") " "
          (if (= k 16) (str (nth (:p1 nd) 1) " " (nth (:p1 nd) 2)) "0 0")
-         ;; 8-11 as exec's tree has them (unread here), 12 and 13 gen's types (aot-at, aot-bt)
+         ;; 8-11 as exec's tree has them (unread here), 12 and 13 gen's types (aot-at, aot-bt),
+         ;; 14 a call's op as head-op reads it (prim-code; aot-pop)
          " nil 0 0 0 " (ty-code (get-in @*ann* [(:node nd) :t] :any)) " "
-         (if-let [b (get-in @*ann* [(:node nd) :b])] (str "(" (str/join " " (map ty-code b)) ")") "nil") ")")))
+         (if-let [b (get-in @*ann* [(:node nd) :b])] (str "(" (str/join " " (map ty-code b)) ")") "nil") " "
+         (or (when (= k 6) (some-> (head-op (first (:children nd))) second prim-code)) 0) ")")))
 
 ;; a typed operand, or nil when it is still text
 (defn- acl2-x [x]
   (when (vector? x)
     (let [[op a t m] x]
       (case op
+        :real (some->> (acl2-x a) (format "(:real %s)"))
+        :op (let [xs (map acl2-x m)] (when (every? some? xs) (str "(:op " a " " (ty-code t) " (" (str/join " " xs) "))")))
         :lit (str "(:lit " (acl2-val a) " " (ty-code t) ")")
         :sv (str "(:sv " a " " (ty-code t) " " (if m "t" "nil") ")")
         (:tv :unbox) (str "(" op " " a " " (ty-code t) ")")))))
@@ -1797,7 +1794,7 @@ end module clotran_rt_decl
 ;; innermost loop's flag, lp -- the fn body's own when it is in no loop
 (defn- acl2-ir [code lp]
   (when (every? vector? code)
-    (let [xs (map (fn [[op a b c]]
+    (let [xs (map (fn [[op a b c :as x]]
                     (case op
                       :const (str "(:const " a " " (acl2-val b) ")")
                       :if (let [t (acl2-ir b lp) e (acl2-ir c lp)] (when (and t e) (str "(:if " a " " t " " e ")")))
@@ -1806,6 +1803,9 @@ end module clotran_rt_decl
                       :clr (str "(:clr " a ")")
                       :tif (let [x (acl2-x a) t (acl2-ir b lp) e (acl2-ir c lp)] (when (and x t e) (str "(:tif " x " " t " " e ")")))
                       (:tput :tset :box) (when-let [x (acl2-x c)] (str "(" op " " a " " (ty-code b) " " x ")"))
+                      :prim (let [[_ d t p w xs hd hs blk res] x xs (map acl2-x xs)]
+                              (when (every? some? xs)
+                                (str "(:prim " d " " (ty-code t) " " p " " (ty-code w) " (" (str/join " " xs) ") " (or hd "nil") " " hs " " blk " " res ")")))
                       (str "(" op " " a " " b ")")))
                   code)]
       (when (every? some? xs) (str "(" (str/join " " xs) ")")))))
@@ -1819,7 +1819,7 @@ end module clotran_rt_decl
         held (remove #(= :site (:kind %)) pool)
         pslots (into {} (map-indexed (fn [i p] [(pkey p) (+ 2 i)]) held))
         n (+ 2 (count held))
-        st {:next n :high (dec n) :pool pslots :pidx {} :flags ["recur0"] :loop "recur0" :fn-loop "recur0"
+        st {:next n :high (dec n) :pool pslots :pidx (into {} (map-indexed (fn [i p] [(pkey p) i]) pool)) :flags ["recur0"] :loop "recur0" :fn-loop "recur0"
             :who who :offset 0 :pool-list pool :counter (atom 0) :prefix "cc_ir" :env {:slots {}} :hoisted {} :params #{}}
         an (atom {})
         [code s st] (binding [*aot-nslots* nslots *int-temps* (atom #{}) *ann* an] (gen body st))

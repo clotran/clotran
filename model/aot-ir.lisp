@@ -44,7 +44,7 @@
 ; over the operands of aot-xrun. The compile: gp (fl 5, i the type wanted) answers (code operand
 ; next) -- a typed constant into a temporary (a bool one in place), a typed local its variable, a node
 ; typed none its code and a literal never read, else gen's value unboxed; fl 6 puts gp's operand in
-; a typed temporary (a typed recur argument). A typed call (a prim) is still (:owed e): 4c-ii.
+; a typed temporary (a typed recur argument). 4c-ii: a typed call is gp-call (fl 7), the prims below.
 
 (in-package "ACL2")
 (include-book "exec")
@@ -53,19 +53,85 @@
 
 (defun aot-deref (x) (if (and (consp x) (eq (car x) :var)) (cadr x) nil))
 
+; ---- 4c-ii: THE PRIMS -------------------------------------------------------------------------
+; An op by its code p, compiler.cljf's prim-syms: 1 + 2 - 3 * 4 / 5 inc 6 dec 7 < 8 > 9 <= 10 >=
+; 11 == 12 = 13 zero? 14 pos? 15 neg? 16 aget 17 aset 18 alength 19 int 20 long 21 double, 22-34 a
+; Math/ member of one operand, 35 pow 36 atan2; w the type its operands are read at (2 long, 3 double).
+(defconst *aot-h* (- (expt 2 63) 1))
+(defun aot-i64p (x) (and (integerp x) (<= (- (- *aot-h*) 1) x) (<= x *aot-h*)))
+(defun aot-bool (b) (if b t :false))
+(defstub aot-dop (* *) => *)      ; a double op: Fortran's IEEE arithmetic and libm on the operands
+(defstub aot-l2d (*) => *)        ; a long widened, real(x, c_double)
+(defstub aot-fbig (* *) => *)     ; abs(real(a, c_double) * real(b, c_double)) > 9.0e18, in doubles
+(defstub aot-dcast (* *) => *)    ; a double cast's range test (int: within int's; long: abs < 9.2e18)
+; the op's value as the Fortran computes it (prim-fast): on longs exact -- in range, where the guard
+; lets it run -- on doubles the IEEE op
+(defun aot-opx (p w vals)
+  (let ((a (car vals)) (b (cadr vals)))
+    (if (and (equal w 2) (integerp a) (or (member p '(5 6 13 14 15 19 20)) (integerp b)))
+        (case p (1 (+ a b)) (2 (- a b)) (3 (* a b)) (5 (+ a 1)) (6 (- a 1))
+          (7 (aot-bool (< a b))) (8 (aot-bool (> a b))) (9 (aot-bool (<= a b))) (10 (aot-bool (>= a b)))
+          ((11 12) (aot-bool (equal a b))) (13 (aot-bool (equal a 0))) (14 (aot-bool (> a 0))) (15 (aot-bool (< a 0)))
+          ((19 20) a)
+          (otherwise (aot-dop p vals)))
+      (aot-dop p vals))))
+; the guard (prim-ok): the op cannot overflow or leave its range
+(defun aot-pg (p w vals)
+  (let ((a (car vals)) (b (cadr vals)) (h *aot-h*))
+    (if (equal w 2)
+        (case p
+          (1 (and (<= a (- h (max b 0))) (>= a (- (- (- h) 1) (min b 0)))))
+          (2 (and (<= a (+ h (min b 0))) (>= a (+ (- (- h) 1) (max b 0)))))
+          (3 (not (aot-fbig a b)))
+          (5 (not (equal a h)))
+          (6 (not (equal a (- (- h) 1))))
+          (19 (and (<= (- (expt 2 31)) a) (<= a (- (expt 2 31) 1))))
+          (otherwise t))
+      (if (member p '(19 20)) (aot-dcast p a) t))))
+; the escape hatch: the host's generic call of f on vals (clotran_call_slots, the interpreter's own
+; path): (:val . v), or what it throws
+(defstub aot-hcall (* *) => *)
+(defun aot-wblk (blk vals bt)
+  (if (atom vals) bt (aot-wblk (+ 1 (nfix blk)) (cdr vals) (update-nth (nfix blk) (car vals) bt))))
+
 ; a TYPED OPERAND (4c): (value . frame after), the frame changed only by a local's last read
 ;   (:lit v t)     v                          a literal, (lit v t)
 ;   (:sv s t m)    fr[s], cleared when m      a typed local's variable l<s>/d<s>/q<s> (the clear: none in
 ;                                             Fortran -- a marked read is its slot's last)
 ;   (:tv d t)      bt[d]                      a typed temporary ti<d>/td<d>/tl<d>, named by the slot it reserves
 ;   (:unbox d t)   bt[d]                      clotran_int/real/bool(b + d)
+;   (:real x)      x widened                  real(x, c_double)             (4c-ii)
+;   (:op p w xs)   the op on xs (aot-opx)     prim-fast: a + b, sqrt(a) ... (4c-ii, an unguarded op)
 ; the type t is the printer's: a value is itself, typed or boxed
-(defun aot-xrun (x fr bt)
-  (case (car x)
-    (:lit (cons (cadr x) fr))
-    (:sv (cons (nth (nfix (cadr x)) fr) (if (cadddr x) (update-nth (nfix (cadr x)) nil fr) fr)))
-    ((:tv :unbox) (cons (nth (nfix (cadr x)) bt) fr))
-    (otherwise (cons nil fr))))
+(mutual-recursion
+ (defun aot-xrun (x fr bt)
+   (declare (xargs :measure (acl2-count x)))
+   (case (car x)
+     (:lit (cons (cadr x) fr))
+     (:sv (cons (nth (nfix (cadr x)) fr) (if (cadddr x) (update-nth (nfix (cadr x)) nil fr) fr)))
+     ((:tv :unbox) (cons (nth (nfix (cadr x)) bt) fr))
+     (:real (if (consp (cdr x)) (let ((r (aot-xrun (cadr x) fr bt))) (cons (aot-l2d (car r)) (cdr r))) (cons nil fr)))
+     (:op (if (consp (cdddr x)) (let ((r (aot-xsrun (cadddr x) fr bt))) (cons (aot-opx (cadr x) (caddr x) (car r)) (cdr r))) (cons nil fr)))
+     (otherwise (cons nil fr))))
+ ; operands left to right: (values . frame after)
+ (defun aot-xsrun (xs fr bt)
+   (declare (xargs :measure (acl2-count xs)))
+   (if (atom xs)
+       (cons nil fr)
+     (let* ((r (aot-xrun (car xs) fr bt)) (rs (aot-xsrun (cdr xs) (cdr r) bt)))
+       (cons (cons (car r) (car rs)) (cdr rs))))))
+
+; (:prim d t p w xs hd hs blk res), its own function so a proof opens it only when it asks
+(defun aot-prim-step (x fr bt)
+  (let* ((xr (aot-xsrun (nth 5 x) fr bt)) (vals (car xr)) (p (nth 3 x)) (w (nth 4 x)) (a (nfix (nth 1 x))))
+    (if (aot-pg p w vals)
+        (list (cdr xr) (update-nth a (aot-opx p w vals) bt))
+      (let* ((bt1 (aot-wblk (nth 8 x) vals bt))
+             (bt2 (if (nth 6 x) (update-nth (nfix (nth 7 x)) (aot-deref (nth (nfix (nth 6 x)) bt1)) bt1) bt1))
+             (h (aot-hcall (nth (nfix (nth 7 x)) bt2) vals)))
+        (if (and (consp h) (equal (car h) :val))
+            (list (cdr xr) (update-nth a (cdr h) (update-nth (nfix (nth 9 x)) (cdr h) bt2)))
+          nil)))))
 
 ; one instruction but :if :loop :recur: (fr bt), nil when it is none the IR has
 (defun aot-ir-step (x fr bt)
@@ -80,6 +146,10 @@
       ; 4c, x an operand: (:tput s t x) l<s> = x; (:tset d t x) ti<d> = x; (:box d t x) x boxed into d
       (:tput (let ((xr (aot-xrun (cadddr x) fr bt))) (list (update-nth a (car xr) (cdr xr)) bt)))
       ((:tset :box) (let ((xr (aot-xrun (cadddr x) fr bt))) (list (cdr xr) (update-nth a (car xr) bt))))
+      ; 4c-ii, (:prim d t p w xs hd hs blk res): the op into d when its guard passes, else the escape
+      ; hatch -- the operands boxed from blk, a Var head dereffed from hd into hs, the generic call
+      ; of the fn in hs into res and d; nil when it throws (the procedure returns its status)
+      (:prim (aot-prim-step x fr bt))
       (otherwise nil))))
 
 (defun aot-isop (x op) (and (consp x) (eq (car x) op)))
@@ -157,12 +227,17 @@
 (defun aot-inpool (s pool)
   (cond ((atom pool) nil) ((and (consp (car pool)) (equal (cadr (car pool)) s)) t) (t (aot-inpool s (cdr pool)))))
 
-(defun aot-ccrank (fl) (case fl (0 3) (1 2) (5 4) (6 5) (otherwise 1)))
+(defun aot-ccrank (fl) (case fl (0 3) (1 2) (5 4) (6 5) (7 0) (otherwise 1)))
 ; 4c: gen's types, as the exported tree carries them: a node's (infer, at gen's env), and a loop's
 ; settled slot types or a recur's target slots' types
 (defun aot-at (e) (nth 12 e))
 (defun aot-bt (e) (nth 13 e))
 (defun aot-typ (ty) (or (equal ty 2) (equal ty 3) (equal ty 4)))
+; 4c-ii: a call's op as gen's head-op reads it (prim-code, 0 for none); a long operand read as a double
+(defun aot-pop (e) (nth 14 e))
+(defun aot-coerce (x from to) (if (and (equal from 2) (equal to 3)) (list :real x) x))
+(defun aot-unprim (p a0 a1)   ; an op gen still prints as text: the arrays, a compare with a boxed operand
+  (or (member p '(16 17 18)) (zp p) (< 36 p) (and (member p '(7 8 9 10 11)) (not (and (member a0 (quote (2 3))) (member a1 (quote (2 3))))))))
 ; a let's or loop's i-th binding's type: the loop's settled one, or the init's own
 (defun aot-bty (e i) (if (equal (ex-kind e) 12) (nth i (aot-bt e)) (aot-at (ex-kid-of e i))))
 (defun aot-ccleft (fl e i) (nfix (- (if (member fl (quote (0 1 2 4))) (ex-nk e) (ex-i2 e)) (nfix i))))
@@ -207,6 +282,10 @@
                  ; every argument computed, then the slots written, then the loop's flag raised
                  ((equal k 16) (let ((r (aot-cc 4 e 0 n pool)))
                                  (list (append (car r) (cadddr r) (list (list :recur))) (cadr r) (caddr r))))
+                 ; a typed op (4c-ii): primitive, then boxed once
+                 ((and (equal k 6) (aot-typ (aot-at e)) (not (equal (aot-pop e) 0)))
+                  (let* ((r (aot-cc 7 e 0 n pool)) (m (caddr r)))
+                    (list (append (car r) (list (list :box m (aot-at e) (cadr r)))) m (+ 1 m))))
                  (t (list (list (list :owed e)) n (+ 1 n))))))
       ; a do from its i-th child: the last child's slot
       (2 (if (and (consp e) (< (+ 1 i) nk))
@@ -233,10 +312,37 @@
                   (list (list (list :tset n ty (list :lit (ex-c e) ty))) (list :tv n ty) (+ 1 n)))
                  ((and (equal k 1) (equal ty 4)) (list nil (list :lit (ex-c e) 4) n))
                  ((and (equal k 2) (aot-typ ty)) (list nil (list :sv (ex-i2 e) ty (ex-mark e)) n))
+                 ((and (equal k 6) (aot-typ ty) (not (equal (aot-pop e) 0))) (aot-cc 7 e 0 n pool))
                  ((and (equal k 6) (aot-typ ty)) (list (list (list :owed e)) (list :lit nil ty) (+ 1 n)))
                  ; a node that never answers (typed none): its code, then a literal no one reads
                  ((equal ty 0) (let ((r (aot-cc 0 e 0 n pool))) (list (car r) (list :lit (if (equal i 4) :false 0) i) (caddr r))))
                  (t (let ((r (aot-cc 0 e 0 n pool))) (list (car r) (list :unbox (cadr r) ty) (caddr r)))))))
+      ; GP-CALL (4c-ii): a typed op e, (code operand next) -- its operands read at w (the second of =
+      ; at its own type), then an unguarded op as the operand (:op p w xs) or set into a temporary, a
+      ; guarded one (long + - * inc dec, the int and long casts) the instruction (:prim ...) with its
+      ; hatch's slots allocated as slow-call does: the head's read (a Var dereffed), the operands' boxes,
+      ; the answer
+      (7 (let ((p (aot-pop e)) (ty (aot-at e)) (k1 (ex-kid-of e 1)) (k2 (ex-kid-of e 2)))
+          (if (or (not (consp e)) (aot-unprim p (aot-at k1) (aot-at k2)))
+              (list (list (list :owed e)) (list :lit nil ty) (+ 1 n))
+          (let* ((a0 (aot-at k1)) (a1 (aot-at k2)) (two (< 2 nk))
+                (w (cond ((member p '(1 2 3 5 6)) ty)
+                         ((or (equal p 4) (< 21 p)) 3)
+                         ((member p '(7 8 9 10 11)) (if (or (equal a0 3) (equal a1 3)) 3 2))
+                         (t a0)))
+                (w2 (if (equal p 12) a1 w))
+                (r1 (aot-cc 5 k1 w n pool))
+                (r2 (if two (aot-cc 5 k2 w2 (caddr r1) pool) (list nil nil (caddr r1))))
+                (xs (if two (list (aot-coerce (cadr r1) a0 w) (aot-coerce (cadr r2) a1 w2)) (list (aot-coerce (cadr r1) a0 w))))
+                (c (append (car r1) (car r2))) (m (caddr r2)))
+           (cond ((equal p 21) (list (car r1) (aot-coerce (cadr r1) a0 3) (caddr r1)))
+                 ((and (equal p 20) (equal a0 2)) (list (car r1) (cadr r1) (caddr r1)))
+                 ((< 21 p) (list c (list :op p 3 xs) m))
+                 ((or (equal p 19) (equal p 20) (and (equal ty 2) (member p '(1 2 3 5 6))))
+                  (let* ((h (aot-cc 1 (ex-kid-of e 0) 0 (+ 1 m) pool)) (blk (caddr h)))
+                    (list (append c (list (list :prim m ty p w xs (if (consp (car h)) (caddr (car (car h))) nil) (cadr h) blk (+ blk (len xs)))))
+                          (list :tv m ty) (+ 1 blk (len xs)))))
+                 (t (list (append c (list (list :tset m ty (list :op p w xs)))) (list :tv m ty) (+ 1 m))))))))
       ; a typed value into a typed temporary, the slot it reserves (a typed recur argument)
       (6 (let* ((r (aot-cc 5 e i n pool)) (m (max n (nfix (caddr r)))))
            (list (append (car r) (list (list :tset m i (cadr r)))) m (+ 1 m))))
@@ -277,6 +383,7 @@
                                     (if (< 2 nk) (aot-cc-cnt 0 (ex-kid-of e 2) 0) 0)))
                     ((or (equal k 11) (equal k 12)) (aot-cc-cnt 3 e 0))
                     ((equal k 16) (aot-cc-cnt 4 e 0))
+                    ((and (equal k 6) (aot-typ (aot-at e)) (not (equal (aot-pop e) 0))) (aot-cc-cnt 7 e 0))
                     (t 0))))
       (2 (+ 1 (if (and (consp e) (< (+ 1 i) nk))
                   (+ (aot-cc-cnt 0 (ex-kid-of e i) 0) (aot-cc-cnt 2 e (+ 1 i)))
@@ -289,9 +396,14 @@
                 (cond ((not (consp e)) 0)
                       ((and (equal k 1) (aot-typ ty)) 0)
                       ((and (equal k 2) (aot-typ ty)) 0)
+                      ((and (equal k 6) (aot-typ ty) (not (equal (aot-pop e) 0))) (aot-cc-cnt 7 e 0))
                       ((and (equal k 6) (aot-typ ty)) 0)
                       (t (aot-cc-cnt 0 e 0))))))
       (6 (+ 1 (aot-cc-cnt 5 e i)))
+      ; gp-call: at most its two operands and the hatch's head read (counted whether or not it is made)
+      (7 (+ 1 (if (consp e)
+                  (+ (aot-cc-cnt 5 (ex-kid-of e 1) 0) (aot-cc-cnt 5 (ex-kid-of e 2) 0) (aot-cc-cnt 1 (ex-kid-of e 0) 0))
+                0)))
       (otherwise (+ 1 (if (and (consp e) (< i (ex-i2 e)))
                           (+ (let ((ty (aot-bty e i)))
                                (if (aot-typ ty) (aot-cc-cnt 5 (ex-kid-of e i) ty) (aot-cc-cnt 0 (ex-kid-of e i) 0)))

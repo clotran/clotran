@@ -169,7 +169,7 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      cljf reads is the one exec runs (the same analyzer tree; assumed, as in slice 2).
 4. EMISSION -- a vmic-style compile to an IR with a meaning, proved to
    agree with ex-tr on the typed subset; the cljf prints the IR. Only
-   then may the row be Modeled. 4a, 4b and 4c-i LANDED (below); 4c-ii (prims, the hatch, hoisting), 4d, 4e owed. DESIGN (lane 3t):
+   then may the row be Modeled. 4a, 4b, 4c-i and 4c-ii's prims LANDED (below); the arrays, the boxed compare and hoisting, 4d, 4e owed. DESIGN (lane 3t):
    - THE IR (model/aot-ir.lisp): what gen's statements do, not their spelling. A program is a
      list of instructions over a state (frame fr, boxed temporaries bt, typed temporaries tt,
      the recur flag, an error): (:get d s) (:put s d) (:const d c) (:box d t x) (:unbox x t d),
@@ -303,8 +303,58 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      HOISTING (hoist-invariants, still text: a loop body reading an outer boxed bound local is not
      compared); coerce (long to double, prims only); the fn-level typed recur's frame write (hinted
      parameters, 4e). A case with any of these is printed text and counted, not compared.
-     NOT DONE: 4c-ii (prims, hatch, A-OP, hoisting), 4d (calls, closures, gen-into), 4e (the entry and
-     versions). The row stays Owed.
+     (4c-ii's first part, below, did the prims, the hatch and coerce.)
+   - 4c-ii, FIRST PART LANDED (lane 3x): THE PRIMS. gp-call's ops but the arrays and a compare with a
+     boxed operand are IR now: an op is named by its code p (compiler.cljf's prim-syms), its operands
+     read at w. Unguarded (double arith, /, double inc dec, the compares and = on numbers, zero? pos?
+     neg?, Math/ members): the operand (:op p w xs), set into a temporary by (:tset) or used in place;
+     (double x) and a long read where a double is wanted: the operand (:real x). Guarded (long + - *
+     inc dec, the int and long casts but long of a long): (:prim d t p w xs hd hs blk res) -- the op
+     into d when its guard passes (aot-pg, prim-ok), else the ESCAPE HATCH: the operands boxed from
+     blk, a Var head dereffed from its pool slot hd into hs, the generic call of the fn into res and
+     d (slow-call's slots and order; a throw stops the run). aot-xrun is now recursive (aot-xsrun, the
+     operands). aot-cc fl 7 is gp-call; gp (fl 5) and gen-op's typed call (fl 1: prim, then (:box))
+     reach it through the call's op, field 14 of the exported tree (head-op's reading, aot-pop).
+     DESIGN CHANGE in gen: the + and - overflow guards fold b's sign with max/min (a <= huge -
+     max(b, 0) ...), so nothing in a guard can overflow whatever b's sign -- the old guard wrote
+     `b > 0 .and. a > huge - b`, and Fortran's .and. does not short-circuit, so huge - b was evaluated
+     for negative b and overflowed (undefined, though harmless under gfortran's wrapping). The literal
+     special case (lit-long) is gone with it: since 4c-i a literal operand is a temporary anyway.
+     PROVED (model/aot-prim-proof.lisp): aot-pg-inr (a long op that passes its guard is in range: no
+     overflow, an int cast within int's), aot-pg-safe (the guard's own terms are longs), aot-pg-host
+     (passing its guard, the op's Fortran value is the generic call's), and aot-prim-correct: the
+     instruction runs exactly when the generic call of the head's fn on the operands answers, d then
+     holds that answer, the frame is the operands' and no slot below n moved; aot-op-correct the same
+     for an unguarded op. COST: a prim is one instruction (aot-ir-steps, aot-ir-size count it 1; the
+     hatch's call is the host's); aot-cc-cost still at most 2 + 6 acl2-count(e) calls, fl 7 counted
+     as its two operands and the hatch's head read whether made or not (an upper bound; aot-kc-call).
+     ASSUMED, named: A-PRIM (aot-prim-ok f p w): the host's call of the op's fn on longs answers the
+     exact value where clj answers (in range), on doubles the IEEE op (aot-dop, a stub, as are the
+     widening aot-l2d and the double casts' range test aot-dcast) -- the spec of the core ops, the
+     emission's counterpart of slice 2's A-OP; A-FMUL (aot-fmul-ok): |fl(a) * fl(b)| <= 9e18 makes the
+     product of two longs a long (the multiply's guard is judged in doubles); a long-typed operand is
+     a 64-bit integer (a hypothesis of aot-prim-correct, A-CONST's reading of the tag).
+     NOT PROVED: the composition with aot-cc-correct. exec does not model the host's apply of a
+     builtin (ex-ev answers (:out) for a call of one), so a tree whose prim runs is outside
+     aot-cc-correct's subset (no kind 6); proving the compile of a typed call against the tree needs an
+     exec that applies the core ops. A FINDING for that proof: a typed operand is read where it is
+     USED, after the code of the operands to its right -- (+ x (inc x)) reads x after inc's operand,
+     the one the analyzer marked last -- so the model's clearing of a marked typed read (4c-i's
+     refinement) would read nil there; the Fortran variable is never cleared, so the Fortran is right,
+     and the composed proof must drop the clearing for typed reads.
+     CHECKED: fuzz-aot-gen part 3 generates numeric ops over numbers, typed locals and nested ops (a
+     parameter operand is boxed, its op still text): -s 1 -n 300, 229 compared, 0 differ, 111 with a typed
+     path, 18 with a guarded op and its hatch, 87 with an unguarded op; -x also reads a guarded op as an
+     unguarded one, and 50 of 72 part. check-compiler (249 calls) and fuzz -m compiled (-s 11, -s 4242)
+     agree with clj under the new guards.
+     ALSO FIXED: ir-check gave gen no :pidx, so a boxed op whose operands are not both numbers (the
+     generic clotran_arith path: (> true a), (zero? true)) threw a null pointer in ir-check alone
+     (compile-fn has the pool index); the new prim forms found it.
+     NOT DONE in 4c-ii: the ARRAYS (aget aset alength: an array's buffer and length are not in the model's
+     state, and aset writes a heap it does not have); a COMPARE WITH A BOXED OPERAND (its tag dispatch)
+     and HOISTING (hoist-invariants, which only that compare reads) -- still text, not compared; the
+     composition above; the fn-level typed recur's frame write (4e). Then 4d (calls, closures, gen-into,
+     flush-typed) and 4e (the entry and versions). The row stays Owed.
 5. purefort's candidates/versions/can-fail, the same way.
 
-The Owed row stays Owed until slice 4 is done (4a, 4b and 4c-i of 4a-4e landed); slice 1 is its own Generated row.
+The Owed row stays Owed until slice 4 is done (4a, 4b, 4c-i and 4c-ii's prims of 4a-4e landed); slice 1 is its own Generated row.
