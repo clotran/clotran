@@ -33,7 +33,7 @@
 (set-prover-step-limit 30000000)
 (include-book "aot-prim-proof")
 
-(in-theory (disable aot-ev ex-kid-of c+ aot-prim-step aot-happ))
+(in-theory (disable aot-ev ex-kid-of c+ aot-prim-step aot-cmpb-step aot-happ))
 (defthm aot-ex-ev-m-i
   (implies (syntaxp (not (and (equal i (quote (quote 0))) (equal tmp (quote (quote nil))))))
            (equal (aot-ev :m e i tmp fr fuel) (aot-ev :m e 0 nil fr fuel)))
@@ -132,7 +132,7 @@
 (defthm aot-cc-next
   (and (natp (caddr (aot-cc fl e i n pool))) (<= (nfix n) (caddr (aot-cc fl e i n pool))))
   :rule-classes nil
-  :hints (("Goal" :induct (aot-cc fl e i n pool) :in-theory (disable aot-unprim aot-pw aot-coerce) :expand ((:free (fl) (aot-cc fl e i n pool))))))
+  :hints (("Goal" :induct (aot-cc fl e i n pool) :in-theory (disable aot-unprim aot-pw aot-coerce aot-cmpb-p aot-numty) :expand ((:free (fl) (aot-cc fl e i n pool))))))
 (defthm aot-cc-next-ge (<= (nfix n) (caddr (aot-cc fl e i n pool))) :rule-classes :linear
   :hints (("Goal" :use aot-cc-next)))
 (defthm aot-cc-next-natp (natp (caddr (aot-cc fl e i n pool))) :rule-classes :type-prescription

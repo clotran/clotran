@@ -56,6 +56,8 @@
 ; ---- THE MEANING ---------------------------------------------------------------------------
 
 (defun aot-deref (x) (if (and (consp x) (eq (car x) :var)) (cadr x) nil))
+(defun aot-wblk (blk vals bt)
+  (if (atom vals) bt (aot-wblk (+ 1 (nfix blk)) (cdr vals) (update-nth (nfix blk) (car vals) bt))))
 
 ; ---- 4c-ii: THE PRIMS -------------------------------------------------------------------------
 ; An op by its code p, compiler.cljf's prim-syms: 1 + 2 - 3 * 4 / 5 inc 6 dec 7 < 8 > 9 <= 10 >=
@@ -97,6 +99,25 @@
 ; the escape hatch: the host's generic call of f on vals (clotran_call_slots, the interpreter's own
 ; path): (:val . v), or what it throws
 (defstub aot-hcall (* *) => *)
+
+; ---- 4c-iv: THE COMPARE WITH A BOXED OPERAND ---------------------------------------------------
+; gp-call's :cmp when exactly one operand is a number (typed, read at nt) and the other a boxed value
+; in slot s: (:cmpb d p nt bi x s hd hs blk res) -- bi the boxed operand's index among the two (the
+; order the compare keeps: (< i n) is not (< n i)), x the typed operand. The boxed value's tag is read
+; (aot-vtag: the same reading of a value's tag A-CONST makes, aot-tag in aot-ty-proof, not included
+; here): a long (2) or a double (3) is compared unboxed -- on longs when x is long too, else both read
+; as doubles, a long widened -- into d; anything else takes the escape hatch, the generic call with
+; the operands boxed from blk in the order kept, as the prim's.
+(defstub aot-vtag (*) => *)
+; an operand value as the Fortran reads it: a long read as a double widened
+(defun aot-cv (v a w) (if (and (equal a 2) (equal w 3)) (aot-l2d v) v))
+(defun aot-ord (bi x v) (if (equal bi 1) (list x v) (list v x)))
+(defun aot-numtag (tg) (or (equal tg 2) (equal tg 3)))
+(defun aot-cmpw (nt tg) (if (and (equal nt 2) (equal tg 2)) 2 3))
+; the unboxed compare's value
+(defun aot-cmpval (p nt bi xv v)
+  (let* ((tg (aot-vtag v)) (w (aot-cmpw nt tg)))
+    (aot-opx p w (aot-ord bi (aot-cv xv nt w) (aot-cv v tg w)))))
 
 ; ---- THE MEANING THE CODE IS COMPARED WITH: exec's, with the host's apply (4c-iii) -------------
 ; aot-ev is exec.lisp's ex-ev on the kinds the compile covers (const local var if do call let loop
@@ -197,8 +218,6 @@
                              (list (car r2) (cadr r2) (c+ 1 (c+ (caddr r) (c+ 1 (caddr r2)))))))))))
              (t (list (list :out) fr 0)))))))
 
-(defun aot-wblk (blk vals bt)
-  (if (atom vals) bt (aot-wblk (+ 1 (nfix blk)) (cdr vals) (update-nth (nfix blk) (car vals) bt))))
 
 ; a TYPED OPERAND (4c): (value . frame after), the frame changed only by a local's last read
 ;   (:lit v t)     v                          a literal, (lit v t)
@@ -226,6 +245,19 @@
        (cons nil fr)
      (let* ((r (aot-xrun (car xs) fr bt)) (rs (aot-xsrun (cdr xs) (cdr r) bt)))
        (cons (cons (car r) (car rs)) (cdr rs))))))
+
+(defun aot-cmpb-step (x fr bt)
+  (let* ((xr (aot-xrun (nth 5 x) fr bt)) (xv (car xr)) (d (nfix (nth 1 x))) (p (nth 2 x)) (nt (nth 3 x)) (bi (nth 4 x))
+         (v (nth (nfix (nth 6 x)) bt)))
+    (if (aot-numtag (aot-vtag v))
+        (list (cdr xr) (update-nth d (aot-cmpval p nt bi xv v) bt))
+      (let* ((vals (aot-ord bi xv v))
+             (bt1 (aot-wblk (nth 9 x) vals bt))
+             (bt2 (if (nth 7 x) (update-nth (nfix (nth 8 x)) (aot-deref (nth (nfix (nth 7 x)) bt1)) bt1) bt1))
+             (h (aot-hcall (nth (nfix (nth 8 x)) bt2) vals)))
+        (if (and (consp h) (equal (car h) :val))
+            (list (cdr xr) (update-nth d (cdr h) (update-nth (nfix (nth 10 x)) (cdr h) bt2)))
+          nil)))))
 
 ; (:prim d t p w xs hd hs blk res), its own function so a proof opens it only when it asks
 (defun aot-prim-step (x fr bt)
@@ -256,6 +288,8 @@
       ; hatch -- the operands boxed from blk, a Var head dereffed from hd into hs, the generic call
       ; of the fn in hs into res and d; nil when it throws (the procedure returns its status)
       (:prim (aot-prim-step x fr bt))
+      ; 4c-iv, (:cmpb d p nt bi x s hd hs blk res): the compare with a boxed operand, above
+      (:cmpb (aot-cmpb-step x fr bt))
       (otherwise nil))))
 
 (defun aot-isop (x op) (and (consp x) (eq (car x) op)))
@@ -352,6 +386,10 @@
         ((or (equal p 4) (< 21 p)) 3)
         ((member p '(7 8 9 10 11)) (if (or (equal a0 3) (equal a1 3)) 3 2))
         (t a0)))
+; a compare with exactly one boxed operand (type any, 1): gp-call's boxed path
+(defun aot-numty (a) (or (equal a 2) (equal a 3)))
+(defun aot-cmpb-p (p a0 a1)
+  (and (member p '(7 8 9 10 11)) (or (and (aot-numty a0) (equal a1 1)) (and (equal a0 1) (aot-numty a1)))))
 (defun aot-ccleft (fl e i) (nfix (- (if (member fl (quote (0 1 2 4))) (ex-nk e) (ex-i2 e)) (nfix i))))
 
 (defun aot-cc (fl e i n pool)
@@ -435,6 +473,20 @@
       ; hatch's slots allocated as slow-call does: the head's read (a Var dereffed), the operands' boxes,
       ; the answer
       (7 (let ((p (aot-pop e)) (ty (aot-at e)) (k1 (ex-kid-of e 1)) (k2 (ex-kid-of e 2)))
+          (if (and (consp e) (aot-cmpb-p p (aot-at k1) (aot-at k2)))
+              ; 4c-iv: the compare with a boxed operand, its operands in the tree's order: the typed one
+              ; first is read into a kept slot before the boxed one's code when there is any
+              (let* ((a0 (aot-at k1)) (a1 (aot-at k2)) (bi (if (aot-numty a0) 1 0)) (nt (if (equal bi 1) a0 a1))
+                     ; k1 is read first whichever it is: typed (bi 1) through gp, boxed (bi 0) through gen
+                     (ra (aot-cc (if (equal bi 1) 5 0) k1 (if (equal bi 1) nt 0) n pool)) (n1 (caddr ra))
+                     (rb (aot-cc (if (equal bi 1) 0 5) k2 (if (equal bi 1) 0 nt) (if (equal bi 1) (+ 1 n1) n1) pool))
+                     (snap (and (equal bi 1) (consp (car rb))))
+                     (x (if (equal bi 1) (if snap (list :tv n1 nt) (cadr ra)) (cadr rb)))
+                     (s (if (equal bi 1) (cadr rb) (cadr ra)))
+                     (c (append (car ra) (if snap (list (list :tset n1 nt (cadr ra))) nil) (car rb)))
+                     (m (caddr rb)) (h (aot-cc 1 (ex-kid-of e 0) 0 (+ 1 m) pool)) (blk (caddr h)))
+                (list (append c (list (list :cmpb m p nt bi x s (if (consp (car h)) (caddr (car (car h))) nil) (cadr h) blk (+ blk 2))))
+                      (list :tv m 4) (+ 3 blk)))
           (if (or (not (consp e)) (aot-unprim p (aot-at k1) (aot-at k2)))
               (list (list (list :owed e)) (list :lit nil ty) (+ 1 n))
           (let* ((a0 (aot-at k1)) (a1 (aot-at k2)) (two (< 2 nk))
@@ -455,7 +507,7 @@
                   (let* ((h (aot-cc 1 (ex-kid-of e 0) 0 (+ 1 m) pool)) (blk (caddr h)))
                     (list (append c (list (list :prim m ty p w xs (if (consp (car h)) (caddr (car (car h))) nil) (cadr h) blk (+ blk (len xs)))))
                           (list :tv m ty) (+ 1 blk (len xs)))))
-                 (t (list (append c (list (list :tset m ty (list :op p w xs)))) (list :tv m ty) (+ 1 m))))))))
+                 (t (list (append c (list (list :tset m ty (list :op p w xs)))) (list :tv m ty) (+ 1 m)))))))))
       ; a typed value into a typed temporary, the slot it reserves (a typed recur argument)
       (6 (let* ((r (aot-cc 5 e i n pool)) (m (max n (nfix (caddr r)))))
            (list (append (car r) (list (list :tset m i (cadr r)))) m (+ 1 m))))

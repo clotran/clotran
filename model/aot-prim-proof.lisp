@@ -60,7 +60,6 @@
       (if (member p '(19 20)) (aot-dcast p a) t))))
 
 ; an operand value as the Fortran reads it: a long read as a double widened (aot-coerce's (:real))
-(defun aot-cv (v a w) (if (and (equal a 2) (equal w 3)) (aot-l2d v) v))
 (defun aot-cvl (vals ts ws)
   (if (atom vals) nil (cons (aot-cv (car vals) (car ts) (car ws)) (aot-cvl (cdr vals) (cdr ts) (cdr ws)))))
 ; values fitting their annotated types, as far as A-PRIM needs: a long one is a 64-bit integer
@@ -133,6 +132,45 @@
                   :use ((:instance aot-wblk-same (blk (nth 8 x)) (vals (car (aot-xsrun (nth 5 x) fr bt))))
                         (:instance aot-wblk-nth-lo (j (nth 6 x)) (blk (nth 8 x)) (vals (car (aot-xsrun (nth 5 x) fr bt))))
                         (:instance aot-wblk-nth-lo (j (nth 7 x)) (blk (nth 8 x)) (vals (car (aot-xsrun (nth 5 x) fr bt))))))))
+
+; ---- 4c-iv: THE COMPARE WITH A BOXED OPERAND ---------------------------------------------------
+; A-CMPB (aot-cmpb-ok f p nt bi): the host's call of f -- the compare's fn -- on the typed operand (a
+; long when nt is 2: a 64-bit integer) and a boxed number (tagged 2: a 64-bit integer; 3: a double),
+; in the order bi keeps, answers the compare as the Fortran computes it on the tag-numeric path
+; (aot-cmpval): the two longs exactly, else both as doubles. The spec of the core compares at mixed
+; types, A-PRIM's counterpart for the boxed path; named, not reducible to the model.
+(defun-sk aot-cmpb-ok (f p nt bi)
+  (forall (xv v)
+    (implies (and (or (equal nt 2) (equal nt 3)) (implies (equal nt 2) (aot-i64p xv))
+                  (aot-numtag (aot-vtag v)) (implies (equal (aot-vtag v) 2) (aot-i64p v)))
+             (equal (aot-hcall f (aot-ord bi xv v)) (cons :val (aot-cmpval p nt bi xv v))))))
+(defun aot-cmpb-slots (x n)
+  (let ((d (nth 1 x)) (s (nth 6 x)) (hd (nth 7 x)) (hs (nth 8 x)) (blk (nth 9 x)) (res (nth 10 x)))
+    (and (equal (car x) :cmpb) (natp n) (natp d) (natp s) (natp blk) (natp res) (natp hs)
+         (<= n d) (<= n blk) (<= n res)
+         (if hd (and (natp hd) (< hd n) (<= n hs)) (< hs n)))))
+(defun aot-cmpb-fit (x fr bt)
+  (let ((xv (car (aot-xrun (nth 5 x) fr bt))) (v (nth (nth 6 x) bt)) (nt (nth 3 x)))
+    (and (or (equal nt 2) (equal nt 3)) (implies (equal nt 2) (aot-i64p xv))
+         (implies (and (aot-numtag (aot-vtag v)) (equal (aot-vtag v) 2)) (aot-i64p v)))))
+; AOT-CMPB-RUN: the instruction answers exactly when the generic call of the head's fn on the operands
+; (in the order kept) does, d then holding its value; the frame is the typed operand's and no slot
+; below n moved
+(defthm aot-cmpb-run
+  (implies (and (aot-cmpb-slots x n) (aot-cmpb-fit x fr bt)
+                (aot-cmpb-ok (aot-hd (nth 7 x) (nth 8 x) bt) (nth 2 x) (nth 3 x) (nth 4 x)))
+           (let* ((xr (aot-xrun (nth 5 x) fr bt)) (vals (aot-ord (nth 4 x) (car xr) (nth (nth 6 x) bt)))
+                  (s (aot-ir-step x fr bt)) (h (aot-hcall (aot-hd (nth 7 x) (nth 8 x) bt) vals)))
+             (and (iff s (and (consp h) (equal (car h) :val)))
+                  (implies s (and (equal (nth (nth 1 x) (cadr s)) (cdr h))
+                                  (equal (car s) (cdr xr))
+                                  (aot-same n (cadr s) bt))))))
+  :hints (("Goal" :in-theory (e/d (aot-cmpb-step aot-cmpb-fit) (aot-same aot-wblk aot-cmpb-ok-necc aot-xrun aot-cmpval))
+                  :use ((:instance aot-cmpb-ok-necc (f (aot-hd (nth 7 x) (nth 8 x) bt)) (p (nth 2 x)) (nt (nth 3 x)) (bi (nth 4 x))
+                                   (xv (car (aot-xrun (nth 5 x) fr bt))) (v (nth (nth 6 x) bt)))
+                        (:instance aot-wblk-same (blk (nth 9 x)) (vals (aot-ord (nth 4 x) (car (aot-xrun (nth 5 x) fr bt)) (nth (nth 6 x) bt))))
+                        (:instance aot-wblk-nth-lo (j (nth 7 x)) (blk (nth 9 x)) (vals (aot-ord (nth 4 x) (car (aot-xrun (nth 5 x) fr bt)) (nth (nth 6 x) bt))))
+                        (:instance aot-wblk-nth-lo (j (nth 8 x)) (blk (nth 9 x)) (vals (aot-ord (nth 4 x) (car (aot-xrun (nth 5 x) fr bt)) (nth (nth 6 x) bt))))))))
 
 (defthm aot-xrun-op
   (equal (aot-xrun (list :op p w xs) fr bt) (let ((r (aot-xsrun xs fr bt))) (cons (aot-opx p w (car r)) (cdr r))))

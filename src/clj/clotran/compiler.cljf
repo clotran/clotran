@@ -625,7 +625,7 @@ end module clotran_rt_decl
         :unbox (unbox t a)
         :real (str "real(" (xt a) ", c_double)")
         :op (prim-fast a t (nth x 3))))))
-(declare ir-lines)
+(declare ir-lines cmpb-lines)
 (defn- ind [code] (map #(str "   " %) (ir-lines code)))
 (defn- ir-lines [code]
   (mapcat (fn [x]
@@ -646,7 +646,8 @@ end module clotran_rt_decl
                   :box [(box a b (xt c))]
                   :loop (concat ["do" (str "   " a " = 0") "   call clotran_poll()"] (ind b) [(str "   if (" a " == 0) exit") "end do"])
                   :recur [(str a " = 1")]
-                  :prim (prim-lines x)))))
+                  :prim (prim-lines x)
+                  :cmpb (cmpb-lines x)))))
           code))
 
 (declare gen gp gpt)
@@ -823,6 +824,29 @@ end module clotran_rt_decl
                          [(str v " = " (unbox t res))]))
             ["end if"])))
 
+(defn- cmpb-lines
+  "[:cmpb d p nt bi x s hd hs blk res site] (aot-ir.lisp's aot-cmpb-step): the boxed operand's tag read,
+  a long or a double compared unboxed against the typed operand x, anything else the generic call
+  with the operands boxed from blk in the order kept."
+  [[_ d p nt bi x s hd hs blk res site]]
+  (let [v (tmp-name d :bool) fop (fortran-op (prim-sym p)) xe (xt x)
+        tagx (str "clotran_tag(b + " s ")") intx (str "clotran_int(b + " s ")") realx (str "clotran_real(b + " s ")")
+        ord (fn [a c] (if (= bi 1) (str a " " fop " " c) (str c " " fop " " a)))
+        bx (box blk nt xe) cp (fn [i] (str "call clotran_copy(b + " i ", b + " s ")"))
+        boxes (if (= bi 1) [bx (cp (inc blk))] [(cp blk) (box (inc blk) nt xe)])]
+    (concat [(str "if (" tagx " == 2_c_int) then")
+             (str "   " v " = " (if (= nt :double) (ord xe (str "real(" intx ", c_double)")) (ord xe intx)))
+             (str "else if (" tagx " == 3_c_int) then")
+             (str "   " v " = " (ord (xt (coerce x nt :double)) realx))
+             "else"]
+            (ind (concat boxes
+                         (when hd [[:deref hs hd]])
+                         (when site [(str "call clotran_site(cf_pool, " site "_c_int)")])
+                         [(str "st = clotran_call_slots(b + " res ", b + " hs ", b + " (dec blk) ", 2_c_int)")]
+                         err-return
+                         [(str v " = " (unbox :bool res))]))
+            ["end if"])))
+
 (defn- hatch
   "The escape hatch's slots, allocated as slow-call allocates them: [hd hs blk res site]."
   [nd n st]
@@ -933,33 +957,47 @@ end module clotran_rt_decl
           (into-tmp :bool w [w w] st))
         ;; One operand is boxed. Check its tag: a long or a double is
         ;; compared unboxed, anything else takes the generic call. The
-        ;; ORDER is kept -- (< i n) is not (< n i). (Still Fortran text.)
+        ;; ORDER is kept -- (< i n) is not (< n i). A boxed local hoisted before
+        ;; the loop is read from its hoisted variables (still Fortran text); every
+        ;; other is the IR (:cmpb, model/aot-ir.lisp 4c-iv), its operands read in the
+        ;; order the tree runs them.
         (let [bi (if (num? (ats 0)) 1 0)
               ni (- 1 bi)
               nt (ats ni)
-              [cn x st] (gpt (args ni) nt st)
-              ;; a boxed local that cannot change in this loop was read
-              ;; and unboxed once before it (see :loop); otherwise the
-              ;; tag and value are read here, every time
-              h (when (= :local (:op (args bi))) (get (:hoisted st) (:i2 (args bi))))
-              [cb s st] (if h [[] (:slot h) st] (gen (args bi) st))
-              tagx (if h (:tag h) (str "clotran_tag(b + " s ")"))
-              intx (if h (:i h) (str "clotran_int(b + " s ")"))
-              realx (if h (:d h) (str "clotran_real(b + " s ")"))
-              [r st] (tmp st :bool)
-              ord (fn [xe ye] (if (= bi 1) (str xe " " fop " " ye) (str ye " " fop " " xe)))
-              [slow st] (slow-call nd (if (= bi 1) [[x nt] [s :slot]] [[s :slot] [x nt]]) r :bool st)]
-          [(concat cn cb
-                   [(str "if (" tagx " == 2_c_int) then")
-                    (str "   " r " = " (if (= nt :double)
-                                          (ord x (str "real(" intx ", c_double)"))
-                                          (ord x intx)))
-                    (str "else if (" tagx " == 3_c_int) then")
-                    (str "   " r " = " (ord (xt (coerce x nt :double)) realx))
-                    "else"]
-                   (ind slow)
-                   ["end if"])
-           r st])))))
+              hoisted (when (= :local (:op (args bi))) (get (:hoisted st) (:i2 (args bi))))]
+          (if hoisted
+            (let [h hoisted
+                  [cn x st] (gpt (args ni) nt st)
+                  [cb s st] [[] (:slot h) st]
+                  tagx (:tag h) intx (:i h) realx (:d h)
+                  [r st] (tmp st :bool)
+                  ord (fn [xe ye] (if (= bi 1) (str xe " " fop " " ye) (str ye " " fop " " xe)))
+                  [slow st] (slow-call nd (if (= bi 1) [[x nt] [s :slot]] [[s :slot] [x nt]]) r :bool st)]
+              [(concat cn cb
+                       [(str "if (" tagx " == 2_c_int) then")
+                        (str "   " r " = " (if (= nt :double)
+                                              (ord x (str "real(" intx ", c_double)"))
+                                              (ord x intx)))
+                        (str "else if (" tagx " == 3_c_int) then")
+                        (str "   " r " = " (ord (xt (coerce x nt :double)) realx))
+                        "else"]
+                       (ind slow)
+                       ["end if"])
+               r st])
+            (let [[c x s st]
+                  (if (= bi 1)
+                    (let [[c0 x0 st] (gp (args 0) nt st)
+                          [k st] (fresh st)
+                          [cb s st] (gen (args 1) st)]
+                      (if (seq cb)
+                        [(-> [] (into c0) (conj [:tset k nt x0]) (into cb)) [:tv k nt] s (declare-var st (tmp-name k nt) nt)]
+                        [(vec c0) x0 s st]))
+                    (let [[cb s st] (gen (args 0) st)
+                          [c1 x1 st] (gp (args 1) nt st)]
+                      [(-> [] (into cb) (into c1)) x1 s st]))
+                  [[_ d :as tv] st] (tmpv st :bool)
+                  [h st] (hatch nd 2 st)]
+              [(conj c (into [:cmpb d p nt bi x s] h)) tv st])))))))
 
 (defn- gp
   "A node as a PRIMITIVE of type `want`: [code expr state], expr being a
@@ -1814,6 +1852,9 @@ end module clotran_rt_decl
                       :clr (str "(:clr " a ")")
                       :tif (let [x (acl2-x a) t (acl2-ir b lp) e (acl2-ir c lp)] (when (and x t e) (str "(:tif " x " " t " " e ")")))
                       (:tput :tset :box) (when-let [x (acl2-x c)] (str "(" op " " a " " (ty-code b) " " x ")"))
+                      :cmpb (let [[_ d p nt bi xo s hd hs blk res] x xo (acl2-x xo)]
+                              (when xo
+                                (str "(:cmpb " d " " p " " (ty-code nt) " " bi " " xo " " s " " (or hd "nil") " " hs " " blk " " res ")")))
                       :prim (let [[_ d t p w xs hd hs blk res] x xs (map acl2-x xs)]
                               (when (every? some? xs)
                                 (str "(:prim " d " " (ty-code t) " " p " " (ty-code w) " (" (str/join " " xs) ") " (or hd "nil") " " hs " " blk " " res ")")))

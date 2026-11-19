@@ -394,6 +394,24 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      carries aot-same. COST: unchanged (aot-cc-cost; the snapshot is not a compile call).
      CHECKED: fuzz-aot-gen part 3 compares gen's IR, snapshot included, with aot-cc: -s 1 -n 300, 229
      compared, 0 differ; -x parts.
+   - 4c-iv LANDED (lane 3z): THE COMPARE WITH A BOXED OPERAND, as IR; its composition with aot-cc-correct OWED.
+     IR (:cmpb d p nt bi x s hd hs blk res) (aot-ir.lisp, aot-cmpb-step): the boxed operand's tag read (aot-vtag, the
+     tag stub A-CONST reads), a long or a double compared unboxed into d -- on longs when the typed operand x (type nt)
+     is long too, else both as doubles, a long widened -- anything else the escape hatch, the generic call with the
+     operands boxed from blk in the order kept (bi, the boxed operand's index). aot-cc fl 7 compiles it (aot-cmpb-p:
+     p a compare, one operand a number, the other type any), the operands in the TREE'S order: the typed one first is read
+     into a kept slot before the boxed one's code when there is any (as 4c-iii's snapshot), the boxed one first is read
+     before the typed one's code. DESIGN CHANGE in gen: the old text read the typed operand first whichever it was, so
+     (< (f) (+ i 1)) ran the arithmetic before f. A hoisted boxed local (hoist-invariants) is still text, not compared.
+     PROVED (aot-prim-proof): aot-cmpb-run -- under A-CMPB (aot-cmpb-ok: the host's call of the compare on a typed number
+     and a boxed number tagged 2 (64-bit) or 3 answers aot-cmpval, the Fortran's value; A-PRIM's counterpart for the
+     boxed path, named, not reducible to the model) the instruction answers exactly when the generic call does, d holds
+     its value, the frame is the typed operand's and no slot below n moved. aot-cc-next and the book still certify with the
+     new branch. NOT PROVED: aot-cc-correct for a tree with a boxed compare (aot-tcok still excludes it: aot-unprim; it
+     needs the operand shapes of aot-7ops for a boxed operand and a shape lemma beside aot-cc-cl-7-prim).
+     CHECKED: fuzz-aot-gen part 3 compares compares on boxed parameters now (-s 1 -n 300: 12 with a :cmpb, 0 differ; -s 7:
+     15, 0 differ; -x reads :cmpb as a text op and parts); compiler-check (261 calls, 3 new: the operand order both ways, a
+     boxed operand with effects).
 5. purefort's candidates/versions/can-fail, the same way.
 
 The Owed row stays Owed until slice 4 is done (4a, 4b, 4c-i, 4c-ii's prims and 4c-iii of 4a-4e landed); slice 1 is its own Generated row.

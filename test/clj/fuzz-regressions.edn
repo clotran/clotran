@@ -367,4 +367,8 @@
  ;; "No matching clause: :none" reading it back as a long (scripts/fuzz-aot-gen)
  (loop [x 1] (recur (loop [y 0] (recur (if (> y 3) (throw (ex-info "out" {})) (inc y))))))
  (loop [x 1.5 q true] (if q (recur (loop [y 0] (recur (if (> y 3) (throw (ex-info "out" {})) (inc y)))) (loop [] (recur))) x))
+ ;; a compare with a boxed operand (:cmpb, 4c-iv): the hatch's call base was one slot off for a non-number (a ratio)
+ (< 4 2/3)
+ (== 11 1/3)
+ (let [r 2/3] [(< 4 r) (> r 1) (<= 1.5 r)])
 ]

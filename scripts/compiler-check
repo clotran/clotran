@@ -121,6 +121,11 @@
     ["a double accumulator" (fn [n] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (* 0.5 i))) s)))
      [[0] [4] [100]]]
     ["compared with a double" (fn [x] (loop [i 0] (if (< i x) (recur (inc i)) i))) [[3.5] [0.0] [-1.5]]]
+    ;; 4c-iv: the compare with a boxed operand as IR (:cmpb): the order of the operands kept both ways, the
+    ;; boxed one a call (side effects run left to right), the typed one a long or a double
+    ["boxed operand first, typed second" (fn [x] (loop [i 0] (if (< x i) i (recur (inc i))))) [[3] [2.5] [-1] [3N]]]
+    ["boxed operand first, a double bound" (fn [x] (let [d 2.5] [(< x d) (>= x d) (== x d)])) [[2] [3] [2.5] ["a"] [1/2]]]
+    ["boxed operand a call, effects in order" (fn [a] (let [l (atom [])] [(< (do (swap! l conj :a) (first a)) (do (swap! l conj :b) 2)) (> 1 (do (swap! l conj :c) (first a))) @l])) [[[1]] [[5.5]] [[nil]]]]
     ["compared with a non-number" (fn [x] (loop [i 0] (if (< i x) (recur (inc i)) i))) [["a"] [nil] [3N]]]
     ["long overflow in a loop" (fn [] (loop [i 9223372036854775800 k 0] (if (< k 20) (recur (+ i 1) (+ k 1)) i))) [[]]]
     ["long overflow on multiply" (fn [] (loop [i 3 k 0] (if (< k 60) (recur (* i 3) (+ k 1)) i))) [[]]]
