@@ -94,7 +94,8 @@
       leaf
       (let [sub (fn [t] (g-expr env fns t (dec depth)))
             l (sub :L) d (sub :D)
-            two (fn [ops a b] (g/fmap (fn [[op x y]] (list op x y)) (g/tuple (g/elements ops) a b)))
+            two (fn [ops a b] (g/fmap (fn [[op x y]] (list op x (if (and (= op '-) (= y Long/MIN_VALUE)) 1 y))) ;; DEVIATIONS 72
+                      (g/tuple (g/elements ops) a b)))
             call (g-call env fns ty depth)]
         (g/frequency
          (cond-> [[2 leaf]

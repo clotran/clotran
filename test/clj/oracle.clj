@@ -3092,6 +3092,9 @@
 ;; negates the long first and overflows
 (expect-diff "DEVIATIONS 72: a ratio less the smallest long is exact")
 [(- -7/2 -9223372036854775808) (- 1/2 -9223372036854775808)]
+;; a BOXED double less it throws in clj the same way; clotran answers the double
+(expect-diff "DEVIATIONS 72: a boxed double less the smallest long is exact")
+(- (identity 2.5) -9223372036854775808)
 ;; and two longs overflow in both, as the docstring says
 (try (- 0 -9223372036854775808) (catch clotran.host.arithmetic_exception e :overflow))
 

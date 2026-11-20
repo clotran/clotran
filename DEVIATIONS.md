@@ -2465,8 +2465,12 @@ answers the BigInt less 2^63 -- 2^64 short of the exact difference, the
 BigInt plus 2^63, which clotran answers (`scripts/fuzz-num`). A ratio or
 BigDecimal less the smallest long does the same: clj's `(unchecked-subtract
 1.5M -9223372036854775808)` is -9223372036854775806.5M, clotran's
-9223372036854775809.5M. A double does not differ, its sum rounding both
-ways to 9.223372036854776E18. scripts/fuzz-num does not generate the three.
+9223372036854775809.5M. A double primitive does not differ (clj's minus(double,long) is plain
+subtraction), but a BOXED double does: `(- (identity 2.5) Long/MIN_VALUE)` throws in clj and
+answers 9.223372036854776E18 here, as the interpreter cannot see static types (found by
+scripts/fuzz-fn, seed 618622110: `(apply f [2.5])` where `f` subtracts the smallest long from
+an unhinted parameter, so clj threw before its bit operation did). scripts/fuzz-fn does not
+generate a subtraction of the smallest long. scripts/fuzz-num does not generate the three.
 
 **Removal**: none intended -- it would mean overflowing on purpose
 where the exact answer is at hand.
