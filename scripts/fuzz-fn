@@ -94,7 +94,8 @@
       leaf
       (let [sub (fn [t] (g-expr env fns t (dec depth)))
             l (sub :L) d (sub :D)
-            two (fn [ops a b] (g/fmap (fn [[op x y]] (list op x y)) (g/tuple (g/elements ops) a b)))
+            two (fn [ops a b] (g/fmap (fn [[op x y]] (list op x (if (and (= op '-) (= y Long/MIN_VALUE)) 1 y))) ;; DEVIATIONS 72
+                      (g/tuple (g/elements ops) a b)))
             call (g-call env fns ty depth)]
         (g/frequency
          (cond-> [[2 leaf]
@@ -113,7 +114,16 @@
                             [2 (two '[+ - *] l d)]
                             [1 (two '[/] d (g/elements [2.0 -0.5 4.0 3.0]))]
                             [1 (g/fmap #(list 'double %) l)]])
-           call (conj [2 call])))))))
+           call (conj [2 call])
+           ;; 4d (AOT slice, tested not proven): a closure over typed locals called at once, a typed value
+           ;; boxed through a call and back (a typed temp held across a hatch), and one kept in a collection
+           true (into [[1 (g/let [a (sub :L) y (g/return (fresh "y"))
+                                  b (g-expr (update env :L conj y) fns ty (dec depth))]
+                            (g/return (list (if (= ty :D) 'double 'long) (list (list 'fn [y] b) a))))]
+                       [1 (g/fmap (fn [e] (list (if (= ty :D) 'double 'long) (list 'identity e))) (sub ty))]
+                       [1 (g/let [a (sub ty) b (sub :L) c (sub :D)]
+                            (g/return (list (if (= ty :D) 'double 'long)
+                                            (list 'nth (list 'let ['v (list 'vector a (list 'identity b) c)] 'v) 0))))]])))))))
 
 ;; ---- functions --------------------------------------------------------------
 
