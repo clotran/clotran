@@ -803,6 +803,7 @@ check-pure:
 check-compiler:
 	@echo "--- the compiler: every case compiled and interpreted, a namespace through clotran compile, a pure loop beside the main thread ---"
 	scripts/compiler-check
+	scripts/compiler-check --control-hoist | tail -1
 check-seed:
 	@echo "--- the fuzz checks' seed: $(SEED) (make test SEED=$(SEED) runs the same cases) ---"
 check-fuzz-regressions:

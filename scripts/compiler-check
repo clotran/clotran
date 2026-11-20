@@ -30,6 +30,9 @@
 (load-file (str (fs/file repo "scripts" "platform.clj")))
 (def keep? (some #{"--keep"} *command-line-args*))
 (def bench? (some #{"--bench"} *command-line-args*))
+(def control-hoist? (some #{"--control-hoist"} *command-line-args*))
+;; the planted bug: hoist-invariants also hoists the loop's own slots, which a recur rebinds
+(def mutant-text "(alter-var-root #'clotran.compiler/hoist-invariants (fn [f] (fn [body own st] (f body #{} st))))\n")
 
 ;; Each case: a name, the fn form, and the calls to make on it.
 (def cases
@@ -192,6 +195,18 @@
      [[(double-array [1 2]) (double-array 2)] [(long-array [1 2]) (long-array 2)] [(long-array [1 2]) (double-array 2)]
       [(double-array [1 2]) (long-array 2)] [(object-array [1 2]) (object-array 2)] [[1 2] (double-array 2)]
       [nil (double-array 2)] [(long-array [clotran.host.int8/MAX_VALUE]) (long-array 1)] [(double-array [1 2]) (double-array 1)]]]
+    ;; HOISTING (hoist-invariants, Fortran text the IR comparison does not cover): a loop body's boxed
+    ;; local read ONCE before the loop. Names start "hoist:"; --control-hoist plants a hoist of the loop's
+    ;; OWN slots (stale after one recur) and must be caught by exactly these.
+    ["hoist: a parameter compared in the body" (fn [x] (loop [i 0] (if (< i x) (recur (inc i)) i))) [[3] [2.5] [-1] [3N] [1/2] ["a"] [nil]]]
+    ["hoist: operand order both ways" (fn [x] (loop [i 0 s 0] (if (< i 4) (recur (inc i) (+ s (if (< x i) 1 0) (if (>= i x) 10 0))) s))) [[2] [2.5] [9223372036854775807] [1/2]]]
+    ["hoist: a let-bound boxed local" (fn [a] (let [x (first a)] (loop [i 0] (if (<= x i) i (recur (inc i)))))) [[[4]] [[2.5]] [[0]] [[nil]]]]
+    ["hoist: two loops share a local" (fn [x] [(loop [i 0] (if (< i x) (recur (inc i)) i)) (loop [j 10] (if (> j x) (recur (dec j)) j))]) [[3] [2.5] [20]]]
+    ["hoist: nested loops, outer boxed local" (fn [x n] (loop [i 0 t 0] (if (< i n) (recur (inc i) (+ t (loop [j 0 s 0] (if (< j x) (recur (inc j) (+ s 1)) s)))) t))) [[3 4] [2.5 2] [0 3]]]
+    ["hoist: an outer loop's own boxed slot read by the inner loop" (fn [x] (loop [a x k 0] (if (< k 3) (recur (+ a (loop [j 0] (if (< j a) (recur (inc j)) j))) (inc k)) a))) [[1] [1.5] [2N]]]
+    ["hoist: a boxed loop slot compared in its own body" (fn [x] (loop [y x k 0] (if (< k 5) (recur (inc y) (inc k)) (< y 3)))) [[0] [1.5] [10]]]
+    ["hoist: the compared call has effects" (fn [x] (let [l (atom [])] (loop [i 0] (if (< (do (swap! l conj i) i) x) (recur (inc i)) [i @l])))) [[3] [2.5]]]
+    ["hoist: two boxed operands" (fn [x y] (loop [i 0] (if (< x y) (recur (inc i)) i))) [[2 1] [1.5 1] ["a" 1]]]
     ["a hint the argument does not honour"
      (fn [^doubles a ^long n] (if (< n 0) :unused (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
      [[(double-array [1 2 3]) 3] [(double-array [1 2 3]) 2.9] [(long-array [1 2]) 1] [[1 2] 1] [[1 2] -1] [nil 1] [(double-array 2) "x"]]]])
@@ -213,7 +228,9 @@
      (fn [a] (let [n (alength a)] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
      [[(double-array [1.0 2.0])]] [(double-array (range 200000))]]])
 
-(def all-cases (if bench? (into cases benches) cases))
+(def all-cases (cond control-hoist? (filterv #(str/starts-with? (first %) "hoist:") cases)
+                     bench? (into cases benches)
+                     :else cases))
 
 (defn- src
   "A form as source, WITH its type hints. pr-str drops metadata, so
@@ -247,6 +264,7 @@
   []
   (str
    "(load-file \"src/clj/clotran/compiler.cljf\")\n"
+   (when control-hoist? mutant-text)
    "(in-ns 'user)\n"
    "(defn compiler-check-target [x] (+ x 100))\n"
    (apply str
@@ -272,6 +290,7 @@
   [ids soext]
   (str
    "(load-file \"src/clj/clotran/compiler.cljf\")\n"
+   (when control-hoist? mutant-text)
    "(in-ns 'user)\n"
    "(defn compiler-check-target [x] (+ x 100))\n"
    "(def fails (atom 0))\n"
@@ -367,7 +386,11 @@
                     (remove #(str/includes? % "WARNING"))
                     (str/join "\n"))]
       (println body)
-      (when-not (re-find #", 0 differ" body) (System/exit 1)))))
+      (if control-hoist?
+        ;; the negative control: the planted hoist must be CAUGHT (some call differs), or hoisting is untested
+        (do (println (if (re-find #", 0 differ" body) "control-hoist: NOT CAUGHT" "control-hoist: the planted hoist was caught"))
+            (System/exit (if (re-find #", 0 differ" body) 1 0)))
+        (when-not (re-find #", 0 differ" body) (System/exit 1))))))
 
 ;; ---- a whole namespace, through `clotran compile` --------------------
 ;;
