@@ -412,6 +412,21 @@ itself (strings; slice 4 would model its meaning, not generate cljf).
      CHECKED: fuzz-aot-gen part 3 compares compares on boxed parameters now (-s 1 -n 300: 12 with a :cmpb, 0 differ; -s 7:
      15, 0 differ; -x reads :cmpb as a text op and parts); compiler-check (261 calls, 3 new: the operand order both ways, a
      boxed operand with effects).
+   TESTED, NOT PROVEN (lane aot-b, 2026-11-20; scope per COORDINATION: tested, the Owed row stays Owed):
+   - HOISTING (hoist-invariants, Fortran text, not in the IR comparison: it would need a hoist instruction
+     plus aot-cc and proof changes): scripts/compiler-check has 9 "hoist:" case sets (32 calls: operand order both
+     ways, a let-bound local, two loops sharing a local, nested loops, an outer loop's boxed slot read by an inner
+     loop, a boxed loop slot compared in its own body, effects in the compared call, two boxed operands) compiled
+     versus interpreted, and --control-hoist (in check-compiler) plants a hoist of the loop's own slots (stale after a
+     recur) and must be caught: 5 of 32 calls differ. scripts/fuzz-fn's boxed compares inside loops (unhinted
+     parameters, fed doubles by apply) hit hoisting versus clj in compiled mode. Owed: the proof (a hoisted read
+     is the same as reading at each compare, since locals are immutable and only the loop's own recur rebinds).
+   - 4d (calls, closures, gen-into, flush-typed): no IR yet, so no comparison with aot-cc; tested versus clj by
+     scripts/fuzz-fn (now generates a closure over typed locals called at once, a typed value boxed through
+     identity and back, one kept in a collection, plus the calls of earlier typed fns and loops/lets in operands:
+     8 seeds x 60 fns x 4 calls x flat/tree/compiled, 0 differ, one seed 618622110 was DEVIATIONS 72, not a bug in
+     the bit-op path) and by 6 "4d:" compiler-check sets (compiled versus interpreted). fuzz -m compiled seeds 5 and 6
+     x 300 cases: 0 differ.
 5. purefort's candidates/versions/can-fail, the same way.
 
 The Owed row stays Owed until slice 4 is done (4a, 4b, 4c-i, 4c-ii's prims and 4c-iii of 4a-4e landed); slice 1 is its own Generated row.

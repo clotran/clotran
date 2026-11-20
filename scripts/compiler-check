@@ -207,6 +207,13 @@
     ["hoist: a boxed loop slot compared in its own body" (fn [x] (loop [y x k 0] (if (< k 5) (recur (inc y) (inc k)) (< y 3)))) [[0] [1.5] [10]]]
     ["hoist: the compared call has effects" (fn [x] (let [l (atom [])] (loop [i 0] (if (< (do (swap! l conj i) i) x) (recur (inc i)) [i @l])))) [[3] [2.5]]]
     ["hoist: two boxed operands" (fn [x y] (loop [i 0] (if (< x y) (recur (inc i)) i))) [[2 1] [1.5 1] ["a" 1]]]
+    ;; 4d (tested, not proven): calls, closures, gen-into and flush-typed beside typed locals
+    ["4d: a typed temp held across a call that boxes" (fn [x] (let [a 2 b 2.5] (+ a (long (identity (* a x))) (long b)))) [[3] [2.5] [-4]]]
+    ["4d: a closure over a typed let and a typed loop local" (fn [n] (let [k 3 d 0.5] (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s ((fn [y] (+ y k d i)) i))) s)))) [[0] [5]]]
+    ["4d: a loop in an operand (gen-into) between typed operands" (fn [n] (let [a 4] (+ a (loop [i 0 s 0] (if (< i n) (recur (inc i) (+ s i a)) s)) a))) [[0] [6]]]
+    ["4d: a let in a call's argument, typed temps kept" (fn [n] (let [a 2 b (* 1.5 a)] [(inc (let [t (* a n)] (- t a))) b (max a (let [u 7] u))])) [[3] [-9]]]
+    ["4d: a typed call result as an operand" (fn [x] (let [a 3] (+ a (compiler-check-target a) (compiler-check-target x)))) [[1] [2.5] [-100]]]
+    ["4d: a vector of typed locals and calls" (fn [x] (let [a 2 b 0.5] [a (compiler-check-target a) b (inc x) (identity a)])) [[1] [2.5]]]
     ["a hint the argument does not honour"
      (fn [^doubles a ^long n] (if (< n 0) :unused (loop [i 0 s 0.0] (if (< i n) (recur (inc i) (+ s (aget a i))) s))))
      [[(double-array [1 2 3]) 3] [(double-array [1 2 3]) 2.9] [(long-array [1 2]) 1] [[1 2] 1] [[1 2] -1] [nil 1] [(double-array 2) "x"]]]])
