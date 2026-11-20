@@ -580,7 +580,8 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-lineedit check-language check-index check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index check-fuzz-recur check-fuzz-binds check-fuzz-forms
-TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
+SCHED_SEEDS ?= 4
+TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-seqlock check-sched check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -841,6 +842,12 @@ check-fuzz-binds:
 check-fuzz-forms:
 	@echo "--- the analyzer's special forms (model/anform.lisp, generated): if, def, quote, throw, try, set!, . and new with too few parts, too many and the wrong kinds, a try's clauses in any order, evaluated by clj and clotran: the value, or the refusal by class and message ---"
 	scripts/fuzz-forms -n 300 -s $(SEED) > $(B)/fuzz-forms.out 2>&1; s=$$?; cat $(B)/fuzz-forms.out; exit $$s
+check-seqlock:
+	@echo "--- the seqlock fences (src/c/seqlock.c): 2 writers + 2 readers under ThreadSanitizer and GenMC (RC11); dropping the release or the acquire fence must be found ---"
+	scripts/check-seqlock
+check-sched:
+	@echo "--- the scheduler seam (Threads.f90): fuzz-threads and fuzz-gc under CLOTRAN_SCHED_SEED=1..N, every lock and wait perturbed, spurious wakeups injected; against clj ---"
+	scripts/check-sched $(SCHED_SEEDS)
 check-fuzz-threads:
 	@echo "--- threads (PLAN 29): futures contending on an atom, two refs and agents -- send, send-off, nested sends, 40 agents on a 2-worker pool (PLAN 24); final values and invariants against clj ---"
 	CLOTRAN_AGENT_POOL=2 scripts/fuzz-threads -n 20 -s $(SEED) -o $(B)/fuzz-threads.edn > $(B)/fuzz-threads.out 2>&1; s=$$?; cat $(B)/fuzz-threads.out; exit $$s

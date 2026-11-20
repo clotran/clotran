@@ -1,0 +1,23 @@
+#!/bin/sh
+# Seeded scheduler seam (src/f/Threads.f90 sched_*, docs/scheduler-seam.md):
+# fuzz-threads and fuzz-gc rerun with CLOTRAN_SCHED_SEED=k perturbing every
+# lock/cond op, for k = 1..N. Their oracle is clj; a seed that fails is
+# repeated by  CLOTRAN_SCHED_SEED=k scripts/fuzz-threads -n 3 -s k.
+# First a sanity check that the seam is on: a lock-heavy loop must be
+# visibly slower with a seed than without (else the env var is not reaching it).
+cd "$(dirname "$0")/.." || exit 2
+N=${1:-4}; rc=0
+P='(let [a (atom 0) fs (doall (for [i (range 4)] (future (dotimes [_ 5000] (swap! a inc)))))] (run! deref fs) @a)'
+t0=$(date +%s%N 2>/dev/null || date +%s); [ "$(./clotran -e "$P")" = 20000 ] || { echo "FAIL sanity off"; exit 1; }
+t1=$(date +%s%N 2>/dev/null || date +%s); [ "$(CLOTRAN_SCHED_SEED=1 ./clotran -e "$P")" = 20000 ] || { echo "FAIL sanity on"; exit 1; }
+t2=$(date +%s%N 2>/dev/null || date +%s)
+if [ $((t2 - t1)) -le $(( (t1 - t0) * 2 )) ]; then echo "FAIL seam looks inactive: off $((t1 - t0)) ns, on $((t2 - t1)) ns"; exit 1; fi
+echo "ok   seam active (off $(( (t1 - t0) / 1000000 )) ms, seeded $(( (t2 - t1) / 1000000 )) ms)"
+k=${2:-1}   # optional 2nd arg: first seed
+while [ $k -le $N ]; do
+  CLOTRAN_AGENT_POOL=2 CLOTRAN_SCHED_SEED=$k scripts/fuzz-threads -n 3 -s $k > build/sched-threads-$k.out 2>&1 || { echo "FAIL fuzz-threads seed $k"; tail -15 build/sched-threads-$k.out; rc=1; }
+  CLOTRAN_SCHED_SEED=$k scripts/fuzz-gc -n 2 -s $k > build/sched-gc-$k.out 2>&1 || { echo "FAIL fuzz-gc seed $k"; tail -15 build/sched-gc-$k.out; rc=1; }
+  k=$((k + 1))
+done
+[ $rc = 0 ] && echo "ok   fuzz-threads and fuzz-gc green under seeds 1..$N"
+exit $rc

@@ -11,6 +11,9 @@
  "Threads.f90/tls_next" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
  "Threads.f90/tls_owned" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
  "Threads.f90/tls_owner" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
+ "Threads.f90/sched_mode" {:class :fixed, :note "the scheduler seam's switch (Threads.f90, sched_init): settled by the first th_lock_init, before any thread exists, read-only after"}
+ "Threads.f90/sched_state" {:class :shared, :note "the scheduler seam's LCG state: only with CLOTRAN_SCHED_SEED set, under sched_lk"}
+ "Threads.f90/sched_lk" {:class :shared, :note "the scheduler seam's mutex, initialised in sched_init before any thread exists; its own pthread calls, not th_*"}
  "Threads.f90/mb_lock" {:class :shared, :note "the main thread's mailbox (Threads.f90, th_main_*; model/mainbox.lisp): its lock, initialised before the program's thread starts"}
  "Threads.f90/mb_cond" {:class :shared, :note "the main thread's mailbox: its condition, initialised before the program's thread starts"}
  "Threads.f90/mb_fn" {:class :shared, :note "the main thread's mailbox: its one slot, under mb_lock"}

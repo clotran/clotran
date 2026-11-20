@@ -50,6 +50,11 @@ module Threads
      integer(c_int64_t) :: raw(OPAQUE_WORDS) = 0
   end type th_cond
 
+  ! the scheduler seam's state (see sched_init): 0 unread, 1 off, 2 on
+  integer, save :: sched_mode = 0
+  integer(c_int64_t), save :: sched_state = 0
+  type(th_lock), save, target :: sched_lk
+
   type :: th_thread
      type(c_ptr) :: handle = c_null_ptr
   end type th_thread
@@ -141,6 +146,10 @@ module Threads
        type(th_timespec), intent(out) :: ts
        integer(c_int) :: r
      end function clock_gettime
+     function sched_yield() bind(C, name="sched_yield") result(r)
+       import :: c_int
+       integer(c_int) :: r
+     end function sched_yield
      function nanosleep(req, rem) bind(C, name="nanosleep") result(r)
        import :: c_int, c_ptr, th_timespec
        type(th_timespec), intent(in) :: req
@@ -216,21 +225,77 @@ module Threads
 
 contains
 
+  ! SCHEDULER SEAM (docs/scheduler-seam.md), OFF unless CLOTRAN_SCHED_SEED is
+  ! set: then every lock, unlock, wait and broadcast is preceded by a
+  ! seeded draw that may yield or sleep a few microseconds, and a wait may
+  ! return at once as a spurious wakeup (the lock released and retaken).
+  ! The draws come from one LCG under its own mutex, so the same seed gives
+  ! the same sequence of perturbations; which thread receives each draw is
+  ! still the OS's choice. Off, each routine pays one integer compare.
+  ! sched_mode is settled in th_lock_init, which runs before any thread.
+  subroutine sched_init()
+    character(len=32) :: v
+    integer :: n, st
+    sched_mode = 1
+    call get_environment_variable("CLOTRAN_SCHED_SEED", v, n, st)
+    if (st /= 0 .or. n < 1) return
+    read(v(1:n), *, iostat=st) sched_state
+    if (st /= 0) return
+    sched_state = mod(abs(sched_state), 2147483648_c_int64_t)
+    if (pthread_mutex_init(c_loc(sched_lk%raw), c_null_ptr) /= 0) return
+    sched_mode = 2
+  end subroutine sched_init
+
+  ! next draw, 0..32767
+  integer function sched_draw()
+    integer(c_int) :: r
+    r = pthread_mutex_lock(c_loc(sched_lk%raw))
+    sched_state = mod(sched_state * 1103515245_c_int64_t + 12345_c_int64_t, 2147483648_c_int64_t)
+    sched_draw = int(sched_state / 65536_c_int64_t)
+    r = pthread_mutex_unlock(c_loc(sched_lk%raw))
+  end function sched_draw
+
+  ! the yield point: 1 in 8 yields, 1 in 64 sleeps up to ~100 us
+  subroutine sched_point()
+    type(th_timespec) :: ts
+    integer :: d
+    integer(c_int) :: r
+    if (sched_mode /= 2) return
+    d = sched_draw()
+    if (mod(d, 8) == 0) then
+       r = sched_yield()
+    else if (mod(d, 64) == 1) then
+       ts%sec = 0
+       ts%nsec = int(mod(d / 64, 100) + 1, c_long) * 1000_c_long
+       r = nanosleep(ts, c_null_ptr)
+    end if
+  end subroutine sched_point
+
+  ! a wait to cut short: 1 draw in 4
+  logical function sched_spurious()
+    sched_spurious = .false.
+    if (sched_mode /= 2) return
+    sched_spurious = mod(sched_draw() / 4, 4) == 0
+  end function sched_spurious
+
   ! Each routine answers .true. on success; the pthread error number is
   ! not interpreted here -- the caller only needs to know the step failed.
 
   logical function th_lock_init(l)
     type(th_lock), target, intent(inout) :: l
+    if (sched_mode == 0) call sched_init()
     th_lock_init = pthread_mutex_init(c_loc(l%raw), c_null_ptr) == 0
   end function th_lock_init
 
   logical function th_lock_acquire(l)
     type(th_lock), target, intent(inout) :: l
+    call sched_point()
     th_lock_acquire = pthread_mutex_lock(c_loc(l%raw)) == 0
   end function th_lock_acquire
 
   logical function th_lock_release(l)
     type(th_lock), target, intent(inout) :: l
+    call sched_point()
     th_lock_release = pthread_mutex_unlock(c_loc(l%raw)) == 0
   end function th_lock_release
 
@@ -244,11 +309,19 @@ contains
   logical function th_cond_wait(c, l)
     type(th_cond), target, intent(inout) :: c
     type(th_lock), target, intent(inout) :: l
+    call sched_point()
+    if (sched_spurious()) then
+       th_cond_wait = pthread_mutex_unlock(c_loc(l%raw)) == 0
+       call sched_point()
+       th_cond_wait = pthread_mutex_lock(c_loc(l%raw)) == 0 .and. th_cond_wait
+       return
+    end if
     th_cond_wait = pthread_cond_wait(c_loc(c%raw), c_loc(l%raw)) == 0
   end function th_cond_wait
 
   logical function th_cond_broadcast(c)
     type(th_cond), target, intent(inout) :: c
+    call sched_point()
     th_cond_broadcast = pthread_cond_broadcast(c_loc(c%raw)) == 0
   end function th_cond_broadcast
 
@@ -374,6 +447,13 @@ contains
     if (ts%nsec >= 1000000000_c_long) then
        ts%sec = ts%sec + 1
        ts%nsec = ts%nsec - 1000000000_c_long
+    end if
+    call sched_point()
+    if (sched_spurious()) then
+       th_cond_timedwait = pthread_mutex_unlock(c_loc(l%raw)) == 0
+       call sched_point()
+       th_cond_timedwait = pthread_mutex_lock(c_loc(l%raw)) == 0 .and. th_cond_timedwait
+       return
     end if
     th_cond_timedwait = pthread_cond_timedwait(c_loc(c%raw), c_loc(l%raw), ts) == 0
   end function th_cond_timedwait
