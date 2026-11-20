@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fence litmus for src/c/seqlock.c (study option (b)): 2 writers + 2 readers
+# on the real functions (test/c/seqlock_litmus.c #includes seqlock.c).
+#  1. ThreadSanitizer on the unmutated code: must be clean.
+#  2. GenMC (RC11): unmutated must find no violation; dropping the writer's
+#     release fence, or the reader's acquire fence, MUST be found (negative control).
+# GenMC: $GENMC, else ~/clotran/genmc/build/bin/genmc (built from source with
+# brew llvm@22 + hwloc; GenMC does not support LLVM 23). Absent: TSan only, loudly.
+cd "$(dirname "$0")/.." || exit 2
+B=${B:-build}; mkdir -p $B/seqlock-litmus; L=test/c/seqlock_litmus.c
+GENMC=${GENMC:-$HOME/clotran/genmc/build/bin/genmc}
+rc=0
+clang -O1 -g -fsanitize=thread -Isrc/c $L -o $B/seqlock-litmus/tsan || exit 2
+for i in 1 2 3 4 5 6 7 8 9 10; do $B/seqlock-litmus/tsan > $B/seqlock-litmus/tsan.out 2>&1 || { echo "FAIL tsan run $i"; head -20 $B/seqlock-litmus/tsan.out; rc=1; break; }; done
+[ $rc = 0 ] && echo "ok   tsan: 10 runs clean"
+if [ ! -x "$GENMC" ]; then echo "SKIP genmc not found ($GENMC); set GENMC="; exit $rc; fi
+gm() { PATH=/opt/homebrew/opt/llvm@22/bin:$PATH "$GENMC" --rc11 --disable-estimation -- "$@" -Isrc/c $L 2>&1; }
+gm > $B/seqlock-litmus/clean.out
+if grep -q "No errors were detected" $B/seqlock-litmus/clean.out; then echo "ok   genmc: unmutated clean ($(grep 'complete executions' $B/seqlock-litmus/clean.out))"; else echo "FAIL genmc unmutated"; grep -m3 Error $B/seqlock-litmus/clean.out; rc=1; fi
+for m in NO_RELEASE_FENCE NO_ACQUIRE_FENCE; do
+  gm -DMUTANT_$m > $B/seqlock-litmus/$m.out
+  if grep -q "Safety violation" $B/seqlock-litmus/$m.out; then echo "ok   genmc: mutant $m found (negative control)"; else echo "FAIL genmc missed mutant $m"; rc=1; fi
+done
+exit $rc
