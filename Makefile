@@ -581,7 +581,7 @@ TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install ch
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index check-fuzz-recur check-fuzz-binds check-fuzz-forms
 SCHED_SEEDS ?= 4
-TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-seqlock check-sched check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
+TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-seqlock check-lazy check-sched check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
 TEST_CHECKS = $(TEST_FIXED) $(TEST_FUZZ)
 else
@@ -845,6 +845,9 @@ check-fuzz-forms:
 check-seqlock:
 	@echo "--- the seqlock fences (src/c/seqlock.c): 2 writers + 2 readers under ThreadSanitizer and GenMC (RC11); dropping the release or the acquire fence must be found ---"
 	scripts/check-seqlock
+check-lazy:
+	@echo "--- the lazy-cell waiters pairing (src/c/seqlock.c): store-buffering litmus under GenMC (RC11); dropping the waiter's or the owner's seq_cst fence must be found ---"
+	scripts/check-lazy
 check-sched:
 	@echo "--- the scheduler seam (Threads.f90): fuzz-threads and fuzz-gc under CLOTRAN_SCHED_SEED=1..N, every lock and wait perturbed, spurious wakeups injected; against clj ---"
 	scripts/check-sched $(SCHED_SEEDS)
