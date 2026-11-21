@@ -1,0 +1,21 @@
+#!/bin/sh
+# Lost-wakeup litmus for the lazy-cell waiters pairing (test/c/lazy_litmus.c): GenMC
+# (RC11) on the real clotran_lazy_waiters_add / _fenced. Unmutated: no violation.
+# NEGATIVE CONTROLS, each must be found: the waiter's seq_cst fence dropped (in _add),
+# the owner's (in _fenced). GenMC as in scripts/check-seqlock ($GENMC); absent: SKIP.
+cd "$(dirname "$0")/.." || exit 2
+B=${B:-build}; mkdir -p $B/lazy-litmus; L=test/c/lazy_litmus.c
+GENMC=${GENMC:-$HOME/clotran/genmc/build/bin/genmc}
+[ -x "$GENMC" ] || { echo "SKIP genmc not found ($GENMC); set GENMC="; exit 0; }
+gm() { PATH=/opt/homebrew/opt/llvm@22/bin:$PATH "$GENMC" --rc11 --disable-estimation -- "$@" -Isrc/c $L 2>&1; }
+line() { awk -v f="$1" '$0 ~ "^[a-z0-9_]+ " f "\\(" {on=1} on && /atomic_thread_fence/ {print NR; exit}' src/c/seqlock.c; }
+rc=0
+gm > $B/lazy-litmus/clean.out
+if grep -q "No errors were detected" $B/lazy-litmus/clean.out; then echo "ok   genmc: lazy waiters pairing clean ($(grep 'complete executions' $B/lazy-litmus/clean.out))"; else echo "FAIL genmc unmutated"; grep -m3 -i error $B/lazy-litmus/clean.out; rc=1; fi
+for m in "waiter clotran_lazy_waiters_add" "owner clotran_lazy_waiters_fenced"; do
+  set -- $m; n=$(line $2)
+  [ -n "$n" ] || { echo "FAIL no fence found in $2"; rc=1; continue; }
+  gm -DMUTANT_LINE=$n > $B/lazy-litmus/$1.out
+  if grep -q "Safety violation" $B/lazy-litmus/$1.out; then echo "ok   genmc: mutant $1 fence dropped (seqlock.c:$n) found (negative control)"; else echo "FAIL genmc missed mutant $1 (seqlock.c:$n)"; rc=1; fi
+done
+exit $rc

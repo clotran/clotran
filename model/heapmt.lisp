@@ -1,3 +1,5 @@
+; Conformance (2026-11-20): scripts/check-replay replays a logged run of the real code (src/f/Threads.f90's CLOTRAN_SCHED_LOG)
+; through hm-step; the lock, safepoint and stop steps of the code are this model's actions. docs/concurrency-checks.md.
 ; Several threads on one heap, formally (docs/model-coverage.md).
 ;
 ; src/f/GC.f90's heap is shared by every thread running clotran. The heap

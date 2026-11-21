@@ -1,0 +1,101 @@
+#!/usr/bin/env bb
+;; check-replay: model conformance by replay. A run under CLOTRAN_SCHED_LOG=prefix
+;; (src/f/Threads.f90: every lock, unlock, wait and broadcast, and GC.f90's enter,
+;; leave, henter, park, wake, hleave, stop, stopwake, start) writes prefix.<pid>;
+;; this replays each file through the executable ACL2 heapmt (hm-step, then hm-inv's
+;; parts) and fails when a step is not enabled in the model, lands in another phase
+;; than the code's, or breaks the invariant. Besides, per lock: at most one holder,
+;; released only by its holder (the log's own sanity).
+;;
+;;   scripts/check-replay [-x MUTANT] FILE...      MUTANT: drop-park | drop-stop
+;;
+;; -x deletes those events from the log first: the replay must then FAIL (the
+;; control that it can). Threads whose first heap event is not an enter start as
+;; running (the main thread); the rest start out. The model has no cells here (own
+;; is empty): it checks the lock/safepoint/stop protocol, not batches or roots.
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[babashka.process :as p])
+(def args *command-line-args*)
+(def mutant (when (= "-x" (first args)) (second args)))
+(def files (if mutant (drop 2 args) args))
+(def root (str (fs/parent (fs/parent (fs/canonicalize *file*)))))
+(def acl2 (or (System/getenv "ACL2") (str (System/getenv "HOME") "/clotran/acl2/saved_acl2")))
+(def heap-evs #{"enter" "leave" "henter" "park" "wake" "hleave" "stop" "stopalone" "stopwake" "start"})
+(def drop-evs (case mutant "drop-park" #{"park"} "drop-stop" #{"stop"} #{}))
+(defn parse [l] (let [[t e a b s] (str/split l #" ")] [t e a b s]))
+(defn lines [f] (str/split-lines (slurp f)))
+
+(defn check-file [f]
+  (let [;; pass 1: thread order, starting phase, lock names
+        names (volatile! {}) seen (volatile! #{}) init-hold (volatile! {}) first-heap (volatile! {}) order (volatile! [])
+        _ (doseq [l (lines f)]
+            (let [[t e a _ s] (parse l)]
+              (when-not (some #{t} @order) (vswap! order conj t))
+              (when (= e "name") (vswap! names assoc a s))
+              ;; logging begins mid-run: a lock first seen released (or waited on) was held by that thread already
+              (when (and (#{"acq" "rel" "wait" "woke"} e) (not (@seen [t a])))
+                (vswap! seen conj [t a])
+                (when (#{"rel" "wait"} e) (vswap! init-hold assoc a t)))
+              (when (and (heap-evs e) (not (contains? drop-evs e)) (not (@first-heap t))) (vswap! first-heap assoc t e))))
+        order @order names @names first-heap @first-heap init-hold @init-hold
+        idx (into {} (map-indexed (fn [i t] [t i]) order))
+        start-run (set (for [t order :when (and (first-heap t) (not= "enter" (first-heap t)))] t))
+        ev-file (str f ".ev") err (volatile! nil) holder (volatile! init-hold) n (volatile! 0)
+        nm (fn [a] (names a))]
+    (let [w (StringBuilder.)]
+      (let [emit (fn [t act kind val ln] (.append w (str "(" (idx t) " :" act " :" kind " " val " " ln ")\n")))]
+        (doseq [[ln l] (map-indexed vector (lines f))]
+          (let [[t e a b _] (parse l)
+                lk (fn [] (nm a)) i (idx t)
+                acq! (fn [] (let [h (@holder a)]
+                              (when (and h (not @err)) (vreset! err (str "line " (inc ln) ": " (or (nm a) a) " acquired by " i " while held by " (idx h))))
+                              (vswap! holder assoc a t)))
+                rel! (fn [] (let [h (@holder a)]
+                              (when (and (not= h t) (not @err)) (vreset! err (str "line " (inc ln) ": " (or (nm a) a) " released by " i " not its holder")))
+                              (vswap! holder dissoc a)))]
+            (when-not (drop-evs e)
+              (case e
+                "acq" (do (acq!) (case (nm a) "state_lk" (emit t "slock" "sl" i ln) "tx_lk" (emit t "xlock" "xl" i ln) nil))
+                "rel" (do (case (nm a) "state_lk" (emit t "sunlock" "sl" "nil" ln) "tx_lk" (emit t "xunlock" "xl" "nil" ln) nil) (rel!))
+                "wait" (do (case (nm a) "state_lk" (emit t "sunlock" "sl" "nil" ln) nil) (rel!))
+                "woke" (do (acq!) (case (nm a) "state_lk" (emit t "slock" "sl" i ln) nil))
+                "enter" (emit t "enter" "ph" ":run" ln)
+                "leave" (emit t "leave" "ph" ":out" ln)
+                "henter" (emit t "henter" "ph" ":inheap" ln)
+                "park" (emit t "henter" "ph" ":parked" ln)
+                "wake" (emit t "wake" "ph" ":inheap" ln)
+                "hleave" (emit t "hleave" "ph" ":run" ln)
+                "stop" (emit t "stop" "ph" ":stopping" ln)
+                "stopalone" (emit t "stop" "ph" ":collect" ln)
+                "stopwake" (emit t "stopwake" "ph" ":collect" ln)
+                "start" (emit t "start" "ph" ":inheap" ln)
+                nil)
+              (vswap! n inc))))
+        (spit ev-file (str w))))
+    (let [init-of (fn [nmx] (if-let [t (some (fn [[a t]] (when (= nmx (names a)) t)) init-hold)] (idx t) "nil"))
+          nth (count order) ths (str/join " " (map (fn [t] (if (start-run t) "(mk-th :run nil nil nil)" "(mk-th :out nil nil nil)")) order))
+          driver (str "(include-book \"heapmt\")\n(set-state-ok t)\n"
+                      "(defun th-oks (st k) (declare (xargs :mode :program)) (if (>= k (len (st-ths st))) t (and (th-ok st k) (th-oks st (1+ k)))))\n"
+                      "(defun expect-ok (st2 i kind val) (declare (xargs :mode :program))\n"
+                      "  (case kind (:ph (eq (th-ph (nth i (st-ths st2))) val)) (:sl (equal (st-sl st2) val)) (:xl (equal (st-xl st2) val)) (t nil)))\n"
+                      "(defun rp (ch st n state) (declare (xargs :mode :program :stobjs state))\n"
+                      "  (mv-let (eofp e state) (read-object ch state)\n"
+                      "    (if eofp (prog2$ (cw \"REPLAY-OK ~x0~%\" n) state)\n"
+                      "      (let* ((i (nth 0 e)) (act (nth 1 e)) (kind (nth 2 e)) (val (nth 3 e)) (ln (nth 4 e))\n"
+                      "             (st2 (hm-step i (list act 0) st)))\n"
+                      "        (cond ((equal st2 st) (prog2$ (cw \"REPLAY-FAIL step ~x0 (log line ~x1): ~x2 by thread ~x3 is not enabled in the model~%\" n (1+ ln) act i) state))\n"
+                      "              ((not (expect-ok st2 i kind val)) (prog2$ (cw \"REPLAY-FAIL step ~x0 (log line ~x1): ~x2 by thread ~x3 did not reach ~x4 ~x5~%\" n (1+ ln) act i kind val) state))\n"
+                      "              ((not (and (hm-inv-g st2) (th-oks st2 0))) (prog2$ (cw \"REPLAY-FAIL step ~x0 (log line ~x1): invariant broken after ~x2 by thread ~x3~%\" n (1+ ln) act i) state))\n"
+                      "              (t (rp ch st2 (1+ n) state)))))))\n"
+                      "(defun go-rp (state) (declare (xargs :mode :program :stobjs state))\n"
+                      "  (mv-let (ch state) (open-input-channel \"" (fs/canonicalize ev-file) "\" :object state)\n"
+                      "    (rp ch (mk-st nil nil " (count start-run) " 0 " (init-of "state_lk") " " (init-of "tx_lk") " nil (list " ths ")) 0 state)))\n"
+                      "(go-rp state)\n(good-bye)\n")
+          _ (when (System/getenv "KEEP") (spit (str f ".lisp") driver))
+          out (:out (p/shell {:dir (str root "/model") :in driver :out :string :err :string :continue true} acl2))
+          res (or (re-find #"REPLAY-(?:OK|FAIL).*" out) (str "REPLAY-FAIL driver: " (subs out (max 0 (- (count out) 600)))))]
+      (println (format "%s: %d threads, %d log events, %s%s" f nth @n res (if @err (str "; LOCK LOG: " @err) "")))
+      (fs/delete-if-exists ev-file)
+      (and (str/starts-with? res "REPLAY-OK") (not @err)))))
+
+(let [rs (doall (map check-file files))]
+  (System/exit (if mutant (if (every? false? rs) 0 (do (println "mutant" mutant "NOT caught") 1)) (if (every? true? rs) 0 1))))

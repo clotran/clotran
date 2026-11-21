@@ -13,6 +13,12 @@
  "Threads.f90/tls_owner" {:class :shared, :note "the single-thread cache of thread-local slots (Threads.f90, th_key_get): written only by the owner thread, or at a th_start/th_spawn before the new thread exists; read only while no other thread runs clotran"}
  "Threads.f90/sched_mode" {:class :fixed, :note "the scheduler seam's switch (Threads.f90, sched_init): settled by the first th_lock_init, before any thread exists, read-only after"}
  "Threads.f90/sched_state" {:class :shared, :note "the scheduler seam's LCG state: only with CLOTRAN_SCHED_SEED set, under sched_lk"}
+ "GC.f90/alone_stops" {:class :shared, :note "world_stop calls that found no one to stop, not yet world_start'ed: read and written only holding heap_lock, and only to label the replay log (CLOTRAN_SCHED_LOG)"}
+ "Threads.f90/sched_llk" {:class :shared, :note "the replay log's mutex, initialised in sched_init before any thread exists; its own pthread calls, not th_*"}
+ "Threads.f90/sched_log_u" {:class :fixed, :note "the replay log's unit: set in sched_init before any thread, read-only after"}
+ "Threads.f90/sched_log_max" {:class :fixed, :note "the replay log's line cap: set in sched_init before any thread, read-only after"}
+ "Threads.f90/sched_log_n" {:class :shared, :note "lines written so far: under sched_llk"}
+ "Threads.f90/sched_on" {:class :shared, :note "logging has begun: set once (th_log_begin, under heap_lock) and only read after; a late read just logs one event later"}
  "Threads.f90/sched_lk" {:class :shared, :note "the scheduler seam's mutex, initialised in sched_init before any thread exists; its own pthread calls, not th_*"}
  "Threads.f90/mb_lock" {:class :shared, :note "the main thread's mailbox (Threads.f90, th_main_*; model/mainbox.lisp): its lock, initialised before the program's thread starts"}
  "Threads.f90/mb_cond" {:class :shared, :note "the main thread's mailbox: its condition, initialised before the program's thread starts"}

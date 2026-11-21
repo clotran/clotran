@@ -1,0 +1,31 @@
+#!/bin/sh
+# Model conformance by replay (scripts/check-replay): fuzz-threads and fuzz-gc under
+# CLOTRAN_SCHED_SEED=k, k = 1..N, each clotran process logging its lock, wait and
+# safepoint events (CLOTRAN_SCHED_LOG, at most 1M lines each), every log replayed
+# through the ACL2 heapmt. Then the controls: dropping the park or the stop events
+# from one log must make the replay fail. Needs make model/heapmt.cert.
+#   scripts/check-replay-run [N] [FIRST-SEED]
+cd "$(dirname "$0")/.." || exit 2
+N=${1:-4}; k=${2:-1}; rc=0
+d=build/replay; mkdir -p $d
+# the seam reaches the accesses the th_* wrappers cannot see: each mark appears in a log
+# of futures contending on a lazy seq, atoms, a sorted map's comparator
+mkdir -p $d/marks
+CLOTRAN_SCHED_LOG=$d/marks/m CLOTRAN_SCHED_SEED=1 ./clotran -e '(let [s (lazy-seq (reduce + (range 2000000)) (list 1)) a (atom 0) m (sorted-map-by (fn [x y] (compare x y)) 1 2 3 4)
+  fs (doall (for [i (range 4)] (future (first s) (dotimes [_ 200] (swap! a inc) (deref a) (assoc m i i)))))] (run! deref fs) @a)' > $d/marks/out 2>&1
+for m in gc_hold cell_get lazy_cas lazy_waiters lazy_wake; do
+  cat $d/marks/m.[0-9]* | grep -q " mark .* $m\$" && echo "ok   mark $m reached" || { echo "FAIL mark $m never logged"; rc=1; }
+done
+while [ $k -le $N ]; do
+  mkdir -p $d/$k
+  CLOTRAN_SCHED_LOG_MAX=1000000 CLOTRAN_SCHED_LOG=$d/$k/th CLOTRAN_SCHED_SEED=$k CLOTRAN_AGENT_POOL=2 scripts/fuzz-threads -n 2 -s $k > $d/$k/threads.out 2>&1 || { echo "FAIL fuzz-threads seed $k"; tail -5 $d/$k/threads.out; rc=1; }
+  CLOTRAN_SCHED_LOG_MAX=1000000 CLOTRAN_SCHED_LOG=$d/$k/gc CLOTRAN_SCHED_SEED=$k scripts/fuzz-gc -n 1 -s $k > $d/$k/gc.out 2>&1 || { echo "FAIL fuzz-gc seed $k"; tail -5 $d/$k/gc.out; rc=1; }
+  echo "seed $k: $(ls $d/$k | grep -c '^[a-z]*\.[0-9]*$') logs"
+  scripts/check-replay $d/$k/th.[0-9]* $d/$k/gc.[0-9]* || rc=1
+  k=$((k + 1))
+done
+big=$(ls -Sr $d/*/th.[0-9]* $d/*/gc.[0-9]* | xargs grep -l " park " | xargs grep -l " stop " | head -1)   # the smallest log that has both
+[ -n "$big" ] || { echo "FAIL no log with a park and a stop to run the controls on"; rc=1; }
+for m in drop-park drop-stop; do scripts/check-replay -x $m $big > $d/ctl-$m.out 2>&1 && echo "ok   control $m: replay fails as it must" || { echo "FAIL control $m"; tail -3 $d/ctl-$m.out; rc=1; }; done
+[ $rc = 0 ] && echo "ok   replay: every log is a run of heapmt (seeds 1..$N)"
+exit $rc

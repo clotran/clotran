@@ -43,6 +43,51 @@ is a seeded perturbation, not a replayable schedule (that needs a baton; owed).
 `scripts/check-sched [N]` first checks the seam is live (a lock-heavy loop is >2x slower seeded),
 then runs fuzz-threads and fuzz-gc under seeds 1..N (SCHED_SEEDS, default 4; about 7 minutes a seed on a loaded machine; a 2nd argument is the first seed) against clj.
 
+## make check-lazy: the lazy-cell waiters pairing (src/c/seqlock.c)
+
+`test/c/lazy_litmus.c` #includes seqlock.c: an owner settles the cell (relaxed store, as the
+Fortran store is plain) then reads clotran_lazy_waiters_fenced(); a waiter does
+clotran_lazy_waiters_add(1) then reads the cell. Store buffering: the lost wakeup is "owner saw
+no waiter AND waiter saw the cell still running". GenMC (RC11): 3 complete executions, none
+violating. NEGATIVE CONTROLS (the script finds the fence's line in seqlock.c and drops it with a
+-DMUTANT_LINE macro): the waiter's seq_cst fence (in _add) and the owner's (in _fenced): each
+"Safety violation". Same GenMC as check-seqlock; absent: SKIP.
+
+## make check-replay: the model's conformance on the real code (scripts/check-replay-run)
+
+CLOTRAN_SCHED_LOG=prefix writes prefix.<pid> (off: one integer compare per op; CLOTRAN_SCHED_LOG_MAX
+lines, default 3M, a prefix of a run is a run). Logging starts when a second thread becomes a
+mutator (gc_mutator_enter, n_running >= 2): before that the process is one thread and every
+allocation is noise. Lines: thread, event, lock/cond address, name. From the th_* wrappers: acq,
+rel, wait, woke (a wait is a release, the wakeup an acquire, spurious or not), bcast; from GC.f90:
+enter, leave, henter, park, wake, hleave, stop, stopalone, stopwake, start; "mark" lines
+(see below). Each line is written under one log mutex, inside the lock-held span it describes,
+so file order is one real order of the events.
+
+scripts/check-replay maps each log to heapmt actions (state_lk acq/rel/wait -> :slock/:sunlock, tx_lk ->
+:xlock/:xunlock, the GC events -> :enter :leave :henter :wake :hleave :stop :stopwake :start) and
+runs hm-step in ACL2 (needs model/heapmt.cert), failing when a step leaves the state unchanged (not
+enabled), lands in a different phase than the code reports (e.g. the code parked and the model
+did not: stop_world disagrees), or breaks the invariant (hm-inv-g and th-ok at every step). It also
+checks per lock: one holder, released by its holder. Who held what when logging began is read off
+each thread's first event. The model runs with no cells: this checks the lock, safepoint and
+stop protocol (and the discipline: state_lk only from :out/:run/:inheap/:collect, tx_lk only when
+out), not batches, roots or the sweep.
+CONTROLS: deleting the park events, or the stop events, from a real log must fail the replay
+(it does: not enabled at the next stopwake / henter).
+Workloads: fuzz-threads (-n 2) and fuzz-gc (-n 1) under CLOTRAN_SCHED_SEED=1..4, every clotran
+process logged.
+
+## Marks: shared accesses the th_* wrappers do not see (th_mark)
+
+Listed in the study: gc_cell_get's seqlock read (GC.f90), clotran_gc_hold (gc_hold_begin/end),
+the lazy-cell CAS (gc_cas_i1), the waiters counter (gc_lazy_wait_add), the wake test
+(gc_lazy_wake), and gc_obj's lock-free batch pop. th_mark(name) is a yield point under a seed and
+a "mark" line in the log; added at all but the last (gc_obj's pop is the allocation hot path
+and is thread-private by the batch invariant, so it is left: a yield there needs a measured
+cost). scripts/check-replay-run first runs futures over a lazy seq, an atom and a sorted-map
+comparator and fails unless every mark name appears in the log.
+
 ## What this tells about the open questions
 
 - Fortran writes to cells (gc_set_slot: `obj_pool(i)%slot(i) = x`) are PLAIN stores of a 16-byte
