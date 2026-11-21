@@ -131,7 +131,7 @@ modeled and the heap satisfies the state facts (nt-lens, xd-lens). About
 
 Tested, not proved: every other generated procedure (regenerated and
 compared where check-gen reaches it, fuzzed against the model everywhere);
-fsem against gfortran and flang (the oracle cases and FCVS); the hand-written
+fsem against gfortran and flang (the oracle cases and FCVS: 159 of 180 print their reference output and the other 21 stop `:pd` where the standard leaves the result to the processor, so no compiler is the specification; what is claimed, what could still be proved and why we stop is lemmis/model/WRAPUP.md); the hand-written
 Modeled code against its model (the drift ratchet sees edits, not code
 wrong from the start; the fuzzers compare behaviour, mostly against
 `clj`); the concurrency rows (litmus tests and the seeded scheduler sample
