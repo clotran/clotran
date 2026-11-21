@@ -183,7 +183,6 @@
   "java.lang.ArrayIndexOutOfBoundsException"
   "clotran.host.array_index_out_of_bounds_exception",
   "java.lang.AssertionError" "clotran.host.assertion_error",
-  "java.lang.BigDecimal" "clotran.host.decimal",
   "java.lang.Boolean" "clotran.host.logical",
   "java.lang.Byte" "clotran.host.int1",
   "java.lang.CharSequence" "clotran.host.char_sequence",
