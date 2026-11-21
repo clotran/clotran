@@ -7,24 +7,23 @@
 
   A value is [kind x]: x is a Long in range for an integer kind, a Double
   holding exactly a binary32 or binary64 number for a real kind. Kinds are
-  iso_fortran_env's: :int8 :int16 :int32 :int64 :real32 :real64. A real
+  iso_fortran_env's: :int1 :int2 :int4 :int8 :real4 :real8. A real
   literal is a STRING, so it is rounded once, from its text, as Fortran
   rounds it. Where the standard leaves a result to the processor (integer
   overflow, division by zero, an inexact power, a value out of range), the
   oracle throws ex-info with {:undefined why}: those cases are not compared
   with the compilers, and an implementation must refuse them (clotran
-  throws)."
-  (:import (java.math BigDecimal BigInteger RoundingMode)))
+  throws).")
 
 (def kinds
-  {:int8 {:type :integer :bits 8 :n 1}   :int16 {:type :integer :bits 16 :n 2}
-   :int32 {:type :integer :bits 32 :n 4} :int64 {:type :integer :bits 64 :n 8}
-   :real32 {:type :real :bits 32 :n 4}   :real64 {:type :real :bits 64 :n 8}})
+  {:int1 {:type :integer :bits 8 :n 1}   :int2 {:type :integer :bits 16 :n 2}
+   :int4 {:type :integer :bits 32 :n 4} :int8 {:type :integer :bits 64 :n 8}
+   :real4 {:type :real :bits 32 :n 4}   :real8 {:type :real :bits 64 :n 8}})
 
 ;; the default kinds: gfortran and flang agree, the standard says only
 ;; "a processor-dependent kind"
-(def default-integer :int32)
-(def default-real :real32)
+(def default-integer :int4)
+(def default-real :real4)
 
 (defn int-kind? [k] (= :integer (:type (kinds k))))
 (defn real-kind? [k] (= :real (:type (kinds k))))
@@ -32,8 +31,9 @@
 (defn- undefined [why] (throw (ex-info (str "undefined: " why) {:undefined why})))
 (defn- ill-typed [msg] (throw (ex-info (str "ill-typed: " msg) {:ill-typed msg})))
 
-(defn- imax [k] (bigint (.subtract (.shiftLeft BigInteger/ONE (dec (:bits (kinds k)))) BigInteger/ONE)))
-(defn- imin [k] (bigint (.negate (.shiftLeft BigInteger/ONE (dec (:bits (kinds k)))))))
+(defn- pow2 [n] (loop [r 1N i n] (if (zero? i) r (recur (*' r 2) (dec i)))))
+(defn- imax [k] (dec (pow2 (dec (:bits (kinds k))))))
+(defn- imin [k] (-' (pow2 (dec (:bits (kinds k))))))
 
 (defn- fit
   "An exact integer, as a value of kind k, or undefined: integer overflow."
@@ -45,14 +45,14 @@
   binary64 result, exact for + - * / and sqrt of binary32 operands)."
   [k x]
   (let [d (double x)]
-    (case k :real64 [k d] :real32 [k (double (float d))])))
+    (case k :real8 [k d] :real4 [k (double (float d))])))
 
 (defn lit
-  "A literal: [:int32 5], or [:real32 \"1.1\"] (a real as its text)."
+  "A literal: [:int4 5], or [:real4 \"1.1\"] (a real as its text)."
   [[k x]]
   (if (int-kind? k)
     (fit k x)
-    [k (case k :real64 (Double/parseDouble x) :real32 (double (Float/parseFloat x)))]))
+    [k (case k :real8 (clotran.host.real8/parseDouble x) :real4 (double (clotran.host.real4/parseFloat x)))]))
 
 (defn- conv
   "Value v converted to kind k (an assignment's or an operand's)."
@@ -60,7 +60,7 @@
   (cond (= k k0) [k x]
         (and (int-kind? k) (int-kind? k0)) (fit k x)
         (and (real-kind? k) (int-kind? k0))
-        [k (case k :real64 (double x) :real32 (double (float (long x))))]
+        [k (case k :real8 (double x) :real4 (double (float (long x))))]
         (and (real-kind? k) (real-kind? k0)) (rnd k x)
         :else (ill-typed (str "real to integer needs int, nint, floor or ceiling: " k0 " to " k))))
 
@@ -74,8 +74,8 @@
           (int-kind? k1) k2
           :else k1)))
 
-(defn- exact [x] (BigDecimal. (double x)))
-(defn- finite! [x] (when (or (Double/isNaN x) (Double/isInfinite x)) (undefined :non-finite)) x)
+(defn- exact [x] (clotran.host.decimal. (double x)))
+(defn- finite! [x] (when (or (clotran.host.real8/isNaN x) (clotran.host.real8/isInfinite x)) (undefined :non-finite)) x)
 
 (defn- arith [op [k1 a :as u] [k2 b :as v]]
   (let [k (promote k1 k2)
@@ -126,17 +126,17 @@
                   (let [[k x] (first vs)] (if (int-kind? k) (fit k (-' (bigint x))) [k (- x)]))
                   (arith op (vs 0) (vs 1)))
       ** (power (vs 0) (vs 1))
-      int (to-int RoundingMode/DOWN (kind-arg (rest vs) default-integer) (first vs))
-      nint (to-int RoundingMode/HALF_UP (kind-arg (rest vs) default-integer) (first vs))
-      floor (to-int RoundingMode/FLOOR (kind-arg (rest vs) default-integer) (first vs))
-      ceiling (to-int RoundingMode/CEILING (kind-arg (rest vs) default-integer) (first vs))
+      int (to-int clotran.host.rounding_mode/DOWN (kind-arg (rest vs) default-integer) (first vs))
+      nint (to-int clotran.host.rounding_mode/HALF_UP (kind-arg (rest vs) default-integer) (first vs))
+      floor (to-int clotran.host.rounding_mode/FLOOR (kind-arg (rest vs) default-integer) (first vs))
+      ceiling (to-int clotran.host.rounding_mode/CEILING (kind-arg (rest vs) default-integer) (first vs))
       real (conv (kind-arg (rest vs) default-real) (first vs))
-      dble (conv :real64 (first vs))
-      abs (let [[k x] (first vs)] (if (int-kind? k) (fit k (clojure.core/abs (bigint x))) [k (Math/abs (double x))]))
+      dble (conv :real8 (first vs))
+      abs (let [[k x] (first vs)] (if (int-kind? k) (fit k (clojure.core/abs (bigint x))) [k (clotran.host.math/abs (double x))]))
       sqrt (let [[k x] (first vs)]
              (when-not (real-kind? k) (ill-typed "sqrt needs a real"))
              (when (neg? x) (undefined :sqrt-of-negative))
-             (rnd k (Math/sqrt x)))
+             (rnd k (clotran.host.math/sqrt x)))
       mod (let [[a p] vs] (need-same 'mod a p)
             (if (int-kind? (first a))
               (if (zero? (second p)) (undefined :mod-by-zero) [(first a) (rem (second a) (second p))])
@@ -152,17 +152,17 @@
              (let [[k x] a [_ y] b]
                (if (int-kind? k)
                  (fit k (if (neg? y) (-' (clojure.core/abs (bigint x))) (clojure.core/abs (bigint x))))
-                 [k (Math/copySign (Math/abs (double x)) (double y))])))
+                 [k (clotran.host.math/copySign (clotran.host.math/abs (double x)) (double y))])))
       (max min) (do (apply need-same op vs)
                     [(first (first vs)) (apply (if (= op 'max) max min) (map second vs))])
-      huge (let [[k] (first vs)] (if (int-kind? k) [k (long (imax k))] [k (case k :real64 Double/MAX_VALUE :real32 (double Float/MAX_VALUE))]))
+      huge (let [[k] (first vs)] (if (int-kind? k) [k (long (imax k))] [k (case k :real8 clotran.host.real8/MAX_VALUE :real4 (double clotran.host.real4/MAX_VALUE))]))
       tiny (let [[k] (first vs)] (when-not (real-kind? k) (ill-typed "tiny needs a real"))
-             [k (case k :real64 Double/MIN_NORMAL :real32 (double Float/MIN_NORMAL))])
+             [k (case k :real8 clotran.host.real8/MIN_NORMAL :real4 (double clotran.host.real4/MIN_NORMAL))])
       epsilon (let [[k] (first vs)] (when-not (real-kind? k) (ill-typed "epsilon needs a real"))
-                [k (case k :real64 (Math/ulp 1.0) :real32 (double (Math/ulp (float 1.0))))])
+                [k (case k :real8 (clotran.host.math/ulp 1.0) :real4 (double (clotran.host.math/ulp (float 1.0))))])
       kind [default-integer (:n (kinds (first (first vs))))]
       digits [default-integer (let [k (first (first vs))]
-                                (if (int-kind? k) (dec (:bits (kinds k))) (case k :real32 24 :real64 53)))]
+                                (if (int-kind? k) (dec (:bits (kinds k))) (case k :real4 24 :real8 53)))]
       (ill-typed (str "unknown operation " op)))))
 
 (defn ev
@@ -176,7 +176,7 @@
   "[:ok kind x] | [:undefined why] | [:ill-typed msg]. x is a long or a double."
   [e]
   (try (let [[k x] (ev e)] [:ok k x])
-       (catch clojure.lang.ExceptionInfo ex
+       (catch clotran.host.exception_info ex
          (let [d (ex-data ex)]
            (cond (:undefined d) [:undefined (:undefined d)]
                  (:ill-typed d) [:ill-typed (:ill-typed d)]

@@ -1,0 +1,247 @@
+(ns fortran.ops
+  "Fortran's arithmetic and intrinsics over clotran's kind-tagged scalars
+  (James, 2026-11-21: clotran's types are Fortran's).
+
+  The kinds are clotran's own, by kind number as Fortran writes them:
+  :int1 :int2 :int4 :int8 (integer(1) .. integer(8), the classes
+  clotran.host.int1 .. int8) and :real4 :real8 (real(4), real(8)). They
+  are values already: (int 5) is an int4. What clojure.core does with them
+  is Clojure's -- (+ int4 int4) widens to int8, (/ 7 2) is a ratio -- and
+  stays so. The operations HERE are Fortran's: the result keeps the kind a
+  Fortran result has (the larger of two integer kinds, the real's kind of an
+  integer with a real), integer / truncates, MOD and MODULO differ on
+  negatives, REAL defaults to real(4), and a value the standard leaves to
+  the processor (integer overflow, division by zero, a result out of the
+  kind's range) throws, as a trapping processor would.
+
+  test/ftypes/oracle.clj, plain Clojure run by clj and checked against
+  gfortran and flang, is the specification; scripts/ftypes-check runs the
+  cases of test/ftypes/cases.edn through it AND through this file and
+  compares. See DEVIATIONS.md (types)."
+  (:refer-clojure :exclude [+ - * / abs min max mod int]))
+
+(def ^:private specs
+  {:int1 {:type :integer :bits 8 :n 1} :int2 {:type :integer :bits 16 :n 2}
+   :int4 {:type :integer :bits 32 :n 4} :int8 {:type :integer :bits 64 :n 8}
+   :real4 {:type :real :bits 32 :n 4} :real8 {:type :real :bits 64 :n 8}})
+
+(def default-integer :int4)
+(def default-real :real4)
+
+(defn- int-kind? [k] (= :integer (:type (specs k))))
+(defn- real-kind? [k] (= :real (:type (specs k))))
+
+(defn- undefined [why] (throw (ex-info (str "undefined: " why) {:undefined why})))
+(defn- ill-typed [msg] (throw (ex-info (str "ill-typed: " msg) {:ill-typed msg})))
+
+(def ^:private kind-classes
+  {clotran.host.int1 :int1 clotran.host.int2 :int2 clotran.host.int4 :int4 clotran.host.int8 :int8
+   clotran.host.real4 :real4 clotran.host.real8 :real8})
+
+(defn kind-of
+  "The Fortran kind of a scalar: :int1 .. :int8, :real4, :real8."
+  [v]
+  (or (kind-classes (class v)) (ill-typed (str "not a Fortran scalar: " (pr-str v)))))
+
+(def ^:private imins {:int1 -128 :int2 -32768 :int4 -2147483648 :int8 -9223372036854775808N})
+(def ^:private imaxs {:int1 127 :int2 32767 :int4 2147483647 :int8 9223372036854775807N})
+
+(defn- fit
+  "An exact integer as a value of integer kind k, or undefined: overflow."
+  [k x]
+  (if (clojure.core/<= (imins k) x (imaxs k))
+    (case k :int1 (byte (long x)) :int2 (short (long x)) :int4 (clojure.core/int (long x)) :int8 (long x))
+    (undefined :integer-overflow)))
+
+(defn- rnd
+  "A double as a value of real kind k (binary32 by one rounding, exact for
+  + - * / and sqrt of binary32 operands: a binary64 result has room to spare)."
+  [k d]
+  (case k :real8 (double d) :real4 (float d)))
+
+(defn lit
+  "A literal as the oracle writes it: (lit :int4 5), (lit :real4 \"1.1\") -- a
+  real as its text, rounded once."
+  [k x]
+  (if (int-kind? k) (fit k x) (rnd k (parse-double x))))
+
+(defn- conv [k v]
+  (let [k0 (kind-of v)]
+    (cond (= k k0) v
+          (and (int-kind? k) (int-kind? k0)) (fit k (long v))
+          (and (real-kind? k) (int-kind? k0)) (rnd k (case k :real8 (double (long v)) :real4 (float (long v))))
+          (and (real-kind? k) (real-kind? k0)) (rnd k (double v))
+          :else (ill-typed (str "real to integer needs int, nint, floor or ceiling: " k0 " to " k)))))
+
+(defn promote
+  "The kind of a mixed operation: integer with integer, the larger; real with
+  real, the larger; integer with real, the real's kind."
+  [k1 k2]
+  (let [b #(:bits (specs %))]
+    (cond (and (int-kind? k1) (int-kind? k2)) (if (clojure.core/>= (b k1) (b k2)) k1 k2)
+          (and (real-kind? k1) (real-kind? k2)) (if (clojure.core/>= (b k1) (b k2)) k1 k2)
+          (int-kind? k1) k2
+          :else k1)))
+
+;; the kind constructors: (fortran.ops/int4 5), (fortran.ops/real4 "1.1")
+(defn int1 [x] (if (integer? x) (fit :int1 x) (conv :int1 x)))
+(defn int2 [x] (if (integer? x) (fit :int2 x) (conv :int2 x)))
+(defn int4 [x] (if (integer? x) (fit :int4 x) (conv :int4 x)))
+(defn int8 [x] (if (integer? x) (fit :int8 x) (conv :int8 x)))
+(defn real4 [x] (cond (string? x) (lit :real4 x) (integer? x) (rnd :real4 (double x)) :else (conv :real4 x)))
+(defn real8 [x] (cond (string? x) (lit :real8 x) (integer? x) (double x) :else (conv :real8 x)))
+
+(defn- arith [op a b]
+  (let [k (promote (kind-of a) (kind-of b))
+        x (conv k a) y (conv k b)]
+    (if (int-kind? k)
+      (let [x (bigint (long x)) y (bigint (long y))]
+        (fit k (case op
+                 :+ (+' x y) :- (-' x y) :* (*' x y)
+                 :/ (if (zero? y) (undefined :division-by-zero) (quot x y)))))
+      (let [x (double x) y (double y)]
+        (rnd k (case op :+ (clojure.core/+ x y) :- (clojure.core/- x y) :* (clojure.core/* x y) :/ (clojure.core// x y)))))))
+
+(defn +
+  "Fortran's a + b."
+  [a b] (arith :+ a b))
+(defn -
+  "Fortran's a - b, or -a."
+  ([a] (let [k (kind-of a)] (if (int-kind? k) (fit k (-' (bigint (long a)))) (rnd k (clojure.core/- (double a))))))
+  ([a b] (arith :- a b)))
+(defn * [a b] (arith :* a b))
+(defn / [a b] (arith :/ a b))
+
+(defn **
+  "Fortran's a ** b: an integer to an integer power exactly; a real to the
+  power 2 as a*a; any other real power is processor dependent here as there."
+  [a b]
+  (let [ka (kind-of a) kb (kind-of b)]
+    (cond
+      (and (int-kind? ka) (int-kind? kb))
+      (let [k (promote ka kb) x (long a) n (long b)]
+        (cond (clojure.core/>= n 0) (fit k (loop [r 1N i n] (if (zero? i) r (recur (*' r (bigint x)) (dec i)))))
+              (= x 1) (fit k 1)
+              (= x -1) (fit k (if (even? n) 1 -1))
+              (zero? x) (undefined :zero-to-negative-power)
+              :else (fit k 0)))
+      (and (real-kind? ka) (int-kind? kb) (= (long b) 2)) (arith :* a a)
+      :else (undefined :inexact-power))))
+
+(defn- need-same [who & vs]
+  (when-not (apply = (map kind-of vs)) (ill-typed (str who " needs one kind: " (mapv kind-of vs)))))
+
+(defn- kind-arg [more dflt] (if (seq more) (first more) dflt))
+
+(defn- finite! [x] (when (or (not= x x) (= x ##Inf) (= x ##-Inf)) (undefined :non-finite)) x)
+
+(defn int
+  "Fortran's INT(x [, kind]): an integer kept, a real truncated toward zero."
+  [x & more]
+  (let [k (kind-arg more default-integer)]
+    (if (int-kind? (kind-of x)) (fit k (long x)) (fit k (long (finite! (double x)))))))
+
+(defn- round-away
+  "The real x rounded to the nearest whole number, halves away from zero,
+  exactly (x - floor x is exact)."
+  [x]
+  (let [ax (clotran.host.math/abs x)
+        f (clotran.host.math/floor ax)
+        r (if (clojure.core/>= (clojure.core/- ax f) 0.5) (clojure.core/+ f 1.0) f)]
+    (if (neg? x) (clojure.core/- r) r)))
+
+(defn nint [x & more]
+  (let [k (kind-arg more default-integer)]
+    (fit k (long (round-away (finite! (double x)))))))
+(defn floor [x & more]
+  (let [k (kind-arg more default-integer)]
+    (fit k (long (clotran.host.math/floor (finite! (double x)))))))
+(defn ceiling [x & more]
+  (let [k (kind-arg more default-integer)]
+    (fit k (long (clotran.host.math/ceil (finite! (double x)))))))
+
+(defn real [x & more] (conv (kind-arg more default-real) x))
+(defn dble [x] (conv :real8 x))
+
+(defn abs [x]
+  (let [k (kind-of x)]
+    (if (int-kind? k)
+      (fit k (let [v (bigint (long x))] (if (neg? v) (-' v) v)))
+      (rnd k (clotran.host.math/abs (double x))))))
+
+(defn- fmod
+  "C's fmod, exactly: the remainder of a by p with a's sign (binary long
+  division in doubles; every subtraction is exact)."
+  [a p]
+  (let [pa (clotran.host.math/abs p) r0 (clotran.host.math/abs a)]
+    (if (< r0 pa)
+      (double a)
+      (let [t0 (loop [t pa] (let [t2 (clojure.core/* t 2.0)] (if (clojure.core/<= t2 r0) (recur t2) t)))
+            r (loop [t t0 r r0]
+                (cond (< t pa) r
+                      (clojure.core/>= r t) (recur (clojure.core// t 2.0) (clojure.core/- r t))
+                      :else (recur (clojure.core// t 2.0) r)))]
+        (if (neg? a) (clojure.core/- r) r)))))
+
+(defn mod
+  "Fortran's MOD(a, p): a - int(a/p)*p, the sign of a."
+  [a p]
+  (need-same 'mod a p)
+  (let [k (kind-of a)]
+    (if (int-kind? k)
+      (if (zero? (long p)) (undefined :mod-by-zero) (fit k (rem (bigint (long a)) (bigint (long p)))))
+      (if (zero? (double p)) (undefined :mod-by-zero) (rnd k (fmod (double a) (double p)))))))
+
+(defn modulo
+  "Fortran's MODULO(a, p): a - floor(a/p)*p, the sign of p."
+  [a p]
+  (need-same 'modulo a p)
+  (let [k (kind-of a)]
+    (if (int-kind? k)
+      (if (zero? (long p)) (undefined :mod-by-zero) (fit k (clojure.core/mod (bigint (long a)) (bigint (long p)))))
+      (if (zero? (double p))
+        (undefined :mod-by-zero)
+        (let [r (fmod (double a) (double p))
+              r (if (and (not (zero? r)) (not= (neg? r) (neg? (double p)))) (clojure.core/+ r (double p)) r)]
+          (rnd k r))))))
+
+(defn sign
+  "Fortran's SIGN(a, b): the magnitude of a with the sign of b."
+  [a b]
+  (need-same 'sign a b)
+  (let [k (kind-of a)]
+    (if (int-kind? k)
+      (let [m (let [v (bigint (long a))] (if (neg? v) (-' v) v))] (fit k (if (neg? (long b)) (-' m) m)))
+      (let [m (clotran.host.math/abs (double a))] (rnd k (if (neg? (double b)) (clojure.core/- m) m))))))
+
+(defn- extreme [f who vs]
+  (apply need-same who vs)
+  (let [k (kind-of (first vs))]
+    (if (int-kind? k)
+      (fit k (apply f (map #(long %) vs)))
+      (rnd k (apply f (map #(double %) vs))))))
+(defn max [& vs] (extreme clojure.core/max 'max vs))
+(defn min [& vs] (extreme clojure.core/min 'min vs))
+
+(defn sqrt [x]
+  (let [k (kind-of x)]
+    (when-not (real-kind? k) (ill-typed "sqrt needs a real"))
+    (when (neg? (double x)) (undefined :sqrt-of-negative))
+    (rnd k (clotran.host.math/sqrt (double x)))))
+
+;; the numeric model of a kind's value x
+(defn huge [x]
+  (let [k (kind-of x)]
+    (if (int-kind? k) (fit k (imaxs k)) (case k :real8 1.7976931348623157E308 :real4 (float 3.4028234663852886E38)))))
+(defn tiny [x]
+  (let [k (kind-of x)]
+    (when-not (real-kind? k) (ill-typed "tiny needs a real"))
+    (case k :real8 2.2250738585072014E-308 :real4 (float 1.1754943508222875E-38))))
+(defn epsilon [x]
+  (let [k (kind-of x)]
+    (when-not (real-kind? k) (ill-typed "epsilon needs a real"))
+    (case k :real8 2.220446049250313E-16 :real4 (float 1.1920928955078125E-7))))
+(defn kind [x] (fit default-integer (:n (specs (kind-of x)))))
+(defn digits [x]
+  (let [k (kind-of x)]
+    (fit default-integer (if (int-kind? k) (dec (:bits (specs k))) (case k :real4 24 :real8 53)))))

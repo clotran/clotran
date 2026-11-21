@@ -22,17 +22,24 @@
 (def work (fs/file repo "build" "ftypes-check"))
 (fs/create-dirs work)
 
-;; 1. the oracle, on real clj
+;; 1. the oracle, on real clj. It is written in clotran's class names, as every file of
+;; the tree is (upstream/check-names); upstream/names.clj turns them into clj's, as
+;; scripts/oracle does for its forms.
+(load-file (str (fs/file repo "upstream" "names.clj")))
+(def oracle-file (fs/file work "oracle_clj.clj"))
+(spit oracle-file (names/to-upstream (slurp (fs/file repo "test" "ftypes" "oracle.clj"))))
 (def answers
   (let [r (shell {:out :string :err :string :dir (str repo)}
                  "clj" "-Sdeps" "{:deps {org.clojure/clojure {:mvn/version \"1.12.6\"}}}"
-                 "-M" "-i" (str (fs/file repo "test" "ftypes" "oracle.clj"))
+                 "-M" "-i" (str oracle-file)
                  "-e" (str "(require 'clojure.edn) (ftypes.oracle/run-file " (pr-str cases-file) ")"))]
     (->> (str/split-lines (:out r)) (remove str/blank?) (mapv read-string))))
 (assert (= (count answers) (count cases)) (str "oracle answered " (count answers) " of " (count cases)))
 
 ;; 2. a case as Fortran text
-(defn fk [k] (name k))
+;; clotran's kind-number names to iso_fortran_env's (bits) names, which the Fortran text uses
+(def iso {:int1 "int8" :int2 "int16" :int4 "int32" :int8 "int64" :real4 "real32" :real8 "real64"})
+(defn fk [k] (iso k))
 (defn ftext [e]
   (cond
     (vector? e) (let [[k x] e]
@@ -50,9 +57,9 @@
                              (str "(" (first a) " " op " " (second a) ")"))
               (str op "(" (str/join ", " a) ")")))))
 
-(def decl {:int8 "integer(int8)" :int16 "integer(int16)" :int32 "integer(int32)" :int64 "integer(int64)"
-           :real32 "real(real32)" :real64 "real(real64)"})
-(def fmt {:real32 "ES16.8E3" :real64 "ES26.17E3"})
+(def decl {:int1 "integer(int8)" :int2 "integer(int16)" :int4 "integer(int32)" :int8 "integer(int64)"
+           :real4 "real(real32)" :real8 "real(real64)"})
+(def fmt {:real4 "ES16.8E3" :real8 "ES26.17E3"})
 
 ;; a case must answer what it says: a value, or {:undefined ..} undefined. Anything else
 ;; (an ill-typed or an unexpected undefined) is a failure, not a skip.
@@ -76,7 +83,7 @@
   (if (str/starts-with? (name k) "int")
     (parse-long (str/trim s))
     (let [t (str/trim s)]
-      (case k :real64 (Double/parseDouble t) :real32 (double (Float/parseFloat t))))))
+      (case k :real8 (Double/parseDouble t) :real4 (double (Float/parseFloat t))))))
 
 (defn same? [k want got]
   (if (str/starts-with? (name k) "int")
@@ -99,9 +106,42 @@
                                :when (not (same? k want got))]
                            {:case (pr-str (nth cases i)) :oracle want :got got :kind k}))}))))))
 
+;; 4. clotran: the same cases through fortran.ops (src/clj/fortran/ops.cljf). A case
+;; must answer the oracle's value and kind, or, for {:undefined ..}, throw.
+(defn clotran-form [e]
+  (cond (vector? e) (list 'f/lit (first e) (second e))
+        (keyword? e) e
+        (map? e) (clotran-form (:undefined e))
+        :else (cons (symbol "f" (name (first e))) (map clotran-form (rest e)))))
+(def clotran-result
+  (let [prog (str "(require '[fortran.ops :as f])\n"
+                  "(defn show [v] (let [k (f/kind-of v)] [:ok k (if (#{:int1 :int2 :int4 :int8} k) (long v) (double v))]))\n"
+                  (str/join (for [e cases]
+                              (str "(prn (try (show " (pr-str (clotran-form e)) ") (catch clotran.host.throwable e [:threw (ex-message e)])))\n"))))
+        f (fs/file work "ftypes_clotran.cljf")]
+    (spit f prog)
+    (let [r (shell {:out :string :err :string :continue true :dir (str work)
+                    :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}}
+                   (str (fs/file repo "clotran")) (str f))]
+      (if (zero? (:exit r))
+        {:answers (->> (str/split-lines (:out r)) (remove str/blank?) (mapv read-string))}
+        {:failed (str (:out r) (:err r))}))))
+(def clotran-diffs
+  (when-let [as (:answers clotran-result)]
+    (vec (for [[i a] (map-indexed vector as)
+               :let [want (nth answers i) ex (expected i)]
+               :when (if (= ex :ok)
+                       (not (and (= :ok (first a) (first want)) (= (second a) (second want))
+                                 (same? (second a) (nth want 2) (nth a 2))))
+                       (not= :threw (first a)))]
+           {:case (pr-str (nth cases i)) :oracle want :clotran a :expected ex}))))
+
 (let [n (count cases)
       und (remove #(= :ok (first %)) answers)
-      bad (+ (count unexpected) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
+      bad (+ (count unexpected) (if (:failed clotran-result) 1 (count clotran-diffs)) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
+  (cond (:failed clotran-result) (println (str "  clotran: DID NOT RUN\n" (:failed clotran-result)))
+        :else (println (str "  clotran: " (count clotran-diffs) " differ from the oracle (" (count (:answers clotran-result)) " cases)")))
+  (doseq [d clotran-diffs] (println (str "  DIFF clotran " (:case d) ": oracle " (:oracle d) ", clotran " (:clotran d))))
   (doseq [u unexpected] (println (str "  UNEXPECTED " (:case u) ": expected " (:expected u) ", the oracle answered " (:answered u))))
   (println (str "ftypes-check: " n " cases, " (count compared) " compared with the compilers, "
                 (count und) " not (the standard leaves them to the processor, or ill-typed): "

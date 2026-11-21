@@ -110,6 +110,12 @@ Categories:
 | 81 | `.hashCode` of a core value is not a member | design | -- |
 | 82 | A symbol's text alone decides its namespace: `(symbol "a" "b/7")` is a/b and 7 | design | `src/f/GC.f90` |
 | 83 | `format`'s `%f`, `%e` and `%g` round the stored double, not its text | design | `src/f/Eval.f90` (format_one) |
+| 86 | clojure.core arithmetic widens the narrow kinds; Fortran's operations keep them | design | `src/clj/fortran/ops.cljf` |
+| 87 | `/` on integers: a ratio in clojure.core, truncation in fortran.ops | design | `src/clj/fortran/ops.cljf` |
+| 88 | What the standard leaves to the processor throws | design | `src/clj/fortran/ops.cljf` |
+| 89 | A real(4) literal is rounded from its text through a real(8) | 1.x | `src/clj/fortran/ops.cljf` |
+| 90 | A real(4) conversion out of range throws where IEEE answers infinity | design | -- |
+| 91 | The pure tier lowers only some of Fortran's kinds | 1.x | `src/clj/clotran/purefort.cljf` |
 
 ---
 
@@ -2718,3 +2724,74 @@ member is a host one, not that the hinted class has it.
 hierarchy does; then dot_hint_class drops its IFn test (and asks the host
 table for the member on that class).
 
+
+## 86. clojure.core arithmetic widens the narrow kinds; Fortran's operations keep them
+
+**Types are Fortran's** (James, 2026-11-21): clotran's value classes are named by
+Fortran kind number -- `clotran.host.int1` .. `int8`, `real4`, `real8` (the
+renames of clj's Byte, Short, Integer, Long, Float, Double, in
+`upstream/class-names.edn`) -- and `(int 5)` is an int4. What clojure.core does
+with them is Clojure's rule: `(+ (int 5) (int 7))` is an int8, `(+ (float 1.5)
+(float 2.5))` a real8. Fortran's result keeps the kind (the larger of two integer
+kinds; with a real, the real's kind). `fortran.ops` is Fortran's: `(f/+ (f/int4 5)
+(f/int4 7))` is an int4, `(f/+ (f/int1 100) (f/int4 100000))` an int4.
+`test/ftypes/oracle.clj` (plain Clojure on clj, checked against gfortran and
+flang by `scripts/ftypes-check`) says what each operation answers, and the same
+script compares `fortran.ops` with it, case by case.
+
+**Removal**: none for clojure.core, which is Clojure's. A front end with Fortran's
+syntax (Lemmis) binds its operators to `fortran.ops`, so a program that reads as
+Fortran computes as Fortran.
+
+## 87. `/` on integers: a ratio in clojure.core, truncation in fortran.ops
+
+`(/ (int 7) (int 2))` is the ratio 7/2 (the numeric tower, which clotran keeps:
+DEVIATIONS 26, 70-72). Fortran's `/` on integers truncates toward zero:
+`(f// (f/int4 -7) (f/int4 2))` is -3, as gfortran and flang answer. `quot`,
+`rem` and `mod` of clojure.core already agree with Fortran's `/`, `MOD` and
+`MODULO` on integers.
+
+**Removal**: none; two surfaces over one set of values (see 86).
+
+## 88. What the standard leaves to the processor throws
+
+Integer overflow, division by zero, an integer out of its kind's range, a real
+power other than `x**2`, a square root of a negative: the standard leaves each to
+the processor, so a program that does one is not Fortran. `fortran.ops` throws
+(a trapping processor is conforming), where the compilers' answers differ with
+the optimization level. The oracle names each such case `{:undefined ...}` in
+`test/ftypes/cases.edn`, and the check fails if a case stops being undefined or
+`fortran.ops` stops throwing.
+
+**Removal**: none intended.
+
+## 89. A real(4) literal is rounded from its text through a real(8)
+
+`(f/real4 "1.1")` is `(float (parse-double "1.1"))`: the decimal text is rounded to
+binary64, then to binary32. Fortran rounds the text once, to binary32. The two
+differ only when the text lies within a double-rounding window of a binary32
+midpoint. clotran has no float parser of its own. The oracle parses directly, so
+a case in that window would show as a difference.
+
+**Removal**: a host parser for real(4) text (`clotran.host.real4` has none).
+
+## 90. A real(4) conversion out of range throws where IEEE answers infinity
+
+`(float 1.0e39)` throws "Value out of range for float" (as clj's does); a Fortran
+processor with IEEE arithmetic answers +Infinity for `real(1.0d39, 4)`. Only
+conversions are affected: the checks in `fortran.ops` for operations on real(4)
+values go through `float` too, so an overflowing real(4) `+` or `*` throws. A real(8) overflow answers Infinity, as IEEE does.
+
+**Removal**: none intended; Fortran leaves the overflow to the processor (88).
+
+## 91. The pure tier lowers only some of Fortran's kinds
+
+`clotran compile --pure` lowers long, double, boolean, 1-D long and double arrays,
+strings and records. It has no int1, int2, int4, real4, complex or logical
+kind, no rank above 1, and types an unhinted parameter by guessing (the hint, else
+what a same-file callee takes, else how the body uses it, else long or double) and
+emitting up to 8 versions. Fortran declares every type. `docs/types.md` has the
+table and what is planned.
+
+**Removal**: the pure tier's lattice takes the kinds `fortran.ops` already has
+(PLAN: types), hints spelled in Fortran's words, and then complex.
