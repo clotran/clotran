@@ -25,6 +25,7 @@ module Threads
   public :: th_lock, th_cond, th_thread, th_start_sized
   public :: th_lock_init, th_lock_acquire, th_lock_release
   public :: th_cond_init, th_cond_wait, th_cond_broadcast
+  public :: th_lock_name, th_cond_name, th_event, th_log_begin, th_mark
   public :: th_start, th_join, th_spawn, th_exit, th_ncpus
   public :: th_key, th_key_create, th_key_set, th_key_get
   public :: th_cond_timedwait, th_sleep_ms, th_wall_ms, PATH_SEP, LINE_SEP
@@ -54,6 +55,11 @@ module Threads
   integer, save :: sched_mode = 0
   integer(c_int64_t), save :: sched_state = 0
   type(th_lock), save, target :: sched_lk
+  ! the replay log (CLOTRAN_SCHED_LOG=prefix writes prefix.<pid>): 0 off, else its unit
+  integer, save :: sched_log_u = 0
+  logical, save :: sched_on = .false.   ! logging has begun: th_log_begin (a second mutator is running)
+  integer(c_int64_t), save :: sched_log_n = 0, sched_log_max = 3000000   ! lines kept (CLOTRAN_SCHED_LOG_MAX): a prefix of a run is a run
+  type(th_lock), save, target :: sched_llk
 
   type :: th_thread
      type(c_ptr) :: handle = c_null_ptr
@@ -146,6 +152,10 @@ module Threads
        type(th_timespec), intent(out) :: ts
        integer(c_int) :: r
      end function clock_gettime
+     function getpid() bind(C, name="getpid") result(r)
+       import :: c_int
+       integer(c_int) :: r
+     end function getpid
      function sched_yield() bind(C, name="sched_yield") result(r)
        import :: c_int
        integer(c_int) :: r
@@ -235,8 +245,19 @@ contains
   ! sched_mode is settled in th_lock_init, which runs before any thread.
   subroutine sched_init()
     character(len=32) :: v
-    integer :: n, st
+    character(len=512) :: f
+    integer :: n, st, u
     sched_mode = 1
+    call get_environment_variable("CLOTRAN_SCHED_LOG", f, n, st)
+    if (st == 0 .and. n >= 1) then
+       if (pthread_mutex_init(c_loc(sched_llk%raw), c_null_ptr) == 0) then
+          write(v, '(I0)') getpid()
+          open(newunit=u, file=f(1:n) // "." // trim(v), status="replace", action="write", iostat=st)
+          if (st == 0) sched_log_u = u
+          call get_environment_variable("CLOTRAN_SCHED_LOG_MAX", v, n, st)
+          if (st == 0 .and. n >= 1) read(v(1:n), *, iostat=st) sched_log_max
+       end if
+    end if
     call get_environment_variable("CLOTRAN_SCHED_SEED", v, n, st)
     if (st /= 0 .or. n < 1) return
     read(v(1:n), *, iostat=st) sched_state
@@ -245,6 +266,69 @@ contains
     if (pthread_mutex_init(c_loc(sched_lk%raw), c_null_ptr) /= 0) return
     sched_mode = 2
   end subroutine sched_init
+
+  ! One line per event: thread, event, two addresses (a lock, a condition), a
+  ! name. Written under sched_llk, so the file's order is one order of the
+  ! events; each is logged inside the lock-held span it describes (an
+  ! acquire after the lock is had, a release before it is let go).
+  subroutine sched_logw(ev, a, b, s)
+    character(len=*), intent(in) :: ev
+    integer(c_intptr_t), intent(in) :: a, b
+    character(len=*), intent(in) :: s
+    integer(c_int) :: r
+    r = pthread_mutex_lock(c_loc(sched_llk%raw))
+    if (sched_log_n < sched_log_max) then
+       sched_log_n = sched_log_n + 1
+       write(sched_log_u, '(I0,1X,A,1X,I0,1X,I0,1X,A)') pthread_self(), ev, a, b, s
+       flush(sched_log_u)
+    end if
+    r = pthread_mutex_unlock(c_loc(sched_llk%raw))
+  end subroutine sched_logw
+
+  subroutine sched_lev(ev, l, c)
+    character(len=*), intent(in) :: ev
+    type(th_lock), target, intent(in) :: l
+    type(th_cond), target, intent(in), optional :: c
+    integer(c_intptr_t) :: b
+    b = 0
+    if (present(c)) b = transfer(c_loc(c%raw), b)
+    call sched_logw(ev, transfer(c_loc(l%raw), b), b, "-")
+  end subroutine sched_lev
+
+  ! names a lock or condition in the log (the replay checker's key to which is which)
+  subroutine th_lock_name(l, nm)
+    type(th_lock), target, intent(in) :: l
+    character(len=*), intent(in) :: nm
+    if (sched_log_u /= 0) call sched_logw("name", transfer(c_loc(l%raw), 0_c_intptr_t), 0_c_intptr_t, nm)
+  end subroutine th_lock_name
+
+  subroutine th_cond_name(c, nm)
+    type(th_cond), target, intent(in) :: c
+    character(len=*), intent(in) :: nm
+    if (sched_log_u /= 0) call sched_logw("name", transfer(c_loc(c%raw), 0_c_intptr_t), 0_c_intptr_t, nm)
+  end subroutine th_cond_name
+
+  ! The log starts when a second thread runs clotran code: before that the process
+  ! is one thread and its heap and lock traffic (every allocation) is noise. The
+  ! replay checker infers who held what at this point from each thread's first event.
+  subroutine th_log_begin()
+    if (sched_log_u /= 0) sched_on = .true.
+  end subroutine th_log_begin
+
+  ! A shared access the th_* wrappers cannot see (a lock-free read, an atomic,
+  ! a CAS): a yield point under a seed, and a "mark" line in the log, so a
+  ! test can tell the seam reaches it. Off, two integer compares.
+  subroutine th_mark(ev)
+    character(len=*), intent(in) :: ev
+    if (sched_mode == 2) call sched_point()
+    if (sched_on) call sched_logw("mark", 0_c_intptr_t, 0_c_intptr_t, ev)
+  end subroutine th_mark
+
+  ! a protocol step of the caller's, in the log (GC.f90: enter, park, stop, ...)
+  subroutine th_event(ev)
+    character(len=*), intent(in) :: ev
+    if (sched_on) call sched_logw(ev, 0_c_intptr_t, 0_c_intptr_t, "-")
+  end subroutine th_event
 
   ! next draw, 0..32767
   integer function sched_draw()
@@ -291,11 +375,13 @@ contains
     type(th_lock), target, intent(inout) :: l
     call sched_point()
     th_lock_acquire = pthread_mutex_lock(c_loc(l%raw)) == 0
+    if (sched_on) call sched_lev("acq", l)
   end function th_lock_acquire
 
   logical function th_lock_release(l)
     type(th_lock), target, intent(inout) :: l
     call sched_point()
+    if (sched_on) call sched_lev("rel", l)
     th_lock_release = pthread_mutex_unlock(c_loc(l%raw)) == 0
   end function th_lock_release
 
@@ -310,18 +396,22 @@ contains
     type(th_cond), target, intent(inout) :: c
     type(th_lock), target, intent(inout) :: l
     call sched_point()
+    if (sched_on) call sched_lev("wait", l, c)
     if (sched_spurious()) then
        th_cond_wait = pthread_mutex_unlock(c_loc(l%raw)) == 0
        call sched_point()
        th_cond_wait = pthread_mutex_lock(c_loc(l%raw)) == 0 .and. th_cond_wait
+       if (sched_on) call sched_lev("woke", l, c)
        return
     end if
     th_cond_wait = pthread_cond_wait(c_loc(c%raw), c_loc(l%raw)) == 0
+    if (sched_on) call sched_lev("woke", l, c)
   end function th_cond_wait
 
   logical function th_cond_broadcast(c)
     type(th_cond), target, intent(inout) :: c
     call sched_point()
+    if (sched_on) call sched_logw("bcast", transfer(c_loc(c%raw), 0_c_intptr_t), 0_c_intptr_t, "-")
     th_cond_broadcast = pthread_cond_broadcast(c_loc(c%raw)) == 0
   end function th_cond_broadcast
 
@@ -449,13 +539,16 @@ contains
        ts%nsec = ts%nsec - 1000000000_c_long
     end if
     call sched_point()
+    if (sched_on) call sched_lev("wait", l, c)
     if (sched_spurious()) then
        th_cond_timedwait = pthread_mutex_unlock(c_loc(l%raw)) == 0
        call sched_point()
        th_cond_timedwait = pthread_mutex_lock(c_loc(l%raw)) == 0 .and. th_cond_timedwait
+       if (sched_on) call sched_lev("woke", l, c)
        return
     end if
     th_cond_timedwait = pthread_cond_timedwait(c_loc(c%raw), c_loc(l%raw), ts) == 0
+    if (sched_on) call sched_lev("woke", l, c)
   end function th_cond_timedwait
 
   ! Sleep this thread ms milliseconds.

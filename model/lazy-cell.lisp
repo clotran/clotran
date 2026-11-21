@@ -1,3 +1,5 @@
+; Conformance (2026-11-20): scripts/check-replay replays a logged run of the real code (src/f/Threads.f90's CLOTRAN_SCHED_LOG)
+; through hm-step; the waiters pairing's fences are check-lazy's (GenMC), not this book's. docs/concurrency-checks.md.
 ; clotran's lazy cells, formally (PLAN step 30, the runtime). A lazy
 ; seq's cell is realised once: the first thread to force it runs its
 ; thunk, the others wait for the answer. Today a global mutex guards the

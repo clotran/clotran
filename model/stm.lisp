@@ -1,3 +1,5 @@
+; Conformance (2026-11-20): scripts/check-replay replays a logged run of the real code (src/f/Threads.f90's CLOTRAN_SCHED_LOG)
+; through hm-step; tx_lk steps are replayed as heapmt's :xlock/:xunlock. docs/concurrency-checks.md.
 ; clotran's transactions (STM), formally (docs/model-coverage.md).
 ;
 ; src/f/Eval.f90 runs every dosync under ONE lock, tx_lk (B_RUNTX,

@@ -19729,6 +19729,7 @@ contains
     call gc_state_lock()
     if (.not. tx_lk_made) then
        ok = th_lock_init(tx_lk)
+       call th_lock_name(tx_lk, "tx_lk")
        tx_lk_made = .true.
     end if
     call gc_state_unlock()

@@ -1,3 +1,5 @@
+; Conformance (2026-11-20): scripts/check-replay replays a logged run of the real code (src/f/Threads.f90's CLOTRAN_SCHED_LOG)
+; through hm-step; the state lock steps of the code are replayed (the fences are check-seqlock's). docs/concurrency-checks.md.
 ; Lock-free cell reads and atoms, formally (docs/model-coverage.md).
 ;
 ; src/c/seqlock.c and GC.f90: a shared cell -- a Var's root, an atom's,

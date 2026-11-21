@@ -68,7 +68,7 @@
 module GC
   use Threads, only: th_key, th_key_create, th_key_set, th_key_get, th_lock, th_cond, &
        th_lock_init, th_lock_acquire, th_lock_release, th_cond_init, th_cond_wait, th_cond_broadcast, &
-       th_cond_timedwait
+       th_cond_timedwait, th_lock_name, th_cond_name, th_event, th_log_begin, th_mark
   use iso_c_binding, only: c_ptr, c_loc, c_f_pointer, c_associated, c_size_t, c_int64_t, c_int, c_int32_t
   use BigInt
   use BigDec
@@ -707,6 +707,7 @@ module GC
   logical :: heap_sync_up = .false.
   logical, volatile :: stop_world = .false.
   integer :: n_running = 1, n_parked = 0
+  integer :: alone_stops = 0   ! world_stop calls that found no one to stop, not yet world_start'ed (the replay log)
 
   ! --- marking work list -----------------------------------------
   ! An explicit stack, not recursion: a list is a chain thousands of
@@ -1347,6 +1348,10 @@ contains
     if (.not. th_lock_init(rem_lk)) error stop "clotran: no lock for the remembered set"
     if (.not. (th_lock_init(state_lk) .and. th_cond_init(state_cv))) &
          error stop "clotran: no lock for shared state"
+    call th_lock_name(heap_lock, "heap_lock")
+    call th_cond_name(heap_cond, "heap_cond")
+    call th_lock_name(state_lk, "state_lk")
+    call th_cond_name(state_cv, "state_cv")
     heap_sync_up = .true.
   end subroutine heap_sync_init
 
@@ -1367,6 +1372,11 @@ contains
     ok = th_lock_acquire(heap_lock)
     s%holds_heap = .true.
     if (stop_world) then
+       call th_event("park")
+    else
+       call th_event("henter")
+    end if
+    if (stop_world) then
        base = vs_enter_on(s, size(a) + size(b))
        do i = 1, size(a)
           s%vstack(base + i) = a(i)
@@ -1380,6 +1390,7 @@ contains
           ok = th_cond_wait(heap_cond, heap_lock)
        end do
        n_parked = n_parked - 1
+       call th_event("wake")
        call vs_leave_on(s, base)
     end if
   end subroutine heap_enter
@@ -1391,6 +1402,7 @@ contains
     if (.not. entered) return
     s => my_stack()
     s%holds_heap = .false.
+    call th_event("hleave")
     ok = th_lock_release(heap_lock)
   end subroutine heap_leave
 
@@ -1404,9 +1416,12 @@ contains
     if (.not. stopped) return
     if (n_running <= 1) then
        stopped = .false.   ! no one to stop: the common case, the baton on
+       if (alone_stops == 0) call th_event("stopalone")
+       alone_stops = alone_stops + 1
        return
     end if
     stop_world = .true.
+    call th_event("stop")
     block
       integer(8) :: t0, t1, rate
       call system_clock(t0, rate)
@@ -1414,6 +1429,7 @@ contains
          ok = th_cond_wait(heap_cond, heap_lock)
       end do
       call system_clock(t1)
+      call th_event("stopwake")
       gc_safepoint_ms = gc_safepoint_ms + real(t1 - t0, 8) * 1000d0 / real(rate, 8)
     end block
   end subroutine world_stop
@@ -1421,7 +1437,14 @@ contains
   subroutine world_start(stopped)
     logical, intent(in) :: stopped
     logical :: ok
-    if (.not. stopped) return
+    if (.not. stopped) then
+       if (alone_stops > 0) then
+          alone_stops = alone_stops - 1
+          if (alone_stops == 0) call th_event("start")
+       end if
+       return
+    end if
+    call th_event("start")
     stop_world = .false.
     ok = th_cond_broadcast(heap_cond)
   end subroutine world_start
@@ -1436,6 +1459,8 @@ contains
        ok = th_cond_wait(heap_cond, heap_lock)
     end do
     n_running = n_running + 1
+    if (n_running >= 2) call th_log_begin()
+    call th_event("enter")
     ok = th_lock_release(heap_lock)
   end subroutine gc_mutator_enter
 
@@ -1445,6 +1470,7 @@ contains
     logical :: ok
     ok = th_lock_acquire(heap_lock)
     n_running = n_running - 1
+    call th_event("leave")
     ok = th_cond_broadcast(heap_cond)
     ok = th_lock_release(heap_lock)
   end subroutine gc_mutator_leave
@@ -3872,10 +3898,12 @@ contains
   ! (scripts/fuzz-gc). No collection runs while any thread holds;
   ! allocation still does, the pools growing until the hold ends.
   subroutine gc_hold_begin()
+    call th_mark("gc_hold")
     call clotran_gc_hold(1_c_int64_t)
   end subroutine gc_hold_begin
 
   subroutine gc_hold_end()
+    call th_mark("gc_hold")
     call clotran_gc_hold(-1_c_int64_t)
   end subroutine gc_hold_end
 
@@ -3937,17 +3965,20 @@ contains
     integer, intent(in) :: from, to
     gc_cas_i1 = .false.
     if (v%tag /= GCT_OBJ) return
+    call th_mark("lazy_cas")
     gc_cas_i1 = clotran_cas_i32(c_loc(obj_pool(v%ref)%i1), int(from, c_int32_t), int(to, c_int32_t)) /= 0
   end function gc_cas_i1
 
   ! a thread waits for a cell another is realising (d 1), or stops (d -1)
   subroutine gc_lazy_wait_add(d)
     integer, intent(in) :: d
+    call th_mark("lazy_waiters")
     call clotran_lazy_waiters_add(int(d, c_int64_t))
   end subroutine gc_lazy_wait_add
 
   ! a cell settled or given back: its waiters woken, when there are any
   subroutine gc_lazy_wake()
+    call th_mark("lazy_wake")
     if (clotran_lazy_waiters_fenced() > 0) call gc_state_notify()
   end subroutine gc_lazy_wake
 
@@ -4064,6 +4095,7 @@ contains
        x = obj_pool(v%ref)%slot(i)
        return
     end if
+    call th_mark("cell_get")
     call clotran_seq_read16(c_loc(obj_pool(v%ref)%slot(i)), c_loc(x))
   end function gc_cell_get
 
