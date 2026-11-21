@@ -108,6 +108,18 @@
   ([a b] (lerp a b 0.5))
   ([a b ^double t] (+ a (* t (- b a)))))
 
+;; a return hint expands the body to (double (let [a a] ..)): the array
+;; parameter is rebound, hinted or not (pure-check)
+(defn hsum ^double [^doubles a]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+
+(defn hsum-u ^double [a]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+
+(defn hreduce ^double [^doubles a] (reduce + 0.0 a))
+
+(defn hlong ^long [^longs a] (reduce + 0 a))
+
 (defn add-down
   ([n] (add-down n 0))
   ([n acc] (if (zero? n) acc (recur (dec n) (+ acc n)))))

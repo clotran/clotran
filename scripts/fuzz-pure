@@ -40,27 +40,40 @@
           body (g-expr (vec (take arity '[x y z])))]
     (g/return {:kind :scalar :arity arity :params (vec (take arity '[x y z])) :body body})))
 
+;; an array function may be hinted -- the parameter (`^doubles a`), the result
+;; (`^double [a]`, which makes the body (double (let [a a] ..))), or both --
+;; and then takes only that array type: the hinted forms lowered to pure
+;; Fortran as the unhinted ones only after the fix in purefort's :loop
 (def g-array-fn
-  (g/let [init (g/elements [0 0.0 1])
+  (g/let [atype (g/elements [:any :doubles :longs])
+          init (g/elements (case atype :doubles [0.0] :longs [0 1] [0 0.0 1]))
+          hint (g/elements (if (= atype :any) [:none] [:none :param :ret :both]))
           op (g/elements '[+ * max min])
           ;; the element written in place: a fn literal per element is tier B
           f (g/elements ["(aget a i)" "(* (aget a i) (aget a i))" "(- (aget a i) 1)"])]
-    (g/return {:kind :array :init init :op op :f f})))
+    (g/return {:kind :array :atype atype :hint hint :init init :op op :f f})))
 
-(defn fn-src [i {:keys [kind params body init op f]}]
+(defn fn-src [i {:keys [kind params body init op f atype hint]}]
   (case kind
     :scalar (str "(defn f" i " " (pr-str params) " " (pr-str body) ")")
-    :array (str "(defn f" i " [a] (let [n (alength a)] (loop [i 0 s " init "] (if (< i n) (recur (inc i) ("
+    :array (str "(defn f" i " "
+                (when (#{:ret :both} hint) (case atype :doubles "^double " :longs "^long "))
+                (if (#{:param :both} hint) (case atype :doubles "[^doubles a]" :longs "[^longs a]") "[a]")
+                " (let [n (alength a)] (loop [i 0 s " init "] (if (< i n) (recur (inc i) ("
                 op " s " f ")) s))))")))
 
 (def g-num (g/one-of [(g/choose -20 20) (g/elements [0.25 -3.5 1e6 2.0 9223372036854775807 -7])]))
 (def g-arr (g/one-of [(g/fmap (fn [xs] (list 'long-array (vec xs))) (g/vector (g/choose -9 9) 0 5))
                       (g/fmap (fn [xs] (list 'double-array (vec xs))) (g/vector (g/elements [0.5 -1.0 2.25 3.0]) 0 5))]))
 
-(defn calls [i {:keys [kind arity]}]
+(def g-larr (g/fmap (fn [xs] (list 'long-array (vec xs))) (g/vector (g/choose -9 9) 0 5)))
+(def g-darr (g/fmap (fn [xs] (list 'double-array (vec xs))) (g/vector (g/elements [0.5 -1.0 2.25 3.0]) 0 5)))
+
+(defn calls [i {:keys [kind arity atype]}]
   (g/vector (case kind
               :scalar (g/fmap #(apply list (symbol (str "f" i)) %) (g/vector g-num arity))
-              :array (g/fmap #(list (symbol (str "f" i)) %) g-arr))
+              :array (g/fmap #(list (symbol (str "f" i)) %)
+                             (case atype :doubles g-darr :longs g-larr g-arr)))
             3))
 
 (let [{:keys [n seed]} opts

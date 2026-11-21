@@ -508,6 +508,8 @@ leaves tier A, says why and what would keep it there:
        |                    ^
        = help: consume it where it is made, so the chain fuses into one loop: (reduce f init (map ...)), (run! f (map ...)), or (into-array (map ...))
 
+A function can be tier A and still be left out of the pure module -- it answers a long on one path and a double on another, which pure Fortran, with one result type, cannot say -- and the report says so with a note, `N003`, carrying the reason, so `--report` and `--pure` agree.
+
 `clotran compile --pure file.cljf` then writes the tier-A functions as
 one ordinary Fortran module, with no clotran runtime at all -- any
 Fortran program can `use` it. Each function gets one generic name and

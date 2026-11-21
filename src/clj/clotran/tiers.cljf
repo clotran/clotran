@@ -75,6 +75,8 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
            :explain "def or set! inside a function changes Vars while the program runs. Define things at the top level of the file."}
    "N002" {:title "assumes a record" :tier :A
            :explain "A keyword that names a field of a record defined in this file is applied to a parameter or local. The function stays tier A on the assumption that it is that record -- in pure Fortran a derived type, and the read a field access. Passed a map instead, it needs the collector."}
+   "N003" {:title "tier A, but not lowered to pure Fortran" :tier :A
+           :explain "The function has no feature that needs the collector or the interpreter, so it is tier A, but pure Fortran cannot lower it as written: the reason is on the note. clotran compile --pure leaves it out, and it still runs compiled through the runtime. A typical cause: the function answers different types on different paths (Clojure's (if c 1 2.5) is a long or a double; pure Fortran has one result type), so make every path the same type."}
    "N001" {:title "assumes a primitive array" :tier :A
            :explain "A sequence function is applied to a parameter or local whose type the report cannot see. The function stays tier A on the assumption that it is a primitive array; passed a vector or a seq, it needs the collector. Once the compiler infers types from the calls in the program (PLAN.md step 13), this note is resolved or turned into a B warning."}})
 

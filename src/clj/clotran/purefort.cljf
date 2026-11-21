@@ -1095,9 +1095,14 @@ end module " mod "
                 label (str "lp" (:n (swap! st update :n inc)))
                 [ls env' vars] (reduce (fn [[ls env vars] i]
                                          (let [[l e t] (emit (nth kids i) env st)
-                                               _ (when (#{:doubles :longs} t) (decline "an array as a loop local"))
-                                               v (fresh! st "q" t)]
-                                           [(-> ls (into l) (conj (str v " = " e)))
+                                               arr? (#{:doubles :longs} t)
+                                               ;; an array local is the same array under another name
+                                               ;; (what `(fn ^double [^doubles a] ..)` expands to:
+                                               ;; (let [a a] ..)): no copy, only a plain name may alias
+                                               _ (when (and arr? (not (re-matches #"[A-Za-z_][A-Za-z0-9_]*" (str e))))
+                                                   (decline "an array as a loop local"))
+                                               v (if arr? e (fresh! st "q" t))]
+                                           [(if arr? (into ls l) (-> ls (into l) (conj (str v " = " e))))
                                             (assoc env (+ base i) [v t])
                                             (conj vars [v t])]))
                                        [[] env []] (range n))
@@ -1144,6 +1149,16 @@ end module " mod "
   reads it, a string if subs or clojure.string does, a number otherwise."
   [params body start sigs records]
   (let [nodes (tree-seq coll? seq body)
+        ;; (let [a a] ..) rebinds a parameter under a new slot -- what a return
+        ;; hint (`^double [^doubles a]`) expands the body to -- so a use of the
+        ;; new slot is a use of the parameter
+        alias (into {} (for [nd nodes
+                             :when (and (map? nd) (= :loop (:op nd)) (integer? (:p1 nd)))
+                             i (range (:i2 nd))
+                             :let [k (nth (:children nd) i nil)]
+                             :when (and (map? k) (= :local (:op k)))]
+                         [(+ (:p1 nd) i) (:i2 k)]))
+        resolve-slot (fn [s] (loop [s s n 0] (let [t (alias s)] (if (and t (< n 16)) (recur t (inc n)) s))))
         ;; a parameter read by keywords that are all fields of a record is
         ;; that record -- each record that has them all is a candidate
         looked-up (reduce (fn [m [slot k]] (update m slot (fnil conj #{}) k)) {}
@@ -1151,7 +1166,7 @@ end module " mod "
                                 :when (and (map? nd) (= :call (:op nd)))
                                 :let [[h a] (:children nd)]
                                 :when (and (= :const (:op h)) (keyword? (:p1 h)) (= :local (:op a)))]
-                            [(:i2 a) (:p1 h)]))
+                            [(resolve-slot (:i2 a)) (:p1 h)]))
         record-cands (fn [slot] (when-let [ks (looked-up slot)]
                                   (seq (for [[_ r] (sort-by key records)
                                              :when (every? (set (map first (:fields r))) ks)]
@@ -1163,7 +1178,7 @@ end module " mod "
                                      a (if (and (= :call (:op a)) (= 'clotran-array-cast (op-name (first (:children a)))))
                                          (second (:children a)) a)]
                                :when (and (#{'aget 'aset 'alength 'aclone} op) (= :local (:op a)))]
-                           (:i2 a)))
+                           (resolve-slot (:i2 a))))
         ;; a parameter passed straight to a same-file function: the types
         ;; that function's versions take in that position
         callee-types (reduce (fn [m [slot ts]] (update m slot (fnil into (sorted-set)) ts)) {}
@@ -1173,14 +1188,14 @@ end module " mod "
                                    :when sig
                                    [j a] (map-indexed vector (rest (:children nd)))
                                    :when (= :local (:op a))]
-                               [(:i2 a) (set (for [k (keys sig) :when (= (count k) (dec (count (:children nd))))] (nth k j)))]))
+                               [(resolve-slot (:i2 a)) (set (for [k (keys sig) :when (= (count k) (dec (count (:children nd))))] (nth k j)))]))
         ;; a parameter subs or clojure.string reads is a string
         string-slots (set (for [nd nodes
                                 :when (and (map? nd) (= :call (:op nd)))
                                 :let [op (op-name (first (:children nd))) a (second (:children nd))]
                                 :when (and (or (= op 'subs) (and (symbol? op) (= "clojure.string" (namespace op))))
                                            (= :local (:op a)))]
-                            (:i2 a)))
+                            (resolve-slot (:i2 a))))
         ;; ... and so is one a sequence function reads from
         array-slots (into array-slots
                           (for [nd nodes
@@ -1188,7 +1203,7 @@ end module " mod "
                                            ('#{map filter remove reduce count every?} (op-name (first (:children nd)))))
                                 :let [a (last (:children nd))]
                                 :when (= :local (:op a))]
-                            (:i2 a)))]
+                            (resolve-slot (:i2 a))))]
     (vec (map-indexed
           (fn [i p]
             (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] clotran.host.string [:string]} (:tag (meta p)))]
@@ -1408,3 +1423,17 @@ end module " mod "
                       "contains\n"
                       (str/join "\n" (for [[_ vs] (sort-by key emitted) v vs] (:text v)))
                       "end module " mod-name "\n"))))
+
+(defn report
+  "clotran compile --report: the tier report, then a note (N003) for each
+  function it calls tier A that pure Fortran declines, with the reason, so
+  --report and --pure tell the same story. Answers the classification."
+  [src]
+  (let [r (tiers/report src)
+        g (generate src)]
+    (doseq [[s why] (sort-by key (:skipped g))
+            :when (= :A (get-in r [s :tier]))]
+      (println (str "note[N003]: tier A, but not lowered to pure Fortran: " why "\n"
+                    "  in `" s "`\n"
+                    "  = help: see clotran explain N003\n")))
+    r))

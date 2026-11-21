@@ -179,7 +179,7 @@ gives the line -- then clotran deps fetches it. More: https://github.com/clotran
 (defn- compile-report [args]
   (if (not= 1 (count args))
     (do (err "usage: clotran compile --report file.cljf") (exit! 2))
-    (tiers-run (str "(clotran.tiers/report " (pr-str (slashes (first args))) ")\n"))))
+    (tiers-run (str "(clotran.purefort/report " (pr-str (slashes (first args))) ")\n"))))
 
 (defn- compile-pure [args]
   (if-not (#{1 2} (count args))
