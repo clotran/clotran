@@ -1,0 +1,113 @@
+#!/usr/bin/env bb
+;; The Fortran-types oracle against the compilers (James, 2026-11-21).
+;;
+;;   scripts/ftypes-check [cases.edn]     default test/ftypes/cases.edn
+;;
+;; test/ftypes/oracle.clj says what Fortran's intrinsic types do, as
+;; Clojure run on real clj. Here every case is evaluated by it, then written
+;; as a Fortran program, built with gfortran AND flang, run, and the printed
+;; answers compared with the oracle's: integers exactly, reals bit for bit
+;; (a binary32 as a binary32). A case the oracle calls :undefined (the
+;; standard leaves it to the processor) is counted, not compared. Exit 1 on
+;; any difference. clotran is then checked against the oracle, not against
+;; this script (PLAN: types).
+(require '[clojure.string :as str]
+         '[clojure.edn :as edn]
+         '[babashka.fs :as fs]
+         '[babashka.process :refer [shell]])
+
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
+(def cases-file (or (first *command-line-args*) (str (fs/file repo "test" "ftypes" "cases.edn"))))
+(def cases (edn/read-string (slurp cases-file)))
+(def work (fs/file repo "build" "ftypes-check"))
+(fs/create-dirs work)
+
+;; 1. the oracle, on real clj
+(def answers
+  (let [r (shell {:out :string :err :string :dir (str repo)}
+                 "clj" "-Sdeps" "{:deps {org.clojure/clojure {:mvn/version \"1.12.6\"}}}"
+                 "-M" "-i" (str (fs/file repo "test" "ftypes" "oracle.clj"))
+                 "-e" (str "(require 'clojure.edn) (ftypes.oracle/run-file " (pr-str cases-file) ")"))]
+    (->> (str/split-lines (:out r)) (remove str/blank?) (mapv read-string))))
+(assert (= (count answers) (count cases)) (str "oracle answered " (count answers) " of " (count cases)))
+
+;; 2. a case as Fortran text
+(defn fk [k] (name k))
+(defn ftext [e]
+  (cond
+    (vector? e) (let [[k x] e]
+                  (if (str/starts-with? (name k) "int")
+                    (str (if (neg? x) (str "(" x "_" (fk k) ")") (str x "_" (fk k))))
+                    (let [t (str x)
+                          t (if (re-find #"[.eE]" t) t (str t ".0"))]
+                      (if (str/starts-with? t "-") (str "(" t "_" (fk k) ")") (str t "_" (fk k))))))
+    (keyword? e) (fk e)
+    :else (let [[op & args] e
+                a (map ftext args)]
+            (case op
+              (+ - * / **) (if (and (= op '-) (= 1 (count a)))
+                             (str "(-" (first a) ")")
+                             (str "(" (first a) " " op " " (second a) ")"))
+              (str op "(" (str/join ", " a) ")")))))
+
+(def decl {:int8 "integer(int8)" :int16 "integer(int16)" :int32 "integer(int32)" :int64 "integer(int64)"
+           :real32 "real(real32)" :real64 "real(real64)"})
+(def fmt {:real32 "ES16.8E3" :real64 "ES26.17E3"})
+
+;; a case must answer what it says: a value, or {:undefined ..} undefined. Anything else
+;; (an ill-typed or an unexpected undefined) is a failure, not a skip.
+(def expected (mapv #(if (map? %) :undefined :ok) cases))
+(def unexpected (vec (for [[i a] (map-indexed vector answers) :when (not= (first a) (expected i))]
+                       {:case (pr-str (nth cases i)) :expected (expected i) :answered a})))
+(def compared (vec (keep-indexed (fn [i [tag k]] (when (and (= tag :ok) (= :ok (expected i))) [i k])) answers)))
+(def program
+  (str "program ftypes\n  use iso_fortran_env\n  implicit none\n"
+       (str/join (for [[i k] compared] (str "  " (decl k) " :: r" i "\n")))
+       (str/join (for [[i _] compared] (str "  r" i " = " (ftext (nth cases i)) "\n")))
+       (str/join (for [[i k] compared]
+                   (if (str/starts-with? (name k) "int")
+                     (str "  write(*,'(I0)') r" i "\n")
+                     (str "  write(*,'(" (fmt k) ")') r" i "\n"))))
+       "end program ftypes\n"))
+(spit (fs/file work "ftypes.f90") program)
+
+;; 3. each compiler
+(defn parse-out [k s]
+  (if (str/starts-with? (name k) "int")
+    (parse-long (str/trim s))
+    (let [t (str/trim s)]
+      (case k :real64 (Double/parseDouble t) :real32 (double (Float/parseFloat t))))))
+
+(defn same? [k want got]
+  (if (str/starts-with? (name k) "int")
+    (= want got)
+    (= (Double/doubleToRawLongBits (double want)) (Double/doubleToRawLongBits (double got)))))
+
+(def results
+  (for [[fc flags] [["gfortran" ["-std=f2018" "-ffp-contract=off" "-O0"]] ["flang" []]]]
+    (let [exe (str (fs/file work (str "ftypes-" fc)))
+          c (apply shell {:out :string :err :string :continue true} fc (concat flags ["-o" exe (str (fs/file work "ftypes.f90"))]))]
+      (if-not (zero? (:exit c))
+        {:fc fc :compile-failed (str (:err c) (:out c))}
+        (let [r (shell {:out :string :err :string :continue true} exe)
+              lines (str/split-lines (:out r))]
+          (if (not= (count lines) (count compared))
+            {:fc fc :compile-failed (str "ran, but printed " (count lines) " lines for " (count compared) " cases: " (:err r))}
+            {:fc fc
+             :diffs (vec (for [[[i k] line] (map vector compared lines)
+                               :let [want (nth (nth answers i) 2) got (parse-out k line)]
+                               :when (not (same? k want got))]
+                           {:case (pr-str (nth cases i)) :oracle want :got got :kind k}))}))))))
+
+(let [n (count cases)
+      und (remove #(= :ok (first %)) answers)
+      bad (+ (count unexpected) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
+  (doseq [u unexpected] (println (str "  UNEXPECTED " (:case u) ": expected " (:expected u) ", the oracle answered " (:answered u))))
+  (println (str "ftypes-check: " n " cases, " (count compared) " compared with the compilers, "
+                (count und) " not (the standard leaves them to the processor, or ill-typed): "
+                (frequencies (map #(if (= :ok (first %)) :ok (second %)) und))))
+  (doseq [r results]
+    (cond (:compile-failed r) (println (str "  " (:fc r) ": DID NOT BUILD\n" (:compile-failed r)))
+          :else (println (str "  " (:fc r) ": " (count (:diffs r)) " differ"))))
+  (doseq [r results d (:diffs r)] (println (str "  DIFF " (:fc r) " " (:case d) ": oracle " (:oracle d) ", compiler " (:got d))))
+  (System/exit (if (zero? bad) 0 1)))
