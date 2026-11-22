@@ -195,7 +195,7 @@
  (real [:complex4 ["1.5" "2.5"]])
  (real [:complex8 ["1.5" "2.5"]] :real4)
  (dble [:complex4 ["0.1" "2.5"]])
- ;; defined (hypot exact), answered by fortran.ops; the pure tier declines ABS of a complex
+ ;; ABS of a complex: sqrt(a**2 + b**2) to 80 digits, rounded once; within an ulp (scripts/ftypes-accuracy)
  {:interpreted (abs [:complex8 ["3" "4"]])}
  {:interpreted (abs [:complex4 ["5" "12"]])}
  (kind [:complex4 ["1" "1"]])
@@ -207,7 +207,7 @@
  (- [:complex4 ["0.1" "0.2"]] [:real8 "0.1"])
  {:undefined (/ [:complex8 ["1" "2"]] [:complex8 ["3" "4"]])}
  {:processor (* [:complex8 ["0.1" "0.2"]] [:complex8 ["0.3" "0.4"]])}
- {:undefined (abs [:complex8 ["1" "1"]])}
+ {:ulp 1 :expr (abs [:complex8 ["1" "1"]])}
 
  ;; elementary functions: the standard gives them no accuracy, so each is checked within 1 ulp of the
  ;; correctly rounded value the oracle computes to 80 digits (test/ftypes/refmath.clj)
@@ -381,4 +381,178 @@
  {:processor (asin [:real8 "1.5"])}
  {:processor (acos [:real8 "-2.0"])}
  {:processor (atan2 [:real8 "0.0"] [:real8 "0.0"])}
+ ;; EXP LOG SQRT SIN COS of a complex: each part within its ulp bound of the 80-digit reference
+ ;; (complex8 3: scripts/ftypes-accuracy's worst over 4000 points for fortran.ops). LOG and SQRT on the
+ ;; negative real axis: the sign of a zero imaginary part picks the side of the cut
+ {:ulp 1 :expr (exp [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (exp [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (exp [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (exp [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (log [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (log [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (sin [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (sin [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (sin [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (sin [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (cos [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (cos [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (cos [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (cos [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-1.0" "0.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-2.5" "0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-4.0" "0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-2.0" "0.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-1.0" "-0.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-2.5" "-0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-4.0" "-0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-2.0" "-0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["0.0" "0.0"]])}
+ {:ulp 1 :expr (exp [:complex4 ["1.0" "0.0"]])}
+ {:ulp 1 :expr (abs [:complex4 ["-1.5" "2.0"]])}
+ {:processor (log [:complex4 ["0.0" "0.0"]])}
+ {:ulp 3 :expr (exp [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (exp [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (exp [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (exp [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (log [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (log [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (sin [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (sin [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (sin [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (sin [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (cos [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (cos [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (cos [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (cos [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-1.0" "0.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-2.5" "0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-4.0" "0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-2.0" "0.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-1.0" "-0.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-2.5" "-0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-4.0" "-0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-2.0" "-0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["0.0" "0.0"]])}
+ {:ulp 3 :expr (exp [:complex8 ["1.0" "0.0"]])}
+ {:ulp 3 :expr (abs [:complex8 ["-1.5" "2.0"]])}
+ {:processor (log [:complex8 ["0.0" "0.0"]])}
+ ;; integer and conversion edges: INT NINT FLOOR CEILING at the ends of every integer kind, from real(8)
+ ;; and real(4) (near 2**31 and 2**63 a real(4) is 2147483520 or 2147483648, a real(8) has 2**63 - 1024)
+ (int [:real8 "2147483647.9"])
+ {:undefined (int [:real8 "2147483648.0"])}
+ (int [:real8 "-2147483648.9"])
+ {:undefined (int [:real8 "-2147483649.0"])}
+ (nint [:real8 "2147483647.4"])
+ {:undefined (nint [:real8 "2147483647.5"])}
+ (nint [:real8 "-2147483648.4"])
+ {:undefined (nint [:real8 "-2147483648.5"])}
+ (floor [:real8 "-2147483648.0"])
+ (floor [:real8 "2147483647.9"])
+ {:undefined (floor [:real8 "-2147483648.5"])}
+ (ceiling [:real8 "-2147483648.9"])
+ {:undefined (ceiling [:real8 "2147483647.1"])}
+ (int [:real4 "2147483520.0"])
+ {:undefined (int [:real4 "2147483648.0"])}
+ (int [:real4 "-2147483648.0"])
+ (nint [:real4 "-2147483648.0"])
+ {:undefined (nint [:real4 "2147483648.0"])}
+ (int [:real8 "9223372036854774784.0"] :int8)
+ {:undefined (int [:real8 "9223372036854775808.0"] :int8)}
+ (int [:real8 "-9223372036854775808.0"] :int8)
+ {:undefined (nint [:real8 "9223372036854775808.0"] :int8)}
+ (nint [:real8 "-9223372036854775808.0"] :int8)
+ (floor [:real8 "-9223372036854775808.0"] :int8)
+ {:undefined (floor [:real8 "-9223372036854777856.0"] :int8)}
+ (ceiling [:real8 "9223372036854774784.0"] :int8)
+ (int [:real4 "9223371487098961920.0"] :int8)
+ {:undefined (int [:real4 "9223372036854775808.0"] :int8)}
+ (int [:real4 "-9223372036854775808.0"] :int8)
+ (int [:real8 "127.9"] :int1)
+ {:undefined (int [:real8 "128.0"] :int1)}
+ (nint [:real8 "-128.4"] :int1)
+ {:undefined (nint [:real8 "-128.5"] :int1)}
+ (floor [:real8 "-128.0"] :int1)
+ {:undefined (floor [:real8 "-128.1"] :int1)}
+ (ceiling [:real8 "32767.0"] :int2)
+ {:undefined (ceiling [:real8 "32767.2"] :int2)}
+ (int [:real4 "-32768.9"] :int2)
+ (nint [:real4 "32767.4"] :int2)
+ (int [:int4 127] :int1)
+ {:undefined (int [:int4 128] :int1)}
+ (int [:int8 -2147483648] :int4)
+ {:undefined (int [:int8 2147483648] :int4)}
+ (int [:int1 -128] :int8)
+ ;; the minimum of a kind: MOD and MODULO by -1 are 0 (A - INT(A/P)*P, a value the kind holds, though A/P
+ ;; is not); A/P itself, -A, A*(-1) and ABS(A) overflow
+ (mod [:int4 -2147483648] [:int4 -1])
+ (modulo [:int4 -2147483648] [:int4 -1])
+ (mod [:int8 -9223372036854775808] [:int8 -1])
+ (modulo [:int8 -9223372036854775808] [:int8 -1])
+ (mod [:int1 -128] [:int1 -1])
+ (modulo [:int2 -32768] [:int2 -1])
+ (mod [:int4 -2147483648] [:int4 2147483647])
+ (modulo [:int4 -2147483648] [:int4 2147483647])
+ (mod [:int4 2147483647] [:int4 -2147483648])
+ (modulo [:int4 2147483647] [:int4 -2147483648])
+ (/ [:int4 -2147483648] [:int4 1])
+ {:undefined (/ [:int4 -2147483648] [:int4 -1])}
+ {:undefined (/ [:int8 -9223372036854775808] [:int8 -1])}
+ {:undefined (- [:int4 -2147483648])}
+ {:undefined (* [:int4 -2147483648] [:int4 -1])}
+ {:undefined (abs [:int8 -9223372036854775808])}
+ ;; ** of integers at the overflow edge
+ (** [:int4 2] [:int4 30])
+ {:undefined (** [:int4 2] [:int4 31])}
+ (** [:int4 -2] [:int4 31])
+ {:undefined (** [:int4 -2] [:int4 32])}
+ (** [:int8 2] [:int8 62])
+ {:undefined (** [:int8 2] [:int8 63])}
+ (** [:int8 -2] [:int8 63])
+ (** [:int4 3] [:int4 19])
+ {:undefined (** [:int4 3] [:int4 20])}
+ (** [:int1 -2] [:int1 7])
+ {:undefined (** [:int1 2] [:int1 7])}
+ (** [:int2 -2] [:int2 15])
+ {:undefined (** [:int2 2] [:int2 15])}
+ (** [:int4 46340] [:int4 2])
+ {:undefined (** [:int4 46341] [:int4 2])}
+ (** [:int8 46341] [:int4 2])
+ (** [:int4 -1] [:int4 2147483647])
+ (** [:int4 1] [:int4 2147483647])
+ (** [:int4 0] [:int4 2147483647])
+ (** [:int4 -1] [:int4 -2147483648])
+ (** [:int4 2] [:int4 -1])
+ ;; an array element of a narrow kind assigned a value (aset): converted as an assignment converts. The
+ ;; pure tier does not make arrays inside a function (DEVIATIONS 91), so it declines these
+ {:interpreted (store :int1 [:int4 -128])}
+ {:undefined (store :int1 [:int4 128])}
+ {:interpreted (store :int2 [:int8 -32768])}
+ {:undefined (store :int2 [:int4 40000])}
+ {:interpreted (store :int4 [:int8 -2147483648])}
+ {:undefined (store :int4 [:int8 2147483648])}
+ {:undefined (store :int4 [:int8 -2147483649])}
+ {:interpreted (store :int8 [:int1 -128])}
+ {:interpreted (store :real4 [:real8 "0.1"])}
+ {:interpreted (store :real4 [:real8 "1e39"])}
+ {:interpreted (store :real8 [:real4 "0.1"])}
+ ;; SIGN with a negative zero: the processor distinguishes it, so the result is negative
+ (sign [:real8 "1.0"] [:real8 "-0.0"])
+ (sign [:real4 "2.5"] [:real4 "-0.0"])
+ (sign [:real8 "-3.0"] [:real8 "0.0"])
+ ;; MAX and MIN of a NaN are the processor's (gfortran answers the other argument)
+ {:processor (max (/ [:real8 "0.0"] [:real8 "0.0"]) [:real8 "1.0"])}
+ {:processor (min [:real8 "1.0"] (/ [:real8 "0.0"] [:real8 "0.0"]))}
+ {:processor (max (/ [:real4 "0.0"] [:real4 "0.0"]) [:real4 "1.0"])}
 ]

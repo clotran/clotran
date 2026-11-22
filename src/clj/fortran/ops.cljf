@@ -110,23 +110,26 @@
             v (if (clojure.core/>= e10 0) (*' m (pow10 e10)) (clojure.core// m (pow10 (clojure.core/- e10))))]
         (if (= sign "-") (clojure.core/- v) v)))))
 
-(defn- real4-of-ratio
-  "The rational r rounded ONCE to the nearest real(4), ties to even, as a double that holds it exactly;
-  infinity past the greatest. Rounding the text through a real(8) first can round the wrong way."
-  [r]
+(defn- real-of-ratio
+  "The rational r rounded ONCE to the nearest real of kind pk (:real4 or :real8), ties to even, as a
+  double that holds it exactly; infinity past the greatest. Rounding the text through a real(8) first
+  can round the wrong way."
+  [pk r]
   (if (zero? r)
     0.0
     (let [a (if (neg? r) (clojure.core/- r) r)
           bits (fn [x] (loop [x (bigint x) c 0] (if (zero? x) c (recur (quot x 2) (inc c)))))
           e0 (clojure.core/- (bits (numerator a)) (bits (denominator a)))
           e (if (clojure.core/>= a (pow2 e0)) e0 (dec e0))
-          q (clojure.core/max (clojure.core/- e 23) -149)
+          [p qmin top] (if (= pk :real4) [24 -149 128] [53 -1074 1024])
+          q (clojure.core/max (clojure.core/- e (dec p)) qmin)
           scaled (clojure.core// a (pow2 q))
           fl (quot (numerator scaled) (denominator scaled))
           rem (clojure.core/- scaled fl)
           n (cond (< rem 1/2) fl (> rem 1/2) (inc fl) (even? fl) fl :else (inc fl))
-          v (if (clojure.core/>= (*' n (pow2 q)) (pow2 128)) ##Inf (clotran.host.math/scalb (double n) q))]
+          v (if (clojure.core/>= (*' n (pow2 q)) (pow2 top)) ##Inf (clotran.host.math/scalb (double n) q))]
       (if (neg? r) (clojure.core/- v) v))))
+(defn- real4-of-ratio [r] (real-of-ratio :real4 r))
 
 (defn lit
   "A literal as the oracle writes it: (lit :int4 5), (lit :real4 \"1.1\") -- a
@@ -134,7 +137,8 @@
   [k x]
   (cond (int-kind? k) (fit k x)
         (complex-kind? k) (->Complex k (lit (:part (specs k)) (first x)) (lit (:part (specs k)) (second x)))
-        (= k :real4) (let [r (decimal->ratio x)] (rnd k (if r (real4-of-ratio r) (parse-double x))))
+        ;; a zero keeps its sign: "-0.0" is -0.0 (the ratio is 0)
+        (= k :real4) (let [r (decimal->ratio x)] (rnd k (if (and r (not (zero? r))) (real4-of-ratio r) (parse-double x))))
         :else (rnd k (parse-double x))))
 
 (defn- conv [k v]
@@ -215,9 +219,6 @@
       (when (and (= dodd 1) (clojure.core/<= bits (if (= pk :real4) 24 53)))
         (rnd pk (clotran.host.math/scalb (double (clojure.core/* sign nodd)) (clojure.core/- nshift dshift)))))))
 
-(defn- isqrt [n]
-  (if (zero? n) 0N (loop [x (bigint n)] (let [y (quot (clojure.core/+ x (quot n x)) 2)] (if (clojure.core/>= y x) x (recur y))))))
-
 (defn- carith
   "Complex + - * /. + and - are IEEE on each part. * is the textbook (ac - bd) + (ad + bc)i and is
   defined only where every product and sum is exact (compilers differ otherwise: FCVS FM828-831);
@@ -276,7 +277,9 @@
     (cond
       (and (int-kind? ka) (int-kind? kb))
       (let [k (promote ka kb) x (long a) n (long b)]
-        (cond (clojure.core/>= n 0) (fit k (loop [r 1N i n] (if (zero? i) r (recur (*' r (bigint x)) (dec i)))))
+        (cond (and (clojure.core/>= n 0) (#{0 1 -1} x)) (fit k (cond (zero? n) 1 (= x -1) (if (even? n) 1 -1) :else x))
+              ;; |x| >= 2: past 64 factors it has left every kind (1**2147483647 looped 2**31 times)
+              (clojure.core/>= n 0) (fit k (loop [r 1N i n] (if (or (zero? i) (clojure.core/> (clojure.core/abs r) 18446744073709551616N)) r (recur (*' r (bigint x)) (dec i)))))
               (= x 1) (fit k 1)
               (= x -1) (fit k (if (even? n) 1 -1))
               (zero? x) (undefined :zero-to-negative-power)
@@ -306,13 +309,19 @@
 (defn- kind-arg [more dflt] (if (seq more) (first more) dflt))
 
 (defn- finite! [x] (when (or (not= x x) (= x ##Inf) (= x ##-Inf)) (undefined :non-finite)) x)
+(defn- in-int8!
+  "A whole real as an integer(8), or undefined: from 2**63 up, or below -2**63, it has none (the host's
+  long saturates to 9223372036854775807)."
+  [x]
+  (when (or (clojure.core/>= x 9.223372036854775808E18) (clojure.core/< x -9.223372036854775808E18)) (undefined :integer-overflow))
+  (long x))
 
 (defn int
   "Fortran's INT(x [, kind]): an integer kept, a real truncated toward zero."
   [x & more]
   (no-complex "int" x)
   (let [k (kind-arg more default-integer)]
-    (if (int-kind? (kind-of x)) (fit k (long x)) (fit k (long (finite! (double x)))))))
+    (if (int-kind? (kind-of x)) (fit k (long x)) (let [d (finite! (double x))] (fit k (in-int8! (if (neg? d) (clotran.host.math/ceil d) (clotran.host.math/floor d))))))))
 
 (defn- round-away
   "The real x rounded to the nearest whole number, halves away from zero,
@@ -326,15 +335,15 @@
 (defn nint [x & more]
   (no-complex "nint" x)
   (let [k (kind-arg more default-integer)]
-    (fit k (long (round-away (finite! (double x)))))))
+    (fit k (in-int8! (round-away (finite! (double x)))))))
 (defn floor [x & more]
   (no-complex "floor" x)
   (let [k (kind-arg more default-integer)]
-    (fit k (long (clotran.host.math/floor (finite! (double x)))))))
+    (fit k (in-int8! (clotran.host.math/floor (finite! (double x)))))))
 (defn ceiling [x & more]
   (no-complex "ceiling" x)
   (let [k (kind-arg more default-integer)]
-    (fit k (long (clotran.host.math/ceil (finite! (double x)))))))
+    (fit k (in-int8! (clotran.host.math/ceil (finite! (double x)))))))
 
 (defn real
   "Fortran's REAL(x [, kind]): a real of the default kind (real(4)); of a COMPLEX, its real part, of
@@ -362,13 +371,10 @@
   (let [k (kind-of x)]
     (cond
       (complex-kind? k)
-      ;; a processor's hypot is exact only where the answer is a whole number of the part kind
-      (let [pk (:part (specs k)) a (->ratio (:re x)) b (->ratio (:im x))
-            s (clojure.core/+ (clojure.core/* a a) (clojure.core/* b b))
-            rt (fn [q] (let [n (numerator q) d (denominator q) rn (isqrt n) rd (isqrt d)]
-                         (when (and (= n (clojure.core/* rn rn)) (= d (clojure.core/* rd rd))) (clojure.core// rn rd))))
-            r (when (not (neg? s)) (rt s))]
-        (or (and r (ratio->part r pk)) (undefined :inexact-complex-abs)))
+      ;; hypot in real(8), rounded once to the part kind; measured against sqrt(a**2 + b**2) to 80 digits
+      (let [a (double (:re x)) b (double (:im x))]
+        (finite! a) (finite! b)
+        (rnd (:part (specs k)) (clotran.host.math/hypot a b)))
       :else
     (if (int-kind? k)
       (fit k (let [v (bigint (long x))] (if (neg? v) (-' v) v)))
@@ -417,22 +423,29 @@
   (let [k (kind-of a)]
     (if (int-kind? k)
       (let [m (let [v (bigint (long a))] (if (neg? v) (-' v) v))] (fit k (if (neg? (long b)) (-' m) m)))
-      (let [m (clotran.host.math/abs (double a))] (rnd k (if (neg? (double b)) (clojure.core/- m) m))))))
+      ;; the sign of b, a -0.0 included (the processor distinguishes negative zero: SIGN(1.0, -0.0) is -1.0)
+      (rnd k (clotran.host.math/copySign (clotran.host.math/abs (double a)) (double b))))))
 
 (defn- extreme [f who vs]
   (apply need-same who vs)
   (let [k (kind-of (first vs))]
     (if (int-kind? k)
       (fit k (apply f (map #(long %) vs)))
-      (rnd k (apply f (map #(double %) vs))))))
+      ;; MAX and MIN of a NaN are the processor's (gfortran answers the other argument): refused
+      (let [ds (map #(double %) vs)]
+        (when (some #(not= % %) ds) (undefined :nan-argument))
+        (rnd k (apply f ds))))))
 (defn max [& vs] (extreme clojure.core/max 'max vs))
 (defn min [& vs] (extreme clojure.core/min 'min vs))
 
+(declare celem)
 (defn sqrt [x]
+  (if (instance? Complex x)
+    (celem "sqrt" x)
   (let [k (kind-of x)]
     (when-not (real-kind? k) (ill-typed "sqrt needs a real"))
     (when (neg? (double x)) (undefined :sqrt-of-negative))
-    (rnd k (clotran.host.math/sqrt (double x)))))
+    (rnd k (clotran.host.math/sqrt (double x))))))
 
 ;; the numeric model of a kind's value x
 (defn huge [x]
@@ -467,11 +480,76 @@
       (when (and (#{"asin" "acos"} op) (clojure.core/> (clotran.host.math/abs d) 1.0)) (undefined :domain))
       (rnd k (f d)))))
 
-(defn exp [x] (elem1 "exp" clotran.host.math/exp x))
-(defn log [x] (elem1 "log" clotran.host.math/log x))
+;; EXP, LOG, SQRT, SIN, COS and ABS of a complex: the textbook formulas in real(8) (each part rounded once to
+;; the part kind, so a complex(4) is nearly correctly rounded), measured part by part against refmath's 80
+;; digits by scripts/ftypes-accuracy. LOG and SQRT are principal values, the branch cut on the negative real
+;; axis decided by the sign of a zero imaginary part (LOG(-1 - 0i) = -pi i, SQRT(-4 - 0i) = -2i), as the
+;; standard has it. LOG of zero is undefined; a part not finite, the processor's: both refused.
+(defn- csqrt-d [a b]
+  (let [M (fn [x] (clotran.host.math/abs x))
+        big (clojure.core/max (M a) (M b))]
+    (cond (clojure.core/> big 1.0e300) (mapv #(clojure.core/* 2.0 %) (csqrt-d (clojure.core// a 4.0) (clojure.core// b 4.0)))
+          ;; tiny parts scaled by 2**200 and the root back by 2**-100, both exact
+          (and (pos? big) (clojure.core/< big 1.0e-300)) (mapv #(clojure.core/* % 7.888609052210118E-31) (csqrt-d (clojure.core/* a 1.6069380442589903E60) (clojure.core/* b 1.6069380442589903E60)))
+          :else
+          (let [m (clotran.host.math/hypot a b)]
+            (if (neg? a)
+              (let [t (clotran.host.math/sqrt (clojure.core// (clojure.core/- m a) 2.0))]
+                [(clojure.core// (M b) (clojure.core/* 2.0 t)) (clotran.host.math/copySign t b)])
+              (let [re (clotran.host.math/sqrt (clojure.core// (clojure.core/+ m a) 2.0))]
+                [re (clojure.core// b (clojure.core/* 2.0 re))]))))))
+
+(defn- clog-re [a b]
+  ;; log |z|: near the unit circle log1p of |z|^2 - 1, computed exactly and rounded once, so it keeps
+  ;; its digits; elsewhere log (hypot a b), halved first where hypot would overflow
+  (let [t (clojure.core/- (clojure.core/+ (clojure.core/* (->ratio a) (->ratio a)) (clojure.core/* (->ratio b) (->ratio b))) 1)]
+    (if (clojure.core/< (clojure.core/abs t) 1/2)
+      (clojure.core// (clotran.host.math/log1p (real-of-ratio :real8 t)) 2.0)
+      (let [big (clojure.core/max (clotran.host.math/abs a) (clotran.host.math/abs b))]
+        (cond
+          ;; hypot would overflow: halve first
+          (clojure.core/> big 1.0e300)
+          (clojure.core/+ (clotran.host.math/log (clotran.host.math/hypot (clojure.core// a 2.0) (clojure.core// b 2.0))) (clotran.host.math/log 2.0))
+          ;; hypot would round to the subnormal grid (log of 4.9e-324 + 4.9e-324i was 0.35 off): 2**54 first
+          (clojure.core/< big 1.0e-290)
+          (clojure.core/- (clotran.host.math/log (clotran.host.math/hypot (clojure.core/* a 1.8014398509481984E16) (clojure.core/* b 1.8014398509481984E16)))
+                          (clojure.core/* 54.0 (clotran.host.math/log 2.0)))
+          :else (clotran.host.math/log (clotran.host.math/hypot a b)))))))
+
+(defn- hyp-times
+  "x cosh b, or x sinh b: past |b| = 709 cosh overflows where x cosh b need not, so there
+  (x/2) e**(|b|/2) e**(|b|/2), e**|b|/2 being cosh |b| and |sinh b| to the last bit."
+  [x b sinh?]
+  (if (clojure.core/> (clotran.host.math/abs b) 709.0)
+    (let [h (clotran.host.math/exp (clojure.core// (clotran.host.math/abs b) 2.0))
+          v (clojure.core/* (clojure.core/* (clojure.core/* x 0.5) h) h)]
+      (if (and sinh? (neg? b)) (clojure.core/- v) v))
+    (clojure.core/* x (if sinh? (clotran.host.math/sinh b) (clotran.host.math/cosh b)))))
+
+(defn- celem [op z]
+  (let [k (:kind z) pk (:part (specs k)) a (double (:re z)) b (double (:im z))
+        c (fn [re im] (->Complex k (rnd pk re) (rnd pk im)))]
+    (finite! a) (finite! b)
+    (case op
+      "exp" (let [e (clotran.host.math/exp a)]
+              (cond (zero? b) (c e b)
+                    ;; e**a overflows where e**a cos b need not: e**(a/2) twice
+                    (= e ##Inf) (let [h (clotran.host.math/exp (clojure.core// a 2.0))]
+                                  (c (clojure.core/* (clojure.core/* h (clotran.host.math/cos b)) h) (clojure.core/* (clojure.core/* h (clotran.host.math/sin b)) h)))
+                    :else (c (clojure.core/* e (clotran.host.math/cos b)) (clojure.core/* e (clotran.host.math/sin b)))))
+      "log" (do (when (and (zero? a) (zero? b)) (undefined :domain))
+                (c (clog-re a b) (clotran.host.math/atan2 b a)))
+      "sqrt" (if (and (zero? a) (zero? b))
+               (c 0.0 b)
+               (let [[re im] (csqrt-d a b)] (c re im)))
+      "sin" (c (hyp-times (clotran.host.math/sin a) b false) (hyp-times (clotran.host.math/cos a) b true))
+      "cos" (c (hyp-times (clotran.host.math/cos a) b false) (clojure.core/- (hyp-times (clotran.host.math/sin a) b true))))))
+
+(defn exp [x] (if (instance? Complex x) (celem "exp" x) (elem1 "exp" clotran.host.math/exp x)))
+(defn log [x] (if (instance? Complex x) (celem "log" x) (elem1 "log" clotran.host.math/log x)))
 (defn log10 [x] (elem1 "log10" clotran.host.math/log10 x))
-(defn sin [x] (elem1 "sin" clotran.host.math/sin x))
-(defn cos [x] (elem1 "cos" clotran.host.math/cos x))
+(defn sin [x] (if (instance? Complex x) (celem "sin" x) (elem1 "sin" clotran.host.math/sin x)))
+(defn cos [x] (if (instance? Complex x) (celem "cos" x) (elem1 "cos" clotran.host.math/cos x)))
 (defn tan [x] (elem1 "tan" clotran.host.math/tan x))
 (defn asin [x] (elem1 "asin" clotran.host.math/asin x))
 (defn acos [x] (elem1 "acos" clotran.host.math/acos x))

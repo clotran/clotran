@@ -2759,8 +2759,10 @@ DEVIATIONS 26, 70-72). Fortran's `/` on integers truncates toward zero:
 
 ## 88. What the standard leaves to the processor throws
 
-Integer overflow, division by zero, an integer out of its kind's range, a real
-power other than `x**2`, a square root of a negative: the standard leaves each to
+Integer overflow (the minimum divided by -1, negated or raised past the range included),
+division by zero, an integer out of its kind's range (a real converted by INT, NINT, FLOOR or
+CEILING from 2**63 up included), a real power with an inexact partial power (`x**2` is always
+exact), a square root of a negative, LOG of zero, MAX or MIN of a NaN: the standard leaves each to
 the processor, so a program that does one is not Fortran. `fortran.ops` throws
 (a trapping processor is conforming), where the compilers' answers differ with
 the optimization level. The oracle names each such case `{:undefined ...}` in
@@ -2777,7 +2779,8 @@ just above the midpoint of 1 and 1+2**-23, so it is the upper one; through a rea
 midpoint exactly and rounds to even, the lower). `fortran.ops/lit` now takes the decimal text as the
 exact rational it says and rounds it once to the nearest real(4), ties to even
 (`real4-of-ratio`). `test/ftypes/cases.edn` has the three cases that tell the two apart, and
-gfortran and flang agree with the oracle on them.
+gfortran and flang agree with the oracle on them. The same day a real(4) literal "-0.0" lost its sign
+(the ratio is 0); it is -0.0, checked by SIGN(2.5, -0.0) = -2.5.
 
 ## 90. RESOLVED -- real(4) overflow is infinity, as IEEE has it
 
@@ -2790,9 +2793,8 @@ pure tier. The real(8) cases were IEEE already: `1.0/0.0` is infinity, `0.0/0.0`
 
 What stays: a NaN or an infinity has no integer value, so `int`, `nint`, `floor` and `ceiling` of
 one is undefined and refused, in the interpreter and, since the same day, in the pure tier (it
-answered 0, the cast of a long). **A found bug, not fixed here:** `clotran.host.real4/POSITIVE_INFINITY`
-(and the negative) answer a real(8), where clj's `Float/POSITIVE_INFINITY` is a Float; a real(4)
-infinity can be made only by `unchecked-float`.
+answered 0, the cast of a long). `clotran.host.real4/POSITIVE_INFINITY`, `NEGATIVE_INFINITY` and `NaN` are
+real(4)s, as clj's Float constants are (fixed in f32a82f3).
 
 ## 91. The pure tier lowers some of Fortran's kinds
 
@@ -2804,7 +2806,8 @@ Not yet: arrays of complex; a complex or a narrow scalar kind as a parameter or 
 compiled library function (they cross the boundary as a long or a double; a complex as its two
 parts); a function parameter or result of the narrow scalar kinds at the
 boundary of a compiled library (they cross as a long or a double: `^int4` is refused on a
-fn, 92); an array RESULT of the four narrow kinds; rank above 1; logical kinds;
+fn, 92); an array RESULT of the four narrow kinds; an array made inside a pure function (`int-array`, `byte-array`:
+the narrow-kind store cases of `test/ftypes/cases.edn` are interpreted only); rank above 1; logical kinds;
 `character(len=n)`. An unhinted parameter's type is still guessed (the hint, else what a
 same-file callee takes, else how the body uses it, else long or double), with up to 8
 versions. Fortran declares every type.
@@ -2842,17 +2845,19 @@ Inside a pure function, a call of a `fortran.ops` operation is lowered by
 `purefort.cljf`'s `fortran-call` with the kinds as Fortran has them: the result keeps the
 kind (the larger of two integer kinds, the real's kind of an integer with a real), a narrow
 integer is computed in integer(8) and checked into its kind by `cl_fit1`/`cl_fit2`/`cl_fit4`,
-and real(4) arithmetic is Fortran's own (computed in real(4)). `clojure.core`'s operations on
+and real(4) arithmetic is Fortran's own (computed in real(4)); a real(4) elementary function is computed
+in real(8) and rounded once, as `fortran.ops` computes it (DEVIATIONS 99). `clojure.core`'s operations on
 these values widen them, as Clojure's do: an integer kind is a long, a real(4) a double; an
-array element read is its own kind. `scripts/ftypes-check` compiles all 121 cases of
-`test/ftypes/cases.edn` as pure functions and requires gfortran's and flang's builds to
+array element read is its own kind. `scripts/ftypes-check` compiles the cases of
+`test/ftypes/cases.edn` as pure functions (511 cases, 497 lowered; the rest interpreted only) and requires gfortran's and flang's builds to
 answer the oracle's value, or, for a case the standard leaves undefined, to fail (or not
 to lower, when `fortran.ops` throws it instead).
 
 Where this differs from `fortran.ops` interpreted: the TEXT of a failure. The pure helpers
 say "undefined by the standard: integer overflow (integer(4))" for a narrow kind but "long
-overflow" for integer(8) and "Divide by zero" for `quot`, the helpers clojure.core's
-arithmetic shares. A real power `x**n` is Fortran's own (`(x ** n)`), whose value is the
+overflow" for integer(8) (its -huge-1 / -1 too), "Value out of range for long" for an integer(8)
+from a real of 2**63 or more, and "Divide by zero" for `quot`, the helpers clojure.core's arithmetic
+shares. A real power `x**n` is Fortran's own (`(x ** n)`), whose value is the
 processor's unless every partial power is exact; `fortran.ops` answers it only then, and refuses
 the rest (`{:processor ...}` cases in `test/ftypes/cases.edn`), as for an inexact complex product
 (DEVIATIONS 94). A real power of a real is not lowered.
@@ -2871,11 +2876,11 @@ is native (`complex(real32)`, `complex(real64)`); it leaves the function as its 
 **The processor decides, so it is refused.** Fortran leaves inexact complex multiplication and all
 complex division to the processor (FCVS FM828-831, the `:pd` stops of Lemmis's fsem: lemmis/model/SCOPE.md, "Stage A cutoff"). So
 `fortran.ops` defines a complex `*` only where every product and sum of the textbook formula is
-exact, a complex `/` and `**` never, and `ABS` of a complex only where the answer is a whole
-number of the part kind (hypot is exact); anything else throws "undefined by the standard".
+exact, and a complex `/` and `**` never; anything else throws "undefined by the standard". (`ABS` of a
+complex was refused unless hypot was exact; since 98 it is measured against a reference, like EXP.)
 `test/ftypes/oracle.clj` says the same, and gfortran and flang agree with it on every case that
 is defined. The pure tier lowers `+ - *`, `cmplx`, `conjg`, `aimag`, `real`, `dble` and the
-constructors natively, and declines `/`, `**` and `abs` of a complex. For `*` it is Fortran's
+constructors natively (and since 98 `exp log sqrt sin cos abs`), and declines `/` and `**` of a complex. For `*` it is Fortran's
 own: where the product is inexact the compiled answer is the processor's, where `fortran.ops`
 refuses.
 
@@ -2891,14 +2896,59 @@ Fortran gives EXP, LOG, SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2, SINH, COSH, TANH
 accuracy: "a processor-dependent approximation". `fortran.ops` and the pure tier answer with the host's
 libm (`clotran.host.math`, Fortran's own intrinsics when compiled), in the argument's kind: real(4) by
 way of real(8), rounded once. What is claimed is measured, not assumed. `test/ftypes/refmath.clj` computes
-each to 80 digits by series and rounds it once to the kind, the correctly rounded value, and
-`scripts/ftypes-check` runs 163 cases (arguments from 1e-10 to 1e300, sin and cos at 1e22, both real kinds)
-through gfortran, flang, `fortran.ops` and both compiled builds, requires each answer within 1 ulp of it,
-and prints the worst error seen: 1 ulp for gfortran, flang and `fortran.ops`, 0 for the compiled gfortran
-build, 1 for the compiled flang one. It is a bound for these cases on this machine's libms, not for all
-arguments or all processors. Outside a function's domain (LOG of zero or less, ASIN or ACOS past 1,
+each to 80 digits by series and rounds it once to the kind, the correctly rounded value (checked: 1
+point in 20 recomputed at 110 digits, and folded by gfortran's MPFR, 0 differ; with `+ - * / sqrt`
+against their exact results). `scripts/ftypes-accuracy`
+sweeps 4000 arguments per function and real kind, structured and random (docs/types.md
+says which), through gfortran, flang, `fortran.ops` and both compiled builds. The maximum / 99.9th
+percentile error in ulps, on this machine's libm:
+
+| function | kind | points | gfortran | flang | fortran.ops | pure gfortran | pure flang |
+|---|---|---|---|---|---|---|---|
+| exp | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| exp | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| log | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log10 | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log10 | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| sin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| cos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| cos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| tan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| tan | real8 | 4000 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
+| asin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| asin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| acos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| acos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| atan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| atan | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| sinh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sinh | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| cosh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| cosh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| tanh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| tanh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| atan2 | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
+| atan2 | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| + | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| + | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| - | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| - | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| * | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| * | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| / | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| / | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sqrt | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sqrt | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+
+In real(8) every leg is the same libm and agrees bit for bit; at most 1 ulp, TAN 2. In real(4)
+`fortran.ops` and the compiled code (real(8), rounded once: DEVIATIONS 99) are correctly rounded on every
+swept point, and the compilers' own real(4) intrinsics are 1 ulp off on 3,030 of 52,000.
+`scripts/ftypes-check` runs 768 of these points every time and fails past those maxima. They are measured bounds for this libm, not proved, and not for another
+processor. Outside a function's domain (LOG of zero or less, ASIN or ACOS past 1,
 ATAN2(0, 0)) or for a NaN or an infinity, the result is the processor's: `fortran.ops` refuses it, compiled
-Fortran answers its processor's (the `{:processor ...}` cases). Complex arguments are not supported.
+Fortran answers its processor's (the `{:processor ...}` cases). Complex arguments: DEVIATIONS 98.
 
 **Removal**: a stated bound per function from the libm's own documentation; correctly rounded versions
 (CORE-MATH, or the reference's series in Fortran) where 0 ulp is wanted.
@@ -2953,3 +3003,99 @@ ways, against each other and against clj).
 
 **Removal**: main.f90's `load_file` routed through `load_text` for a `.lms` path; map and set elements
 walked; a reader that hands forms over one at a time, if Lemmis ever needs reading to depend on evaluation.
+
+## 98. The complex elementary functions: clotran's formulas, measured; the compiled code is the processor's
+
+EXP, LOG, SQRT, SIN, COS and ABS take a complex(4) or complex(8). The standard gives them no accuracy
+either, and fixes only the branch: LOG and SQRT are principal values, cut along the negative real axis,
+where the sign of a zero imaginary part picks the side (LOG(-1 - 0i) = -pi i, SQRT(-4 - 0i) = -2i; LOG's
+imaginary part is in (-pi, pi]); SQRT's real part is >= 0. LOG of zero is undefined ("X shall not be
+zero") and refused, as a part that is not finite is; compiled code answers its processor's (`{:processor}`).
+
+- **The reference**: `test/ftypes/refmath.clj`'s `cexp* clog* csqrt* csin* ccos* cabs*`, 80 digits,
+  each part rounded once to the part kind (the oracle uses them; `(abs z)` is no longer refused unless
+  exact). LOG's real part is log1p(|z|^2 - 1)/2 with |z|^2 - 1 exact, SQRT the half-angle form that does
+  not cancel, so both keep their digits near the unit circle and the cut. Checked as the real ones are: 1
+  point in 20 recomputed at 110 digits, and folded by gfortran, which uses MPC, correctly rounded per
+  part (0 differ; MPC's signs of zero are not compared, the ulp measure has none; a subnormal argument is
+  not folded, MPC answers atan2(1.4e-45, 1.2e-38) = 0).
+- **`fortran.ops`** computes the textbook formulas in real(8) and rounds each part once: e**a (cos b, sin b),
+  log |z| + i atan2(b, a), the half-angle root, sin a cosh b + i cos a sinh b, cos a cosh b - i sin a sinh b,
+  hypot; with the scalings a real(8) needs (|z| past 1e300 or below 1e-290, cosh b or e**a past the
+  overflow threshold computed as two halves), and log1p of the exact |z|^2 - 1 near the unit circle.
+- **The pure tier** lowers them to Fortran's own intrinsics (`exp(z)`, ...), which are the processor's
+  libm; a complex(4) through the complex(8) one, rounded once (99).
+- **Not here**: TAN, ASIN, ACOS, ATAN, SINH, COSH and TANH of a complex (Fortran 2008) are ill-typed in the
+  oracle and `fortran.ops` and not lowered; LOG10 and ATAN2 of a complex are not Fortran.
+
+Measured by `scripts/ftypes-accuracy` (4000 arguments per function and kind: the cut with +-0 and tiny
+imaginary parts, the unit circle, both sides of |z| = 1, parts at the kind's extremes and subnormal, the
+overflow thresholds, near multiples of pi/2; and random), max / 99.9th percentile error in ulps of each
+PART, on this machine:
+
+| function | kind | points | gfortran | flang | fortran.ops | pure gfortran | pure flang |
+|---|---|---|---|---|---|---|---|
+| exp | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| exp | complex8 | 4000 | 2 / 2 | 2 / 2 | 3 / 2 | 2 / 2 | 2 / 2 |
+| log | complex4 | 4000 | 1694574510 / 1684919996 | 1694574510 / 1684919996 | 0 / 0 | 32 / 0 | 32 / 0 |
+| log | complex8 | 4000 | 8716560023488369748 / 8711941746245982286 | 8716560023488369748 / 8711941746245982286 | 3 / 2 | 8716560023488369748 / 8711941746245982286 | 8716560023488369748 / 8711941746245982286 |
+| sqrt | complex4 | 4000 | 436207616 / 430228120 | 436207616 / 430228120 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sqrt | complex8 | 4000 | 6473974912013982395 / 6372751694632527319 | 6473974912013982395 / 6372751694632527319 | 1 / 1 | 6473974912013982395 / 6372751694632527319 | 6473974912013982395 / 6372751694632527319 |
+| sin | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sin | complex8 | 4000 | 3 / 2 | 3 / 2 | 2 / 2 | 3 / 2 | 3 / 2 |
+| cos | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| cos | complex8 | 4000 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
+| abs | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| abs | complex8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+
+`fortran.ops` is correctly rounded on every complex(4) point and within 3 ulps on complex(8). The
+compilers (both use the system libm, and so does the compiled code) are within 3 ulps for EXP, SIN, COS and
+ABS, and are NOT for LOG and SQRT, measured in ulps of the part:
+
+- LOG computes log |z| as log(hypot): near the unit circle, where log |z| is tiny, it keeps no relative
+  digits, and can have the wrong sign (log(-0.9807852804032304 - 0.19509032201612836i) has real part
+  -3.87e-19; the libm answers +3.47e-18). 845 of 4000 complex(4) and 795 of 4000 complex(8) points are
+  more than 4 ulps off.
+- SQRT loses a part 20 orders of magnitude below the other: sqrt(2.0923711828269023e230 -
+  2.0669078095765342e210i) has imaginary part -7.14e94; the libm answers -0. 21 of 4000 complex(4) and 635
+  of 4000 complex(8) points are more than 4 ulps off.
+- flang FOLDS a constant complex SQRT inexactly: sqrt((-4.0, 0.0)) written as a constant is
+  1.22e-16 + 2i in complex(8) (1.5e-7 + 2i in complex(4)), where the run-time intrinsic answers 0 + 2i.
+  `scripts/ftypes-check` now passes complex constants through `id`, as reals, so it measures the run time.
+
+So in the pure tier these functions are as good as the processor's, and `fortran.ops` and compiled code
+differ where it is not (2,751 of 96,000 real(8)-part points across the sweep, all of them complex(8);
+470 more differ only in the sign of a zero, which the standard leaves to the processor).
+`scripts/ftypes-check` holds 63 cases of them (each part within 1 ulp for complex(4), 3 for complex(8),
+the cut on both sides), and its quick sweep bounds `fortran.ops` at the maxima above; the compilers'
+complex figures are reported, not bounded.
+
+**Removal**: lower them in the pure tier through the same formulas as `fortran.ops` (helpers in the
+generated module), so the compiled code is clotran's, not the libm's; the Fortran 2008 complex functions.
+
+## 99. A real(4) function is computed in real(8) and rounded once, interpreted and compiled
+
+`fortran.ops` computes EXP, LOG, SIN ... ATAN2 of a real(4), and EXP LOG SQRT SIN COS ABS of a complex(4),
+in real(8) and rounds the result once to real(4); the pure tier now does the same
+(`real(sin(real(x, real64)), real32)`, `cmplx(exp(cmplx(z, kind=real64)), kind=real32)`) where it called
+Fortran's real(4) intrinsic. A Fortran program calls the real(4) intrinsic (`sinf`), so clotran's compiled
+real(4) value is not the processor's: it is more accurate, and it is `fortran.ops`'s, bit for bit
+(`scripts/ftypes-accuracy`: 0 of 76,000 real-part points differ in value; the gate fails if one does). The
+processor's real(4) intrinsics are 1 ulp off on 3,030 of the 52,000 real(4) points swept; clotran's are
+correctly rounded on all of them.
+
+Rounding twice is not always rounding once. For `+ - * /` and `sqrt` it is (53 >= 2 x 24 + 2; measured, 0 of
+the swept real(4) points differ, and the oracle's real(4) arithmetic relies on it). For the elementary
+functions it is not, and `--scan-real4` counts the cases over every real(4) argument of the twelve
+one-argument functions: 18 of 42.8 billion (log 5, cos 4, sin 2, acos 2, atan 2, sinh 2, log10 1; table in
+docs/types.md), each 1 ulp, on exactly which `fortran.ops` and the compiled code are not correctly rounded.
+Complex(4) from the complex(8) libm (the compiled code) is not `fortran.ops`'s on 2 of 8,000 complex(4)
+LOG points, where that libm is far off (98).
+
+Every real(4) result is checked against a real(4)-rounded reference: refmath rounds its 80 digits straight
+to real(4) (never through real(8)), the arithmetic is checked against its exact result, and the scan
+compares with the reference itself, not with a real(8).
+
+**Removal**: correctly rounded real(4) functions (a real(8) result within half a real(8) ulp of a real(4)
+midpoint recomputed, as CORE-MATH does) if the 18 matter; or the processor's real(4) intrinsics, if being
+the processor's matters more than agreeing with `fortran.ops`.
