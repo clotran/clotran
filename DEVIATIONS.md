@@ -2759,8 +2759,10 @@ DEVIATIONS 26, 70-72). Fortran's `/` on integers truncates toward zero:
 
 ## 88. What the standard leaves to the processor throws
 
-Integer overflow, division by zero, an integer out of its kind's range, a real
-power other than `x**2`, a square root of a negative: the standard leaves each to
+Integer overflow (the minimum divided by -1, negated or raised past the range included),
+division by zero, an integer out of its kind's range (a real converted by INT, NINT, FLOOR or
+CEILING from 2**63 up included), a real power with an inexact partial power (`x**2` is always
+exact), a square root of a negative, LOG of zero, MAX or MIN of a NaN: the standard leaves each to
 the processor, so a program that does one is not Fortran. `fortran.ops` throws
 (a trapping processor is conforming), where the compilers' answers differ with
 the optimization level. The oracle names each such case `{:undefined ...}` in
@@ -2777,7 +2779,8 @@ just above the midpoint of 1 and 1+2**-23, so it is the upper one; through a rea
 midpoint exactly and rounds to even, the lower). `fortran.ops/lit` now takes the decimal text as the
 exact rational it says and rounds it once to the nearest real(4), ties to even
 (`real4-of-ratio`). `test/ftypes/cases.edn` has the three cases that tell the two apart, and
-gfortran and flang agree with the oracle on them.
+gfortran and flang agree with the oracle on them. The same day a real(4) literal "-0.0" lost its sign
+(the ratio is 0); it is -0.0, checked by SIGN(2.5, -0.0) = -2.5.
 
 ## 90. RESOLVED -- real(4) overflow is infinity, as IEEE has it
 
@@ -2790,9 +2793,8 @@ pure tier. The real(8) cases were IEEE already: `1.0/0.0` is infinity, `0.0/0.0`
 
 What stays: a NaN or an infinity has no integer value, so `int`, `nint`, `floor` and `ceiling` of
 one is undefined and refused, in the interpreter and, since the same day, in the pure tier (it
-answered 0, the cast of a long). **A found bug, not fixed here:** `clotran.host.real4/POSITIVE_INFINITY`
-(and the negative) answer a real(8), where clj's `Float/POSITIVE_INFINITY` is a Float; a real(4)
-infinity can be made only by `unchecked-float`.
+answered 0, the cast of a long). `clotran.host.real4/POSITIVE_INFINITY`, `NEGATIVE_INFINITY` and `NaN` are
+real(4)s, as clj's Float constants are (fixed in f32a82f3).
 
 ## 91. The pure tier lowers some of Fortran's kinds
 
@@ -2804,7 +2806,8 @@ Not yet: arrays of complex; a complex or a narrow scalar kind as a parameter or 
 compiled library function (they cross the boundary as a long or a double; a complex as its two
 parts); a function parameter or result of the narrow scalar kinds at the
 boundary of a compiled library (they cross as a long or a double: `^int4` is refused on a
-fn, 92); an array RESULT of the four narrow kinds; rank above 1; logical kinds;
+fn, 92); an array RESULT of the four narrow kinds; an array made inside a pure function (`int-array`, `byte-array`:
+the narrow-kind store cases of `test/ftypes/cases.edn` are interpreted only); rank above 1; logical kinds;
 `character(len=n)`. An unhinted parameter's type is still guessed (the hint, else what a
 same-file callee takes, else how the body uses it, else long or double), with up to 8
 versions. Fortran declares every type.
@@ -2842,17 +2845,19 @@ Inside a pure function, a call of a `fortran.ops` operation is lowered by
 `purefort.cljf`'s `fortran-call` with the kinds as Fortran has them: the result keeps the
 kind (the larger of two integer kinds, the real's kind of an integer with a real), a narrow
 integer is computed in integer(8) and checked into its kind by `cl_fit1`/`cl_fit2`/`cl_fit4`,
-and real(4) arithmetic is Fortran's own (computed in real(4)). `clojure.core`'s operations on
+and real(4) arithmetic is Fortran's own (computed in real(4)); a real(4) elementary function is computed
+in real(8) and rounded once, as `fortran.ops` computes it (DEVIATIONS 99). `clojure.core`'s operations on
 these values widen them, as Clojure's do: an integer kind is a long, a real(4) a double; an
-array element read is its own kind. `scripts/ftypes-check` compiles all 121 cases of
-`test/ftypes/cases.edn` as pure functions and requires gfortran's and flang's builds to
+array element read is its own kind. `scripts/ftypes-check` compiles the cases of
+`test/ftypes/cases.edn` as pure functions (511 cases, 497 lowered; the rest interpreted only) and requires gfortran's and flang's builds to
 answer the oracle's value, or, for a case the standard leaves undefined, to fail (or not
 to lower, when `fortran.ops` throws it instead).
 
 Where this differs from `fortran.ops` interpreted: the TEXT of a failure. The pure helpers
 say "undefined by the standard: integer overflow (integer(4))" for a narrow kind but "long
-overflow" for integer(8) and "Divide by zero" for `quot`, the helpers clojure.core's
-arithmetic shares. A real power `x**n` is Fortran's own (`(x ** n)`), whose value is the
+overflow" for integer(8) (its -huge-1 / -1 too), "Value out of range for long" for an integer(8)
+from a real of 2**63 or more, and "Divide by zero" for `quot`, the helpers clojure.core's arithmetic
+shares. A real power `x**n` is Fortran's own (`(x ** n)`), whose value is the
 processor's unless every partial power is exact; `fortran.ops` answers it only then, and refuses
 the rest (`{:processor ...}` cases in `test/ftypes/cases.edn`), as for an inexact complex product
 (DEVIATIONS 94). A real power of a real is not lowered.

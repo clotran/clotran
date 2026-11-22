@@ -57,7 +57,8 @@ sqrt`, `huge tiny epsilon kind digits`, for complex `cmplx conjg aimag`, and the
 atan atan2 sinh cosh tanh` (the host libm's, measured against a correctly rounded reference: below, and DEVIATIONS 95), and of a complex `exp log sqrt sin cos abs` (DEVIATIONS 98). `CMPLX(x, y)` is a
 complex(4) whatever the arguments' kind, as Fortran's is; a complex product the processor would
 round, any complex division and `**`, LOG of zero, and a real to an integer power whose partial powers are not all
-exact (`x**2` always is defined) are refused (DEVIATIONS 93, 94). Real arithmetic is IEEE: overflow is
+exact (`x**2` always is defined) are refused (DEVIATIONS 93, 94). SIGN keeps a negative zero's sign (`SIGN(1.0, -0.0)` is -1.0); MAX and MIN of a NaN are
+the processor's and refused. Real arithmetic is IEEE: overflow is
 infinity, `x/0.0` infinity, `0.0/0.0` NaN, in both real kinds; a NaN or an infinity has no integer
 value (DEVIATIONS 90).
 
