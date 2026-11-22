@@ -27,11 +27,13 @@
 ;; scripts/oracle does for its forms.
 (load-file (str (fs/file repo "upstream" "names.clj")))
 (def oracle-file (fs/file work "oracle_clj.clj"))
+(def refmath-file (fs/file work "refmath_clj.clj"))
+(spit refmath-file (names/to-upstream (slurp (fs/file repo "test" "ftypes" "refmath.clj"))))
 (spit oracle-file (names/to-upstream (slurp (fs/file repo "test" "ftypes" "oracle.clj"))))
 (def answers
   (let [r (shell {:out :string :err :string :dir (str repo)}
                  "clj" "-Sdeps" "{:deps {org.clojure/clojure {:mvn/version \"1.12.6\"}}}"
-                 "-M" "-i" (str oracle-file)
+                 "-M" "-i" (str refmath-file) "-i" (str oracle-file)
                  "-e" (str "(require 'clojure.edn) (ftypes.oracle/run-file " (pr-str cases-file) ")"))]
     (->> (str/split-lines (:out r)) (remove str/blank?) (mapv read-string))))
 (assert (= (count answers) (count cases)) (str "oracle answered " (count answers) " of " (count cases)))
@@ -44,7 +46,7 @@
 (defn fk [k] (iso k))
 (defn ftext [e]
   (cond
-    (map? e) (ftext (or (:undefined e) (:processor e) (:interpreted e)))
+    (map? e) (ftext (or (:undefined e) (:processor e) (:interpreted e) (:expr e)))
     (and (vector? e) (complex? (first e)))
     ;; a complex constant: (re, im), each part a real of the kind's part, signs inside
     (let [[k [x y]] e
@@ -116,6 +118,25 @@
             (str/includes? t "inf") (if (str/starts-with? t "-") ##-Inf ##Inf)
             :else (case k :real8 (Double/parseDouble t) :real4 (double (Float/parseFloat t))))))))
 
+;; units in the last place between two values of a real kind, on the integers that order them
+(defn ulp-order [k x]
+  (let [b (if (= k :real4) (long (Float/floatToIntBits (float x))) (Double/doubleToLongBits (double x)))]
+    (if (neg? b) (- (if (= k :real4) (long Integer/MIN_VALUE) Long/MIN_VALUE) b) b)))
+(defn ulp-dist [k a b] (abs (-' (ulp-order k a) (ulp-order k b))))
+;; a case's bound, 0 for the ones that must agree to the bit
+(defn ulp-bound [i] (let [c (nth cases i)] (if (and (map? c) (:ulp c)) (:ulp c) 0)))
+;; the worst distance seen, by who answered and which case
+(def ulp-seen (atom {}))
+(declare same?)
+(defn close? [who i k want got]
+  (let [tol (ulp-bound i)]
+    (cond (zero? tol) (same? k want got)
+          (or (Double/isNaN (double want)) (Double/isInfinite (double want)) (Double/isNaN (double got)) (Double/isInfinite (double got)))
+          (same? k want got)
+          :else (let [d (ulp-dist k want got)]
+                  (swap! ulp-seen update who (fnil max 0) d)
+                  (<= d tol)))))
+
 (defn same? [k want got]
   (cond
     (complex? k) (and (= (count want) (count got) 2) (every? true? (map (fn [w g] (= (Double/doubleToRawLongBits (double w)) (Double/doubleToRawLongBits (double g)))) want got)))
@@ -137,7 +158,7 @@
             {:fc fc
              :diffs (vec (for [[[i k] [kline line]] (map vector compared (partition 2 lines))
                                :let [want (nth (nth answers i) 2) got (parse-out k line)]
-                               :when (or (not= (str/trim kline) (name k)) (not (same? k want got)))]
+                               :when (or (not= (str/trim kline) (name k)) (not (close? fc i k want got)))]
                            {:case (pr-str (nth cases i)) :oracle want :got got :kind k
                             :compiler-kind (str/trim kline)}))}))))))
 
@@ -146,7 +167,7 @@
 (defn clotran-form [e]
   (cond (vector? e) (list 'f/lit (first e) (second e))
         (keyword? e) e
-        (map? e) (clotran-form (or (:undefined e) (:processor e) (:interpreted e)))
+        (map? e) (clotran-form (or (:undefined e) (:processor e) (:interpreted e) (:expr e)))
         :else (cons (symbol "f" (name (first e))) (map clotran-form (rest e)))))
 (def clotran-result
   (let [prog (str "(require '[fortran.ops :as f])\n"
@@ -169,7 +190,7 @@
                :let [want (nth answers i) ex (expected i)]
                :when (if (= ex :ok)
                        (not (and (= :ok (first a) (first want)) (= (second a) (second want))
-                                 (same? (second a) (nth want 2) (nth a 2))))
+                                 (close? "fortran.ops" i (second a) (nth want 2) (nth a 2))))
                        (not= :threw (first a)))]
            {:case (pr-str (nth cases i)) :oracle want :clotran a :expected ex}))))
 
@@ -233,7 +254,7 @@
                         (:complex4 :complex8) (list* (symbol "f" (name k)) x)
                         (list (symbol "f" (name k)) x)))
         (keyword? e) e
-        (map? e) (pure-form (or (:undefined e) (:processor e) (:interpreted e)))
+        (map? e) (pure-form (or (:undefined e) (:processor e) (:interpreted e) (:expr e)))
         :else (cons (symbol "f" (name (first e))) (map pure-form (rest e)))))
 (defn case-cplx? [i] (and (= :ok (first (nth answers i))) (complex? (second (nth answers i)))))
 (def pure-results
@@ -303,15 +324,19 @@
                                                 pk (case k :complex4 :real4 :complex8 :real8 k)
                                                 got (mapv #(parse-pure pk (:out %)) rs)]
                                             (and (not-any? #{::bad} got)
-                                                 (same? k (nth want 2) (if cplx got (first got))))))))
+                                                 (close? (str "pure Fortran " (:fc r)) i k (nth want 2) (if cplx got (first got))))))))
                                 (every? #(zero? (:exit %)) rs))]
                     (str (:fc r) " " (pr-str (nth cases i)) ": oracle " (pr-str want) ", pure printed " (pr-str (mapv :out rs)) " (exit " (mapv :exit rs) ")")))]
           d))))
 
 (let [n (count cases)
+      ulp-cases (count (filter #(pos? (ulp-bound %)) (range (count cases))))
       und (remove #(= :ok (first %)) answers)
       bad (+ (count unexpected) (if (:failed clotran-result) 1 (count clotran-diffs)) (count hint-diffs) (count pure-diffs) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
   (println (str "  hints in Fortran's words: " (count hint-diffs) " differ from Clojure's spelling (" (count hint-pairs) " pairs, interpreted and pure Fortran)"))
+  (when (pos? ulp-cases)
+    (println (str "  elementary functions: " ulp-cases " cases within their ulp bound of the 80-digit reference; the worst error seen, in ulps: "
+                  (str/join ", " (for [[who d] (sort-by key @ulp-seen)] (str who " " d))))))
   (doseq [d hint-diffs] (println (str "  DIFF hints: " d)))
   (println (str "  pure Fortran: " (count pure-diffs) " differ from the oracle (" (count (:lowered pure-results)) " cases lowered, gfortran and flang)"))
   (doseq [d pure-diffs] (println (str "  DIFF pure " d)))

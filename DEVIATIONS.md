@@ -119,6 +119,7 @@ Categories:
 | 92 | Type hints in Fortran's words | design | `src/f/analyze.inc` (hint_canon) |
 | 93 | fortran.ops in the pure tier: Fortran's kinds, with their own messages | design | `src/clj/clotran/purefort.cljf` (fortran-call) |
 | 94 | Complex values are records, and a complex result the processor decides is refused | 1.x | `src/clj/fortran/ops.cljf` |
+| 95 | The elementary functions are the host libm's, measured against a correctly rounded reference | design | `src/clj/fortran/ops.cljf` |
 
 ---
 
@@ -2883,3 +2884,21 @@ its real part in the part's kind, not real(4).
 
 **Removal**: a scalar class for the two complex kinds in the runtime (and so an ABI for them);
 then the refusal of the inexact cases is the only difference left.
+
+## 95. The elementary functions are the host libm's, measured against a correctly rounded reference
+
+Fortran gives EXP, LOG, SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2, SINH, COSH, TANH and LOG10 no
+accuracy: "a processor-dependent approximation". `fortran.ops` and the pure tier answer with the host's
+libm (`clotran.host.math`, Fortran's own intrinsics when compiled), in the argument's kind: real(4) by
+way of real(8), rounded once. What is claimed is measured, not assumed. `test/ftypes/refmath.clj` computes
+each to 80 digits by series and rounds it once to the kind, the correctly rounded value, and
+`scripts/ftypes-check` runs 163 cases (arguments from 1e-10 to 1e300, sin and cos at 1e22, both real kinds)
+through gfortran, flang, `fortran.ops` and both compiled builds, requires each answer within 1 ulp of it,
+and prints the worst error seen: 1 ulp for gfortran, flang and `fortran.ops`, 0 for the compiled gfortran
+build, 1 for the compiled flang one. It is a bound for these cases on this machine's libms, not for all
+arguments or all processors. Outside a function's domain (LOG of zero or less, ASIN or ACOS past 1,
+ATAN2(0, 0)) or for a NaN or an infinity, the result is the processor's: `fortran.ops` refuses it, compiled
+Fortran answers its processor's (the `{:processor ...}` cases). Complex arguments are not supported.
+
+**Removal**: a stated bound per function from the libm's own documentation; correctly rounded versions
+(CORE-MATH, or the reference's series in Fortran) where 0 ulp is wanted.

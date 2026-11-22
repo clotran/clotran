@@ -50,7 +50,8 @@
    :inexact-complex "a complex product whose parts are not all exact is processor dependent"
    :complex-division "complex division is processor dependent"
    :complex-power "a complex power is processor dependent"
-   :inexact-complex-abs "ABS of a complex is exact only where the answer is a whole number of the part kind"})
+   :inexact-complex-abs "ABS of a complex is exact only where the answer is a whole number of the part kind"
+   :domain "the argument is outside the function's domain: the result is the processor's"})
 
 (defn- kind-words
   "A kind as Fortran writes it: :int4 is integer(4), :real8 real(8)."
@@ -451,3 +452,37 @@
   (let [k (kind-of x)]
     (when (complex-kind? k) (ill-typed "digits of a complex"))
     (fit default-integer (if (int-kind? k) (dec (:bits (specs k))) (case k :real4 24 :real8 53)))))
+
+;; The elementary functions. The standard gives them no accuracy; these are the host's libm's (through
+;; clotran.host.math, then rounded to the kind), and scripts/ftypes-check measures them against the
+;; correctly rounded value (test/ftypes/refmath.clj) and reports the worst error. An argument outside a
+;; function's domain, or not finite, is refused, as everything the processor decides is.
+(defn- elem1 [op f x]
+  (no-complex op x)
+  (let [k (kind-of x)]
+    (when-not (real-kind? k) (ill-typed (str op " needs a real")))
+    (let [d (double x)]
+      (finite! d)
+      (when (and (#{"log" "log10"} op) (not (pos? d))) (undefined :domain))
+      (when (and (#{"asin" "acos"} op) (clojure.core/> (clotran.host.math/abs d) 1.0)) (undefined :domain))
+      (rnd k (f d)))))
+
+(defn exp [x] (elem1 "exp" clotran.host.math/exp x))
+(defn log [x] (elem1 "log" clotran.host.math/log x))
+(defn log10 [x] (elem1 "log10" clotran.host.math/log10 x))
+(defn sin [x] (elem1 "sin" clotran.host.math/sin x))
+(defn cos [x] (elem1 "cos" clotran.host.math/cos x))
+(defn tan [x] (elem1 "tan" clotran.host.math/tan x))
+(defn asin [x] (elem1 "asin" clotran.host.math/asin x))
+(defn acos [x] (elem1 "acos" clotran.host.math/acos x))
+(defn atan [x] (elem1 "atan" clotran.host.math/atan x))
+(defn sinh [x] (elem1 "sinh" clotran.host.math/sinh x))
+(defn cosh [x] (elem1 "cosh" clotran.host.math/cosh x))
+(defn tanh [x] (elem1 "tanh" clotran.host.math/tanh x))
+(defn atan2 [y x]
+  (need-same 'atan2 y x)
+  (let [k (kind-of y)]
+    (when-not (real-kind? k) (ill-typed "atan2 needs reals"))
+    (finite! (double y)) (finite! (double x))
+    (when (and (zero? (double y)) (zero? (double x))) (undefined :domain))
+    (rnd k (clotran.host.math/atan2 (double y) (double x)))))

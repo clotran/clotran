@@ -13,7 +13,8 @@
   overflow, division by zero, an inexact power, a value out of range), the
   oracle throws ex-info with {:undefined why}: those cases are not compared
   with the compilers, and an implementation must refuse them (clotran
-  throws).")
+  throws)."
+  (:require [ftypes.refmath :as rm]))
 
 (def kinds
   {:int1 {:type :integer :bits 8 :n 1}   :int2 {:type :integer :bits 16 :n 2}
@@ -190,6 +191,32 @@
 
 (declare ev)
 
+(def ^:private elementary
+  {'exp rm/exp* 'log rm/log* 'log10 rm/log10* 'sin rm/sin* 'cos rm/cos* 'tan rm/tan*
+   'asin rm/asin* 'acos rm/acos* 'atan rm/atan* 'sinh rm/sinh* 'cosh rm/cosh* 'tanh rm/tanh*})
+
+(defn- elem
+  "EXP, LOG, SIN ...: the value to 80 digits (test/ftypes/refmath.clj), rounded once to the argument's
+  kind. The standard gives no accuracy, so a result is checked within an ulp bound of this one; an
+  argument outside the function's domain is the processor's."
+  [op vs]
+  (let [[k x] (first vs)]
+    (when-not (real-kind? k) (ill-typed (str op " needs a real")))
+    (finite! x)
+    (when (and ('#{log log10} op) (not (pos? x))) (undefined :domain))
+    (when (and ('#{asin acos} op) (clojure.core/> (clotran.host.math/abs x) 1.0)) (undefined :domain))
+    [k (rm/round-to k ((elementary op) (rm/bd x)))]))
+
+(defn- elem2
+  "ATAN2(y, x) the same way."
+  [vs]
+  (apply need-same 'atan2 vs)
+  (let [[[k y] [_ x]] vs]
+    (when-not (real-kind? k) (ill-typed "atan2 needs reals"))
+    (finite! y) (finite! x)
+    (when (and (zero? x) (zero? y)) (undefined :domain))
+    [k (rm/round-to k (rm/atan2* (rm/bd y) (rm/bd x)))]))
+
 (def ^:private complex-ok '#{+ - * / ** abs real dble cmplx conjg aimag kind})
 
 (defn- call [op args]
@@ -197,6 +224,8 @@
     (when (and (some #(and (vector? %) (complex-kind? (first %))) vs) (not (complex-ok op)))
       (ill-typed (str op " of a complex")))
     (case op
+      (exp log log10 sin cos tan asin acos atan sinh cosh tanh) (elem op vs)
+      atan2 (elem2 vs)
       cmplx (let [k (kind-arg (drop 2 vs) :complex4) pk (:part (kinds k)) [x y] vs]
               (when-not (complex-kind? k) (ill-typed "cmplx's kind is a complex kind"))
               (if (complex-kind? (first x))
@@ -284,8 +313,10 @@
 (defn case-expr
   "A case is an expression; {:undefined expr}, one the standard leaves to the processor;
   {:processor expr}, the same, where compiled Fortran may answer with the processor's value; or
-  {:interpreted expr}, one that is defined and that the pure Fortran tier may decline to lower."
-  [c] (if (map? c) (or (:undefined c) (:processor c) (:interpreted c)) c))
+  {:interpreted expr}, one that is defined and that the pure Fortran tier may decline to lower;
+  or {:ulp n :expr expr}, an elementary function, whose value an implementation may have within n
+  units in the last place of the correctly rounded one this oracle computes."
+  [c] (if (map? c) (or (:undefined c) (:processor c) (:interpreted c) (:expr c)) c))
 
 (defn run-file
   "Prints one EDN vector per case of the EDN file: the answers, in order."

@@ -208,4 +208,177 @@
  {:undefined (/ [:complex8 ["1" "2"]] [:complex8 ["3" "4"]])}
  {:processor (* [:complex8 ["0.1" "0.2"]] [:complex8 ["0.3" "0.4"]])}
  {:undefined (abs [:complex8 ["1" "1"]])}
+
+ ;; elementary functions: the standard gives them no accuracy, so each is checked within 1 ulp of the
+ ;; correctly rounded value the oracle computes to 80 digits (test/ftypes/refmath.clj)
+ {:ulp 1 :expr (exp [:real8 "0.5"])}
+ {:ulp 1 :expr (exp [:real8 "1.0"])}
+ {:ulp 1 :expr (exp [:real8 "-1.0"])}
+ {:ulp 1 :expr (exp [:real8 "10.0"])}
+ {:ulp 1 :expr (exp [:real8 "-20.0"])}
+ {:ulp 1 :expr (exp [:real8 "100.0"])}
+ {:ulp 1 :expr (exp [:real8 "0.001"])}
+ {:ulp 1 :expr (exp [:real8 "700.0"])}
+ {:ulp 1 :expr (exp [:real8 "0.0"])}
+ {:ulp 1 :expr (exp [:real4 "0.5"])}
+ {:ulp 1 :expr (exp [:real4 "1.0"])}
+ {:ulp 1 :expr (exp [:real4 "-1.0"])}
+ {:ulp 1 :expr (exp [:real4 "10.0"])}
+ {:ulp 1 :expr (exp [:real4 "-20.0"])}
+ {:ulp 1 :expr (exp [:real4 "100.0"])}
+ {:ulp 1 :expr (log [:real8 "0.5"])}
+ {:ulp 1 :expr (log [:real8 "1.0000001"])}
+ {:ulp 1 :expr (log [:real8 "2.0"])}
+ {:ulp 1 :expr (log [:real8 "10.0"])}
+ {:ulp 1 :expr (log [:real8 "1e-10"])}
+ {:ulp 1 :expr (log [:real8 "12345.678"])}
+ {:ulp 1 :expr (log [:real8 "1e300"])}
+ {:ulp 1 :expr (log [:real8 "1.0"])}
+ {:ulp 1 :expr (log [:real4 "0.5"])}
+ {:ulp 1 :expr (log [:real4 "1.0000001"])}
+ {:ulp 1 :expr (log [:real4 "2.0"])}
+ {:ulp 1 :expr (log [:real4 "10.0"])}
+ {:ulp 1 :expr (log [:real4 "12345.678"])}
+ {:ulp 1 :expr (log [:real4 "1.0"])}
+ {:ulp 1 :expr (log10 [:real8 "0.5"])}
+ {:ulp 1 :expr (log10 [:real8 "2.0"])}
+ {:ulp 1 :expr (log10 [:real8 "100.0"])}
+ {:ulp 1 :expr (log10 [:real8 "1000.0"])}
+ {:ulp 1 :expr (log10 [:real8 "12345.0"])}
+ {:ulp 1 :expr (log10 [:real8 "1e-5"])}
+ {:ulp 1 :expr (log10 [:real4 "0.5"])}
+ {:ulp 1 :expr (log10 [:real4 "2.0"])}
+ {:ulp 1 :expr (log10 [:real4 "100.0"])}
+ {:ulp 1 :expr (log10 [:real4 "1000.0"])}
+ {:ulp 1 :expr (log10 [:real4 "12345.0"])}
+ {:ulp 1 :expr (log10 [:real4 "1e-5"])}
+ {:ulp 1 :expr (sin [:real8 "0.5"])}
+ {:ulp 1 :expr (sin [:real8 "1.0"])}
+ {:ulp 1 :expr (sin [:real8 "10.0"])}
+ {:ulp 1 :expr (sin [:real8 "100.0"])}
+ {:ulp 1 :expr (sin [:real8 "1e5"])}
+ {:ulp 1 :expr (sin [:real8 "1e10"])}
+ {:ulp 1 :expr (sin [:real8 "1e22"])}
+ {:ulp 1 :expr (sin [:real8 "3.141592653589793"])}
+ {:ulp 1 :expr (sin [:real8 "0.0001"])}
+ {:ulp 1 :expr (sin [:real8 "0.0"])}
+ {:ulp 1 :expr (sin [:real4 "0.5"])}
+ {:ulp 1 :expr (sin [:real4 "1.0"])}
+ {:ulp 1 :expr (sin [:real4 "10.0"])}
+ {:ulp 1 :expr (sin [:real4 "100.0"])}
+ {:ulp 1 :expr (sin [:real4 "1e5"])}
+ {:ulp 1 :expr (sin [:real4 "3.141592653589793"])}
+ {:ulp 1 :expr (cos [:real8 "0.5"])}
+ {:ulp 1 :expr (cos [:real8 "1.0"])}
+ {:ulp 1 :expr (cos [:real8 "10.0"])}
+ {:ulp 1 :expr (cos [:real8 "100.0"])}
+ {:ulp 1 :expr (cos [:real8 "1e5"])}
+ {:ulp 1 :expr (cos [:real8 "1e22"])}
+ {:ulp 1 :expr (cos [:real8 "1.5707963267948966"])}
+ {:ulp 1 :expr (cos [:real8 "0.0"])}
+ {:ulp 1 :expr (cos [:real4 "0.5"])}
+ {:ulp 1 :expr (cos [:real4 "1.0"])}
+ {:ulp 1 :expr (cos [:real4 "10.0"])}
+ {:ulp 1 :expr (cos [:real4 "100.0"])}
+ {:ulp 1 :expr (cos [:real4 "1e5"])}
+ {:ulp 1 :expr (cos [:real4 "1.5707963267948966"])}
+ {:ulp 1 :expr (tan [:real8 "0.5"])}
+ {:ulp 1 :expr (tan [:real8 "1.0"])}
+ {:ulp 1 :expr (tan [:real8 "10.0"])}
+ {:ulp 1 :expr (tan [:real8 "100.0"])}
+ {:ulp 1 :expr (tan [:real8 "1e5"])}
+ {:ulp 1 :expr (tan [:real8 "-0.25"])}
+ {:ulp 1 :expr (tan [:real4 "0.5"])}
+ {:ulp 1 :expr (tan [:real4 "1.0"])}
+ {:ulp 1 :expr (tan [:real4 "10.0"])}
+ {:ulp 1 :expr (tan [:real4 "100.0"])}
+ {:ulp 1 :expr (tan [:real4 "1e5"])}
+ {:ulp 1 :expr (tan [:real4 "-0.25"])}
+ {:ulp 1 :expr (asin [:real8 "0.5"])}
+ {:ulp 1 :expr (asin [:real8 "-0.9"])}
+ {:ulp 1 :expr (asin [:real8 "0.99"])}
+ {:ulp 1 :expr (asin [:real8 "0.001"])}
+ {:ulp 1 :expr (asin [:real8 "1.0"])}
+ {:ulp 1 :expr (asin [:real8 "0.0"])}
+ {:ulp 1 :expr (asin [:real4 "0.5"])}
+ {:ulp 1 :expr (asin [:real4 "-0.9"])}
+ {:ulp 1 :expr (asin [:real4 "0.99"])}
+ {:ulp 1 :expr (asin [:real4 "0.001"])}
+ {:ulp 1 :expr (asin [:real4 "1.0"])}
+ {:ulp 1 :expr (asin [:real4 "0.0"])}
+ {:ulp 1 :expr (acos [:real8 "0.5"])}
+ {:ulp 1 :expr (acos [:real8 "-0.9"])}
+ {:ulp 1 :expr (acos [:real8 "0.99"])}
+ {:ulp 1 :expr (acos [:real8 "0.001"])}
+ {:ulp 1 :expr (acos [:real8 "1.0"])}
+ {:ulp 1 :expr (acos [:real8 "0.0"])}
+ {:ulp 1 :expr (acos [:real4 "0.5"])}
+ {:ulp 1 :expr (acos [:real4 "-0.9"])}
+ {:ulp 1 :expr (acos [:real4 "0.99"])}
+ {:ulp 1 :expr (acos [:real4 "0.001"])}
+ {:ulp 1 :expr (acos [:real4 "1.0"])}
+ {:ulp 1 :expr (acos [:real4 "0.0"])}
+ {:ulp 1 :expr (atan [:real8 "0.5"])}
+ {:ulp 1 :expr (atan [:real8 "1.0"])}
+ {:ulp 1 :expr (atan [:real8 "10.0"])}
+ {:ulp 1 :expr (atan [:real8 "-3.0"])}
+ {:ulp 1 :expr (atan [:real8 "1e10"])}
+ {:ulp 1 :expr (atan [:real8 "1e-5"])}
+ {:ulp 1 :expr (atan [:real8 "0.0"])}
+ {:ulp 1 :expr (atan [:real4 "0.5"])}
+ {:ulp 1 :expr (atan [:real4 "1.0"])}
+ {:ulp 1 :expr (atan [:real4 "10.0"])}
+ {:ulp 1 :expr (atan [:real4 "-3.0"])}
+ {:ulp 1 :expr (atan [:real4 "1e-5"])}
+ {:ulp 1 :expr (atan [:real4 "0.0"])}
+ {:ulp 1 :expr (sinh [:real8 "0.5"])}
+ {:ulp 1 :expr (sinh [:real8 "1.0"])}
+ {:ulp 1 :expr (sinh [:real8 "10.0"])}
+ {:ulp 1 :expr (sinh [:real8 "-5.0"])}
+ {:ulp 1 :expr (sinh [:real8 "0.0"])}
+ {:ulp 1 :expr (sinh [:real4 "0.5"])}
+ {:ulp 1 :expr (sinh [:real4 "1.0"])}
+ {:ulp 1 :expr (sinh [:real4 "10.0"])}
+ {:ulp 1 :expr (sinh [:real4 "-5.0"])}
+ {:ulp 1 :expr (sinh [:real4 "0.0"])}
+ {:ulp 1 :expr (cosh [:real8 "0.5"])}
+ {:ulp 1 :expr (cosh [:real8 "1.0"])}
+ {:ulp 1 :expr (cosh [:real8 "10.0"])}
+ {:ulp 1 :expr (cosh [:real8 "-5.0"])}
+ {:ulp 1 :expr (cosh [:real8 "0.0"])}
+ {:ulp 1 :expr (cosh [:real4 "0.5"])}
+ {:ulp 1 :expr (cosh [:real4 "1.0"])}
+ {:ulp 1 :expr (cosh [:real4 "10.0"])}
+ {:ulp 1 :expr (cosh [:real4 "-5.0"])}
+ {:ulp 1 :expr (cosh [:real4 "0.0"])}
+ {:ulp 1 :expr (tanh [:real8 "0.5"])}
+ {:ulp 1 :expr (tanh [:real8 "1.0"])}
+ {:ulp 1 :expr (tanh [:real8 "10.0"])}
+ {:ulp 1 :expr (tanh [:real8 "-2.0"])}
+ {:ulp 1 :expr (tanh [:real8 "0.0"])}
+ {:ulp 1 :expr (tanh [:real4 "0.5"])}
+ {:ulp 1 :expr (tanh [:real4 "1.0"])}
+ {:ulp 1 :expr (tanh [:real4 "10.0"])}
+ {:ulp 1 :expr (tanh [:real4 "-2.0"])}
+ {:ulp 1 :expr (tanh [:real4 "0.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "1.0"] [:real8 "1.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "1.0"] [:real8 "-1.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "-1.0"] [:real8 "-1.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "-1.0"] [:real8 "1.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "3.0"] [:real8 "4.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "1.0"] [:real8 "0.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "-2.0"] [:real8 "0.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "0.0"] [:real8 "-1.0"])}
+ {:ulp 1 :expr (atan2 [:real8 "1e-5"] [:real8 "1e5"])}
+ {:ulp 1 :expr (atan2 [:real8 "7.5"] [:real8 "-0.001"])}
+ {:ulp 1 :expr (atan2 [:real4 "1.0"] [:real4 "1.0"])}
+ {:ulp 1 :expr (atan2 [:real4 "-1.0"] [:real4 "-1.0"])}
+ {:ulp 1 :expr (atan2 [:real4 "3.0"] [:real4 "4.0"])}
+ ;; outside a function's domain the result is the processor's (a NaN); fortran.ops refuses it
+ {:processor (log [:real8 "-1.0"])}
+ {:processor (log [:real8 "0.0"])}
+ {:processor (log10 [:real8 "-2.0"])}
+ {:processor (asin [:real8 "1.5"])}
+ {:processor (acos [:real8 "-2.0"])}
+ {:processor (atan2 [:real8 "0.0"] [:real8 "0.0"])}
 ]

@@ -1109,6 +1109,11 @@
 
 ;; the non-finite constants
 [(pr-str clotran.host.real8/POSITIVE_INFINITY) (pr-str clotran.host.real8/NEGATIVE_INFINITY) (pr-str ##NaN)]
+;; Float's own constants are Floats (they answered Doubles), and its range members exist
+[(class clotran.host.real4/POSITIVE_INFINITY) (class clotran.host.real4/NEGATIVE_INFINITY) (class clotran.host.real4/NaN)
+ (pr-str clotran.host.real4/MAX_VALUE) (pr-str clotran.host.real4/MIN_VALUE)
+ clotran.host.real4/MAX_EXPONENT clotran.host.real4/MIN_EXPONENT
+ (= clotran.host.real4/POSITIVE_INFINITY (float ##Inf)) (.isNaN clotran.host.real4/NaN)]
 
 (require (quote [clojure.string :as ltstr]))
 

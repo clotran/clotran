@@ -1079,6 +1079,14 @@ end module " mod "
           (let [h (str "cl_fsqrt(" (kwiden e0 t0 :double) ")")]
             (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0)))
 
+      ;; the elementary functions: Fortran's own, in the argument's kind (the host's libm's: accurate to
+      ;; the ulp bound scripts/ftypes-check measures; outside a domain the processor's, a NaN)
+      ("exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh")
+      (do (when-not (kreal? t0) (decline (str nm " of something that is not a real")))
+          (done (str nm "(" e0 ")") t0))
+      "atan2" (do (same!) (when-not (kreal? t0) (decline "atan2 of something that is not a real"))
+                  (done (str "atan2(" e0 ", " e1 ")") t0))
+
       "huge" (done (str "huge(" (kzero t0) ")") t0)
       "tiny" (do (when-not (kreal? t0) (decline "tiny of an integer")) (done (str "tiny(" (kzero t0) ")") t0))
       "epsilon" (do (when-not (kreal? t0) (decline "epsilon of an integer")) (done (str "epsilon(" (kzero t0) ")") t0))

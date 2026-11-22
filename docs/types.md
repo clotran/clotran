@@ -53,7 +53,8 @@ indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 ```
 
 The operations: `+ - * / **`, `int nint floor ceiling real dble`, `abs sign min max mod modulo
-sqrt`, `huge tiny epsilon kind digits`, and for complex `cmplx conjg aimag`. `CMPLX(x, y)` is a
+sqrt`, `huge tiny epsilon kind digits`, for complex `cmplx conjg aimag`, and the elementary functions `exp log log10 sin cos tan asin acos
+atan atan2 sinh cosh tanh` (the host libm's, measured within 1 ulp of a correctly rounded reference: DEVIATIONS 95). `CMPLX(x, y)` is a
 complex(4) whatever the arguments' kind, as Fortran's is; a complex product the processor would
 round, any complex division and `**`, and a real to an integer power whose partial powers are not all
 exact (`x**2` always is defined) are refused (DEVIATIONS 93, 94). Real arithmetic is IEEE: overflow is

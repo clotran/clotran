@@ -5005,6 +5005,11 @@ contains
     case (HK_PINF);     out = gc_real(ieee_value(1.0_gc_dp, ieee_positive_inf))
     case (HK_NINF);     out = gc_real(ieee_value(1.0_gc_dp, ieee_negative_inf))
     case (HK_NAN);      out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan))
+    ! a Float: the double that holds the real(4), marked as one (the cast of a real(4), W_FLOAT)
+    case (HK_REAL4);    out = gc_real(row%rval); out%ref = W_FLOAT
+    case (HK_PINF4);    out = gc_real(ieee_value(1.0_gc_dp, ieee_positive_inf)); out%ref = W_FLOAT
+    case (HK_NINF4);    out = gc_real(ieee_value(1.0_gc_dp, ieee_negative_inf)); out%ref = W_FLOAT
+    case (HK_NAN4);     out = gc_real(ieee_value(1.0_gc_dp, ieee_quiet_nan)); out%ref = W_FLOAT
     case (HK_TRUE);     out = gc_bool(.true.)
     case (HK_FALSE);    out = gc_bool(.false.)
     case (HK_LINEBOX);  out = gc_obj(OBJ_ATOM, [gc_int(0_gc_ip), gc_nil()], [roots])

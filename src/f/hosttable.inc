@@ -21,7 +21,8 @@
   integer, parameter :: HK_INT = -1, HK_REAL = -2, HK_PINF = -3, HK_NINF = -4, &
        HK_NAN = -5, HK_NIL = -6, HK_EMPTYMAP = -7, HK_SPECIALS = -8, HK_TYPE = -9, &
        HK_TRUE = -10, HK_FALSE = -11, HK_LINEBOX = -12, HK_SELFKEY = -13, HK_MATHCTX = -14, &
-       HK_BOXVAR = -15, HK_CLJVAR = -16, HK_LOCK = -17
+       HK_BOXVAR = -15, HK_CLJVAR = -16, HK_LOCK = -17, &
+       HK_REAL4 = -18, HK_PINF4 = -19, HK_NINF4 = -20, HK_NAN4 = -21
 
   type(hm), parameter :: HOST_STATICS_1(110) = [ &
   ! a static field written in Clojure: the var the name gives, its
@@ -353,7 +354,7 @@
   ! Long's bounds are clotran's own: an integer here IS a 64-bit one.
        hm("clotran.host.int8", "MAX_VALUE", HK_INT, "", huge(0_gc_ip)), &
        hm("clotran.host.int8", "MIN_VALUE", HK_INT, "", -huge(0_gc_ip) - 1_gc_ip) ]
-  type(hm), parameter :: HOST_STATICS_4(66) = [ &
+  type(hm), parameter :: HOST_STATICS_4(71) = [ &
   ! Double.compare, NOT clojure.core/compare: a total order in which
   ! -0.0 is below 0.0. clojure.math's tests are written on it.
        hm("clotran.host.real8", "compare", B_NUMCOMPARE, "clotran-num-compare"), &
@@ -365,8 +366,14 @@
        hm("clotran.host.real8", "MIN_EXPONENT", HK_INT, "", -1022_gc_ip), &
        hm("clotran.host.real8", "POSITIVE_INFINITY", HK_PINF), &
        hm("clotran.host.real8", "NEGATIVE_INFINITY", HK_NINF), &
-       hm("clotran.host.real4", "POSITIVE_INFINITY", HK_PINF), &
-       hm("clotran.host.real4", "NEGATIVE_INFINITY", HK_NINF), &
+       ! Float's own: a real(4), where these answered a real(8) (clj's Float/POSITIVE_INFINITY is a Float)
+       hm("clotran.host.real4", "POSITIVE_INFINITY", HK_PINF4), &
+       hm("clotran.host.real4", "NEGATIVE_INFINITY", HK_NINF4), &
+       hm("clotran.host.real4", "NaN", HK_NAN4), &
+       hm("clotran.host.real4", "MAX_VALUE", HK_REAL4, "", 0_gc_ip, real(huge(1.0_4), gc_dp)), &
+       hm("clotran.host.real4", "MIN_VALUE", HK_REAL4, "", 0_gc_ip, real(tiny(1.0_4) * epsilon(1.0_4), gc_dp)), &
+       hm("clotran.host.real4", "MAX_EXPONENT", HK_INT, "", 127_gc_ip), &
+       hm("clotran.host.real4", "MIN_EXPONENT", HK_INT, "", -126_gc_ip), &
   ! Number.compare is the TOTAL order clj puts on doubles: -0.0 below 0.0, NaN above everything.
        hm("clotran.host.int4", "valueOf", B_INTEGERVALUE, "clotran-int-value"), &
        hm("clotran.host.int4", "parseInt", B_INTEGERVALUE, "clotran-int-value"), &
@@ -444,7 +451,7 @@
        hm("clotran.host.numbers", "longs", B_IDENTITY, "identity"), &
        hm("clotran.host.numbers", "doubles", B_IDENTITY, "identity"), &
        hm("clotran.host.util", "arrayTypeToSymbol", B_ARRAYTYPESYM, "clotran-array-type-symbol") ]
-  type(hm), parameter :: HOST_STATICS(339) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
+  type(hm), parameter :: HOST_STATICS(344) = [HOST_STATICS_1, HOST_STATICS_2, HOST_STATICS_3, HOST_STATICS_4]
 
   type(hm), parameter :: HOST_METHODS_1(104) = [ &
   ! Instance members. The target becomes the first argument, which is all
