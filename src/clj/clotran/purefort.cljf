@@ -428,7 +428,7 @@ end module " mod "
              [(str nm) {:type (keyword "record" (str nm))
                         :factory (symbol (str ns-name) (str "->" nm))
                         :fields (mapv (fn [fl] [(keyword (name fl))
-                                               (case (:tag (meta fl)) long :long double :double :double)])
+                                               (case (:tag (meta fl)) (long int8) :long (double real8) :double :double)])
                                       fields)}])))
 
 (defn- num? [t] (#{:long :double} t))
@@ -1206,7 +1206,8 @@ end module " mod "
                             (resolve-slot (:i2 a))))]
     (vec (map-indexed
           (fn [i p]
-            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] clotran.host.string [:string]} (:tag (meta p)))]
+            (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] clotran.host.string [:string]
+                    real8s [:doubles] int8s [:longs] real8 [:double] int8 [:long]} (:tag (meta p)))]
               h
               (cond (callee-types (+ start i)) (vec (callee-types (+ start i)))
                     (record-cands (+ start i)) (vec (record-cands (+ start i)))

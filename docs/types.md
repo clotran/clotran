@@ -52,6 +52,27 @@ indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 The operations: `+ - * / **`, `int nint floor ceiling real dble`, `abs sign min max mod modulo
 sqrt`, `huge tiny epsilon kind digits`.
 
+## Hints in Fortran's words
+
+A hint says what an argument is. Clojure's spellings work, and so do Fortran's:
+
+| Clojure | Fortran's words |
+|---|---|
+| `^long`, `^double` | `^int8`, `^real8` |
+| `^longs`, `^doubles` | `^int8s`, `^real8s` |
+| `^ints`, `^floats` | `^int4s`, `^real4s` |
+| `^shorts`, `^bytes` | `^int2s`, `^int1s` |
+
+```
+(defn dot ^real8 [^real8s a ^real8s b]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))
+```
+
+The spelling changes nothing: the same conversions, the same refusal of a wrong kind of array,
+the same pure Fortran (checked by `scripts/ftypes-check`). The scalar hints `^real4`, `^int4`,
+`^int2` and `^int1` are refused on a fn as `^float`, `^int`, `^short` and `^byte` are, for now
+(DEVIATIONS 92).
+
 ## What decides what Fortran does
 
 Not clojure.core, and not this file. Three things, in order:
@@ -73,4 +94,4 @@ that was undefined and stops being so, or the reverse, fails.
 
 `clotran compile --pure` lowers long, double, boolean, 1-D arrays of long and double,
 strings and records, and guesses an unhinted parameter's type (DEVIATIONS 91). The lattice is
-to take the kinds above, spelled as Fortran spells them, then complex.
+to take the kinds above (the hints are spelled as Fortran spells them already), then complex.

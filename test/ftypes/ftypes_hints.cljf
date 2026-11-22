@@ -1,0 +1,36 @@
+(ns ftypes-hints
+  "Each function twice: with Clojure's type hints, and with the same hints in
+  Fortran's words (^real8s is ^doubles, ^int8 is ^long, ...). scripts/ftypes-check
+  runs both interpreted and compares the answers, and compiles both to pure Fortran
+  and compares the generated text: a spelling must change nothing.")
+
+(defn sum-c ^double [^doubles a] (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+(defn sum-f ^real8 [^real8s a] (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+
+(defn tot-c ^long [^longs a] (loop [i 0 s 0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+(defn tot-f ^int8 [^int8s a] (loop [i 0 s 0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+
+(defn scale-c ^double [^long n ^double x] (* n x))
+(defn scale-f ^real8 [^int8 n ^real8 x] (* n x))
+
+(defn dot-c ^double [^doubles a ^doubles b]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))
+(defn dot-f ^real8 [^real8s a ^real8s b]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))
+
+(defn sq-c [^doubles a] (reduce + 0.0 (map #(* % %) a)))
+(defn sq-f [^real8s a] (reduce + 0.0 (map #(* % %) a)))
+
+;; hints that decide behaviour: the wrong array kind is refused, the same way under both spellings
+(defn ints-c [^ints a] (alength a))
+(defn ints-f [^int4s a] (alength a))
+(defn flts-c [^floats a] (alength a))
+(defn flts-f [^real4s a] (alength a))
+(defn shrt-c [^shorts a] (alength a))
+(defn shrt-f [^int2s a] (alength a))
+(defn byts-c [^bytes a] (alength a))
+(defn byts-f [^int1s a] (alength a))
+(defn lngs-c [^longs a] (alength a))
+(defn lngs-f [^int8s a] (alength a))
+(defn dbls-c [^doubles a] (alength a))
+(defn dbls-f [^real8s a] (alength a))

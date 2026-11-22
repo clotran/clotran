@@ -116,6 +116,7 @@ Categories:
 | 89 | A real(4) literal is rounded from its text through a real(8) | 1.x | `src/clj/fortran/ops.cljf` |
 | 90 | A real(4) conversion out of range throws where IEEE answers infinity | design | -- |
 | 91 | The pure tier lowers only some of Fortran's kinds | 1.x | `src/clj/clotran/purefort.cljf` |
+| 92 | Type hints in Fortran's words | design | `src/f/analyze.inc` (hint_canon) |
 
 ---
 
@@ -2795,3 +2796,28 @@ table and what is planned.
 
 **Removal**: the pure tier's lattice takes the kinds `fortran.ops` already has
 (PLAN: types), hints spelled in Fortran's words, and then complex.
+
+## 92. Type hints in Fortran's words
+
+A hint may be spelled as Fortran spells the type (James, 2026-11-21: as close to
+Fortran as possible): `^real8` is `^double` and `^int8` is `^long`, converting an argument
+on the way in and a result on the way out exactly as those do; the array hints
+`^real8s`, `^int8s`, `^int4s`, `^real4s`, `^int2s` and `^int1s` are `^doubles`, `^longs`,
+`^ints`, `^floats`, `^shorts` and `^bytes`. The spelling is a plain alias, read in one
+place (`hint_canon`, `src/f/analyze.inc`) and in the two tables of the compiler
+(`compiler.cljf`, `purefort.cljf`); `scripts/ftypes-check` runs 11 pairs of functions,
+each written both ways (`test/ftypes/ftypes_hints.cljf`), and requires the same answers,
+the same refusals of a wrong kind of array, and the same pure Fortran.
+
+clj ignores a tag it does not know until the value is used as an array, so code
+written with these spellings is not Clojure that clj accepts.
+
+The scalar kinds `^real4`, `^int4`, `^int2` and `^int1` are `^float`, `^int`, `^short` and
+`^byte`, which a fn parameter refuses ("Only long and double primitives are supported"), as
+Clojure refuses them. Fortran has these kinds and a fn could take them; the refusal stays
+until the compiler does (91), because the generated `anb-method-open` (model/anbuild.lisp)
+decides refuse or rewrite. The class-cast message of an array hint still names the array
+as clj does (`[I`, `[D`); its Fortran wording is a change to the oracle's expected text.
+
+**Removal**: accept the other scalar kinds on a fn (a conversion by `int`, `float`,
+`short`, `byte`) once the pure tier has them, and reword the class-cast text.

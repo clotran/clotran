@@ -563,8 +563,35 @@
   ! alength look the name up the same way name resolution does, so
   ! shadowing and closures come out right without further thought.
 
+  ! A type hint as Fortran spells it, as Clojure spells it (James, 2026-11-21:
+  ! clotran's types are Fortran's, so a hint may say so): ^real8 is ^double and
+  ! ^int8 ^long; the arrays real8s int8s int4s real4s int2s int1s are doubles
+  ! longs ints floats shorts bytes; the other scalar kinds real4 int4 int2 int1
+  ! are float int short byte, which a fn parameter refuses as Clojure refuses
+  ! them (DEVIATIONS 92). Any other text is itself.
+  subroutine hint_canon(t, c)
+    character(len=*), intent(in) :: t
+    character(len=:), allocatable, intent(out) :: c
+    select case (t)
+    case ("real8");  c = "double"
+    case ("int8");   c = "long"
+    case ("real4");  c = "float"
+    case ("int4");   c = "int"
+    case ("int2");   c = "short"
+    case ("int1");   c = "byte"
+    case ("real8s"); c = "doubles"
+    case ("int8s");  c = "longs"
+    case ("int4s");  c = "ints"
+    case ("real4s"); c = "floats"
+    case ("int2s");  c = "shorts"
+    case ("int1s");  c = "bytes"
+    case default;    c = t
+    end select
+  end subroutine hint_canon
+
   ! The array hint on a binding form, or "" -- doubles, longs, ints and
-  ! the rest, the way Clojure spells them.
+  ! the rest, the way Clojure spells them; real8s, int8s, int4s ... are
+  ! the same hints in Fortran's words (hint_canon).
   subroutine array_hint_of(raw, h)
     type(gc_value), intent(in) :: raw
     character(len=:), allocatable, intent(out) :: h
@@ -579,12 +606,10 @@
     if (tg%tag /= GCT_SYM) return
     block
        call gc_ref_text(tg%ref, s=dlt_1)
-    select case (dlt_1)
+       call hint_canon(dlt_1, c=dlt_2)
+    select case (dlt_2)
     case ("doubles", "longs", "ints", "floats", "shorts", "bytes", "booleans", "chars", "objects")
-       block
-          call gc_ref_text(tg%ref, s=dlt_2)
-          h = dlt_2
-       end block
+       h = dlt_2
     end select
     end block
   end subroutine array_hint_of
@@ -4411,7 +4436,7 @@
     type(gc_value), intent(in) :: v
     type(gc_value) :: md, tg
     ! temporaries for the deferred-length calls below (share.clj)
-    character(len=:), allocatable :: dlt_1
+    character(len=:), allocatable :: dlt_1, dlt_2
     prim_hint_kind = 0
     if (gc_kind(v) /= OBJ_META) return
     md = gc_slot(v, 2)
@@ -4420,7 +4445,8 @@
     if (tg%tag /= GCT_SYM) return
     block
        call gc_ref_text(tg%ref, s=dlt_1)
-    select case (dlt_1)
+       call hint_canon(dlt_1, c=dlt_2)
+    select case (dlt_2)
     case ("long");   prim_hint_kind = 1
     case ("double"); prim_hint_kind = 2
     case ("int", "float", "short", "byte", "char", "boolean"); prim_hint_kind = -1

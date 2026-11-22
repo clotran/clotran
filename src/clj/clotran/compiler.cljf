@@ -1500,7 +1500,8 @@ end module clotran_rt_decl
   [params start]
   (into {} (keep-indexed
             (fn [i p]
-              (when-let [t ('{doubles :doubles longs :longs double :double long :long}
+              (when-let [t ('{doubles :doubles longs :longs double :double long :long
+                             real8s :doubles int8s :longs real8 :double int8 :long}
                             (:tag (meta p)))]
                 [(+ start i) t]))
             (take-while #(not= '& %) params))))

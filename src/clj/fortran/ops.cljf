@@ -31,7 +31,25 @@
 (defn- int-kind? [k] (= :integer (:type (specs k))))
 (defn- real-kind? [k] (= :real (:type (specs k))))
 
-(defn- undefined [why] (throw (ex-info (str "undefined: " why) {:undefined why})))
+(def ^:private fortran-words
+  {:integer-overflow "integer overflow"
+   :division-by-zero "integer division by zero"
+   :mod-by-zero "MOD or MODULO with a zero second argument"
+   :inexact-power "a real power other than x**2 is processor dependent"
+   :zero-to-negative-power "0 raised to a negative integer power"
+   :sqrt-of-negative "SQRT of a negative real"
+   :non-finite "a NaN or an infinity has no integer value"})
+
+(defn- kind-words
+  "A kind as Fortran writes it: :int4 is integer(4), :real8 real(8)."
+  [k] (let [s (name k)] (str (if (= \i (first s)) "integer" "real") "(" (subs s (if (= \i (first s)) 3 4)) ")")))
+
+(defn- undefined
+  "A result the standard leaves to the processor: throws, in Fortran's words, with the
+  reason as a keyword in the ex-data (the oracle's)."
+  ([why] (throw (ex-info (str "undefined by the standard: " (fortran-words why (name why))) {:undefined why})))
+  ([why k] (throw (ex-info (str "undefined by the standard: " (fortran-words why (name why)) " (" (kind-words k) ")")
+                           {:undefined why :kind k}))))
 (defn- ill-typed [msg] (throw (ex-info (str "ill-typed: " msg) {:ill-typed msg})))
 
 (def ^:private kind-classes
@@ -51,7 +69,7 @@
   [k x]
   (if (clojure.core/<= (imins k) x (imaxs k))
     (case k :int1 (byte (long x)) :int2 (short (long x)) :int4 (clojure.core/int (long x)) :int8 (long x))
-    (undefined :integer-overflow)))
+    (undefined :integer-overflow k)))
 
 (defn- rnd
   "A double as a value of real kind k (binary32 by one rounding, exact for

@@ -136,9 +136,59 @@
                        (not= :threw (first a)))]
            {:case (pr-str (nth cases i)) :oracle want :clotran a :expected ex}))))
 
+;; 5. type hints in Fortran's words (test/ftypes/ftypes_hints.cljf: every function twice): the same
+;; answers interpreted, and the same pure Fortran compiled. A spelling must change nothing.
+(def hint-pairs
+  '[[sum-c sum-f [(double-array [1.5 2.5 -3.0])] [(double-array [])]]
+    [tot-c tot-f [(long-array [1 2 3 -4])] [(long-array [])]]
+    [scale-c scale-f [3 1.5] [-2 0.25] [3.9 2.0]]
+    [dot-c dot-f [(double-array [1.0 2.0 3.0]) (double-array [4.0 5.0 6.0])]]
+    [sq-c sq-f [(double-array [1.0 2.0 3.0])]]
+    ;; a hint that is honoured refuses the wrong kind of array, with the same message
+    [ints-c ints-f [(int-array [1 2])] [(double-array [1.0])]]
+    [flts-c flts-f [(float-array [1 2])] [(double-array [1.0])]]
+    [shrt-c shrt-f [(short-array [1 2])] [(double-array [1.0])]]
+    [byts-c byts-f [(byte-array [1 2])] [(double-array [1.0])]]
+    [lngs-c lngs-f [(long-array [1 2])] [(int-array [1])]]
+    [dbls-c dbls-f [(double-array [1 2])] [(int-array [1])]]])
+(def hint-diffs
+  (let [dir (str (fs/file repo "test" "ftypes"))
+        prog (str "(require 'ftypes-hints)\n"
+                  (str/join (for [[c f & argsets] hint-pairs, args argsets]
+                              (str "(prn [" (pr-str (list 'quote (list c f))) " "
+                                   (pr-str (list 'try (cons (symbol "ftypes-hints" (str c)) args) '(catch clotran.host.throwable e (ex-message e)))) " "
+                                   (pr-str (list 'try (cons (symbol "ftypes-hints" (str f)) args) '(catch clotran.host.throwable e (ex-message e)))) "])\n"))))
+        pf (fs/file work "ftypes_hints_run.cljf")
+        _ (spit pf prog)
+        run (shell {:out :string :err :string :continue true :dir (str work)
+                    :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj") ":" dir)}}
+                   (str (fs/file repo "clotran")) (str pf))
+        interp (if (zero? (:exit run))
+                 (for [line (str/split-lines (:out run)) :when (str/starts-with? line "[")
+                       :let [[_ a b] (read-string line)] :when (not= a b)]
+                   (str "interpreted answers differ: " a " vs " b))
+                 [(str "did not run: " (:out run) (:err run))])
+        pure-file (fs/file work "ftypes_hints_pure.f90")
+        pr (shell {:out :string :err :string :continue true :dir (str work)
+                   :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}}
+                  (str (fs/file repo "clotran")) "compile" "--pure" (str (fs/file dir "ftypes_hints.cljf")) (str pure-file))
+        text (when (zero? (:exit pr)) (slurp pure-file))
+        procs (fn [fname] (let [id (str/replace (name fname) "-" "_")]
+                            (->> (re-seq (re-pattern (str "(?s)(?:pure )?function " id "__\\w+\\(.*?end function " id "__\\w+")) text)
+                                 (map #(str/replace % id "FN")))))
+        pure (if text
+               (for [[c f] hint-pairs
+                     :let [pc (procs c) pf' (procs f)]
+                     :when (or (empty? pc) (not= pc pf'))]
+                 (str "pure Fortran differs (or is not generated) for " c " and " f))
+               [(str "compile --pure failed: " (:out pr) (:err pr))])]
+    (vec (concat interp pure))))
+
 (let [n (count cases)
       und (remove #(= :ok (first %)) answers)
-      bad (+ (count unexpected) (if (:failed clotran-result) 1 (count clotran-diffs)) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
+      bad (+ (count unexpected) (if (:failed clotran-result) 1 (count clotran-diffs)) (count hint-diffs) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
+  (println (str "  hints in Fortran's words: " (count hint-diffs) " differ from Clojure's spelling (" (count hint-pairs) " pairs, interpreted and pure Fortran)"))
+  (doseq [d hint-diffs] (println (str "  DIFF hints: " d)))
   (cond (:failed clotran-result) (println (str "  clotran: DID NOT RUN\n" (:failed clotran-result)))
         :else (println (str "  clotran: " (count clotran-diffs) " differ from the oracle (" (count (:answers clotran-result)) " cases)")))
   (doseq [d clotran-diffs] (println (str "  DIFF clotran " (:case d) ": oracle " (:oracle d) ", clotran " (:clotran d))))
