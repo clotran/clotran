@@ -2891,12 +2891,46 @@ Fortran gives EXP, LOG, SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2, SINH, COSH, TANH
 accuracy: "a processor-dependent approximation". `fortran.ops` and the pure tier answer with the host's
 libm (`clotran.host.math`, Fortran's own intrinsics when compiled), in the argument's kind: real(4) by
 way of real(8), rounded once. What is claimed is measured, not assumed. `test/ftypes/refmath.clj` computes
-each to 80 digits by series and rounds it once to the kind, the correctly rounded value, and
-`scripts/ftypes-check` runs 163 cases (arguments from 1e-10 to 1e300, sin and cos at 1e22, both real kinds)
-through gfortran, flang, `fortran.ops` and both compiled builds, requires each answer within 1 ulp of it,
-and prints the worst error seen: 1 ulp for gfortran, flang and `fortran.ops`, 0 for the compiled gfortran
-build, 1 for the compiled flang one. It is a bound for these cases on this machine's libms, not for all
-arguments or all processors. Outside a function's domain (LOG of zero or less, ASIN or ACOS past 1,
+each to 80 digits by series and rounds it once to the kind, the correctly rounded value (checked: 1
+point in 20 recomputed at 110 digits, and folded by gfortran's MPFR, 0 differ). `scripts/ftypes-accuracy`
+sweeps 4000 arguments per function and real kind, 104,000 in all, structured and random (docs/types.md
+says which), through gfortran, flang, `fortran.ops` and both compiled builds. The maximum / 99.9th
+percentile error in ulps, on this machine's libm:
+
+| function | kind | points | gfortran | flang | fortran.ops | pure gfortran | pure flang |
+|---|---|---|---|---|---|---|---|
+| exp | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| exp | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| log | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| log | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log10 | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log10 | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| sin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| sin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| cos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| cos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| tan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| tan | real8 | 4000 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
+| asin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| asin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| acos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| acos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| atan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| atan | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| sinh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| sinh | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| cosh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| cosh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| tanh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| tanh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| atan2 | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| atan2 | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+
+In real(8) every leg is the same libm and agrees bit for bit; at most 1 ulp, TAN 2. In real(4)
+`fortran.ops` (real(8), rounded once) is correctly rounded on every point, and the compilers' real(4)
+intrinsics are 1 ulp off on 3,030 of 52,000. `scripts/ftypes-check` runs 416 of these points every time
+and fails past those maxima. They are measured bounds for this libm, not proved, and not for another
+processor. Outside a function's domain (LOG of zero or less, ASIN or ACOS past 1,
 ATAN2(0, 0)) or for a NaN or an infinity, the result is the processor's: `fortran.ops` refuses it, compiled
 Fortran answers its processor's (the `{:processor ...}` cases). Complex arguments are not supported.
 

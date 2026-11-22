@@ -329,10 +329,16 @@
                     (str (:fc r) " " (pr-str (nth cases i)) ": oracle " (pr-str want) ", pure printed " (pr-str (mapv :out rs)) " (exit " (mapv :exit rs) ")")))]
           d))))
 
+;; 7. accuracy measured, the quick version of scripts/ftypes-accuracy: 16 points per function and kind
+;; through every leg, against the reference, within the bound the full sweep measured (docs/types.md)
+(def accuracy (shell {:out :string :err :string :continue true :dir (str repo)} (str (fs/file repo "scripts" "ftypes-accuracy")) "--quick"))
+
 (let [n (count cases)
       ulp-cases (count (filter #(pos? (ulp-bound %)) (range (count cases))))
       und (remove #(= :ok (first %)) answers)
-      bad (+ (count unexpected) (if (:failed clotran-result) 1 (count clotran-diffs)) (count hint-diffs) (count pure-diffs) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r))))))]
+      bad (+ (count unexpected) (if (:failed clotran-result) 1 (count clotran-diffs)) (count hint-diffs) (count pure-diffs) (reduce + (for [r results] (if (:compile-failed r) 1 (count (:diffs r)))))
+             (if (zero? (:exit accuracy)) 0 1))]
+  (doseq [l (str/split-lines (str (:out accuracy) (:err accuracy))) :when (not (str/starts-with? l "|"))] (println (str "  " l)))
   (println (str "  hints in Fortran's words: " (count hint-diffs) " differ from Clojure's spelling (" (count hint-pairs) " pairs, interpreted and pure Fortran)"))
   (when (pos? ulp-cases)
     (println (str "  elementary functions: " ulp-cases " cases within their ulp bound of the 80-digit reference; the worst error seen, in ulps: "

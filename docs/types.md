@@ -54,12 +54,67 @@ indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 
 The operations: `+ - * / **`, `int nint floor ceiling real dble`, `abs sign min max mod modulo
 sqrt`, `huge tiny epsilon kind digits`, for complex `cmplx conjg aimag`, and the elementary functions `exp log log10 sin cos tan asin acos
-atan atan2 sinh cosh tanh` (the host libm's, measured within 1 ulp of a correctly rounded reference: DEVIATIONS 95). `CMPLX(x, y)` is a
+atan atan2 sinh cosh tanh` (the host libm's, measured against a correctly rounded reference: below, and DEVIATIONS 95). `CMPLX(x, y)` is a
 complex(4) whatever the arguments' kind, as Fortran's is; a complex product the processor would
 round, any complex division and `**`, and a real to an integer power whose partial powers are not all
 exact (`x**2` always is defined) are refused (DEVIATIONS 93, 94). Real arithmetic is IEEE: overflow is
 infinity, `x/0.0` infinity, `0.0/0.0` NaN, in both real kinds; a NaN or an infinity has no integer
 value (DEVIATIONS 90).
+
+## Accuracy, measured
+
+The standard gives the elementary functions no accuracy. `scripts/ftypes-accuracy` measures it: 4000
+arguments per function and real kind (104,000 points; seed 1), half structured (near zero, both
+sides of 1, the domain's edges, the overflow and underflow thresholds, every power of two, huge
+arguments up to 1.8e308 for sin, cos and tan, values near the first 200 multiples of pi/2 and
+near 2**j pi/2, the real(8) argument closest to a multiple of pi/2), half random (uniform, and
+log-uniform over the kind's whole exponent range). The reference is `test/ftypes/refmath.clj`,
+80 digits rounded once. It checks itself twice: 1 point in 20 is recomputed at 110 digits (5200,
+0 differ), and the same points are folded at compile time by gfortran, whose folding is MPFR's,
+correctly rounded (5119 of them, the subnormal results left out because gfortran rounds those
+twice; 0 differ). Each entry is the maximum / the 99.9th percentile of the error in ulps of the
+kind (0 means correctly rounded), on this machine (macOS, its libm), gfortran and flang at -O0, the
+pure tier compiled at -O2 -ffp-contract=off:
+
+| function | kind | points | gfortran | flang | fortran.ops | pure gfortran | pure flang |
+|---|---|---|---|---|---|---|---|
+| exp | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| exp | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| log | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| log | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log10 | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| log10 | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| sin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| sin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| cos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| cos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| tan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| tan | real8 | 4000 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
+| asin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| asin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| acos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| acos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| atan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| atan | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| sinh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| sinh | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| cosh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| cosh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| tanh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| tanh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
+| atan2 | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| atan2 | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+
+- real(8): every leg is the same libm, and they agree bit for bit (0 of 52,000 points differ from
+  `fortran.ops`). At most 1 ulp, except TAN, 2 ulps (at -2.698607540904404e10 and -3.48e41, for
+  example; MPFR agrees with the reference there).
+- real(4): `fortran.ops` computes in real(8) and rounds once, and is correctly rounded on all 52,000
+  points; gfortran, flang and the compiled code use the real(4) intrinsics and differ from it on
+  3,030 of them, by 1 ulp.
+- `scripts/ftypes-check` runs `scripts/ftypes-accuracy --quick` (16 points per function and kind,
+  416 in all) and fails past these maxima, the same for every leg: 1 ulp, TAN of a real(8) 2. A
+  regression that matters (a real(8) through a real(4), a lost argument reduction) is millions of
+  ulps, not one more.
 
 ## Hints in Fortran's words
 

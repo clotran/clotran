@@ -1,0 +1,332 @@
+#!/usr/bin/env bb
+;; Accuracy as a measurement (2026-11-22). The standard gives the elementary functions no accuracy, so
+;; what clotran claims is measured here: every function over thousands of arguments per real kind,
+;; random and structured (near zero, near the domain's edges, the overflow and underflow thresholds,
+;; powers of two, huge arguments for sin cos tan, values near multiples of pi/2), each against the
+;; correctly rounded value (test/ftypes/refmath.clj, 80 digits, on clj), through four legs: gfortran and
+;; flang (the intrinsic, -O0), fortran.ops interpreted, and clotran's pure tier compiled by each
+;; (clotran compile --pure, -O2 -ffp-contract=off, the release profile). The error is in units in the
+;; last place of the kind (0 = correctly rounded); for a complex result, of each PART.
+;;
+;;   scripts/ftypes-accuracy [-n N] [-s SEED] [--table FILE]   N points per function and kind (4000)
+;;   scripts/ftypes-accuracy --quick                           the gate: 16 points each, fixed seed,
+;;                                                             exit 1 past the bounds below
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[babashka.process :refer [shell]])
+
+(def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
+(def opts (loop [m {:n 4000 :seed 1} [a & r] *command-line-args*]
+            (case a
+              nil m
+              "--quick" (recur (assoc m :quick true :n 16 :seed 7) r)
+              "-n" (recur (assoc m :n (parse-long (first r))) (rest r))
+              "-s" (recur (assoc m :seed (parse-long (first r))) (rest r))
+              "--table" (recur (assoc m :table (first r)) (rest r))
+              (do (println "usage: scripts/ftypes-accuracy [--quick] [-n N] [-s SEED] [--table FILE]") (System/exit 2)))))
+(def work (fs/file repo "build" "ftypes-accuracy"))
+(fs/create-dirs work)
+
+;; ---- the functions: name, arity, what the Fortran and fortran.ops call is
+(def real-fns ["exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh" "atan2"])
+(def complex-fns [])
+(def fns (vec (concat real-fns complex-fns)))
+(def fn-index (zipmap fns (range)))
+(defn arity [f] (if (#{"atan2"} f) 2 1))
+
+;; ---- points
+;; splitmix64, seeded: the same points for the same seed on any host
+(def rng-state (atom (long (:seed opts))))
+(defn next-long []
+  (let [z (swap! rng-state #(unchecked-add % -7046029254386353131))
+        z (unchecked-multiply (bit-xor z (unsigned-bit-shift-right z 30)) -4658895280553007687)
+        z (unchecked-multiply (bit-xor z (unsigned-bit-shift-right z 27)) -7723592293110705685)]
+    (bit-xor z (unsigned-bit-shift-right z 31))))
+(defn next-double [] (* (unsigned-bit-shift-right (next-long) 11) (Math/scalb 1.0 -53)))
+(defn u [lo hi] (+ lo (* (- hi lo) (next-double))))
+(defn ri [lo hi] (+ lo (long (Math/floor (* (next-double) (inc (- hi lo)))))))
+(defn sgn [] (if (neg? (next-long)) 1.0 -1.0))
+(defn mag "a random value in [2^e, 2^(e+1)), e uniform in [lo, hi]" [lo hi] (Math/scalb (+ 1.0 (next-double)) (int (ri lo hi))))
+(def kp {:real8 {:emin -1074 :emax 1023 :max Double/MAX_VALUE :minn Double/MIN_NORMAL :mins Double/MIN_VALUE}
+         :real4 {:emin -149 :emax 127 :max (double Float/MAX_VALUE) :minn (double Float/MIN_NORMAL) :mins (double Float/MIN_VALUE)}})
+(defn in-kind [k x] (if (= k :real4) (double (unchecked-float x)) (double x)))
+(defn step [k x up?] (if (= k :real4) (double (if up? (Math/nextUp (unchecked-float x)) (Math/nextDown (unchecked-float x)))) (if up? (Math/nextUp x) (Math/nextDown x))))
+(defn around "x and m neighbours each side, in kind k" [k x m]
+  (let [x (in-kind k x)]
+    (concat [x] (take m (rest (iterate #(step k % true) x))) (take m (rest (iterate #(step k % false) x))))))
+(defn finite? [x] (not (or (Double/isNaN x) (Double/isInfinite x))))
+(def half-pi (/ Math/PI 2))
+
+(defn domain-ok? [f k xs]
+  (let [[x y] xs]
+    (and (every? finite? xs)
+         (case f
+           ("log" "log10") (pos? x)
+           ("asin" "acos") (<= (Math/abs x) 1.0)
+           "atan2" (not (and (zero? x) (zero? y)))
+           true))))
+
+(defn structured [f k]
+  (let [{:keys [emin emax max minn mins]} (kp k)
+        ln-max (Math/log max) ln-minn (Math/log minn) ln-mins (Math/log mins)
+        pow2 (for [e (range emin (inc emax)) s [1.0 -1.0]] (* s (Math/scalb 1.0 (int e))))
+        near-pi2 (concat (for [j (range 1 200)] (* j half-pi)) (for [j (range 1 60)] (* (Math/pow 2 j) half-pi)))]
+    (case f
+      "exp" (concat (mapcat #(around k % 6) [ln-max (- ln-max) ln-minn ln-mins 0.0 1.0 -1.0]) (filter #(< (Math/abs %) 800) pow2))
+      ("log" "log10") (concat (mapcat #(around k % 8) [1.0 mins minn max 10.0 0.1 2.0 0.5]) (filter pos? pow2))
+      ("sin" "cos" "tan") (concat (mapcat #(around k % 3) (concat near-pi2 (map - near-pi2)))
+                                  (when (= k :real8) (around k (Math/scalb 6381956970095103.0 797) 4))
+                                  (mapcat #(around k % 4) [0.0 max (- max)])
+                                  pow2)
+      ("asin" "acos") (concat (mapcat #(around k % 12) [1.0 -1.0 0.0 0.5 -0.5]) (filter #(<= (Math/abs %) 1.0) pow2))
+      "atan" (concat (mapcat #(around k % 8) [0.0 1.0 -1.0 max (- max)]) pow2)
+      ("sinh" "cosh") (let [e (+ (Math/log max) (Math/log 2.0))] (concat (mapcat #(around k % 6) [e (- e) 0.0 1.0 -1.0]) (filter #(< (Math/abs %) 800) pow2)))
+      "tanh" (concat (mapcat #(around k % 6) [0.0 (if (= k :real8) 19.06 9.01) (if (= k :real8) -19.06 -9.01) 0.5 -0.5]) (filter #(< (Math/abs %) 64) pow2))
+      "atan2" (concat (for [y [0.0 -0.0 1.0 -1.0 mins (- mins)] x [-1.0 1.0 -2.0 mins (- mins) max (- max)]] [y x])
+                      (for [x (filter #(< 1e-30 (Math/abs %) 1e30) pow2) y [1.0 -1.0]] [y x])))))
+
+(defn random-point [f k]
+  (let [{:keys [emin emax max]} (kp k)
+        ln-max (Math/log max)
+        pick (fn [& gs] ((nth gs (ri 0 (dec (count gs))))))]
+    (case f
+      "exp" (pick #(u -1 1) #(* (sgn) (mag -60 9)) #(u (- (+ ln-max 40)) (+ ln-max 1)) #(* (sgn) (mag emin -20)))
+      ("log" "log10") (pick #(mag emin emax) #(+ 1.0 (* (sgn) (mag -60 -1))) #(u 0 10))
+      ("sin" "cos" "tan") (pick #(u (- Math/PI) Math/PI) #(* (sgn) (mag emin emax)) #(* (sgn) (mag -30 60))
+                                #(* (sgn) (ri 1 (bit-shift-left 1 30)) half-pi) #(u -1e6 1e6))
+      ("asin" "acos") (pick #(u -1 1) #(* (sgn) (- 1.0 (mag -60 -2))) #(* (sgn) (mag emin -1)))
+      "atan" (pick #(u -4 4) #(* (sgn) (mag emin emax)))
+      ("sinh" "cosh") (pick #(u -1 1) #(* (sgn) (mag -60 9)) #(u (- (+ ln-max 1)) (+ ln-max 1)) #(* (sgn) (mag emin -20)))
+      "tanh" (pick #(u -3 3) #(* (sgn) (mag emin 6)))
+      "atan2" (pick #(vector (* (sgn) (mag -60 60)) (* (sgn) (mag -60 60)))
+                    #(vector (u -4 4) (u -4 4))
+                    #(vector (* (sgn) (mag emin -30)) (- (mag -4 4)))
+                    #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax)))))))
+
+(defn points
+  "n distinct arguments of f in kind k: up to half structured (evenly sampled), the rest random"
+  [f k n]
+  (let [norm (fn [p] (mapv #(in-kind k %) (if (vector? p) p [p])))
+        ok (fn [p] (domain-ok? f k p))
+        s (vec (distinct (filter ok (map norm (structured f k)))))
+        s (if (> (count s) (quot n 2)) (mapv #(s (quot (* % (count s)) (quot n 2))) (range (quot n 2))) s)
+        r (filter ok (map norm (repeatedly #(random-point f k))))]
+    (vec (take n (distinct (concat s r))))))
+
+(def kinds [:real4 :real8])
+(def jobs (vec (for [f fns k kinds p (points f k (:n opts))] {:f f :k k :args p})))
+
+;; ---- encodings
+(defn bits [k x] (if (= k :real4) (long (Float/floatToRawIntBits (unchecked-float x))) (Double/doubleToRawLongBits x)))
+(defn from-bits [k b] (if (= k :real4) (double (Float/intBitsToFloat (int b))) (Double/longBitsToDouble b)))
+(defn text [k x] (if (= k :real4) (str (unchecked-float x)) (str x)))
+
+;; ---- the reference (clj), cached by the inputs and the reference's source
+(load-file (str (fs/file repo "upstream" "names.clj")))
+(def ref-in (str/join "\n" (for [{:keys [f k args]} jobs] (str/join " " (concat [f (name k)] (map #(bits k %) args))))))
+(def src-key (str (hash [ref-in (slurp (fs/file repo "test" "ftypes" "refmath.clj")) (slurp (fs/file repo "test" "ftypes" "accuracy.clj"))])))
+(def ref-file (fs/file work (str "ref-" src-key ".txt")))
+(when-not (fs/exists? ref-file)
+  (let [in (fs/file work "ref-in.txt") rm (fs/file work "refmath_clj.clj") ac (fs/file work "accuracy_clj.clj")]
+    (spit in (str ref-in "\n"))
+    (spit rm (names/to-upstream (slurp (fs/file repo "test" "ftypes" "refmath.clj"))))
+    (spit ac (names/to-upstream (slurp (fs/file repo "test" "ftypes" "accuracy.clj"))))
+    (let [r (shell {:out :string :err :string :continue true :dir (str repo)}
+                   "clj" "-Sdeps" "{:deps {org.clojure/clojure {:mvn/version \"1.12.6\"}}}"
+                   "-M" "-i" (str rm) "-i" (str ac)
+                   "-e" (str "(ftypes.accuracy/run " (pr-str (str in)) " " (pr-str (str (fs/file work "ref-tmp.txt"))) " 20) (shutdown-agents)"))
+          [_ n bad ex] (re-find #"RECHECK (\d+) (\d+) (.*)" (:out r))]
+      (when-not (and (zero? (:exit r)) n) (println "the reference did not run:" (:err r)) (System/exit 1))
+      ;; the reference checks itself: 1 point in 20 recomputed at 110 digits must round the same
+      (spit (fs/file work (str "ref-" src-key ".check")) (str n " " bad))
+      (when-not (= bad "0") (println "the reference is not converged:" bad "of" n "differ at 110 digits:" ex) (System/exit 1))
+      (fs/move (fs/file work "ref-tmp.txt") ref-file {:replace-existing true}))))
+(defn parse-bits-line [k line] (mapv #(from-bits k (parse-long %)) (str/split (str/trim line) #"\s+")))
+(def recheck (str/split (slurp (fs/file work (str "ref-" src-key ".check"))) #" "))
+(def reference (mapv (fn [{:keys [k]} l] (parse-bits-line k l)) jobs (str/split-lines (slurp ref-file))))
+(assert (= (count reference) (count jobs)))
+
+;; ---- Fortran drivers: the intrinsic (plain) or clotran's pure function (pure)
+(defn ffn [f] f)
+(defn driver [mode]
+  (let [call (fn [f kk xs] ; kk 4 or 8; xs the argument variables
+               (if (= mode :plain)
+                 (str (ffn f) "(" (str/join ", " xs) ")")
+                 (str (str/replace f "-" "_") "_r" kk "(" (str/join ", " (map #(if (= kk 4) (str "real(" % ", real64)") %) xs)) ")")))
+        block (fn [kk]
+                (let [x (str "x" kk) y (str "y" kk) r (str "r" kk)]
+                  (str "      select case (fi)\n"
+                       (str/join (for [f fns :let [i (fn-index f) xs (if (= 2 (arity f)) [x y] [x])]]
+                                   (str "      case (" i ")\n        " r " = " (if (and (= mode :pure) (= kk 4)) (str "real(" (call f kk xs) ", real32)") (call f kk xs)) "\n")))
+                       "      end select\n")))]
+    (str "program acc\n  use iso_fortran_env\n" (when (= mode :pure) "  use accpure_pure\n") "  implicit none\n"
+         "  integer(int64) :: fi, ki, b1, b2, o1, o2\n  integer :: ios\n"
+         "  real(real32) :: x4, y4, r4\n  real(real64) :: x8, y8, r8\n"
+         "  do\n    read(*,*,iostat=ios) fi, ki, b1, b2\n    if (ios /= 0) exit\n    o2 = 0\n"
+         "    if (ki == 4) then\n      x4 = transfer(int(b1, int32), x4)\n      y4 = transfer(int(b2, int32), y4)\n"
+         (block 4) "      o1 = int(transfer(r4, 0_int32), int64)\n"
+         "    else\n      x8 = transfer(b1, x8)\n      y8 = transfer(b2, y8)\n"
+         (block 8) "      o1 = transfer(r8, 0_int64)\n"
+         "    end if\n    write(*,'(I0,1X,I0)') o1, o2\n  end do\nend program acc\n")))
+
+;; the driver's input: atan2's arguments as y then x, as the jobs hold them
+(def fin (str/join "\n" (for [{:keys [f k args]} jobs]
+                          (let [[a b] args] (str (fn-index f) " " (if (= k :real4) 4 8) " " (bits k a) " " (if b (bits k b) 0))))))
+(spit (fs/file work "in.txt") (str fin "\n"))
+
+(def pure-src
+  (str "(ns accpure (:require [fortran.ops :as f]))\n"
+       (str/join (for [f fns k kinds :let [kk (if (= k :real4) 4 8) mk (if (= k :real4) "f/real4" "f/real8")]]
+                   (if (= 2 (arity f))
+                     (str "(defn " f "-r" kk " ^double [^double y ^double x] (f/dble (f/" f " (" mk " y) (" mk " x))))\n")
+                     (str "(defn " f "-r" kk " ^double [^double x] (f/dble (f/" f " (" mk " x))))\n"))))))
+
+(defn run-fortran [mode fc]
+  (let [dir (fs/file work (str (name mode) "-" fc))
+        _ (fs/create-dirs dir)
+        drv (fs/file dir "driver.f90") exe (str (fs/file dir "acc"))
+        env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}
+        srcs (if (= mode :pure)
+               (let [cl (fs/file dir "accpure.cljf") f90 (fs/file dir "accpure.f90")]
+                 (spit cl pure-src)
+                 (let [c (shell {:out :string :err :string :continue true :dir (str dir) :extra-env env}
+                                (str (fs/file repo "clotran")) "compile" "--pure" (str cl) (str f90))]
+                   (when-not (zero? (:exit c)) (throw (ex-info (str "compile --pure: " (:out c) (:err c)) {}))))
+                 [(str f90) (str drv)])
+               [(str drv)])
+        flags (if (= mode :pure) ["-O2" "-ffp-contract=off"] (if (= fc "gfortran") ["-O0" "-ffp-contract=off"] ["-O0"]))]
+    (spit drv (driver mode))
+    (let [c (apply shell {:out :string :err :string :continue true :dir (str dir)} fc (concat flags ["-o" exe] srcs))]
+      (when-not (zero? (:exit c)) (throw (ex-info (str fc " " (name mode) ": " (:err c)) {}))))
+    (let [r (shell {:out :string :err :string :continue true :in (fs/file work "in.txt")} exe)
+          ls (str/split-lines (:out r))]
+      (when-not (= (count ls) (count jobs)) (throw (ex-info (str fc " " (name mode) " printed " (count ls) " lines for " (count jobs) ": " (:err r)) {})))
+      (mapv (fn [{:keys [f k]} l]
+              (let [[o1 o2] (str/split (str/trim l) #"\s+")]
+                [(from-bits k (parse-long o1))]))
+            jobs ls))))
+
+(defn pd [t] (case t "##Inf" ##Inf "##-Inf" ##-Inf "##NaN" ##NaN (or (parse-double t) (throw (ex-info (str "not a number: " t) {})))))
+;; ---- fortran.ops, interpreted: arguments as decimal text (the shortest that reads back as the value;
+;; each point also prints its argument back, so a text that does not round-trip is caught, not measured)
+(def ops-in (str/join "\n" (for [{:keys [f k args]} jobs] (str/join " " (concat [f (name k)] (map #(text k %) args))))))
+(spit (fs/file work "ops-in.txt") (str ops-in "\n"))
+(def ops-src
+  (str "(require '[fortran.ops :as f] '[clojure.string :as str])\n"
+       "(def fns {" (str/join " " (for [f fns] (str (pr-str f) " f/" f))) "})\n"
+       "(doseq [line (str/split-lines (slurp " (pr-str (str (fs/file work "ops-in.txt"))) "))]\n"
+       "  (let [[fname k & ts] (str/split line #\" \")\n"
+       "        mk (if (= k \"real4\") f/real4 f/real8)\n"
+       "        xs (map mk ts)\n"
+       "        show (fn [v] (pr-str (double v)))]\n"
+       "    (println (str/join \" \" (map show xs)) \"|\"\n"
+       "      (try (let [r (apply (fns fname) xs)] (show r))\n"
+       "           (catch clotran.host.throwable e \"refused\")))))\n"))
+(defn run-ops []
+  (let [src (fs/file work "ops.cljf")]
+    (spit src ops-src)
+    (let [r (shell {:out :string :err :string :continue true :dir (str work) :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}}
+                   (str (fs/file repo "clotran")) (str src))
+          ls (str/split-lines (:out r))]
+      (when-not (and (zero? (:exit r)) (= (count ls) (count jobs)))
+        (throw (ex-info (str "fortran.ops printed " (count ls) " lines for " (count jobs) ": " (:err r) (subs (:out r) 0 (min 400 (count (:out r))))) {})))
+      (mapv (fn [{:keys [k args]} l]
+              (let [[back res] (map str/trim (str/split l #"\|"))
+                    back (mapv pd (str/split back #" "))]
+                (when-not (= (mapv #(bits k %) back) (mapv #(bits k %) args))
+                  (throw (ex-info (str "fortran.ops read " (pr-str args) " back as " back) {})))
+                (if (= res "refused") :refused (mapv pd (str/split res #" ")))))
+            jobs ls))))
+
+;; ---- errors in ulps
+(defn ord [k x] (let [b (bits k x)] (if (neg? b) (-' (if (= k :real4) (long Integer/MIN_VALUE) Long/MIN_VALUE) b) b)))
+(defn err "ulps between got and want, ##Inf for a NaN where the reference is a number" [k want got]
+  (cond (Double/isNaN got) (if (Double/isNaN want) 0 ##Inf)
+        :else (abs (-' (ord k want) (ord k got)))))
+(defn job-err [{:keys [k]} want got] (if (= got :refused) ##Inf (apply max (map #(err k %1 %2) want got))))
+
+(def legs
+  (let [ps (pmap (fn [[nm thunk]] [nm (try (thunk) (catch Exception e (println "  " nm "FAILED:" (ex-message e)) nil))])
+                 [["gfortran" #(run-fortran :plain "gfortran")] ["flang" #(run-fortran :plain "flang")]
+                  ["fortran.ops" run-ops]
+                  ["pure gfortran" #(run-fortran :pure "gfortran")] ["pure flang" #(run-fortran :pure "flang")]])]
+    (vec ps)))
+
+(defn pct [sorted q] (if (empty? sorted) 0 (nth sorted (min (dec (count sorted)) (int (Math/ceil (* q (dec (count sorted)))))))))
+(def stats
+  (into {} (for [[leg res] legs :when res
+                 [[f k] idxs] (group-by (fn [i] [(:f (jobs i)) (:k (jobs i))]) (range (count jobs)))]
+             (let [es (vec (sort (map #(job-err (jobs %) (reference %) (res %)) idxs)))]
+               [[leg f k] {:n (count es) :max (peek es) :p999 (pct es 0.999) :cr (count (filter zero? es))}]))))
+(def leg-names (mapv first legs))
+
+;; ---- a second reference: gfortran folds a constant expression with MPFR, correctly rounded, so 1
+;; point in 20 is folded at compile time and must equal refmath's. Not a subnormal result: gfortran
+;; rounds it to the kind's precision and then to the subnormal's, twice (exp(-88.72284698486328) in
+;; real(4) folds 1 ulp from the nearest, 7.2e-46 away where refmath's is 6.8e-46)
+(def mpfr-check
+  (let [sub? (fn [i] (let [k (:k (jobs i)) x (Math/abs (double (first (reference i))))] (and (pos? x) (< x (:minn (kp k))))))
+        idx (vec (remove sub? (range 0 (count jobs) 20)))
+        lit (fn [k x] (str (if (= k :real4) (str (unchecked-float x)) (str x)) (if (= k :real4) "_real32" "_real64")))
+        expr (fn [{:keys [f k args]}] (str f "(" (str/join ", " (map #(lit k %) args)) ")"))
+        src (str "program mp
+  use iso_fortran_env
+  implicit none
+"
+                 (str/join (for [i idx :let [j (jobs i)]]
+                             (str "  real(" (if (= (:k j) :real4) "real32" "real64") "), parameter :: p" i " = " (expr j) "
+")))
+                 (str/join (for [i idx :let [j (jobs i)]]
+                             (str "  write(*,'(I0)') " (if (= (:k j) :real4) (str "transfer(p" i ", 0_int32)") (str "transfer(p" i ", 0_int64)")) "
+")))
+                 "end program mp
+")
+        dir (fs/file work "mpfr") _ (fs/create-dirs dir)
+        f90 (fs/file dir "mp.f90") exe (str (fs/file dir "mp"))]
+    (spit f90 src)
+    (let [c (shell {:out :string :err :string :continue true} "gfortran" "-fno-range-check" "-o" exe (str f90))]
+      (if-not (zero? (:exit c))
+        {:failed (subs (:err c) 0 (min 600 (count (:err c))))}
+        (let [ls (str/split-lines (:out (shell {:out :string} exe)))
+              diffs (for [[i l] (map vector idx ls) :let [k (:k (jobs i)) got (from-bits k (parse-long (str/trim l)))]
+                          :when (not= (bits k got) (bits k (first (reference i))))]
+                      [(jobs i) (first (reference i)) got])]
+          {:n (count idx) :diffs (vec diffs)})))))
+(defn fmt-e [x] (if (Double/isInfinite (double x)) "inf" (str x)))
+(def table
+  (str "| function | kind | points | " (str/join " | " leg-names) " |\n"
+       "|---|---|---|" (str/join (repeat (count leg-names) "---|")) "\n"
+       (str/join (for [f fns k kinds :let [n (:n (stats [(first leg-names) f k]))]]
+                   (str "| " f " | " (name k) " | " n " | "
+                        (str/join " | " (for [l leg-names :let [s (stats [l f k])]] (if s (str (fmt-e (:max s)) " / " (fmt-e (:p999 s))) "--")))
+                        " |\n")))))
+(println (str "ftypes-accuracy: " (count jobs) " points (" (:n opts) " per function and kind, seed " (:seed opts) "); max / 99.9th percentile error in ulps"))
+(println (str "  the reference: 80 digits, rounded once; " (first recheck) " points recomputed at 110 digits, " (second recheck) " differ; "
+              (if (:failed mpfr-check) (str "MPFR (gfortran folding) did not build: " (:failed mpfr-check))
+                  (str (:n mpfr-check) " folded by MPFR (gfortran), " (count (:diffs mpfr-check)) " differ"))))
+(doseq [d (take 5 (:diffs mpfr-check))] (println "  MPFR DIFF" (pr-str d)))
+(print table) (flush)
+(when (:table opts) (spit (:table opts) table))
+;; where a leg's bits differ from fortran.ops's, by kind: the interpreter and the compiled code are one
+;; implementation, and where they disagree it is said
+(def ops-res (some (fn [[l r]] (when (= l "fortran.ops") r)) legs))
+(doseq [[leg res] legs :when (and res ops-res (not= leg "fortran.ops"))]
+  (println (str "  " leg " differs from fortran.ops on "
+                (str/join ", " (for [k kinds :let [is (filter #(= k (:k (jobs %))) (range (count jobs)))]]
+                                 (str (count (filter #(not= (mapv (fn [x] (bits k x)) (res %)) (if (= :refused (ops-res %)) [] (mapv (fn [x] (bits k x)) (ops-res %)))) is))
+                                      " of " (count is) " " (name k) " points"))))))
+;; the arguments of the worst errors of 2 ulps or more
+(doseq [[leg res] legs :when res
+        [[f k] idxs] (sort (group-by (fn [i] [(:f (jobs i)) (:k (jobs i))]) (range (count jobs))))
+        :let [es (map (fn [i] [i (job-err (jobs i) (reference i) (res i))]) idxs)
+              m (apply max (map second es))]
+        :when (>= m 2)]
+  (println (str "  worst " leg " " f " " (name k) ": " m " ulps at "
+                (str/join ", " (for [[i e] (take 3 (filter #(= m (second %)) es))] (pr-str (:args (jobs i))))))))
+
+;; the gate's bounds: the sweep's maximum (4000 points per function and kind, docs/types.md), the same for
+;; every leg. A regression that matters (a real(8) computed through real(4), a lost argument reduction, a
+;; wrong branch) is thousands of ulps, not one more.
+(defn bound [f k] (get {["tan" :real8] 2} [f k] 1))
+(def over (for [[[leg f k] s] stats :when (> (:max s) (bound f k))] (str leg " " f " " (name k) ": " (fmt-e (:max s)) " ulps, bound " (bound f k))))
+(doseq [o over] (println (str "  OVER BOUND " o)))
+(def failed-legs (remove second legs))
+(System/exit (if (or (seq failed-legs) (:failed mpfr-check) (seq (:diffs mpfr-check)) (and (:quick opts) (seq over))) 1 0))
