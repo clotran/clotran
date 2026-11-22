@@ -1,0 +1,2 @@
+(ns bad.readerr)
+(def x (+ 1 2)

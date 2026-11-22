@@ -1,0 +1,4 @@
+(ns mix.core
+  (:require [mix.solver :as s]))
+
+(defn go [] [(s/run (s/scale 2) 5) (s/run inc 1) ((s/scale 10) 4) (s/plus3 1)])

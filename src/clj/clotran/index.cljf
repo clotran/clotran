@@ -8,7 +8,7 @@
   With no PATH, the project in the current directory: its source roots
   (CLOTRAN_PATH, which the launcher sets from deps.edn) and clotran's own
   src/clj, the language. A PATH is a Clojure file, a directory walked for
-  .cljf, .cljc and .clj files, or a directory holding a package.edn, whose
+  .cljf, .cljc, .clj and .lms (Lemmis) files, or a directory holding a package.edn, whose
   Fortran routines are read by the same parser that writes their shims
   (clotran.bind/routines). The answer is EDN, one definition a line:
 
@@ -30,6 +30,7 @@
   files costs the reader one slot."
   (:require [clojure.string :as str]
             [clotran.bind :as bind]
+            [clotran.lms :as lms]
             [clotran.package :as package]))
 
 (def ^:private heads
@@ -110,7 +111,10 @@
   file's name."
   ([path] (index-file path nil))
   ([path text]
-   (let [forms (try (binding [*ns* (the-ns 'user)] (clotran-read-forms path true text))
+   (let [forms (try (if (str/ends-with? path ".lms")
+                      ;; a Lemmis file: the forms load evaluates (DEVIATIONS 97)
+                      (lms/read-forms (or text (clotran-slurp path)) path)
+                      (binding [*ns* (the-ns 'user)] (clotran-read-forms path true text)))
                     (catch clotran.host.throwable e {:error (.getMessage e)}))]
      (if (map? forms)
        [{:file path :kind :error :error (:error forms)}]
@@ -141,7 +145,7 @@
              (:rspec r) (assoc :returns (:type (:rspec r)))
              bound? (assoc :doc (package/doc-of (assoc (bind/manifest-routine name r) :file rel)))))))))
 
-(defn- clojure-file? [p] (re-find #"\.(cljf|cljc|clj)$" p))
+(defn- clojure-file? [p] (re-find #"\.(cljf|cljc|clj|lms)$" p))
 
 (defn- walk
   "Every Clojure file under dir, and every directory holding a package.edn,

@@ -1,0 +1,2 @@
+(ns bad.elsewhere)
+(def x 1)

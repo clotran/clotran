@@ -1,0 +1,4 @@
+(ns bad.analyze)
+
+(defn f []
+  (nope 1))

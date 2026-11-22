@@ -1,0 +1,210 @@
+#!/usr/bin/env bb
+;; fuzz-lms: a namespace written both ways -- as Clojure (.cljf) and as a
+;; Lemmis file (.lms, read by test/lms's stub reader) -- must agree
+;; (DEVIATIONS 96, 97).
+;;
+;;   scripts/fuzz-lms [-n N] [-s SEED]
+;;
+;; N generated namespaces in a chain, each written twice: fzl/cI.cljf and
+;; fzl/lI.lms, the second with Fortran comment lines, blank lines and its
+;; forms broken over lines. Each defines values, functions of two
+;; arguments, closures and a higher-order function, over the earlier ones and
+;; over earlier namespaces' -- each reference to an earlier namespace takes
+;; its .cljf or its .lms twin at random, so a .cljf requires a .lms and a
+;; .lms a .cljf. Probes call every definition, closures and functions
+;; passed across the two. The oracle: clotran's answers through the .lms
+;; twins must be its answers through the .cljf ones, and those must be
+;; clj's on the same text as .clj files; every .lms Var's :line is the line
+;; the generator put it at. Counts by kind, the first cases of each, exit 1
+;; on any.
+(require '[clojure.test.check.generators :as g]
+         '[clojure.test.check.random :as tr]
+         '[clojure.string :as str]
+         '[clojure.edn :as edn]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p])
+
+(def opts (loop [as *command-line-args* o {:n 12 :seed 1}]
+            (if (empty? as) o
+                (case (first as)
+                  "-n" (recur (drop 2 as) (assoc o :n (parse-long (second as))))
+                  "-s" (recur (drop 2 as) (assoc o :seed (parse-long (second as))))
+                  (do (println "usage: scripts/fuzz-lms [-n N] [-s SEED]") (System/exit 2))))))
+
+;; the layout's own choices, from the seed: test.check's splittable random
+(def rng (atom (tr/make-random (:seed opts))))
+(defn nd [] (let [[a b] (tr/split @rng)] (reset! rng b) (tr/rand-double a)))
+(defn pick [xs] (nth xs (int (* (nd) (count xs)))))
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+
+;; ---- the generator -------------------------------------------------------------
+;; An expression is data: [:int n] [:local s] [:ref ns-index name] [:op o a b]
+;; [:if a b c d] [:let a b] [:call ns-index name a b] [:mk ns-index name a b];
+;; ns-index nil is the namespace's own. ctx: {:locals [..] :vals [[i name]]
+;; :fns [[i name]] :mks [[i name]]}, what may be referred to.
+
+(defn g-expr [ctx depth]
+  (let [leaf (g/one-of (cond-> [(g/fmap (fn [n] [:int n]) (g/choose -5 5))]
+                         (seq (:locals ctx)) (conj (g/fmap (fn [s] [:local s]) (g/elements (:locals ctx))))
+                         (seq (:vals ctx)) (conj (g/fmap (fn [[i nm]] [:ref i nm]) (g/elements (:vals ctx))))))]
+    (if (zero? depth) leaf
+        (let [sub (g-expr ctx (dec depth))]
+          (g/frequency
+           (cond-> [[2 leaf]
+                    [3 (g/let [o (g/elements ['+ '- '*]) a sub b sub] [:op o a b])]
+                    [1 (g/let [a sub b sub c sub d sub] [:if a b c d])]
+                    [1 (g/let [a sub b sub] [:let a b])]]
+             (seq (:fns ctx)) (conj [2 (g/let [[i nm] (g/elements (:fns ctx)) a sub b sub] [:call i nm a b])])
+             (seq (:mks ctx)) (conj [2 (g/let [[i nm] (g/elements (:mks ctx)) a sub b sub] [:mk i nm a b])])))))))
+
+(def g-kind (g/elements [:val :val :fn :mk :hof]))
+
+(defn g-ns
+  "Namespace i's definitions, given the earlier namespaces' public ones."
+  [i outer]
+  (g/let [kinds (g/vector g-kind 1 5)
+          seeds (g/vector (g/choose 0 1000000) 5)]
+    (loop [k 0 ctx outer defs []]
+      (if (= k (count kinds)) defs
+          (let [kind (kinds k) nm (str (name kind) k)
+                body (fn [locals] (g/generate (g-expr (assoc ctx :locals locals) 3) 10 (+ (seeds k) (* 7919 i))))
+                d (case kind
+                    :val {:kind :val :name nm :body (body [])}
+                    :fn {:kind :fn :name nm :body (body ['a 'b])}
+                    :mk {:kind :mk :name nm :body (body ['a 'x])}
+                    :hof {:kind :hof :name nm})
+                ctx (case kind
+                      :val (update ctx :vals conj [nil nm])
+                      :fn (update ctx :fns conj [nil nm])
+                      :mk (update ctx :mks conj [nil nm])
+                      :hof ctx)]
+            (recur (inc k) ctx (conj defs d)))))))
+
+;; ---- rendering ---------------------------------------------------------------------
+
+(defn render [e alias]
+  (let [r #(render % alias)
+        q (fn [i nm] (if (nil? i) nm (str (alias i) "/" nm)))]
+    (case (first e)
+      :int (str (second e))
+      :local (str (second e))
+      :ref (q (nth e 1) (nth e 2))
+      :op (str "(" (nth e 1) " " (r (nth e 2)) " " (r (nth e 3)) ")")
+      :if (str "(if (< " (r (nth e 1)) " " (r (nth e 2)) ") " (r (nth e 3)) " " (r (nth e 4)) ")")
+      :let (str "(let [t " (r (nth e 1)) "] (+ t " (r (nth e 2)) "))")
+      :call (str "(" (q (nth e 1) (nth e 2)) " " (r (nth e 3)) " " (r (nth e 4)) ")")
+      :mk (str "((" (q (nth e 1) (nth e 2)) " " (r (nth e 3)) ") " (r (nth e 4)) ")"))))
+
+;; rem keeps every value small, in both languages the same
+(defn def-text [{:keys [kind name body]} alias]
+  (case kind
+    :val (str "(def " name " (rem " (render body alias) " 997))")
+    :fn (str "(defn " name " [a b] (rem " (render body alias) " 997))")
+    :mk (str "(defn " name " [a] (fn [x] (rem " (render body alias) " 997)))")
+    :hof (str "(defn " name " [g y] (g (g y)))")))
+
+(defn ns-text
+  "[text {def-name line}] of namespace nsname, its earlier namespaces as
+  required: twin maps an earlier index to the variant (\"c\" or \"l\") it is
+  required as. lms? lays it out as the .lms twin is."
+  [nsname deps twin defs lms?]
+  (let [alias (fn [j] (str "r" j))
+        req (when (seq deps) (str "\n  (:require " (str/join " " (for [j deps] (str "[fzl." (twin j) j " :as r" j "]"))) ")"))
+        head (str "(ns " nsname req ")")
+        gap (fn [] (if lms? (pick ["\n" "\n\n" "\n! a comment\n" "\n  ! indented comment\n\n"]) "\n"))
+        brk (fn [t] (if lms? (str/replace t #" " (fn [_] (if (< (nd) 0.15) "\n    " " "))) t))]
+    (loop [ds defs text (str (when lms? "! a Lemmis module (the stub's .lms)\n") head) lines {}]
+      (if (empty? ds) [(str text "\n") lines]
+          (let [d (first ds)
+                t (str text (gap))
+                line (inc (count (filter #{\newline} t)))]
+            (recur (rest ds) (str t (brk (def-text d alias))) (assoc lines (:name d) line)))))))
+
+(defn probes
+  "[id expr-text] calling namespace nsname's definitions."
+  [nsname defs]
+  (for [{:keys [kind name]} defs]
+    [(str nsname "/" name)
+     (case kind
+       :val (str nsname "/" name)
+       :fn (str "(" nsname "/" name " 3 -2)")
+       :mk (str "((" nsname "/" name " 4) 5)")
+       :hof (let [mk (some #(when (= :mk (:kind %)) (:name %)) defs)]
+              (if mk (str "(" nsname "/" name " (" nsname "/" mk " 2) 1)") (str "(" nsname "/" name " inc 1)"))))]))
+
+;; ---- running ------------------------------------------------------------------------
+
+(defn run [cmd dir env secs]
+  (let [proc (apply p/process {:dir dir :out :string :err :string :in "" :extra-env env} cmd)
+        r (deref proc (* 1000 secs) ::timeout)]
+    (if (= r ::timeout) (do (p/destroy-tree proc) {:timeout true :exit -1 :out "" :err "timeout"}) r)))
+
+(defn results [out]
+  (into {} (for [[_ id v] (re-seq #"(?m)^RES (\S+) (.*)$" out)] [id (edn/read-string v)])))
+
+(defn driver [ids-exprs]
+  (str/join "\n" (for [[id e] ids-exprs]
+                    (str "(println \"RES\" " (pr-str id) " (pr-str " e "))"))))
+
+(let [{:keys [n seed]} opts
+      work (str (fs/create-temp-dir {:prefix "fuzz-lms"}))
+      _ (doseq [d ["src/fzl" "cljsrc/fzl"]] (fs/create-dirs (str work "/" d)))
+      nss (loop [i 0 outer {:vals [] :fns [] :mks []} acc []]
+            (if (= i n) acc
+                (let [deps (vec (filter (fn [_] (< (nd) 0.4)) (range (max 0 (- i 3)) i)))
+                      ;; what of the earlier namespaces this one may refer to
+                      outer-here (reduce (fn [o j] (-> o (update :vals into (map (fn [nm] [j nm]) (:vals (acc j))))
+                                                       (update :fns into (map (fn [nm] [j nm]) (:fns (acc j))))
+                                                       (update :mks into (map (fn [nm] [j nm]) (:mks (acc j))))))
+                                         {:vals [] :fns [] :mks []} deps)
+                      defs (g/generate (g-ns i outer-here) 10 (+ seed (* 104729 i)))
+                      twin-c (into {} (for [j deps] [j (pick ["c" "l"])]))
+                      twin-l (into {} (for [j deps] [j (pick ["c" "l"])]))
+                      names-of (fn [k] (vec (for [d defs :when (= k (:kind d))] (:name d))))]
+                  (recur (inc i) outer
+                         (conj acc {:i i :deps deps :defs defs :twin-c twin-c :twin-l twin-l
+                                    :vals (names-of :val) :fns (names-of :fn) :mks (names-of :mk)})))))
+      problems (atom {})
+      note! (fn [kind x] (swap! problems update kind (fnil conj []) x))
+      lines (atom {})]
+  (doseq [{:keys [i deps defs twin-c twin-l]} nss]
+    (let [[ct _] (ns-text (str "fzl.c" i) deps twin-c defs false)
+          [lt ls] (ns-text (str "fzl.l" i) deps twin-l defs true)
+          [jt _] (ns-text (str "fzl.c" i) deps (constantly "c") defs false)]
+      (spit (str work "/src/fzl/c" i ".cljf") ct)
+      (spit (str work "/src/fzl/l" i ".lms") lt)
+      (spit (str work "/cljsrc/fzl/c" i ".clj") jt)
+      (swap! lines into (for [[nm l] ls] [(str "fzl.l" i "/" nm) l]))))
+  (let [pc (mapcat (fn [{:keys [i defs]}] (probes (str "fzl.c" i) defs)) nss)
+        pl (mapcat (fn [{:keys [i defs]}] (probes (str "fzl.l" i) defs)) nss)
+        req (str "(require " (str/join " " (for [{:keys [i]} nss] (str "'fzl.c" i " 'fzl.l" i))) ")\n")
+        clo-drv (str work "/drive.clj")
+        clj-drv (str work "/clj-drive.clj")]
+    (spit clo-drv (str req (driver (concat pc pl)) "\n"
+                       (str/join "\n" (for [id (keys @lines)] (str "(println \"LINE\" " (pr-str id) " (:line (meta (resolve '" id "))))")))
+                       "\n"))
+    (spit clj-drv (str "(require " (str/join " " (for [{:keys [i]} nss] (str "'fzl.c" i))) ")\n" (driver pc) "\n"))
+    (let [r (run [(str repo "/clotran-bin") (str repo "/src/clj/clojure/core.clj") clo-drv] repo
+                 {"CLOTRAN_PATH" (str repo "/test/lms:" work "/src")} 300)
+          c (run ["clj" "-Sdeps" (pr-str {:paths [(str work "/cljsrc")]}) "-M" clj-drv] repo {} 300)
+          ours (results (:out r)) theirs (results (:out c))
+          got-lines (into {} (for [[_ id l] (re-seq #"(?m)^LINE (\S+) (\S+)$" (:out r))] [id (edn/read-string l)]))]
+      (when (not= 0 (:exit r)) (note! :clotran-failed (str/trim (str (:err r) (:out r)))))
+      (when (not= 0 (:exit c)) (note! :clj-failed (str/trim (:err c))))
+      (doseq [[id _] pc
+              :let [lid (str/replace-first id #"^fzl\.c" "fzl.l")
+                    vc (get ours id ::none) vl (get ours lid ::none) vj (get theirs id ::none)]]
+        (cond (= ::none vc) (note! :no-answer id)
+              (not= vc vl) (note! :lms-vs-cljf (str id " .cljf " (pr-str vc) " .lms " (pr-str vl)))
+              (= ::none vj) (note! :no-clj-answer id)
+              (not= vc vj) (note! :clotran-vs-clj (str id " clotran " (pr-str vc) " clj " (pr-str vj)))))
+      (doseq [[id want] @lines :let [got (got-lines id)]]
+        (when (not= want got) (note! :position (str id " at line " want ", its Var says " got))))
+      (doseq [[kind xs] (sort-by key @problems)]
+        (println (str kind ": " (count xs)))
+        (doseq [x (take 3 xs)] (println "  " x)))
+      (println (str "fuzz-lms: " n " namespaces written both ways, " (count pc) " probes each way, "
+                    (count @lines) " .lms positions, " (reduce + (map count (vals @problems))) " problems"))))
+  (if (System/getenv "FUZZ_KEEP") (println "kept:" work) (fs/delete-tree work))
+  (System/exit (if (empty? @problems) 0 1)))
