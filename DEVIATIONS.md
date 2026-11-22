@@ -113,8 +113,8 @@ Categories:
 | 86 | clojure.core arithmetic widens the narrow kinds; Fortran's operations keep them | design | `src/clj/fortran/ops.cljf` |
 | 87 | `/` on integers: a ratio in clojure.core, truncation in fortran.ops | design | `src/clj/fortran/ops.cljf` |
 | 88 | What the standard leaves to the processor throws | design | `src/clj/fortran/ops.cljf` |
-| 89 | A real(4) literal is rounded from its text through a real(8) | 1.x | `src/clj/fortran/ops.cljf` |
-| 90 | A real(4) conversion out of range throws where IEEE answers infinity | design | -- |
+| 89 | RESOLVED -- a real(4) literal is rounded once, from its text | -- | `src/clj/fortran/ops.cljf` |
+| 90 | RESOLVED -- real(4) overflow is infinity, as IEEE has it | -- | `src/clj/fortran/ops.cljf` |
 | 91 | The pure tier lowers some of Fortran's kinds | 1.x | `src/clj/clotran/purefort.cljf` |
 | 92 | Type hints in Fortran's words | design | `src/f/analyze.inc` (hint_canon) |
 | 93 | fortran.ops in the pure tier: Fortran's kinds, with their own messages | design | `src/clj/clotran/purefort.cljf` (fortran-call) |
@@ -2768,24 +2768,30 @@ the optimization level. The oracle names each such case `{:undefined ...}` in
 
 **Removal**: none intended.
 
-## 89. A real(4) literal is rounded from its text through a real(8)
+## 89. RESOLVED -- a real(4) literal is rounded once, from its text
 
-`(f/real4 "1.1")` is `(float (parse-double "1.1"))`: the decimal text is rounded to
-binary64, then to binary32. Fortran rounds the text once, to binary32. The two
-differ only when the text lies within a double-rounding window of a binary32
-midpoint. clotran has no float parser of its own. The oracle parses directly, so
-a case in that window would show as a difference.
+**RESOLVED 2026-11-22.** `(f/real4 "1.1")` was `(float (parse-double "1.1"))`: the text rounded to
+binary64, then to binary32, which can round the wrong way (the text 1.000000059604644775390626 lies
+just above the midpoint of 1 and 1+2**-23, so it is the upper one; through a real(8) it becomes the
+midpoint exactly and rounds to even, the lower). `fortran.ops/lit` now takes the decimal text as the
+exact rational it says and rounds it once to the nearest real(4), ties to even
+(`real4-of-ratio`). `test/ftypes/cases.edn` has the three cases that tell the two apart, and
+gfortran and flang agree with the oracle on them.
 
-**Removal**: a host parser for real(4) text (`clotran.host.real4` has none).
+## 90. RESOLVED -- real(4) overflow is infinity, as IEEE has it
 
-## 90. A real(4) conversion out of range throws where IEEE answers infinity
+**RESOLVED 2026-11-22.** `fortran.ops` threw "Value out of range for float" when a real(4) result or
+conversion went past the greatest real(4) (the checked `float`, which is Clojure's rule), where
+gfortran and flang, on IEEE processors, answer infinity (a value from the greatest plus half its
+last place up rounds there; below it, to the greatest). `rnd` now narrows with `unchecked-float`, the
+IEEE narrowing, so `(f/+ (f/real4 "3.0e38") (f/real4 "3.0e38"))` is infinity, as it is in the
+pure tier. The real(8) cases were IEEE already: `1.0/0.0` is infinity, `0.0/0.0` NaN.
 
-`(float 1.0e39)` throws "Value out of range for float" (as clj's does); a Fortran
-processor with IEEE arithmetic answers +Infinity for `real(1.0d39, 4)`. Only
-conversions are affected: the checks in `fortran.ops` for operations on real(4)
-values go through `float` too, so an overflowing real(4) `+` or `*` throws. A real(8) overflow answers Infinity, as IEEE does.
-
-**Removal**: none intended; Fortran leaves the overflow to the processor (88).
+What stays: a NaN or an infinity has no integer value, so `int`, `nint`, `floor` and `ceiling` of
+one is undefined and refused, in the interpreter and, since the same day, in the pure tier (it
+answered 0, the cast of a long). **A found bug, not fixed here:** `clotran.host.real4/POSITIVE_INFINITY`
+(and the negative) answer a real(8), where clj's `Float/POSITIVE_INFINITY` is a Float; a real(4)
+infinity can be made only by `unchecked-float`.
 
 ## 91. The pure tier lowers some of Fortran's kinds
 
@@ -2845,9 +2851,10 @@ to lower, when `fortran.ops` throws it instead).
 Where this differs from `fortran.ops` interpreted: the TEXT of a failure. The pure helpers
 say "undefined by the standard: integer overflow (integer(4))" for a narrow kind but "long
 overflow" for integer(8) and "Divide by zero" for `quot`, the helpers clojure.core's
-arithmetic shares. A real(4) overflow is infinity in pure Fortran, as IEEE has it, where
-`fortran.ops` throws (DEVIATIONS 90). `NaN` converted to an integer is 0 (the cast of a long), where
-the oracle calls it undefined. A real power other than `x**2` is not lowered.
+arithmetic shares. A real power `x**n` is Fortran's own (`(x ** n)`), whose value is the
+processor's unless every partial power is exact; `fortran.ops` answers it only then, and refuses
+the rest (`{:processor ...}` cases in `test/ftypes/cases.edn`), as for an inexact complex product
+(DEVIATIONS 94). A real power of a real is not lowered.
 
 **Removal**: one text for each failure, from one table; the real(4) overflow decided once.
 

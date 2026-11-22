@@ -44,7 +44,7 @@
 (defn fk [k] (iso k))
 (defn ftext [e]
   (cond
-    (map? e) (ftext (or (:undefined e) (:interpreted e)))
+    (map? e) (ftext (or (:undefined e) (:processor e) (:interpreted e)))
     (and (vector? e) (complex? (first e)))
     ;; a complex constant: (re, im), each part a real of the kind's part, signs inside
     (let [[k [x y]] e
@@ -55,7 +55,7 @@
                     (str (if (neg? x) (str "(" x "_" (fk k) ")") (str x "_" (fk k))))
                     (let [t (str x)
                           t (if (re-find #"[.eE]" t) t (str t ".0"))]
-                      (if (str/starts-with? t "-") (str "(" t "_" (fk k) ")") (str t "_" (fk k))))))
+                      (str "id(" (if (str/starts-with? t "-") (str "(" t "_" (fk k) ")") (str t "_" (fk k))) ")"))))
     (keyword? e) (fk e)
     :else (let [[op & args] e
                 a (map ftext args)]
@@ -71,7 +71,8 @@
 
 ;; a case must answer what it says: a value, or {:undefined ..} undefined. Anything else
 ;; (an ill-typed or an unexpected undefined) is a failure, not a skip.
-(def expected (mapv #(if (:undefined %) :undefined :ok) cases))
+(def expected (mapv #(if (or (:undefined %) (:processor %)) :undefined :ok) cases))
+(defn processor-case? [i] (let [c (nth cases i)] (and (map? c) (:processor c))))
 (defn interpreted-only? [i] (let [c (nth cases i)] (and (map? c) (:interpreted c))))
 (def unexpected (vec (for [[i a] (map-indexed vector answers) :when (not= (first a) (expected i))]
                        {:case (pr-str (nth cases i)) :expected (expected i) :answered a})))
@@ -80,7 +81,12 @@
 ;; ORACLE's kind, which would convert a different one silently)
 (def tkind-module
   (str "module tkind\n  use iso_fortran_env\n  implicit none\n  interface tk\n"
-       "    module procedure tk_i1, tk_i2, tk_i4, tk_i8, tk_r4, tk_r8, tk_c4, tk_c8\n  end interface\ncontains\n"
+       "    module procedure tk_i1, tk_i2, tk_i4, tk_i8, tk_r4, tk_r8, tk_c4, tk_c8\n  end interface\n"
+       ;; id passes a real through a procedure: a compiler cannot fold 1.0e200*1.0e200 into
+       ;; "Arithmetic overflow" at compile time, so the overflow happens at run time, as IEEE has it
+       "  interface id\n    module procedure id_r4, id_r8\n  end interface\ncontains\n"
+       "  function id_r4(x) result(y)\n    real(real32), intent(in) :: x\n    real(real32) :: y\n    y = x\n  end function id_r4\n"
+       "  function id_r8(x) result(y)\n    real(real64), intent(in) :: x\n    real(real64) :: y\n    y = x\n  end function id_r8\n"
        (str/join (for [[nm t k] [["i1" "integer(int8)" "int1"] ["i2" "integer(int16)" "int2"] ["i4" "integer(int32)" "int4"]
                                  ["i8" "integer(int64)" "int8"] ["r4" "real(real32)" "real4"] ["r8" "real(real64)" "real8"]
                                  ["c4" "complex(real32)" "complex4"] ["c8" "complex(real64)" "complex8"]]]
@@ -105,15 +111,18 @@
       [(parse-out (case k :complex4 :real4 :complex8 :real8) re) (parse-out (case k :complex4 :real4 :complex8 :real8) im)])
   (if (str/starts-with? (name k) "int")
     (parse-long (str/trim s))
-    (let [t (str/trim s)]
-      (case k :real8 (Double/parseDouble t) :real4 (double (Float/parseFloat t)))))))
+    (let [t (str/lower-case (str/trim s))]
+      (cond (str/includes? t "nan") ##NaN
+            (str/includes? t "inf") (if (str/starts-with? t "-") ##-Inf ##Inf)
+            :else (case k :real8 (Double/parseDouble t) :real4 (double (Float/parseFloat t))))))))
 
 (defn same? [k want got]
   (cond
     (complex? k) (and (= (count want) (count got) 2) (every? true? (map (fn [w g] (= (Double/doubleToRawLongBits (double w)) (Double/doubleToRawLongBits (double g)))) want got)))
     (str/starts-with? (name k) "int") (= want got)
     :else
-    (= (Double/doubleToRawLongBits (double want)) (Double/doubleToRawLongBits (double got)))))
+    (or (and (Double/isNaN (double want)) (Double/isNaN (double got)))
+        (= (Double/doubleToRawLongBits (double want)) (Double/doubleToRawLongBits (double got))))))
 
 (def results
   (for [[fc flags] [["gfortran" ["-std=f2018" "-ffp-contract=off" "-O0"]] ["flang" []]]]
@@ -137,7 +146,7 @@
 (defn clotran-form [e]
   (cond (vector? e) (list 'f/lit (first e) (second e))
         (keyword? e) e
-        (map? e) (clotran-form (or (:undefined e) (:interpreted e)))
+        (map? e) (clotran-form (or (:undefined e) (:processor e) (:interpreted e)))
         :else (cons (symbol "f" (name (first e))) (map clotran-form (rest e)))))
 (def clotran-result
   (let [prog (str "(require '[fortran.ops :as f])\n"
@@ -224,7 +233,7 @@
                         (:complex4 :complex8) (list* (symbol "f" (name k)) x)
                         (list (symbol "f" (name k)) x)))
         (keyword? e) e
-        (map? e) (pure-form (or (:undefined e) (:interpreted e)))
+        (map? e) (pure-form (or (:undefined e) (:processor e) (:interpreted e)))
         :else (cons (symbol "f" (name (first e))) (map pure-form (rest e)))))
 (defn case-cplx? [i] (and (= :ok (first (nth answers i))) (complex? (second (nth answers i)))))
 (def pure-results
@@ -270,7 +279,13 @@
                                                                      {:exit (:exit r) :out (str/trim (:out r))}))]]
                                              [i (if (case-cplx? i) [(run 0) (run 1)] (run 0))]))))))}))
 (defn parse-pure [k out]
-  (try (if (str/starts-with? (name k) "int") (parse-long out) (Double/parseDouble out)) (catch Exception _ ::bad)))
+  (try (if (str/starts-with? (name k) "int")
+         (parse-long out)
+         (let [t (str/lower-case out)]
+           (cond (str/includes? t "nan") ##NaN
+                 (str/includes? t "inf") (if (str/starts-with? t "-") ##-Inf ##Inf)
+                 :else (Double/parseDouble out))))
+       (catch Exception _ ::bad)))
 (def pure-diffs
   (vec (concat
         (for [i (range (count cases)) :when (and (= :ok (expected i)) (not (interpreted-only? i)) (not ((:lowered pure-results) i)))]
@@ -278,16 +293,17 @@
         (for [r (:runs pure-results)
               d (if (:failed r) [(str (:fc r) " did not build: " (subs (:failed r) 0 (min 400 (count (:failed r)))))]
                   (for [[i res] (:out r)
+                        :when (not (processor-case? i))
                         :let [want (nth answers i) cplx (case-cplx? i)
                               rs (if cplx res [res])
                               ok? (every? #(zero? (:exit %)) rs)]
                         :when (if (= :ok (expected i))
-                                (not (and ok?
+                                (and (= :ok (first want)) (not (and ok?
                                           (let [k (second want)
                                                 pk (case k :complex4 :real4 :complex8 :real8 k)
                                                 got (mapv #(parse-pure pk (:out %)) rs)]
                                             (and (not-any? #{::bad} got)
-                                                 (same? k (nth want 2) (if cplx got (first got)))))))
+                                                 (same? k (nth want 2) (if cplx got (first got))))))))
                                 (every? #(zero? (:exit %)) rs))]
                     (str (:fc r) " " (pr-str (nth cases i)) ": oracle " (pr-str want) ", pure printed " (pr-str (mapv :out rs)) " (exit " (mapv :exit rs) ")")))]
           d))))

@@ -1,3 +1,8 @@
+;; A case is an expression; {:undefined expr}, a result the standard leaves to the processor (an
+;; implementation refuses it: fortran.ops throws, the pure tier fails or does not lower it);
+;; {:processor expr}, one the processor decides but compiled Fortran may answer with the
+;; processor's value (fortran.ops refuses it, the pure tier is not checked); {:interpreted expr},
+;; a defined one the pure tier may decline to lower.
 ;; Cases for the Fortran-types oracle (test/ftypes/oracle.clj). Each is an
 ;; expression: a literal [kind x] (a real's x is its TEXT), or (op args...).
 ;; scripts/ftypes-check runs them through the oracle on clj and through
@@ -135,7 +140,39 @@
  {:undefined (mod [:int4 1] [:int4 0])}
  {:undefined (int [:real8 "1.0e30"])}
  {:undefined (int [:int8 300] :int1)}
- {:undefined (** [:real8 "2.0"] [:int4 3])}
+ ;; a real to an integer power: defined where every partial power is exact, else the processor's
+ (** [:real8 "2.0"] [:int4 3])
+ (** [:real8 "1.5"] [:int4 3])
+ (** [:real8 "0.5"] [:int4 10])
+ (** [:real8 "2.0"] [:int4 -3])
+ (** [:real8 "10.0"] [:int4 22])
+ (** [:real4 "1.5"] [:int8 4])
+ (** [:real8 "-2.0"] [:int4 5])
+ (** [:real8 "7.0"] [:int4 0])
+ {:processor (** [:real8 "10.0"] [:int4 23])}
+ {:processor (** [:real4 "1.1"] [:int4 3])}
+ {:processor (** [:real8 "3.0"] [:int4 -1])}
+ {:undefined (** [:real8 "0.0"] [:int4 -2])}
+ {:undefined (** [:real8 "2.0"] [:real8 "0.5"])}
+ ;; IEEE: overflow is infinity, x/0 infinity, 0/0 NaN, in both real kinds
+ (+ [:real4 "3.0e38"] [:real4 "3.0e38"])
+ (* [:real8 "1.0e200"] [:real8 "1.0e200"])
+ (/ [:real8 "1.0"] [:real8 "0.0"])
+ (/ [:real4 "-1.0"] [:real4 "0.0"])
+ (/ [:real8 "0.0"] [:real8 "0.0"])
+ (- [:real4 "3.0e38"] [:real4 "-3.0e38"])
+ (real [:real8 "1.0e39"])
+ (real [:real8 "-1.0e39"])
+ (real [:real8 "3.4028235677973366e38"])
+ (real [:real8 "3.4028235677973362e38"])
+ {:undefined (int (/ [:real8 "0.0"] [:real8 "0.0"]))}
+ {:undefined (int (/ [:real8 "1.0"] [:real8 "0.0"]))}
+ {:undefined (nint (* [:real8 "1.0e200"] [:real8 "1.0e200"]))}
+ ;; a real(4) literal is rounded once, from its text: just above the midpoint of 1 and 1+2**-23
+ ;; the text is nearer the upper one, which rounding through a real(8) would lose
+ (+ [:real4 "1.000000059604644775390626"] [:real4 "0.0"])
+ (+ [:real4 "1.000000059604644775390624"] [:real4 "0.0"])
+ (+ [:real4 "16777217.0000001"] [:real4 "0.0"])
  {:undefined (** [:int4 0] [:int4 -2])}
  {:undefined (sqrt [:real8 "-1.0"])}
  ;; complex (the standard leaves inexact complex * and all / to the processor: FCVS FM828-831)
@@ -169,6 +206,6 @@
  (aimag [:complex8 ["0.1" "0.2"]])
  (- [:complex4 ["0.1" "0.2"]] [:real8 "0.1"])
  {:undefined (/ [:complex8 ["1" "2"]] [:complex8 ["3" "4"]])}
- {:undefined (* [:complex8 ["0.1" "0.2"]] [:complex8 ["0.3" "0.4"]])}
+ {:processor (* [:complex8 ["0.1" "0.2"]] [:complex8 ["0.3" "0.4"]])}
  {:undefined (abs [:complex8 ["1" "1"]])}
 ]

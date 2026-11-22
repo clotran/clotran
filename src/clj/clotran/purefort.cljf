@@ -42,6 +42,15 @@
              "    end if\n"
              "    r = int(a, " iso ")\n"
              "  end function cl_fit" n "\n")))
+     ;; INT, NINT, FLOOR, CEILING of a NaN or an infinity: the standard has no integer for it
+     "  " P "function cl_finite(x" E ") result(r)\n"
+     "    real(real64), intent(in) :: x\n" ED
+     "    real(real64) :: r\n"
+     "    if (x /= x .or. abs(x) > huge(x)) then\n"
+     "       " (fail "'undefined by the standard: a NaN or an infinity has no integer value'" 1) "\n"
+     "    end if\n"
+     "    r = x\n"
+     "  end function cl_finite\n"
      "  " P "function cl_fsqrt(x" E ") result(r)\n"
      "    real(real64), intent(in) :: x\n" ED
      "    real(real64) :: r\n"
@@ -390,7 +399,7 @@ end module " mod "
 (def ^:private fallible
   #{"cl_add" "cl_sub" "cl_mul" "cl_neg" "cl_quot" "cl_rem" "cl_mod" "cl_long_of"
     "cl_bounds" "cl_dzeros" "cl_lzeros" "cl_subs"
-    "cl_fit1" "cl_fit2" "cl_fit4" "cl_ipow" "cl_fsqrt" "cl_fmod" "cl_fmodulo"})
+    "cl_fit1" "cl_fit2" "cl_fit4" "cl_ipow" "cl_fsqrt" "cl_fmod" "cl_fmodulo" "cl_finite"})
 
 (defn- ident-char? [c] (boolean (re-matches #"[A-Za-z0-9_]" (str c))))
 
@@ -1005,14 +1014,17 @@ end module " mod "
         (cond (and (kint? t0) (kint? t1))
               (let [k (kpromote t0 t1)] (done (kfit (str "cl_ipow(" (i64 e0 t0) ", " (i64 e1 t1) ")") k) k))
               (and (kreal? t0) (kint? t1) (= p 2)) (done (str "(" e0 " * " e0 ")") t0)
-              :else (decline "a real power other than x**2 is processor dependent")))
+              ;; x**n for another integer n: Fortran's own power. Its value is the processor's unless every
+              ;; partial power is exact (fortran.ops refuses the others; DEVIATIONS 93)
+              (and (kreal? t0) (kint? t1)) (done (str "(" e0 " ** " e1 ")") t0)
+              :else (decline "a real power of a real is processor dependent")))
 
       "int"
       (let [k (tgt :int4)]
         (when-not (kint? k) (decline "int to a real kind"))
         (if (kint? t0)
           (done (kto e0 t0 k) k)
-          (done (to-int (str "cl_long_of(" (kwiden e0 t0 :double) ")") k) k)))
+          (done (to-int (str "cl_long_of(cl_finite(" (kwiden e0 t0 :double) "))") k) k)))
 
       ("nint" "floor" "ceiling")
       (let [k (tgt :int4)]
@@ -1021,11 +1033,11 @@ end module " mod "
           (done (kto e0 t0 k) k)
           (let [x (fresh! st "x" :double)]
             (if (= nm "nint")
-              (done (to-int (str "cl_long_of(anint(" x "))") k) k [(str x " = " (kwiden e0 t0 :double))])
+              (done (to-int (str "cl_long_of(anint(" x "))") k) k [(str x " = cl_finite(" (kwiden e0 t0 :double) ")")])
               (done (to-int (if (= nm "floor")
                               (str "cl_long_of(aint(" x ") - merge(1.0_real64, 0.0_real64, " x " < aint(" x ")))")
                               (str "cl_long_of(aint(" x ") + merge(1.0_real64, 0.0_real64, " x " > aint(" x ")))")) k) k
-                    [(str x " = " (kwiden e0 t0 :double))])))))
+                    [(str x " = cl_finite(" (kwiden e0 t0 :double) ")")])))))
 
       "real"
       (if (kcplx? t0)

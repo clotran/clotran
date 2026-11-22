@@ -55,7 +55,10 @@ indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 The operations: `+ - * / **`, `int nint floor ceiling real dble`, `abs sign min max mod modulo
 sqrt`, `huge tiny epsilon kind digits`, and for complex `cmplx conjg aimag`. `CMPLX(x, y)` is a
 complex(4) whatever the arguments' kind, as Fortran's is; a complex product the processor would
-round, any complex division and `**` are refused (DEVIATIONS 94).
+round, any complex division and `**`, and a real to an integer power whose partial powers are not all
+exact (`x**2` always is defined) are refused (DEVIATIONS 93, 94). Real arithmetic is IEEE: overflow is
+infinity, `x/0.0` infinity, `0.0/0.0` NaN, in both real kinds; a NaN or an infinity has no integer
+value (DEVIATIONS 90).
 
 ## Hints in Fortran's words
 

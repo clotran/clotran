@@ -92,7 +92,40 @@
   "A double as a value of real kind k (binary32 by one rounding, exact for
   + - * / and sqrt of binary32 operands: a binary64 result has room to spare)."
   [k d]
-  (case k :real8 (double d) :real4 (float d)))
+  ;; unchecked-float is the IEEE narrowing: a value past real(4) is infinity (the checked float refuses it, as
+  ;; Clojure's does, which is not Fortran's; DEVIATIONS 90)
+  (case k :real8 (double d) :real4 (unchecked-float d)))
+
+(declare pow2)
+(defn- pow10 [n] (loop [r 1N i n] (if (zero? i) r (recur (*' r 10) (dec i)))))
+
+(defn- decimal->ratio
+  "A decimal text as the exact rational it says, or nil."
+  [text]
+  (when-let [[_ sign ip fp ex] (re-matches #"([+-]?)(\d*)\.?(\d*)(?:[eEdD]([+-]?\d+))?" text)]
+    (when (not (and (empty? ip) (empty? fp)))
+      (let [m (bigint (str (if (empty? ip) "0" ip) fp))
+            e10 (clojure.core/- (if ex (parse-long (if (= \+ (first ex)) (subs ex 1) ex)) 0) (count fp))
+            v (if (clojure.core/>= e10 0) (*' m (pow10 e10)) (clojure.core// m (pow10 (clojure.core/- e10))))]
+        (if (= sign "-") (clojure.core/- v) v)))))
+
+(defn- real4-of-ratio
+  "The rational r rounded ONCE to the nearest real(4), ties to even, as a double that holds it exactly;
+  infinity past the greatest. Rounding the text through a real(8) first can round the wrong way."
+  [r]
+  (if (zero? r)
+    0.0
+    (let [a (if (neg? r) (clojure.core/- r) r)
+          bits (fn [x] (loop [x (bigint x) c 0] (if (zero? x) c (recur (quot x 2) (inc c)))))
+          e0 (clojure.core/- (bits (numerator a)) (bits (denominator a)))
+          e (if (clojure.core/>= a (pow2 e0)) e0 (dec e0))
+          q (clojure.core/max (clojure.core/- e 23) -149)
+          scaled (clojure.core// a (pow2 q))
+          fl (quot (numerator scaled) (denominator scaled))
+          rem (clojure.core/- scaled fl)
+          n (cond (< rem 1/2) fl (> rem 1/2) (inc fl) (even? fl) fl :else (inc fl))
+          v (if (clojure.core/>= (*' n (pow2 q)) (pow2 128)) ##Inf (clotran.host.math/scalb (double n) q))]
+      (if (neg? r) (clojure.core/- v) v))))
 
 (defn lit
   "A literal as the oracle writes it: (lit :int4 5), (lit :real4 \"1.1\") -- a
@@ -100,6 +133,7 @@
   [k x]
   (cond (int-kind? k) (fit k x)
         (complex-kind? k) (->Complex k (lit (:part (specs k)) (first x)) (lit (:part (specs k)) (second x)))
+        (= k :real4) (let [r (decimal->ratio x)] (rnd k (if r (real4-of-ratio r) (parse-double x))))
         :else (rnd k (parse-double x))))
 
 (defn- conv [k v]
@@ -246,7 +280,22 @@
               (= x -1) (fit k (if (even? n) 1 -1))
               (zero? x) (undefined :zero-to-negative-power)
               :else (fit k 0)))
-      (and (real-kind? ka) (int-kind? kb) (= (long b) 2)) (arith :* a a)
+      ;; a real to an integer power is x multiplied n times: defined where every partial power is
+      ;; exact, and for n = 2, one multiplication, correctly rounded (test/ftypes/oracle.clj)
+      (and (real-kind? ka) (int-kind? kb))
+      (let [n (long b)]
+        (cond (zero? n) (rnd ka 1.0)
+              (= n 1) a
+              (= n 2) (arith :* a a)
+              (clojure.core/> (clojure.core/abs n) 64) (undefined :inexact-power)
+              (and (zero? (double a)) (neg? n)) (undefined :zero-to-negative-power)
+              :else
+              (let [x (->ratio a)
+                    partials (take (clojure.core/abs n) (iterate #(clojure.core/* % x) x))]
+                (if (every? #(ratio->part % ka) partials)
+                  (or (ratio->part (let [p (last partials)] (if (neg? n) (clojure.core// 1 p) p)) ka)
+                      (undefined :inexact-power))
+                  (undefined :inexact-power)))))
       :else (undefined :inexact-power))))
 
 (defn- need-same [who & vs]

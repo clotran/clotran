@@ -49,7 +49,9 @@
   binary64 result, exact for + - * / and sqrt of binary32 operands)."
   [k x]
   (let [d (double x)]
-    (case k :real8 [k d] :real4 [k (double (float d))])))
+    ;; .floatValue is the host's plain narrowing: infinity on overflow, as IEEE rounds; clojure.core's float
+    ;; throws "Value out of range for float", which is Clojure's, not Fortran's
+    (case k :real8 [k d] :real4 [k (double (.floatValue d))])))
 
 (declare lit*)
 (defn lit
@@ -136,7 +138,10 @@
                - (-' (bigint x) (bigint y))
                * (*' (bigint x) (bigint y))
                / (if (zero? y) (undefined :division-by-zero) (quot (bigint x) (bigint y)))))
-      (rnd k (case op + (+ x y) - (- x y) * (* x y) / (/ x y))))))
+      ;; primitive doubles: boxed, clojure.core's / throws "Divide by zero" for 0.0, where IEEE says
+      ;; infinity (or NaN)
+      (let [x (double x) y (double y)]
+        (rnd k (case op + (+ x y) - (- x y) * (* x y) / (/ x y)))))))
 
 (defn- power [[k1 a :as u] [k2 b :as v]]
   (cond
@@ -147,9 +152,26 @@
             (= a -1) (fit k (if (even? b) 1 -1))
             (zero? a) (undefined :zero-to-negative-power)
             :else (fit k 0)))
-    ;; x**2 is x*x everywhere; any other real power is processor dependent
-    ;; (DEVIATIONS: FM062, 6.1.2 of F77), so it is undefined here
-    (and (real-kind? k1) (int-kind? k2) (= b 2)) (arith '* u u)
+    ;; a real to an integer power is x multiplied n times (1/x**|n| for a negative n): its value is
+    ;; the processor's (a power function, or n-1 roundings in some order) unless every partial power is exact (FCVS FM062, lemmis/model/SCOPE.md), so
+    ;; that is where it is defined; a real to a real power never is
+    (and (real-kind? k1) (int-kind? k2))
+    (cond (zero? b) [k1 (second (rnd k1 1.0))]
+          (= b 1) [k1 a]
+          ;; x**2 is one multiplication, correctly rounded on any IEEE processor, so always defined
+          (= b 2) (arith '* u u)
+          (> (clojure.core/abs b) 64) (undefined :inexact-power)
+          (and (zero? a) (neg? b)) (undefined :zero-to-negative-power)
+          :else
+          (let [E exact
+                n (clojure.core/abs b)
+                partials (take n (iterate #(.multiply % (E a)) (E a)))
+                ok? (fn [x] (= x (E (second (rnd k1 x)))))]
+            (if (every? ok? partials)
+              (let [pn (last partials)
+                    v (if (neg? b) (try (.divide (clotran.host.decimal. "1") pn) (catch clotran.host.throwable _ nil)) pn)]
+                (if (and v (ok? v)) (rnd k1 v) (undefined :inexact-power)))
+              (undefined :inexact-power))))
     :else (undefined :inexact-power)))
 
 (defn- need-same [who & vs]
@@ -260,9 +282,10 @@
                  :else (throw ex))))))
 
 (defn case-expr
-  "A case is an expression; {:undefined expr}, one the standard leaves to the processor; or
+  "A case is an expression; {:undefined expr}, one the standard leaves to the processor;
+  {:processor expr}, the same, where compiled Fortran may answer with the processor's value; or
   {:interpreted expr}, one that is defined and that the pure Fortran tier may decline to lower."
-  [c] (if (map? c) (or (:undefined c) (:interpreted c)) c))
+  [c] (if (map? c) (or (:undefined c) (:processor c) (:interpreted c)) c))
 
 (defn run-file
   "Prints one EDN vector per case of the EDN file: the answers, in order."
