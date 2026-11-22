@@ -18,7 +18,9 @@
 (def kinds
   {:int1 {:type :integer :bits 8 :n 1}   :int2 {:type :integer :bits 16 :n 2}
    :int4 {:type :integer :bits 32 :n 4} :int8 {:type :integer :bits 64 :n 8}
-   :real4 {:type :real :bits 32 :n 4}   :real8 {:type :real :bits 64 :n 8}})
+   :real4 {:type :real :bits 32 :n 4}   :real8 {:type :real :bits 64 :n 8}
+   ;; complex(4) and complex(8): a value is [kind [re im]], each part a real of the part kind
+   :complex4 {:type :complex :bits 64 :n 4 :part :real4} :complex8 {:type :complex :bits 128 :n 8 :part :real8}})
 
 ;; the default kinds: gfortran and flang agree, the standard says only
 ;; "a processor-dependent kind"
@@ -27,6 +29,8 @@
 
 (defn int-kind? [k] (= :integer (:type (kinds k))))
 (defn real-kind? [k] (= :real (:type (kinds k))))
+(defn complex-kind? [k] (= :complex (:type (kinds k))))
+(def ^:private part-complex {:real4 :complex4 :real8 :complex8})
 
 (defn- undefined [why] (throw (ex-info (str "undefined: " why) {:undefined why})))
 (defn- ill-typed [msg] (throw (ex-info (str "ill-typed: " msg) {:ill-typed msg})))
@@ -47,9 +51,15 @@
   (let [d (double x)]
     (case k :real8 [k d] :real4 [k (double (float d))])))
 
+(declare lit*)
 (defn lit
-  "A literal: [:int4 5], or [:real4 \"1.1\"] (a real as its text)."
+  "A literal: [:int4 5], [:real4 \"1.1\"] (a real as its text), or [:complex8 [\"1.5\" \"2.5\"]]."
   [[k x]]
+  (if (complex-kind? k)
+    [k (mapv #(second (lit [(:part (kinds k)) %])) x)]
+    (lit* [k x])))
+
+(defn- lit* [[k x]]
   (if (int-kind? k)
     (fit k x)
     [k (case k :real8 (clotran.host.real8/parseDouble x) :real4 (double (clotran.host.real4/parseFloat x)))]))
@@ -58,6 +68,11 @@
   "Value v converted to kind k (an assignment's or an operand's)."
   [k [k0 x]]
   (cond (= k k0) [k x]
+        ;; to a complex kind: a real or integer is the real part, the imaginary part zero
+        (and (complex-kind? k) (complex-kind? k0))
+        [k (mapv #(second (rnd (:part (kinds k)) %)) x)]
+        (complex-kind? k) [k [(second (conv (:part (kinds k)) [k0 x])) 0.0]]
+        (complex-kind? k0) (ill-typed (str "a complex is not a " k " : use real, aimag or int of its part"))
         (and (int-kind? k) (int-kind? k0)) (fit k x)
         (and (real-kind? k) (int-kind? k0))
         [k (case k :real8 (double x) :real4 (double (float (long x))))]
@@ -69,7 +84,12 @@
   with real, the larger; integer with real, the real's kind."
   [k1 k2]
   (let [b #(:bits (kinds %))]
-    (cond (and (int-kind? k1) (int-kind? k2)) (if (>= (b k1) (b k2)) k1 k2)
+    (cond (or (complex-kind? k1) (complex-kind? k2))
+          ;; the complex kind whose parts are as wide as the widest real part or real operand
+          (let [part (fn [k] (cond (complex-kind? k) (:part (kinds k)) (real-kind? k) k))
+                ps (remove nil? [(part k1) (part k2)])]
+            (part-complex (apply max-key #(:bits (kinds %)) ps)))
+          (and (int-kind? k1) (int-kind? k2)) (if (>= (b k1) (b k2)) k1 k2)
           (and (real-kind? k1) (real-kind? k2)) (if (>= (b k1) (b k2)) k1 k2)
           (int-kind? k1) k2
           :else k1)))
@@ -77,7 +97,36 @@
 (defn- exact [x] (clotran.host.decimal. (double x)))
 (defn- finite! [x] (when (or (clotran.host.real8/isNaN x) (clotran.host.real8/isInfinite x)) (undefined :non-finite)) x)
 
+(declare arith*)
+(defn- exact-part [x] (clotran.host.decimal. (double x)))
+
+(defn- carith
+  "Complex + - * /. + and - are IEEE on each part. * is the textbook (ac - bd) + (ad + bc)i and
+  is defined only where every product and sum is exact (compilers differ otherwise: FCVS
+  FM828-831, lemmis/model/SCOPE.md); / is processor dependent."
+  [op u v]
+  (let [k (promote (first u) (first v)) pk (:part (kinds k))
+        [_ [a b]] (conv k u) [_ [c d]] (conv k v)
+        r #(second (rnd pk %))]
+    (case op
+      + [k [(r (+ a c)) (r (+ b d))]]
+      - [k [(r (- a c)) (r (- b d))]]
+      * (let [E exact-part
+              ac (.multiply (E a) (E c)) bd (.multiply (E b) (E d))
+              ad (.multiply (E a) (E d)) bc (.multiply (E b) (E c))
+              re (.subtract ac bd) im (.add ad bc)
+              repr? (fn [x] (= x (E (r x))))]
+          (if (every? repr? [ac bd ad bc re im])
+            [k [(r re) (r im)]]
+            (undefined :inexact-complex)))
+      / (undefined :complex-division))))
+
 (defn- arith [op [k1 a :as u] [k2 b :as v]]
+  (if (or (complex-kind? k1) (complex-kind? k2))
+    (carith op u v)
+    (arith* op u v)))
+
+(defn- arith* [op [k1 a :as u] [k2 b :as v]]
   (let [k (promote k1 k2)
         x (second (conv k u))
         y (second (conv k v))]
@@ -119,20 +168,48 @@
 
 (declare ev)
 
+(def ^:private complex-ok '#{+ - * / ** abs real dble cmplx conjg aimag kind})
+
 (defn- call [op args]
   (let [vs (mapv #(if (keyword? %) % (ev %)) args)]
+    (when (and (some #(and (vector? %) (complex-kind? (first %))) vs) (not (complex-ok op)))
+      (ill-typed (str op " of a complex")))
     (case op
+      cmplx (let [k (kind-arg (drop 2 vs) :complex4) pk (:part (kinds k)) [x y] vs]
+              (when-not (complex-kind? k) (ill-typed "cmplx's kind is a complex kind"))
+              (if (complex-kind? (first x))
+                (conv k x)
+                [k [(second (conv pk x)) (if (keyword? y) 0.0 (second (conv pk y)))]]))
+      conjg (let [[k [a b]] (first vs)] [k [a (- b)]])
+      aimag (let [[k [a b]] (first vs)] [(:part (kinds k)) b])
       (+ - * /) (if (and (= op '-) (= 1 (count vs)))
-                  (let [[k x] (first vs)] (if (int-kind? k) (fit k (-' (bigint x))) [k (- x)]))
+                  (let [[k x] (first vs)]
+                    (cond (int-kind? k) (fit k (-' (bigint x)))
+                          (complex-kind? k) [k (mapv - x)]
+                          :else [k (- x)]))
                   (arith op (vs 0) (vs 1)))
       ** (power (vs 0) (vs 1))
       int (to-int clotran.host.rounding_mode/DOWN (kind-arg (rest vs) default-integer) (first vs))
       nint (to-int clotran.host.rounding_mode/HALF_UP (kind-arg (rest vs) default-integer) (first vs))
       floor (to-int clotran.host.rounding_mode/FLOOR (kind-arg (rest vs) default-integer) (first vs))
       ceiling (to-int clotran.host.rounding_mode/CEILING (kind-arg (rest vs) default-integer) (first vs))
-      real (conv (kind-arg (rest vs) default-real) (first vs))
-      dble (conv :real8 (first vs))
-      abs (let [[k x] (first vs)] (if (int-kind? k) (fit k (clojure.core/abs (bigint x))) [k (clotran.host.math/abs (double x))]))
+      real (let [[k x] (first vs)]
+             (if (complex-kind? k)
+               ;; REAL of a complex is its real part, of the PART's kind unless a kind says otherwise
+               (conv (kind-arg (rest vs) (:part (kinds k))) [(:part (kinds k)) (first x)])
+               (conv (kind-arg (rest vs) default-real) (first vs))))
+      dble (let [[k x] (first vs)]
+             (if (complex-kind? k) (conv :real8 [(:part (kinds k)) (first x)]) (conv :real8 (first vs))))
+      abs (let [[k x] (first vs)]
+            (if (complex-kind? k)
+              (let [pk (:part (kinds k)) [a b] x
+                    s (.add (.multiply (exact-part a) (exact-part a)) (.multiply (exact-part b) (exact-part b)))
+                    r (clotran.host.decimal. (clotran.host.math/sqrt (double s)))]
+                ;; a processor's hypot is exact only where the answer is a whole number of the part kind
+                (if (and (= s (.multiply r r)) (= r (exact-part (second (rnd pk r)))))
+                  [pk (double r)]
+                  (undefined :inexact-complex-abs)))
+            (if (int-kind? k) (fit k (clojure.core/abs (bigint x))) [k (clotran.host.math/abs (double x))])))
       sqrt (let [[k x] (first vs)]
              (when-not (real-kind? k) (ill-typed "sqrt needs a real"))
              (when (neg? x) (undefined :sqrt-of-negative))
@@ -183,8 +260,9 @@
                  :else (throw ex))))))
 
 (defn case-expr
-  "A case is an expression, or {:undefined expr}: one the standard leaves to the processor."
-  [c] (if (map? c) (:undefined c) c))
+  "A case is an expression; {:undefined expr}, one the standard leaves to the processor; or
+  {:interpreted expr}, one that is defined and that the pure Fortran tier may decline to lower."
+  [c] (if (map? c) (or (:undefined c) (:interpreted c)) c))
 
 (defn run-file
   "Prints one EDN vector per case of the EDN file: the answers, in order."

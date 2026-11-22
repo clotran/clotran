@@ -124,7 +124,8 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
      fortran.ops/+ fortran.ops/- fortran.ops/* fortran.ops// fortran.ops/**
      fortran.ops/int fortran.ops/nint fortran.ops/floor fortran.ops/ceiling fortran.ops/real fortran.ops/dble
      fortran.ops/abs fortran.ops/sign fortran.ops/min fortran.ops/max fortran.ops/mod fortran.ops/modulo
-     fortran.ops/sqrt fortran.ops/huge fortran.ops/tiny fortran.ops/epsilon fortran.ops/kind fortran.ops/digits})
+     fortran.ops/sqrt fortran.ops/huge fortran.ops/tiny fortran.ops/epsilon fortran.ops/kind fortran.ops/digits
+     fortran.ops/complex4 fortran.ops/complex8 fortran.ops/cmplx fortran.ops/conjg fortran.ops/aimag})
 
 (def ^:private string-a
   "clojure.string functions with a pure-Fortran lowering: strings in,

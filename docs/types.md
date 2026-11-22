@@ -19,13 +19,16 @@ in `upstream/class-names.edn`).
 | `integer(8)` | :int8 | `clotran.host.int8` | `(fortran.ops/int8 x)` | `long`, and every integer literal |
 | `real(4)` | :real4 | `clotran.host.real4` | `(fortran.ops/real4 "1.1")` | `float` |
 | `real(8)` | :real8 | `clotran.host.real8` | `(fortran.ops/real8 "1.1")` | `double`, and every real literal |
+| `complex(4)` | :complex4 | `fortran.ops.Complex` | `(fortran.ops/complex4 "1.5" "2.5")` | -- |
+| `complex(8)` | :complex8 | `fortran.ops.Complex` | `(fortran.ops/complex8 "1.5" "2.5")` | -- |
 
 Arrays have the same kinds (`(fortran/make-array "real8" n)`, `int1` .. `int8`, `real4`).
 The exact types of the tower -- `BigInt`, `Ratio`, `BigDecimal` -- have no Fortran
 intrinsic type; they are library types, the way a Fortran program holds an extended-precision
 number as a derived type with defined operators. They are tier B in the compiler's words.
 
-Not there yet: `complex`, `logical` as a kind (a boolean is `true`/`false`),
+Complex has no scalar class yet: a value is a record, native inside a compiled function
+(DEVIATIONS 94). Not there yet: `logical` as a kind (a boolean is `true`/`false`),
 `character(len=n)` (a string is a string), rank above 1, array sections, and 1-based
 indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 
@@ -50,7 +53,9 @@ indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 ```
 
 The operations: `+ - * / **`, `int nint floor ceiling real dble`, `abs sign min max mod modulo
-sqrt`, `huge tiny epsilon kind digits`.
+sqrt`, `huge tiny epsilon kind digits`, and for complex `cmplx conjg aimag`. `CMPLX(x, y)` is a
+complex(4) whatever the arguments' kind, as Fortran's is; a complex product the processor would
+round, any complex division and `**` are refused (DEVIATIONS 94).
 
 ## Hints in Fortran's words
 
@@ -105,5 +110,7 @@ runs every oracle case through gfortran's and flang's pure builds.
   (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget a i)))) (/ s (alength a)))))
 ```
 
-Not yet lowered: complex, the narrow scalar kinds as parameters or results of a compiled
-library function, array results of the narrow kinds, rank above 1 (DEVIATIONS 91).
+Complex is native inside a function too: `(f/+ z w)` is a `complex(real64)` add, and a complex
+leaves the function as `(f/real z)` and `(f/aimag z)`. Not yet lowered: arrays of complex, `abs`,
+`/` and `**` of a complex, the narrow scalar kinds and complex as parameters or results of a
+compiled library function, array results of the narrow kinds, rank above 1 (DEVIATIONS 91, 94).

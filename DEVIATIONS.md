@@ -118,6 +118,7 @@ Categories:
 | 91 | The pure tier lowers some of Fortran's kinds | 1.x | `src/clj/clotran/purefort.cljf` |
 | 92 | Type hints in Fortran's words | design | `src/f/analyze.inc` (hint_canon) |
 | 93 | fortran.ops in the pure tier: Fortran's kinds, with their own messages | design | `src/clj/clotran/purefort.cljf` (fortran-call) |
+| 94 | Complex values are records, and a complex result the processor decides is refused | 1.x | `src/clj/fortran/ops.cljf` |
 
 ---
 
@@ -2788,11 +2789,13 @@ values go through `float` too, so an overflowing real(4) `+` or `*` throws. A re
 
 ## 91. The pure tier lowers some of Fortran's kinds
 
-`clotran compile --pure` lowers integer(1), (2), (4) and (8), real(4) and real(8) scalars
-(through `fortran.ops`, DEVIATIONS 93), boolean, strings and records, and 1-D arrays of
+`clotran compile --pure` lowers integer(1), (2), (4) and (8), real(4) and real(8) and complex(4) and
+complex(8) scalars (through `fortran.ops`, DEVIATIONS 93, 94), boolean, strings and records, and 1-D arrays of
 integer(8), real(8), integer(4), real(4), integer(2) and integer(1) as ARGUMENTS (`^longs`,
 `^doubles`, `^ints`, `^floats`, `^shorts`, `^bytes`, or Fortran's spellings, DEVIATIONS 92).
-Not yet: complex; a function parameter or result of the narrow scalar kinds at the
+Not yet: arrays of complex; a complex or a narrow scalar kind as a parameter or result of a
+compiled library function (they cross the boundary as a long or a double; a complex as its two
+parts); a function parameter or result of the narrow scalar kinds at the
 boundary of a compiled library (they cross as a long or a double: `^int4` is refused on a
 fn, 92); an array RESULT of the four narrow kinds; rank above 1; logical kinds;
 `character(len=n)`. An unhinted parameter's type is still guessed (the hint, else what a
@@ -2847,3 +2850,29 @@ arithmetic shares. A real(4) overflow is infinity in pure Fortran, as IEEE has i
 the oracle calls it undefined. A real power other than `x**2` is not lowered.
 
 **Removal**: one text for each failure, from one table; the real(4) overflow decided once.
+
+## 94. Complex values are records, and a complex result the processor decides is refused
+
+**A complex is a record.** `complex(4)` and `complex(8)` have no scalar class in the runtime yet
+(its values are a tag and one 64-bit payload; a complex(8) is two of them), so
+`fortran.ops`'s value is `fortran.ops.Complex`, a record of its kind and its two parts, each a
+real of the part kind, printed as Fortran writes one: `(1.5,2.5)`. In a pure function a complex
+is native (`complex(real32)`, `complex(real64)`); it leaves the function as its parts
+(`(f/real z)`, `(f/aimag z)`), and no pure library function takes or answers one.
+
+**The processor decides, so it is refused.** Fortran leaves inexact complex multiplication and all
+complex division to the processor (FCVS FM828-831, the `:pd` stops of Lemmis's fsem: lemmis/model/SCOPE.md, "Stage A cutoff"). So
+`fortran.ops` defines a complex `*` only where every product and sum of the textbook formula is
+exact, a complex `/` and `**` never, and `ABS` of a complex only where the answer is a whole
+number of the part kind (hypot is exact); anything else throws "undefined by the standard".
+`test/ftypes/oracle.clj` says the same, and gfortran and flang agree with it on every case that
+is defined. The pure tier lowers `+ - *`, `cmplx`, `conjg`, `aimag`, `real`, `dble` and the
+constructors natively, and declines `/`, `**` and `abs` of a complex. For `*` it is Fortran's
+own: where the product is inexact the compiled answer is the processor's, where `fortran.ops`
+refuses.
+
+`CMPLX(x, y)` is a complex(4) whatever the arguments' kind (a famous trap); `REAL(z)` of a complex is
+its real part in the part's kind, not real(4).
+
+**Removal**: a scalar class for the two complex kinds in the runtime (and so an ABI for them);
+then the refusal of the inexact cases is the only difference left.

@@ -479,13 +479,14 @@ end module " mod "
       :int1 "integer(int8)" :int2 "integer(int16)" :int4 "integer(int32)" :real4 "real(real32)"
       :doubles "real(real64)" :longs "integer(int64)"
       :ints "integer(int32)" :floats "real(real32)" :shorts "integer(int16)" :bytes "integer(int8)"
+      :complex4 "complex(real32)" :complex8 "complex(real64)"
       :string "character(len=:), allocatable"} t)))
 
 (defn- suffix [t]
   (if (record-type? t)
     (str "r" (fort-ident* (name t)))
     ({:long "l" :double "d" :doubles "vd" :longs "vl" :string "s"
-      :int1 "i1" :int2 "i2" :int4 "i4" :real4 "f4" :ints "vi4" :floats "vf4" :shorts "vi2" :bytes "vi1"} t)))
+      :int1 "i1" :int2 "i2" :int4 "i4" :real4 "f4" :complex4 "c4" :complex8 "c8" :ints "vi4" :floats "vf4" :shorts "vi2" :bytes "vi1"} t)))
 
 (defn records-of
   "The records a file defines: {Name {:type :record/Name :factory ns/->Name
@@ -512,12 +513,16 @@ end module " mod "
 (def ^:private fkinds
   {:int1 {:int? true :bits 8 :n 1 :iso "int8"} :int2 {:int? true :bits 16 :n 2 :iso "int16"}
    :int4 {:int? true :bits 32 :n 4 :iso "int32"} :long {:int? true :bits 64 :n 8 :iso "int64"}
-   :real4 {:bits 32 :n 4 :iso "real32"} :double {:bits 64 :n 8 :iso "real64"}})
+   :real4 {:bits 32 :n 4 :iso "real32"} :double {:bits 64 :n 8 :iso "real64"}
+   ;; complex(4) and complex(8): :part is the real kind of a part, :iso the Fortran kind they share
+   :complex4 {:cplx true :bits 64 :n 4 :iso "real32" :part :real4}
+   :complex8 {:cplx true :bits 128 :n 8 :iso "real64" :part :double}})
 (defn- k? [t] (contains? fkinds t))
 (defn- kint? [t] (boolean (:int? (fkinds t))))
-(defn- kreal? [t] (and (k? t) (not (kint? t))))
+(defn- kcplx? [t] (boolean (:cplx (fkinds t))))
+(defn- kreal? [t] (and (k? t) (not (kint? t)) (not (kcplx? t))))
 (defn- kiso [t] (:iso (fkinds t)))
-(defn- kwords [t] (str (if (kint? t) "integer" "real") "(" (:n (fkinds t)) ")"))
+(defn- kwords [t] (str (cond (kint? t) "integer" (kcplx? t) "complex" :else "real") "(" (:n (fkinds t)) ")"))
 
 ;; arrays of those kinds, as clj's hints spell them: ^doubles ^longs ^ints ^floats ^shorts ^bytes
 ;; (and Fortran's: ^real8s ^int8s ^int4s ^real4s ^int2s ^int1s). An element read is its own kind;
@@ -853,6 +858,8 @@ end module " mod "
   "Expression e of kind from, as kind to, where to is at least as wide (or a real)."
   [e from to]
   (cond (= from to) e
+        (kcplx? to) (str "cmplx(" e ", kind=" (kiso to) ")")
+        (kcplx? from) (decline (str "a " (kwords from) " cannot be used as a " (kwords to) ": use real, aimag or abs"))
         (and (kint? from) (kint? to)) (str "int(" e ", " (kiso to) ")")
         (kreal? to) (str "real(" e ", " (kiso to) ")")
         :else (decline (str "a " (kwords from) " cannot be used as a " (kwords to)))))
@@ -871,11 +878,17 @@ end module " mod "
         (if (> (:bits (fkinds to)) (:bits (fkinds from)))
           (kwiden e from to)
           (kfit (if (= from :long) e (str "int(" e ", int64)")) to))
-        (kreal? to) (kwiden e from to)
+        (or (kreal? to) (kcplx? to)) (kwiden e from to)
         :else (decline (str "a " (kwords from) " to a " (kwords to) ": use int, nint, floor or ceiling"))))
 
 (defn- kpromote [a b]
-  (cond (and (kint? a) (kint? b)) (if (>= (:bits (fkinds a)) (:bits (fkinds b))) a b)
+  (cond (or (kcplx? a) (kcplx? b))
+        ;; the complex kind whose parts are as wide as the widest real part or real operand
+        (let [part (fn [t] (cond (kcplx? t) (:part (fkinds t)) (kreal? t) t))
+              ps (remove nil? [(part a) (part b)])
+              widest (reduce (fn [m p] (if (> (:bits (fkinds p)) (:bits (fkinds m))) p m)) ps)]
+          ({:real4 :complex4 :double :complex8} widest))
+        (and (kint? a) (kint? b)) (if (>= (:bits (fkinds a)) (:bits (fkinds b))) a b)
         (and (kreal? a) (kreal? b)) (if (>= (:bits (fkinds a)) (:bits (fkinds b))) a b)
         (kint? a) b
         :else a))
@@ -886,6 +899,7 @@ end module " mod "
   "a op b, op one of :+ :- :* :/ , for two expressions of Fortran kinds."
   [op a ta b tb]
   (let [k (kpromote ta tb) x (kwiden a ta k) y (kwiden b tb k)]
+    (when (and (kcplx? k) (= op :/)) (decline "complex division is processor dependent"))
     (if (kint? k)
       (if (= k :long)
         [(str (case op :+ "cl_add(" :- "cl_sub(" :* "cl_mul(" :/ "cl_quot(") x ", " y ")") :long]
@@ -920,20 +934,24 @@ end module " mod "
 
 (defn- fortran-call [op args env st]
   (let [nm (name op)
-        n (count args)
         kw? #(and (= :const (:op %)) (keyword? (:p1 %)))
+        n (count (remove kw? args))
         vals (vec (remove kw? args))
         [ls es ts] (emit-args vals env st)
         kwk (some #(when (kw? %) (:p1 %)) args)
-        tgt (fn [dflt] (let [m {:int1 :int1 :int2 :int2 :int4 :int4 :int8 :long :real4 :real4 :real8 :double}]
+        tgt (fn [dflt] (let [m {:int1 :int1 :int2 :int2 :int4 :int4 :int8 :long :real4 :real4 :real8 :double
+                                :complex4 :complex4 :complex8 :complex8}]
                          (cond (nil? kwk) dflt
                                (m kwk) (m kwk)
                                :else (decline (str "the kind " kwk " is not one of int1 int2 int4 int8 real4 real8")))))
         done (fn [e t & [more]] [(into ls more) e t])
         e0 (first es) t0 (first ts) e1 (second es) t1 (second ts)
-        _ (when (and (not (#{"int1" "int2" "int4" "int8" "real4" "real8"} nm))
+        _ (when (and (not (#{"int1" "int2" "int4" "int8" "real4" "real8" "complex4" "complex8"} nm))
                      (not (every? k? ts)))
             (decline (str "fortran." "ops/" nm " of something that is not a Fortran kind: make one with int4, real8 ..., or write long or double")))
+        _ (when (and (some kcplx? ts)
+                     (not (#{"+" "-" "*" "real" "dble" "cmplx" "conjg" "aimag" "kind" "complex4" "complex8"} nm)))
+            (decline (str "fortran.ops/" nm " of a complex is not lowered")))
         same! (fn [] (when-not (apply = ts) (decline (str "fortran.ops/" nm " needs one kind, not " (str/join ", " (map kwords ts))))))
         to-int (fn [e64 k] (kfit e64 k))]
     (case nm
@@ -941,6 +959,29 @@ end module " mod "
       (let [k ({"int1" :int1 "int2" :int2 "int4" :int4 "int8" :long} nm)]
         (cond (kint? t0) (done (kto e0 t0 k) k)
               :else (decline (str nm " of a real: use int, nint, floor or ceiling"))))
+
+      ("complex4" "complex8")
+      (let [k (keyword nm) pk (:part (fkinds k))
+            part (fn [nd e t] (cond (and (= :const (:op nd)) (string? (:p1 nd))) (real-literal (:p1 nd) pk)
+                                    (kcplx? t) (decline (str nm " of a complex and another value"))
+                                    :else (kto e t pk)))]
+        (case n
+          1 (if (kcplx? t0)
+              (done (kwiden e0 t0 k) k)
+              (done (str "cmplx(" (part (first vals) e0 t0) ", kind=" (kiso k) ")") k))
+          2 (done (str "cmplx(" (part (first vals) e0 t0) ", " (part (second vals) e1 t1) ", kind=" (kiso k) ")") k)
+          (decline (str nm " of other than one or two values"))))
+
+      ;; CMPLX defaults to complex(4), whatever its arguments' kind
+      "cmplx"
+      (let [k (tgt :complex4)]
+        (when-not (kcplx? k) (decline "cmplx to a kind that is not complex"))
+        (cond (and (= n 1) (kcplx? t0)) (done (kwiden e0 t0 k) k)
+              (<= 1 n 2) (done (str "cmplx(" (str/join ", " es) ", kind=" (kiso k) ")") k)
+              :else (decline "cmplx of other than one or two values")))
+
+      "conjg" (done (str "conjg(" e0 ")") t0)
+      "aimag" (done (str "aimag(" e0 ")") (:part (fkinds t0)))
 
       ("real4" "real8")
       (let [k (if (= nm "real4") :real4 :double) a (first vals)]
@@ -987,11 +1028,14 @@ end module " mod "
                     [(str x " = " (kwiden e0 t0 :double))])))))
 
       "real"
-      (let [k (tgt :real4)]
-        (when-not (kreal? k) (decline "real to an integer kind"))
-        (done (kto e0 t0 k) k))
+      (if (kcplx? t0)
+        ;; REAL of a complex is its real part, of the part's kind unless a kind says otherwise
+        (let [k (tgt (:part (fkinds t0)))] (done (str "real(" e0 ", " (kiso k) ")") k))
+        (let [k (tgt :real4)]
+          (when-not (kreal? k) (decline "real to an integer kind"))
+          (done (kto e0 t0 k) k)))
 
-      "dble" (done (kto e0 t0 :double) :double)
+      "dble" (if (kcplx? t0) (done (str "real(" e0 ", real64)") :double) (done (kto e0 t0 :double) :double))
 
       "abs"
       (cond (= t0 :long) (let [a (fresh! st "x" :long)]
@@ -1137,7 +1181,7 @@ end module " mod "
       (#{'double 'num} op)
       (cond (num? (first ts)) (done (as-double (first es) (first ts)) :double)
             ;; a Fortran kind leaves the kinds here, widened (fortran.ops makes them)
-            (k? (first ts)) (done (kwiden (first es) (first ts) :double) :double)
+            (and (k? (first ts)) (not (kcplx? (first ts)))) (done (kwiden (first es) (first ts) :double) :double)
             :else (decline (str op " of something that is not a number")))
 
       (#{'long 'int 'unchecked-long} op)

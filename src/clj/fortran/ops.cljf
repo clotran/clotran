@@ -23,13 +23,21 @@
 (def ^:private specs
   {:int1 {:type :integer :bits 8 :n 1} :int2 {:type :integer :bits 16 :n 2}
    :int4 {:type :integer :bits 32 :n 4} :int8 {:type :integer :bits 64 :n 8}
-   :real4 {:type :real :bits 32 :n 4} :real8 {:type :real :bits 64 :n 8}})
+   :real4 {:type :real :bits 32 :n 4} :real8 {:type :real :bits 64 :n 8}
+   :complex4 {:type :complex :bits 64 :n 4 :part :real4} :complex8 {:type :complex :bits 128 :n 8 :part :real8}})
 
 (def default-integer :int4)
 (def default-real :real4)
 
 (defn- int-kind? [k] (= :integer (:type (specs k))))
 (defn- real-kind? [k] (= :real (:type (specs k))))
+(defn- complex-kind? [k] (= :complex (:type (specs k))))
+(def ^:private part-complex {:real4 :complex4 :real8 :complex8})
+
+;; A complex(4) or complex(8) value: its kind and its two parts, each a real of the part kind.
+;; (clotran has no scalar class for them yet: DEVIATIONS 94.) Printed as Fortran writes one.
+(defrecord Complex [kind re im])
+(defmethod print-method Complex [z w] (.write w (str "(" (:re z) "," (:im z) ")")))
 
 (def ^:private fortran-words
   {:integer-overflow "integer overflow"
@@ -38,7 +46,11 @@
    :inexact-power "a real power other than x**2 is processor dependent"
    :zero-to-negative-power "0 raised to a negative integer power"
    :sqrt-of-negative "SQRT of a negative real"
-   :non-finite "a NaN or an infinity has no integer value"})
+   :non-finite "a NaN or an infinity has no integer value"
+   :inexact-complex "a complex product whose parts are not all exact is processor dependent"
+   :complex-division "complex division is processor dependent"
+   :complex-power "a complex power is processor dependent"
+   :inexact-complex-abs "ABS of a complex is exact only where the answer is a whole number of the part kind"})
 
 (defn- kind-words
   "A kind as Fortran writes it: :int4 is integer(4), :real8 real(8)."
@@ -57,9 +69,14 @@
    clotran.host.real4 :real4 clotran.host.real8 :real8})
 
 (defn kind-of
-  "The Fortran kind of a scalar: :int1 .. :int8, :real4, :real8."
+  "The Fortran kind of a scalar: :int1 .. :int8, :real4, :real8, :complex4, :complex8."
   [v]
-  (or (kind-classes (class v)) (ill-typed (str "not a Fortran scalar: " (pr-str v)))))
+  (or (when (instance? Complex v) (:kind v))
+      (kind-classes (class v))
+      (ill-typed (str "not a Fortran scalar: " (pr-str v)))))
+
+(defn- no-complex [who & vs]
+  (when (some #(instance? Complex %) vs) (ill-typed (str who " of a complex"))))
 
 (def ^:private imins {:int1 -128 :int2 -32768 :int4 -2147483648 :int8 -9223372036854775808N})
 (def ^:private imaxs {:int1 127 :int2 32767 :int4 2147483647 :int8 9223372036854775807N})
@@ -81,11 +98,18 @@
   "A literal as the oracle writes it: (lit :int4 5), (lit :real4 \"1.1\") -- a
   real as its text, rounded once."
   [k x]
-  (if (int-kind? k) (fit k x) (rnd k (parse-double x))))
+  (cond (int-kind? k) (fit k x)
+        (complex-kind? k) (->Complex k (lit (:part (specs k)) (first x)) (lit (:part (specs k)) (second x)))
+        :else (rnd k (parse-double x))))
 
 (defn- conv [k v]
   (let [k0 (kind-of v)]
     (cond (= k k0) v
+          ;; to a complex kind: a real or integer is the real part, the imaginary part zero
+          (and (complex-kind? k) (complex-kind? k0))
+          (->Complex k (conv (:part (specs k)) (:re v)) (conv (:part (specs k)) (:im v)))
+          (complex-kind? k) (->Complex k (conv (:part (specs k)) v) (rnd (:part (specs k)) 0.0))
+          (complex-kind? k0) (ill-typed (str "a complex is not a " (name k) ": use real, aimag or int of its part"))
           (and (int-kind? k) (int-kind? k0)) (fit k (long v))
           (and (real-kind? k) (int-kind? k0)) (rnd k (case k :real8 (double (long v)) :real4 (float (long v))))
           (and (real-kind? k) (real-kind? k0)) (rnd k (double v))
@@ -96,7 +120,12 @@
   real, the larger; integer with real, the real's kind."
   [k1 k2]
   (let [b #(:bits (specs %))]
-    (cond (and (int-kind? k1) (int-kind? k2)) (if (clojure.core/>= (b k1) (b k2)) k1 k2)
+    (cond (or (complex-kind? k1) (complex-kind? k2))
+          ;; the complex kind whose parts are as wide as the widest real part or real operand
+          (let [part (fn [k] (cond (complex-kind? k) (:part (specs k)) (real-kind? k) k))
+                ps (remove nil? [(part k1) (part k2)])]
+            (part-complex (reduce (fn [m p] (if (clojure.core/> (b p) (b m)) p m)) ps)))
+          (and (int-kind? k1) (int-kind? k2)) (if (clojure.core/>= (b k1) (b k2)) k1 k2)
           (and (real-kind? k1) (real-kind? k2)) (if (clojure.core/>= (b k1) (b k2)) k1 k2)
           (int-kind? k1) k2
           :else k1)))
@@ -109,7 +138,77 @@
 (defn real4 [x] (cond (string? x) (lit :real4 x) (integer? x) (rnd :real4 (double x)) :else (conv :real4 x)))
 (defn real8 [x] (cond (string? x) (lit :real8 x) (integer? x) (double x) :else (conv :real8 x)))
 
+(defn- part-of [pk x] (cond (string? x) (lit pk x) (integer? x) (conv pk x) :else (conv pk x)))
+(defn- complex-of [k re im]
+  (let [pk (:part (specs k))] (->Complex k (part-of pk re) (if (nil? im) (rnd pk 0.0) (part-of pk im)))))
+(defn complex4
+  "A complex(4): (complex4 re im), each a real, an integer or a decimal text; (complex4 x) converts a
+  real, integer or complex."
+  ([x] (if (instance? Complex x) (conv :complex4 x) (complex-of :complex4 x nil)))
+  ([re im] (complex-of :complex4 re im)))
+(defn complex8
+  ([x] (if (instance? Complex x) (conv :complex8 x) (complex-of :complex8 x nil)))
+  ([re im] (complex-of :complex8 re im)))
+
+(declare arith*)
+
+(defn- pow2 [n]
+  (if (clojure.core/>= n 0) (loop [r 1N i n] (if (zero? i) r (recur (*' r 2) (dec i)))) (clojure.core// 1 (pow2 (clojure.core/- n)))))
+
+(defn- ->ratio
+  "A finite double as the exact rational it is: an integer mantissa times a power of two."
+  [x]
+  (let [x (double x)]
+    (if (zero? x)
+      0N
+      (let [e (clotran.host.math/getExponent x)
+            m (long (clotran.host.math/scalb x (clojure.core/- 52 e)))]
+        (clojure.core/* m (pow2 (clojure.core/- e 52)))))))
+
+(defn- ratio->part
+  "The exact rational r as a real of kind pk when pk holds it exactly (an odd mantissa of at most 24
+  or 53 bits times a power of two), else nil."
+  [r pk]
+  (if (zero? r)
+    (rnd pk 0.0)
+    (let [n (numerator r) d (denominator r)
+          sign (if (neg? n) -1 1)
+          strip (fn [x] (loop [x x s 0] (if (even? x) (recur (quot x 2) (inc s)) [x s])))
+          [dodd dshift] (strip d)
+          [nodd nshift] (strip (clojure.core/abs n))
+          bits (loop [x nodd c 0] (if (zero? x) c (recur (quot x 2) (inc c))))]
+      (when (and (= dodd 1) (clojure.core/<= bits (if (= pk :real4) 24 53)))
+        (rnd pk (clotran.host.math/scalb (double (clojure.core/* sign nodd)) (clojure.core/- nshift dshift)))))))
+
+(defn- isqrt [n]
+  (if (zero? n) 0N (loop [x (bigint n)] (let [y (quot (clojure.core/+ x (quot n x)) 2)] (if (clojure.core/>= y x) x (recur y))))))
+
+(defn- carith
+  "Complex + - * /. + and - are IEEE on each part. * is the textbook (ac - bd) + (ad + bc)i and is
+  defined only where every product and sum is exact (compilers differ otherwise: FCVS FM828-831);
+  / is processor dependent. test/ftypes/oracle.clj says the same."
+  [op a b]
+  (let [k (promote (kind-of a) (kind-of b)) pk (:part (specs k))
+        x (conv k a) y (conv k b)
+        a1 (double (:re x)) a2 (double (:im x)) c1 (double (:re y)) c2 (double (:im y))]
+    (case op
+      :+ (->Complex k (rnd pk (clojure.core/+ a1 c1)) (rnd pk (clojure.core/+ a2 c2)))
+      :- (->Complex k (rnd pk (clojure.core/- a1 c1)) (rnd pk (clojure.core/- a2 c2)))
+      :* (let [r* (fn [p q] (clojure.core/* (->ratio p) (->ratio q)))
+               ac (r* a1 c1) bd (r* a2 c2) ad (r* a1 c2) bc (r* a2 c1)
+               re (clojure.core/- ac bd) im (clojure.core/+ ad bc)
+               parts (map #(ratio->part % pk) [ac bd ad bc re im])]
+           (if (every? some? parts)
+             (->Complex k (nth parts 4) (nth parts 5))
+             (undefined :inexact-complex)))
+      :/ (undefined :complex-division))))
+
 (defn- arith [op a b]
+  (if (or (instance? Complex a) (instance? Complex b))
+    (carith op a b)
+    (arith* op a b)))
+
+(defn- arith* [op a b]
   (let [k (promote (kind-of a) (kind-of b))
         x (conv k a) y (conv k b)]
     (if (int-kind? k)
@@ -125,7 +224,10 @@
   [a b] (arith :+ a b))
 (defn -
   "Fortran's a - b, or -a."
-  ([a] (let [k (kind-of a)] (if (int-kind? k) (fit k (-' (bigint (long a)))) (rnd k (clojure.core/- (double a))))))
+  ([a] (let [k (kind-of a)]
+         (cond (int-kind? k) (fit k (-' (bigint (long a))))
+               (complex-kind? k) (->Complex k (rnd (:part (specs k)) (clojure.core/- (double (:re a)))) (rnd (:part (specs k)) (clojure.core/- (double (:im a)))))
+               :else (rnd k (clojure.core/- (double a))))))
   ([a b] (arith :- a b)))
 (defn * [a b] (arith :* a b))
 (defn / [a b] (arith :/ a b))
@@ -135,6 +237,7 @@
   power 2 as a*a; any other real power is processor dependent here as there."
   [a b]
   (let [ka (kind-of a) kb (kind-of b)]
+    (when (or (complex-kind? ka) (complex-kind? kb)) (undefined :complex-power))
     (cond
       (and (int-kind? ka) (int-kind? kb))
       (let [k (promote ka kb) x (long a) n (long b)]
@@ -147,6 +250,7 @@
       :else (undefined :inexact-power))))
 
 (defn- need-same [who & vs]
+  (when (some #(complex-kind? (kind-of %)) vs) (ill-typed (str who " of a complex")))
   (when-not (apply = (map kind-of vs)) (ill-typed (str who " needs one kind: " (mapv kind-of vs)))))
 
 (defn- kind-arg [more dflt] (if (seq more) (first more) dflt))
@@ -156,6 +260,7 @@
 (defn int
   "Fortran's INT(x [, kind]): an integer kept, a real truncated toward zero."
   [x & more]
+  (no-complex "int" x)
   (let [k (kind-arg more default-integer)]
     (if (int-kind? (kind-of x)) (fit k (long x)) (fit k (long (finite! (double x)))))))
 
@@ -169,23 +274,55 @@
     (if (neg? x) (clojure.core/- r) r)))
 
 (defn nint [x & more]
+  (no-complex "nint" x)
   (let [k (kind-arg more default-integer)]
     (fit k (long (round-away (finite! (double x)))))))
 (defn floor [x & more]
+  (no-complex "floor" x)
   (let [k (kind-arg more default-integer)]
     (fit k (long (clotran.host.math/floor (finite! (double x)))))))
 (defn ceiling [x & more]
+  (no-complex "ceiling" x)
   (let [k (kind-arg more default-integer)]
     (fit k (long (clotran.host.math/ceil (finite! (double x)))))))
 
-(defn real [x & more] (conv (kind-arg more default-real) x))
-(defn dble [x] (conv :real8 x))
+(defn real
+  "Fortran's REAL(x [, kind]): a real of the default kind (real(4)); of a COMPLEX, its real part, of
+  the part's kind unless a kind says otherwise."
+  [x & more]
+  (if (instance? Complex x)
+    (conv (kind-arg more (:part (specs (:kind x)))) (:re x))
+    (conv (kind-arg more default-real) x)))
+(defn dble [x] (if (instance? Complex x) (conv :real8 (:re x)) (conv :real8 x)))
+
+(defn cmplx
+  "Fortran's CMPLX(x [, y] [, kind]): a complex of the default kind, complex(4), whatever its
+  arguments' (a famous trap); a kind keyword, :complex8, says otherwise."
+  [x & more]
+  (let [kw (first (filter keyword? more)) ys (remove keyword? more)
+        k (or kw :complex4)]
+    (when-not (complex-kind? k) (ill-typed "cmplx's kind is a complex kind"))
+    (if (instance? Complex x)
+      (conv k x)
+      (->Complex k (conv (:part (specs k)) x) (if (seq ys) (conv (:part (specs k)) (first ys)) (rnd (:part (specs k)) 0.0))))))
+(defn conjg [z] (->Complex (:kind z) (:re z) (rnd (:part (specs (:kind z))) (clojure.core/- (double (:im z))))))
+(defn aimag [z] (:im z))
 
 (defn abs [x]
   (let [k (kind-of x)]
+    (cond
+      (complex-kind? k)
+      ;; a processor's hypot is exact only where the answer is a whole number of the part kind
+      (let [pk (:part (specs k)) a (->ratio (:re x)) b (->ratio (:im x))
+            s (clojure.core/+ (clojure.core/* a a) (clojure.core/* b b))
+            rt (fn [q] (let [n (numerator q) d (denominator q) rn (isqrt n) rd (isqrt d)]
+                         (when (and (= n (clojure.core/* rn rn)) (= d (clojure.core/* rd rd))) (clojure.core// rn rd))))
+            r (when (not (neg? s)) (rt s))]
+        (or (and r (ratio->part r pk)) (undefined :inexact-complex-abs)))
+      :else
     (if (int-kind? k)
       (fit k (let [v (bigint (long x))] (if (neg? v) (-' v) v)))
-      (rnd k (clotran.host.math/abs (double x))))))
+      (rnd k (clotran.host.math/abs (double x)))))))
 
 (defn- fmod
   "C's fmod, exactly: the remainder of a by p with a's sign (binary long
@@ -250,6 +387,7 @@
 ;; the numeric model of a kind's value x
 (defn huge [x]
   (let [k (kind-of x)]
+    (when (complex-kind? k) (ill-typed "huge of a complex"))
     (if (int-kind? k) (fit k (imaxs k)) (case k :real8 1.7976931348623157E308 :real4 (float 3.4028234663852886E38)))))
 (defn tiny [x]
   (let [k (kind-of x)]
@@ -262,4 +400,5 @@
 (defn kind [x] (fit default-integer (:n (specs (kind-of x)))))
 (defn digits [x]
   (let [k (kind-of x)]
+    (when (complex-kind? k) (ill-typed "digits of a complex"))
     (fit default-integer (if (int-kind? k) (dec (:bits (specs k))) (case k :real4 24 :real8 53)))))

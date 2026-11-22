@@ -138,4 +138,37 @@
  {:undefined (** [:real8 "2.0"] [:int4 3])}
  {:undefined (** [:int4 0] [:int4 -2])}
  {:undefined (sqrt [:real8 "-1.0"])}
+ ;; complex (the standard leaves inexact complex * and all / to the processor: FCVS FM828-831)
+ (+ [:complex8 ["1.5" "2.5"]] [:complex8 ["0.5" "-1.0"]])
+ (- [:complex8 ["1.5" "2.5"]] [:complex8 ["0.5" "-1.0"]])
+ (* [:complex8 ["1" "2"]] [:complex8 ["3" "4"]])
+ (* [:complex4 ["1.5" "2.0"]] [:complex4 ["2.0" "-0.5"]])
+ (- [:complex8 ["1.5" "-2.5"]])
+ (+ [:complex4 ["1.5" "2.5"]] [:real8 "1.0"])
+ (+ [:int4 1] [:complex4 ["1.5" "2.5"]])
+ (+ [:complex4 ["1.5" "2.5"]] [:complex8 ["0.25" "0.5"]])
+ (* [:real4 "2.0"] [:complex8 ["1.5" "2.5"]])
+ (cmplx [:real8 "1.5"] [:real8 "2.5"])
+ (cmplx [:real8 "1.5"] [:real8 "2.5"] :complex8)
+ (cmplx [:int4 3] [:int4 4] :complex8)
+ (cmplx [:real8 "0.1"] [:real8 "0.2"])
+ (conjg [:complex4 ["1.5" "2.5"]])
+ (aimag [:complex4 ["1.5" "2.5"]])
+ (aimag [:complex8 ["1.5" "2.5"]])
+ (real [:complex4 ["1.5" "2.5"]])
+ (real [:complex8 ["1.5" "2.5"]] :real4)
+ (dble [:complex4 ["0.1" "2.5"]])
+ ;; defined (hypot exact), answered by fortran.ops; the pure tier declines ABS of a complex
+ {:interpreted (abs [:complex8 ["3" "4"]])}
+ {:interpreted (abs [:complex4 ["5" "12"]])}
+ (kind [:complex4 ["1" "1"]])
+ (kind [:complex8 ["1" "1"]])
+ (+ [:complex4 ["0.1" "0.2"]] [:real8 "1.0"])
+ (+ [:complex4 ["0.1" "0.2"]] [:complex8 ["0.1" "0.2"]])
+ (real [:complex8 ["0.1" "0.2"]])
+ (aimag [:complex8 ["0.1" "0.2"]])
+ (- [:complex4 ["0.1" "0.2"]] [:real8 "0.1"])
+ {:undefined (/ [:complex8 ["1" "2"]] [:complex8 ["3" "4"]])}
+ {:undefined (* [:complex8 ["0.1" "0.2"]] [:complex8 ["0.3" "0.4"]])}
+ {:undefined (abs [:complex8 ["1" "1"]])}
 ]
