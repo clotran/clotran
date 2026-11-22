@@ -911,7 +911,11 @@ end module " mod "
     (when (and (kcplx? k) (= op :/)) (decline "complex division is processor dependent"))
     (if (kint? k)
       (if (= k :long)
-        [(str (case op :+ "cl_add(" :- "cl_sub(" :* "cl_mul(" :/ "cl_quot(") x ", " y ")") :long]
+        (if (= op :/)
+          ;; Fortran's integer(8) -huge-1 / -1 overflows; cl_quot answers -huge-1 there (Clojure's quot
+          ;; does), so 1 is taken from it in that one case, which cl_add refuses as the overflow it is
+          [(str "cl_add(cl_quot(" x ", " y "), merge(-1_int64, 0_int64, " x " == -huge(1_int64) - 1_int64 .and. " y " == -1_int64))") :long]
+          [(str (case op :+ "cl_add(" :- "cl_sub(" :* "cl_mul(") x ", " y ")") :long])
         [(kfit (case op
                  :/ (str "cl_quot(" (i64 x k) ", " (i64 y k) ")")
                  (str "(" (i64 x k) " " (name op) " " (i64 y k) ")")) k)
@@ -963,7 +967,10 @@ end module " mod "
                              "exp" "log" "sqrt" "sin" "cos" "abs"} nm)))
             (decline (str "fortran.ops/" nm " of a complex is not lowered")))
         same! (fn [] (when-not (apply = ts) (decline (str "fortran.ops/" nm " needs one kind, not " (str/join ", " (map kwords ts))))))
-        to-int (fn [e64 k] (kfit e64 k))]
+        to-int (fn [e64 k] (kfit e64 k))
+        ;; a whole real64 to an integer: cl_long_of takes 2**63 itself (Clojure's long does), which an
+        ;; integer(8) does not hold, so for that kind it is sent past the range, where cl_long_of fails
+        lof (fn [x k] (str "cl_long_of(" (if (= k :long) (str "merge(huge(1.0_real64), " x ", " x " >= 9.223372036854775808e18_real64)") x) ")"))]
     (case nm
       ("int1" "int2" "int4" "int8")
       (let [k ({"int1" :int1 "int2" :int2 "int4" :int4 "int8" :long} nm)]
@@ -1025,7 +1032,7 @@ end module " mod "
         (when-not (kint? k) (decline "int to a real kind"))
         (if (kint? t0)
           (done (kto e0 t0 k) k)
-          (done (to-int (str "cl_long_of(cl_finite(" (kwiden e0 t0 :double) "))") k) k)))
+          (done (to-int (lof (str "cl_finite(" (kwiden e0 t0 :double) ")") k) k) k)))
 
       ("nint" "floor" "ceiling")
       (let [k (tgt :int4)]
@@ -1034,10 +1041,10 @@ end module " mod "
           (done (kto e0 t0 k) k)
           (let [x (fresh! st "x" :double)]
             (if (= nm "nint")
-              (done (to-int (str "cl_long_of(anint(" x "))") k) k [(str x " = cl_finite(" (kwiden e0 t0 :double) ")")])
+              (done (to-int (lof (str "anint(" x ")") k) k) k [(str x " = cl_finite(" (kwiden e0 t0 :double) ")")])
               (done (to-int (if (= nm "floor")
-                              (str "cl_long_of(aint(" x ") - merge(1.0_real64, 0.0_real64, " x " < aint(" x ")))")
-                              (str "cl_long_of(aint(" x ") + merge(1.0_real64, 0.0_real64, " x " > aint(" x ")))")) k) k
+                              (lof (str "(aint(" x ") - merge(1.0_real64, 0.0_real64, " x " < aint(" x ")))") k)
+                              (lof (str "(aint(" x ") + merge(1.0_real64, 0.0_real64, " x " > aint(" x ")))") k)) k) k
                     [(str x " = cl_finite(" (kwiden e0 t0 :double) ")")])))))
 
       "real"

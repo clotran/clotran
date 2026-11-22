@@ -277,7 +277,9 @@
     (cond
       (and (int-kind? ka) (int-kind? kb))
       (let [k (promote ka kb) x (long a) n (long b)]
-        (cond (clojure.core/>= n 0) (fit k (loop [r 1N i n] (if (zero? i) r (recur (*' r (bigint x)) (dec i)))))
+        (cond (and (clojure.core/>= n 0) (#{0 1 -1} x)) (fit k (cond (zero? n) 1 (= x -1) (if (even? n) 1 -1) :else x))
+              ;; |x| >= 2: past 64 factors it has left every kind (1**2147483647 looped 2**31 times)
+              (clojure.core/>= n 0) (fit k (loop [r 1N i n] (if (or (zero? i) (clojure.core/> (clojure.core/abs r) 18446744073709551616N)) r (recur (*' r (bigint x)) (dec i)))))
               (= x 1) (fit k 1)
               (= x -1) (fit k (if (even? n) 1 -1))
               (zero? x) (undefined :zero-to-negative-power)
@@ -307,13 +309,19 @@
 (defn- kind-arg [more dflt] (if (seq more) (first more) dflt))
 
 (defn- finite! [x] (when (or (not= x x) (= x ##Inf) (= x ##-Inf)) (undefined :non-finite)) x)
+(defn- in-int8!
+  "A whole real as an integer(8), or undefined: from 2**63 up, or below -2**63, it has none (the host's
+  long saturates to 9223372036854775807)."
+  [x]
+  (when (or (clojure.core/>= x 9.223372036854775808E18) (clojure.core/< x -9.223372036854775808E18)) (undefined :integer-overflow))
+  (long x))
 
 (defn int
   "Fortran's INT(x [, kind]): an integer kept, a real truncated toward zero."
   [x & more]
   (no-complex "int" x)
   (let [k (kind-arg more default-integer)]
-    (if (int-kind? (kind-of x)) (fit k (long x)) (fit k (long (finite! (double x)))))))
+    (if (int-kind? (kind-of x)) (fit k (long x)) (let [d (finite! (double x))] (fit k (in-int8! (if (neg? d) (clotran.host.math/ceil d) (clotran.host.math/floor d))))))))
 
 (defn- round-away
   "The real x rounded to the nearest whole number, halves away from zero,
@@ -327,15 +335,15 @@
 (defn nint [x & more]
   (no-complex "nint" x)
   (let [k (kind-arg more default-integer)]
-    (fit k (long (round-away (finite! (double x)))))))
+    (fit k (in-int8! (round-away (finite! (double x)))))))
 (defn floor [x & more]
   (no-complex "floor" x)
   (let [k (kind-arg more default-integer)]
-    (fit k (long (clotran.host.math/floor (finite! (double x)))))))
+    (fit k (in-int8! (clotran.host.math/floor (finite! (double x)))))))
 (defn ceiling [x & more]
   (no-complex "ceiling" x)
   (let [k (kind-arg more default-integer)]
-    (fit k (long (clotran.host.math/ceil (finite! (double x)))))))
+    (fit k (in-int8! (clotran.host.math/ceil (finite! (double x)))))))
 
 (defn real
   "Fortran's REAL(x [, kind]): a real of the default kind (real(4)); of a COMPLEX, its real part, of
@@ -415,14 +423,18 @@
   (let [k (kind-of a)]
     (if (int-kind? k)
       (let [m (let [v (bigint (long a))] (if (neg? v) (-' v) v))] (fit k (if (neg? (long b)) (-' m) m)))
-      (let [m (clotran.host.math/abs (double a))] (rnd k (if (neg? (double b)) (clojure.core/- m) m))))))
+      ;; the sign of b, a -0.0 included (the processor distinguishes negative zero: SIGN(1.0, -0.0) is -1.0)
+      (rnd k (clotran.host.math/copySign (clotran.host.math/abs (double a)) (double b))))))
 
 (defn- extreme [f who vs]
   (apply need-same who vs)
   (let [k (kind-of (first vs))]
     (if (int-kind? k)
       (fit k (apply f (map #(long %) vs)))
-      (rnd k (apply f (map #(double %) vs))))))
+      ;; MAX and MIN of a NaN are the processor's (gfortran answers the other argument): refused
+      (let [ds (map #(double %) vs)]
+        (when (some #(not= % %) ds) (undefined :nan-argument))
+        (rnd k (apply f ds))))))
 (defn max [& vs] (extreme clojure.core/max 'max vs))
 (defn min [& vs] (extreme clojure.core/min 'min vs))
 

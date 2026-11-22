@@ -148,7 +148,9 @@
   (cond
     (and (int-kind? k1) (int-kind? k2))
     (let [k (promote k1 k2)]
-      (cond (>= b 0) (fit k (loop [r 1N i b] (if (zero? i) r (recur (*' r (bigint a)) (dec i)))))
+      (cond (and (>= b 0) (#{0 1 -1} a)) (fit k (cond (zero? b) 1 (= a -1) (if (even? b) 1 -1) :else a))
+            ;; |a| >= 2: past 64 factors it has left every kind
+            (>= b 0) (fit k (loop [r 1N i b] (if (or (zero? i) (> (abs r) (pow2 64))) r (recur (*' r (bigint a)) (dec i)))))
             (= a 1) (fit k 1)
             (= a -1) (fit k (if (even? b) 1 -1))
             (zero? a) (undefined :zero-to-negative-power)
@@ -255,6 +257,12 @@
                           :else [k (- x)]))
                   (arith op (vs 0) (vs 1)))
       ** (power (vs 0) (vs 1))
+      ;; an array element of kind k assigned the value (the narrow kinds' aset): converted as an assignment
+      ;; converts, so an integer out of the element's range is undefined
+      store (let [[k v] vs]
+              (when-not (or (and (int-kind? k) (int-kind? (first v))) (and (real-kind? k) (real-kind? (first v))))
+                (ill-typed "store needs a value of the element's class"))
+              (conv k v))
       ;; checked before sqrt's real case below
       csqrt (celem 'sqrt (first vs))
       int (to-int clotran.host.rounding_mode/DOWN (kind-arg (rest vs) default-integer) (first vs))
@@ -295,7 +303,9 @@
                (if (int-kind? k)
                  (fit k (if (neg? y) (-' (clojure.core/abs (bigint x))) (clojure.core/abs (bigint x))))
                  [k (clotran.host.math/copySign (clotran.host.math/abs (double x)) (double y))])))
+      ;; MAX and MIN of a NaN: the standard leaves it to the processor (gfortran answers the other one)
       (max min) (do (apply need-same op vs)
+                    (when (some #(and (real-kind? (first %)) (clotran.host.real8/isNaN (second %))) vs) (undefined :nan-argument))
                     [(first (first vs)) (apply (if (= op 'max) max min) (map second vs))])
       huge (let [[k] (first vs)] (if (int-kind? k) [k (long (imax k))] [k (case k :real8 clotran.host.real8/MAX_VALUE :real4 (double clotran.host.real4/MAX_VALUE))]))
       tiny (let [[k] (first vs)] (when-not (real-kind? k) (ill-typed "tiny needs a real"))

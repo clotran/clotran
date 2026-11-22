@@ -54,9 +54,15 @@
       ;; through id, as a real constant is: a compiler folds sqrt((-4.0, 0.0)) at compile time otherwise
       ;; (flang's folding answers a real part of 1.5e-7 for 0), and the run-time intrinsic is what is measured
       (str "id((" (part x) ", " (part y) "))"))
-    (vector? e) (let [[k x] e]
+    ;; (store k e): an array element of kind k assigned e, read back (st_<k>, generic over the source kind)
+    (and (seq? e) (= 'store (first e))) (str "st_" (name (second e)) "(" (ftext (nth e 2)) ")")
+    (vector? e) (let [[k x] e
+                      kmin {:int1 -128 :int2 -32768 :int4 -2147483648 :int8 -9223372036854775808}]
                   (if (str/starts-with? (name k) "int")
-                    (str (if (neg? x) (str "(" x "_" (fk k) ")") (str x "_" (fk k))))
+                    ;; the minimum has no literal: 2147483648_int32 is out of range before the minus
+                    (cond (= x (kmin k)) (str "(-" (dec (-' x)) "_" (fk k) " - 1_" (fk k) ")")
+                          (neg? x) (str "(" x "_" (fk k) ")")
+                          :else (str x "_" (fk k)))
                     (let [t (str x)
                           t (if (re-find #"[.eE]" t) t (str t ".0"))]
                       (str "id(" (if (str/starts-with? t "-") (str "(" t "_" (fk k) ")") (str t "_" (fk k))) ")"))))
@@ -88,7 +94,14 @@
        "    module procedure tk_i1, tk_i2, tk_i4, tk_i8, tk_r4, tk_r8, tk_c4, tk_c8\n  end interface\n"
        ;; id passes a real through a procedure: a compiler cannot fold 1.0e200*1.0e200 into
        ;; "Arithmetic overflow" at compile time, so the overflow happens at run time, as IEEE has it
+       (str/join (for [[t cls] [["int1" :i] ["int2" :i] ["int4" :i] ["int8" :i] ["real4" :r] ["real8" :r]]]
+                   (str "  interface st_" t "\n    module procedure "
+                        (str/join ", " (for [s (if (= cls :i) ["int1" "int2" "int4" "int8"] ["real4" "real8"])] (str "st_" t "_" s))) "\n  end interface\n")))
        "  interface id\n    module procedure id_r4, id_r8, id_c4, id_c8\n  end interface\ncontains\n"
+       (str/join (for [[t cls] [["int1" :i] ["int2" :i] ["int4" :i] ["int8" :i] ["real4" :r] ["real8" :r]]
+                       s (if (= cls :i) ["int1" "int2" "int4" "int8"] ["real4" "real8"])]
+                   (str "  function st_" t "_" s "(x) result(y)\n    " (decl (keyword s)) ", intent(in) :: x\n    "
+                        (decl (keyword t)) " :: a(1), y\n    a(1) = x\n    y = a(1)\n  end function st_" t "_" s "\n")))
        "  function id_c4(x) result(y)\n    complex(real32), intent(in) :: x\n    complex(real32) :: y\n    y = x\n  end function id_c4\n"
        "  function id_c8(x) result(y)\n    complex(real64), intent(in) :: x\n    complex(real64) :: y\n    y = x\n  end function id_c8\n"
        "  function id_r4(x) result(y)\n    real(real32), intent(in) :: x\n    real(real32) :: y\n    y = x\n  end function id_r4\n"
@@ -173,8 +186,12 @@
 
 ;; 4. clotran: the same cases through fortran.ops (src/clj/fortran/ops.cljf). A case
 ;; must answer the oracle's value and kind, or, for {:undefined ..}, throw.
+(def arrays {:int1 'byte-array :int2 'short-array :int4 'int-array :int8 'long-array :real4 'float-array :real8 'double-array})
 (defn clotran-form [e]
-  (cond (vector? e) (list 'f/lit (first e) (second e))
+  (cond (and (seq? e) (= 'store (first e)))
+        ;; an array of the kind, aset with the value made that kind (as an assignment converts), aget back
+        (let [[_ k v] e] (list 'let ['a (list (arrays k) 1)] (list 'aset 'a 0 (list (symbol "f" (name k)) (clotran-form v))) '(aget a 0)))
+        (vector? e) (list 'f/lit (first e) (second e))
         (keyword? e) e
         (map? e) (clotran-form (or (:undefined e) (:processor e) (:interpreted e) (:expr e)))
         :else (cons (symbol "f" (name (first e))) (map clotran-form (rest e)))))
@@ -257,7 +274,9 @@
 ;; must answer the oracle's value; a case the standard leaves undefined must fail, or not lower
 ;; (then fortran.ops throws it, leg 4); a case that answers and does not lower is a failure.
 (defn pure-form [e]
-  (cond (vector? e) (let [[k x] e]
+  (cond (and (seq? e) (= 'store (first e)))
+        (let [[_ k v] e] (list 'let ['a (list (arrays k) 1)] (list 'aset 'a 0 (list (symbol "f" (name k)) (pure-form v))) '(aget a 0)))
+        (vector? e) (let [[k x] e]
                       (case k
                         :real4 (list 'f/real4 x) :real8 (list 'f/real8 x)
                         (:complex4 :complex8) (list* (symbol "f" (name k)) x)
