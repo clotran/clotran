@@ -7717,6 +7717,19 @@ contains
     integer(gc_ip) :: ia, ib, ir
     integer :: n
     type(gc_value) :: a0, a1
+    ! libm's own: log(1+x) and exp(x)-1 are 22 ulps off near zero, and no series patch is right to the last place
+    interface
+       function c_expm1(x) bind(C, name="expm1") result(r)
+         import :: c_double
+         real(c_double), value :: x
+         real(c_double) :: r
+       end function c_expm1
+       function c_log1p(x) bind(C, name="log1p") result(r)
+         import :: c_double
+         real(c_double), value :: x
+         real(c_double) :: r
+       end function c_log1p
+    end interface
 
     out = gc_nil()
     n = gcv_count(args)
@@ -7832,19 +7845,11 @@ contains
     case (19); out = gc_real(cosh(x))
     case (20); out = gc_real(tanh(x))
     case (21)
-       ! exp(x)-1 loses every significant digit near zero, so the
-       ! series takes over where it would.
-       if (abs(x) < 1.0e-5_gc_dp) then
-          out = gc_real(x * (1.0_gc_dp + x * (0.5_gc_dp + x / 6.0_gc_dp)))
-       else
-          out = gc_real(exp(x) - 1.0_gc_dp)
-       end if
+       ! Math.expm1: libm's (exp(x)-1 loses every digit near zero)
+       out = gc_real(c_expm1(x))
     case (22)
-       if (abs(x) < 1.0e-5_gc_dp) then
-          out = gc_real(x * (1.0_gc_dp - x * (0.5_gc_dp - x / 3.0_gc_dp)))
-       else
-          out = gc_real(log(1.0_gc_dp + x))
-       end if
+       ! Math.log1p: libm's
+       out = gc_real(c_log1p(x))
     case (23)
        ! Math.ulp: infinity's is infinity, zero's the least denormal
        if (abs(x) > huge(x)) then

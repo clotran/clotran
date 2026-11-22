@@ -1110,6 +1110,10 @@
 ;; the non-finite constants
 [(pr-str clotran.host.real8/POSITIVE_INFINITY) (pr-str clotran.host.real8/NEGATIVE_INFINITY) (pr-str ##NaN)]
 ;; Float's own constants are Floats (they answered Doubles), and its range members exist
+;; log1p and expm1 are libm's: near zero the naive forms are many ulps off
+[(clotran.host.math/log1p 0.0229) (clotran.host.math/log1p -0.3) (clotran.host.math/log1p 1.0e-8) (clotran.host.math/log1p 12345.678)
+ (clotran.host.math/expm1 0.0229) (clotran.host.math/expm1 -0.3) (clotran.host.math/expm1 1.0e-8) (clotran.host.math/expm1 20.0)
+ (clotran.host.math/log1p 0.0) (clotran.host.math/expm1 0.0) (clotran.host.math/log1p -1.0)]
 [(class clotran.host.real4/POSITIVE_INFINITY) (class clotran.host.real4/NEGATIVE_INFINITY) (class clotran.host.real4/NaN)
  (pr-str clotran.host.real4/MAX_VALUE) (pr-str clotran.host.real4/MIN_VALUE)
  clotran.host.real4/MAX_EXPONENT clotran.host.real4/MIN_EXPONENT
