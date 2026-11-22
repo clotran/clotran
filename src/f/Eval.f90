@@ -12843,6 +12843,15 @@ contains
                call vs_leave(vst, base)
                return
             end if
+            ! an int[] takes an int: clj's RT.intCast of a long past one is "integer overflow"; storing it
+            ! wrapped (Fortran's int(v, 4) of a value out of range is the processor's) answered a wrong number silently
+            if (kn == "int4" .and. val%tag == GCT_INT) then
+               if (val%ival < -2147483648_gc_ip .or. val%ival > 2147483647_gc_ip) then
+                  call raise_class("clotran.host.arithmetic_exception", "integer overflow", [vs_get(vst, base + 1)])
+                  call vs_leave(vst, base)
+                  return
+               end if
+            end if
             call array_write(h, at, kn, val, ok)
             if (.not. ok) then
                call fail("aset: cannot store that in a '" // kn // "' array")

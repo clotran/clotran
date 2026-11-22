@@ -1114,6 +1114,12 @@
 [(clotran.host.math/log1p 0.0229) (clotran.host.math/log1p -0.3) (clotran.host.math/log1p 1.0e-8) (clotran.host.math/log1p 12345.678)
  (clotran.host.math/expm1 0.0229) (clotran.host.math/expm1 -0.3) (clotran.host.math/expm1 1.0e-8) (clotran.host.math/expm1 20.0)
  (clotran.host.math/log1p 0.0) (clotran.host.math/expm1 0.0) (clotran.host.math/log1p -1.0)]
+;; aset into an int[] of a long past an int: clj throws "integer overflow"; and the long array
+[(try (aset (int-array 1) 0 2147483648) (catch clotran.host.throwable e (ex-message e)))
+ (try (aset (int-array 1) 0 -2147483649) (catch clotran.host.throwable e (ex-message e)))
+ (let [a (int-array 1)] (aset a 0 2147483647) (aget a 0))
+ (let [a (int-array 1)] (aset a 0 -2147483648) (aget a 0))
+ (let [a (long-array 1)] (aset a 0 9223372036854775807) (aget a 0))]
 [(class clotran.host.real4/POSITIVE_INFINITY) (class clotran.host.real4/NEGATIVE_INFINITY) (class clotran.host.real4/NaN)
  (pr-str clotran.host.real4/MAX_VALUE) (pr-str clotran.host.real4/MIN_VALUE)
  clotran.host.real4/MAX_EXPONENT clotran.host.real4/MIN_EXPONENT
