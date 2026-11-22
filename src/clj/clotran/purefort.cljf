@@ -1051,7 +1051,8 @@ end module " mod "
       "dble" (if (kcplx? t0) (done (str "real(" e0 ", real64)") :double) (done (kto e0 t0 :double) :double))
 
       "abs"
-      (cond (kcplx? t0) (done (str "abs(" e0 ")") (:part (fkinds t0)))
+      (cond (= t0 :complex4) (done (str "real(abs(cmplx(" e0 ", kind=real64)), real32)") :real4)
+            (kcplx? t0) (done (str "abs(" e0 ")") (:part (fkinds t0)))
             (= t0 :long) (let [a (fresh! st "x" :long)]
                            (done (str "merge(cl_neg(" a "), " a ", " a " < 0_int64)") :long [(str a " = " e0)]))
             (kint? t0) (done (kfit (str "abs(" (i64 e0 t0) ")") t0) t0)
@@ -1078,7 +1079,7 @@ end module " mod "
 
       "sqrt"
       (if (kcplx? t0)
-        (done (str "sqrt(" e0 ")") t0)
+        (done (if (= t0 :complex4) (str "cmplx(sqrt(cmplx(" e0 ", kind=real64)), kind=real32)") (str "sqrt(" e0 ")")) t0)
       (do (when-not (kreal? t0) (decline "sqrt of an integer"))
           (let [h (str "cl_fsqrt(" (kwiden e0 t0 :double) ")")]
             (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0))))
@@ -1086,12 +1087,20 @@ end module " mod "
       ;; the elementary functions: Fortran's own, in the argument's kind (the host's libm's: accurate to
       ;; the ulp bound scripts/ftypes-check measures; outside a domain the processor's, a NaN)
       ("exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh")
-      ;; of a complex, Fortran's own EXP LOG SIN COS (and SQRT, ABS above): measured part by part
+      ;; of a complex, Fortran's own EXP LOG SIN COS (and SQRT, ABS above): measured part by part. A real(4)
+      ;; or complex(4) is computed in real(8) and rounded once, as fortran.ops computes it, so the two agree
+      ;; bit for bit and the real(4) result is correctly rounded but for rare double roundings
+      ;; (scripts/ftypes-accuracy --scan-real4 counts them)
       (do (when-not (or (kreal? t0) (and (kcplx? t0) (#{"exp" "log" "sin" "cos"} nm)))
             (decline (str nm " of something that is not a real")))
-          (done (str nm "(" e0 ")") t0))
+          (done (case t0
+                  :real4 (str "real(" nm "(real(" e0 ", real64)), real32)")
+                  :complex4 (str "cmplx(" nm "(cmplx(" e0 ", kind=real64)), kind=real32)")
+                  (str nm "(" e0 ")")) t0))
       "atan2" (do (same!) (when-not (kreal? t0) (decline "atan2 of something that is not a real"))
-                  (done (str "atan2(" e0 ", " e1 ")") t0))
+                  (done (if (= t0 :real4)
+                          (str "real(atan2(real(" e0 ", real64), real(" e1 ", real64)), real32)")
+                          (str "atan2(" e0 ", " e1 ")")) t0))
 
       "huge" (done (str "huge(" (kzero t0) ")") t0)
       "tiny" (do (when-not (kreal? t0) (decline "tiny of an integer")) (done (str "tiny(" (kzero t0) ")") t0))

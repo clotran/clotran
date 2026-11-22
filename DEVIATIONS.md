@@ -2892,44 +2892,55 @@ accuracy: "a processor-dependent approximation". `fortran.ops` and the pure tier
 libm (`clotran.host.math`, Fortran's own intrinsics when compiled), in the argument's kind: real(4) by
 way of real(8), rounded once. What is claimed is measured, not assumed. `test/ftypes/refmath.clj` computes
 each to 80 digits by series and rounds it once to the kind, the correctly rounded value (checked: 1
-point in 20 recomputed at 110 digits, and folded by gfortran's MPFR, 0 differ). `scripts/ftypes-accuracy`
-sweeps 4000 arguments per function and real kind, 104,000 in all, structured and random (docs/types.md
+point in 20 recomputed at 110 digits, and folded by gfortran's MPFR, 0 differ; with `+ - * / sqrt`
+against their exact results). `scripts/ftypes-accuracy`
+sweeps 4000 arguments per function and real kind, structured and random (docs/types.md
 says which), through gfortran, flang, `fortran.ops` and both compiled builds. The maximum / 99.9th
 percentile error in ulps, on this machine's libm:
 
 | function | kind | points | gfortran | flang | fortran.ops | pure gfortran | pure flang |
 |---|---|---|---|---|---|---|---|
-| exp | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| exp | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | exp | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
-| log | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| log | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | log | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 | log10 | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 | log10 | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
-| sin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| sin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | sin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
-| cos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| cos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | cos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
-| tan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| tan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | tan | real8 | 4000 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
-| asin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| asin | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | asin | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
-| acos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| acos | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | acos | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
-| atan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| atan | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | atan | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
-| sinh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| sinh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | sinh | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
-| cosh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| cosh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | cosh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
-| tanh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| tanh | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | tanh | real8 | 4000 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 | 1 / 0 |
-| atan2 | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 1 / 1 | 1 / 1 |
+| atan2 | real4 | 4000 | 1 / 1 | 1 / 1 | 0 / 0 | 0 / 0 | 0 / 0 |
 | atan2 | real8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+| + | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| + | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| - | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| - | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| * | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| * | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| / | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| / | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sqrt | real4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sqrt | real8 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 
 In real(8) every leg is the same libm and agrees bit for bit; at most 1 ulp, TAN 2. In real(4)
-`fortran.ops` (real(8), rounded once) is correctly rounded on every point, and the compilers' real(4)
-intrinsics are 1 ulp off on 3,030 of 52,000. `scripts/ftypes-check` runs 416 of these points every time
-and fails past those maxima. They are measured bounds for this libm, not proved, and not for another
+`fortran.ops` and the compiled code (real(8), rounded once: DEVIATIONS 99) are correctly rounded on every
+swept point, and the compilers' own real(4) intrinsics are 1 ulp off on 3,030 of 52,000.
+`scripts/ftypes-check` runs 768 of these points every time and fails past those maxima. They are measured bounds for this libm, not proved, and not for another
 processor. Outside a function's domain (LOG of zero or less, ASIN or ACOS past 1,
 ATAN2(0, 0)) or for a NaN or an infinity, the result is the processor's: `fortran.ops` refuses it, compiled
 Fortran answers its processor's (the `{:processor ...}` cases). Complex arguments: DEVIATIONS 98.
@@ -3008,7 +3019,7 @@ zero") and refused, as a part that is not finite is; compiled code answers its p
   hypot; with the scalings a real(8) needs (|z| past 1e300 or below 1e-290, cosh b or e**a past the
   overflow threshold computed as two halves), and log1p of the exact |z|^2 - 1 near the unit circle.
 - **The pure tier** lowers them to Fortran's own intrinsics (`exp(z)`, ...), which are the processor's
-  libm.
+  libm; a complex(4) through the complex(8) one, rounded once (99).
 - **Not here**: TAN, ASIN, ACOS, ATAN, SINH, COSH and TANH of a complex (Fortran 2008) are ill-typed in the
   oracle and `fortran.ops` and not lowered; LOG10 and ATAN2 of a complex are not Fortran.
 
@@ -3021,9 +3032,9 @@ PART, on this machine:
 |---|---|---|---|---|---|---|---|
 | exp | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 | exp | complex8 | 4000 | 2 / 2 | 2 / 2 | 3 / 2 | 2 / 2 | 2 / 2 |
-| log | complex4 | 4000 | 1694574510 / 1684919996 | 1694574510 / 1684919996 | 0 / 0 | 1694574510 / 1684919996 | 1694574510 / 1684919996 |
+| log | complex4 | 4000 | 1694574510 / 1684919996 | 1694574510 / 1684919996 | 0 / 0 | 32 / 0 | 32 / 0 |
 | log | complex8 | 4000 | 8716560023488369748 / 8711941746245982286 | 8716560023488369748 / 8711941746245982286 | 3 / 2 | 8716560023488369748 / 8711941746245982286 | 8716560023488369748 / 8711941746245982286 |
-| sqrt | complex4 | 4000 | 436207616 / 430228120 | 436207616 / 430228120 | 0 / 0 | 436207616 / 430228120 | 436207616 / 430228120 |
+| sqrt | complex4 | 4000 | 436207616 / 430228120 | 436207616 / 430228120 | 0 / 0 | 0 / 0 | 0 / 0 |
 | sqrt | complex8 | 4000 | 6473974912013982395 / 6372751694632527319 | 6473974912013982395 / 6372751694632527319 | 1 / 1 | 6473974912013982395 / 6372751694632527319 | 6473974912013982395 / 6372751694632527319 |
 | sin | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
 | sin | complex8 | 4000 | 3 / 2 | 3 / 2 | 2 / 2 | 3 / 2 | 3 / 2 |
@@ -3048,10 +3059,38 @@ ABS, and are NOT for LOG and SQRT, measured in ulps of the part:
   `scripts/ftypes-check` now passes complex constants through `id`, as reals, so it measures the run time.
 
 So in the pure tier these functions are as good as the processor's, and `fortran.ops` and compiled code
-differ where it is not (2950 of 76000 real(8)-part points across the sweep, all of them complex).
+differ where it is not (2,751 of 96,000 real(8)-part points across the sweep, all of them complex(8);
+470 more differ only in the sign of a zero, which the standard leaves to the processor).
 `scripts/ftypes-check` holds 63 cases of them (each part within 1 ulp for complex(4), 3 for complex(8),
 the cut on both sides), and its quick sweep bounds `fortran.ops` at the maxima above; the compilers'
 complex figures are reported, not bounded.
 
 **Removal**: lower them in the pure tier through the same formulas as `fortran.ops` (helpers in the
 generated module), so the compiled code is clotran's, not the libm's; the Fortran 2008 complex functions.
+
+## 99. A real(4) function is computed in real(8) and rounded once, interpreted and compiled
+
+`fortran.ops` computes EXP, LOG, SIN ... ATAN2 of a real(4), and EXP LOG SQRT SIN COS ABS of a complex(4),
+in real(8) and rounds the result once to real(4); the pure tier now does the same
+(`real(sin(real(x, real64)), real32)`, `cmplx(exp(cmplx(z, kind=real64)), kind=real32)`) where it called
+Fortran's real(4) intrinsic. A Fortran program calls the real(4) intrinsic (`sinf`), so clotran's compiled
+real(4) value is not the processor's: it is more accurate, and it is `fortran.ops`'s, bit for bit
+(`scripts/ftypes-accuracy`: 0 of 76,000 real-part points differ in value; the gate fails if one does). The
+processor's real(4) intrinsics are 1 ulp off on 3,030 of the 52,000 real(4) points swept; clotran's are
+correctly rounded on all of them.
+
+Rounding twice is not always rounding once. For `+ - * /` and `sqrt` it is (53 >= 2 x 24 + 2; measured, 0 of
+the swept real(4) points differ, and the oracle's real(4) arithmetic relies on it). For the elementary
+functions it is not, and `--scan-real4` counts the cases over every real(4) argument of the twelve
+one-argument functions: 18 of 42.8 billion (log 5, cos 4, sin 2, acos 2, atan 2, sinh 2, log10 1; table in
+docs/types.md), each 1 ulp, on exactly which `fortran.ops` and the compiled code are not correctly rounded.
+Complex(4) from the complex(8) libm (the compiled code) is not `fortran.ops`'s on 2 of 8,000 complex(4)
+LOG points, where that libm is far off (98).
+
+Every real(4) result is checked against a real(4)-rounded reference: refmath rounds its 80 digits straight
+to real(4) (never through real(8)), the arithmetic is checked against its exact result, and the scan
+compares with the reference itself, not with a real(8).
+
+**Removal**: correctly rounded real(4) functions (a real(8) result within half a real(8) ulp of a real(4)
+midpoint recomputed, as CORE-MATH does) if the 18 matter; or the processor's real(4) intrinsics, if being
+the processor's matters more than agreeing with `fortran.ops`.

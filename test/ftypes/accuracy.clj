@@ -19,16 +19,28 @@
         (and (zero? y) (neg? x)) (if (neg? (clotran.host.math/copySign 1.0 y)) (.negate (rm/pi*)) (rm/pi*))
         :else (rm/atan2* (rm/bd y) (rm/bd x))))
 
-(defn reference [line]
+;; + - * / and SQRT, exactly (a quotient and a root to the working precision, which cannot sit on a
+;; midpoint of either kind unless they are exact)
+(def arith
+  {"add" (fn [x y] (.add (rm/bd x) (rm/bd y))) "sub" (fn [x y] (.subtract (rm/bd x) (rm/bd y)))
+   "mul" (fn [x y] (.multiply (rm/bd x) (rm/bd y))) "div" (fn [x y] (.divide (rm/bd x) (rm/bd y) rm/*mc*))
+   "sqrt" (fn [x] (.sqrt (rm/bd x) rm/*mc*))})
+
+(defn reference
+  "The bits of the value rounded to the kind; for a real(4) with one part, also \" | \" and the bits of
+  the value rounded to real(8), from which rounding again to real(4) is a double rounding."
+  [line]
   (let [[f k & bs] (str/split (str/trim line) #"\s+")
         k (keyword k)
         xs (map #(from-bits k (parse-long %)) bs)
-        v (cond (real1 f) [((real1 f) (rm/bd (first xs)))]
+        v (cond (arith f) [(apply (arith f) xs)]
+                (real1 f) [((real1 f) (rm/bd (first xs)))]
                 (= f "atan2") [(apply atan2-ref xs)]
                 :else (let [g (or (resolve (symbol "ftypes.refmath" (str f "*"))) (throw (ex-info (str "no reference for " f) {})))
                             r (apply @g xs)]
                         (if (vector? r) r [r])))]
-    (str/join " " (map #(to-bits k (rm/round-to k %)) v))))
+    (str (str/join " " (map #(to-bits k (rm/round-to k %)) v))
+         (when (and (= k :real4) (= 1 (count v))) (str " | " (to-bits :real8 (rm/round-to :real8 (first v))))))))
 
 (defn run
   "The reference of every line of in, to out; then every step-th line again at 110 digits, which must

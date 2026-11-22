@@ -9,6 +9,8 @@
 ;; last place of the kind (0 = correctly rounded); for a complex result, of each PART.
 ;;
 ;;   scripts/ftypes-accuracy [-n N] [-s SEED] [--table FILE]   N points per function and kind (4000)
+;;   scripts/ftypes-accuracy --scan-real4                      every real(4) argument of the 12 one-argument
+;;                                                             functions: the double roundings (below)
 ;;   scripts/ftypes-accuracy --quick                           the gate: 16 points each, fixed seed,
 ;;                                                             exit 1 past the bounds below
 (require '[clojure.string :as str] '[babashka.fs :as fs] '[babashka.process :refer [shell]])
@@ -21,20 +23,25 @@
               "-n" (recur (assoc m :n (parse-long (first r))) (rest r))
               "-s" (recur (assoc m :seed (parse-long (first r))) (rest r))
               "--table" (recur (assoc m :table (first r)) (rest r))
+              "--scan-real4" (recur (assoc m :scan true) r)
               (do (println "usage: scripts/ftypes-accuracy [--quick] [-n N] [-s SEED] [--table FILE]") (System/exit 2)))))
 (def work (fs/file repo "build" "ftypes-accuracy"))
 (fs/create-dirs work)
+(load-file (str (fs/file repo "upstream" "names.clj")))
 
 ;; ---- the functions: name, arity, what the Fortran and fortran.ops call is
+(def binop {"add" "+" "sub" "-" "mul" "*" "div" "/"})
 (def real-fns ["exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh" "atan2"])
 ;; of a complex, part kind k (complex(4) has real(4) parts); "cexp" is EXP of a complex, and so on
 (def complex-fns ["cexp" "clog" "csqrt" "csin" "ccos" "cabs"])
 (def complex-fn? (set complex-fns))
-(defn intrinsic [f] (get {"cexp" "exp" "clog" "log" "csqrt" "sqrt" "csin" "sin" "ccos" "cos" "cabs" "abs"} f f))
+(defn intrinsic [f] (get (merge binop {"cexp" "exp" "clog" "log" "csqrt" "sqrt" "csin" "sin" "ccos" "cos" "cabs" "abs"}) f f))
 (defn two-parts? "a complex result" [f] (and (complex-fn? f) (not= f "cabs")))
-(def fns (vec (concat real-fns complex-fns)))
+;; the arithmetic, against the exact result rounded once
+(def arith-fns ["add" "sub" "mul" "div" "sqrt"])
+(def fns (vec (concat real-fns complex-fns arith-fns)))
 (def fn-index (zipmap fns (range)))
-(defn arity [f] (if (or (= f "atan2") (complex-fn? f)) 2 1))
+(defn arity [f] (if (or (= f "atan2") (complex-fn? f) (binop f)) 2 1))
 
 ;; ---- points
 ;; splitmix64, seeded: the same points for the same seed on any host
@@ -67,6 +74,8 @@
            ("asin" "acos") (<= (Math/abs x) 1.0)
            "atan2" (not (and (zero? x) (zero? y)))
            "clog" (not (and (zero? x) (zero? y)))
+           "div" (not (zero? y))
+           "sqrt" (not (neg? x))
            true))))
 
 (defn structured [f k]
@@ -87,6 +96,11 @@
       "tanh" (concat (mapcat #(around k % 6) [0.0 (if (= k :real8) 19.06 9.01) (if (= k :real8) -19.06 -9.01) 0.5 -0.5]) (filter #(< (Math/abs %) 64) pow2))
       "atan2" (concat (for [y [0.0 -0.0 1.0 -1.0 mins (- mins)] x [-1.0 1.0 -2.0 mins (- mins) max (- max)]] [y x])
                       (for [x (filter #(< 1e-30 (Math/abs %) 1e30) pow2) y [1.0 -1.0]] [y x]))
+      ;; arithmetic: the extremes, cancellation, subnormal results
+      ("add" "sub" "mul" "div")
+      (concat (for [x [max (- max) minn mins 1.0 -1.0 0.5 3.0] y [max minn mins 1.0 -1.0 0.5 3.0 (- max)]] [x y])
+              (for [x (take 40 (filter #(< 1e-30 (Math/abs %) 1e30) pow2)) d [true false]] [x (step k x d)]))
+      "sqrt" (concat (mapcat #(around k % 4) [0.0 mins minn 1.0 2.0 4.0 max]) (filter pos? pow2))
       ;; complex: [re im]
       ("clog" "csqrt" "cabs")
       (concat (for [a [-4.0 -1.0 -0.5 (- mins) (- max)] b [0.0 -0.0 mins (- mins) 1e-30 -1e-30]] [a b])   ; the branch cut
@@ -116,6 +130,10 @@
                     #(vector (u -4 4) (u -4 4))
                     #(vector (* (sgn) (mag emin -30)) (- (mag -4 4)))
                     #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax))))
+      ("add" "sub" "mul" "div")
+      (pick #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax))) #(vector (u -4 4) (u -4 4))
+            #(let [x (* (sgn) (mag -30 30))] [x (* x (+ 1.0 (u -1e-6 1e-6)))]))
+      "sqrt" (pick #(mag emin emax) #(u 0 4))
       ("clog" "csqrt" "cabs")
       (pick #(vector (u -3 3) (u -3 3)) #(vector (* (sgn) (mag -60 60)) (* (sgn) (mag -60 60)))
             #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax)))
@@ -136,6 +154,71 @@
         r (filter ok (map norm (repeatedly #(random-point f k))))]
     (vec (take n (distinct (concat s r))))))
 
+;; ---- --scan-real4: fortran.ops (and the compiled code) computes a real(4) function in real(8) and rounds
+;; once more, which is wrong only where the real(8) value lies on, or one real(8) ulp from, a real(4)
+;; midpoint (its 29 low bits are 2^28 +- 1). A Fortran loop over all 2^32 real(4) values finds those
+;; arguments, using the same libm (fortran.ops's real(8) results equal it bit for bit, the sweep shows);
+;; refmath then decides each: is the real(4) value rounded once different from the correctly rounded
+;; real(8) rounded again (a true double rounding), and from what fortran.ops answers?
+(defn scan-real4 []
+  (let [one ["exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh"]
+        dir (fs/file work "scan") _ (fs/create-dirs dir)
+        src (str "program scan\n  use iso_fortran_env\n  implicit none\n  integer(int64) :: i, b8, low, n\n  integer(int32) :: b\n"
+                 "  real(real32) :: x\n  real(real64) :: d\n  integer :: fi\n  character(len=8) :: arg\n"
+                 "  call get_command_argument(1, arg)\n  read(arg, *) fi\n  n = 0\n"
+                 "  do i = -2147483648_int64, 2147483647_int64\n    b = int(i, int32)\n"
+                 "    if (iand(b, int(z'7F800000', int32)) == int(z'7F800000', int32)) cycle\n    x = transfer(b, x)\n"
+                 "    select case (fi)\n"
+                 (str/join (for [[j f] (map-indexed vector one)]
+                             (str "    case (" j ")\n"
+                                  (case f ("log" "log10") "      if (x <= 0) cycle\n" ("asin" "acos") "      if (abs(x) > 1) cycle\n" "")
+                                  "      d = " f "(real(x, real64))\n")))
+                 "    end select\n    n = n + 1\n"
+                 ;; a real(4) subnormal or overflowed result has its midpoints elsewhere: not scanned
+                 "    if (abs(d) < real(tiny(x), real64) .or. abs(d) > real(huge(x), real64)) cycle\n"
+                 "    b8 = transfer(d, b8)\n    low = iand(b8, 536870911_int64)\n"
+                 "    if (abs(low - 268435456_int64) <= 1) write(*,'(I0,1X,I0,1X,I0)') b, b8, low - 268435456_int64\n"
+                 "  end do\n  write(*,'(A,1X,I0)') 'scanned', n\nend program scan\n")
+        f90 (fs/file dir "scan.f90") exe (str (fs/file dir "scan"))]
+    (spit f90 src)
+    (let [c (shell {:out :string :err :string :continue true} "gfortran" "-O2" "-ffp-contract=off" "-o" exe (str f90))]
+      (when-not (zero? (:exit c)) (println "scan did not build:" (:err c)) (System/exit 1)))
+    (let [outs (vec (pmap (fn [j] (:out (shell {:out :string} exe (str j)))) (range (count one))))
+          cands (vec (for [[j out] (map-indexed vector outs) l (str/split-lines out) :when (not (str/starts-with? l "scanned"))
+                           :let [[b b8 off] (map parse-long (str/split l #" "))]]
+                       {:f (one j) :b b :d (Double/longBitsToDouble b8) :off off}))
+          scanned (mapv (fn [out] (parse-long (second (re-find #"scanned (\d+)" out)))) outs)
+          in (fs/file dir "ref-in.txt") outf (fs/file dir "ref-out.txt")
+          rmf (fs/file dir "refmath_clj.clj") acf (fs/file dir "accuracy_clj.clj")]
+      (spit in (str (str/join "\n" (for [{:keys [f b]} cands] (str f " real4 " b))) "\n"))
+      (spit rmf (names/to-upstream (slurp (fs/file repo "test" "ftypes" "refmath.clj"))))
+      (spit acf (names/to-upstream (slurp (fs/file repo "test" "ftypes" "accuracy.clj"))))
+      (let [r (shell {:out :string :err :string :continue true :dir (str repo)}
+                     "clj" "-Sdeps" "{:deps {org.clojure/clojure {:mvn/version \"1.12.6\"}}}" "-M" "-i" (str rmf) "-i" (str acf)
+                     "-e" (str "(ftypes.accuracy/run " (pr-str (str in)) " " (pr-str (str outf)) " 1) (shutdown-agents)"))]
+        (when-not (zero? (:exit r)) (println "the reference did not run:" (:err r)) (System/exit 1))
+        (let [rows (for [[c l] (map vector cands (str/split-lines (slurp outf)))
+                         :let [[m r8] (str/split l #"\|")
+                               r4 (Float/intBitsToFloat (int (parse-long (str/trim m))))
+                               r8 (Double/longBitsToDouble (parse-long (str/trim r8)))
+                               ops (unchecked-float (:d c))]]
+                     (assoc c :dr (not= (Float/floatToIntBits (unchecked-float r8)) (Float/floatToIntBits r4))
+                              :ops-wrong (not= (Float/floatToIntBits ops) (Float/floatToIntBits r4))
+                              :x (Float/intBitsToFloat (int (:b c))) :r4 r4))
+              by (group-by :f rows)]
+          (println (str "ftypes-accuracy --scan-real4: every real(4) argument; the reference rechecked at 110 digits on all candidates ("
+                        (second (re-find #"RECHECK \d+ (\d+)" (:out r))) " differ)"))
+          (println "| function | arguments | near a midpoint | double roundings | fortran.ops wrong |")
+          (println "|---|---|---|---|---|")
+          (doseq [[j f] (map-indexed vector one) :let [rs (by f)]]
+            (println (str "| " f " | " (scanned j) " | " (count rs) " | " (count (filter :dr rs)) " | " (count (filter :ops-wrong rs)) " |")))
+          (println (str "  total: " (reduce + scanned) " arguments, " (count rows) " near a midpoint, "
+                        (count (filter :dr rows)) " double roundings, fortran.ops not correctly rounded on " (count (filter :ops-wrong rows))))
+          (doseq [r (take 8 (filter :ops-wrong rows))]
+            (println (str "  e.g. " (:f r) "(" (:x r) "): correctly rounded " (:r4 r) ", fortran.ops " (unchecked-float (:d r)))))
+          (flush)
+          (System/exit 0))))))
+
 (def kinds [:real4 :real8])
 (def jobs (vec (for [f fns k kinds p (points f k (:n opts))] {:f f :k k :args p})))
 
@@ -145,7 +228,7 @@
 (defn text [k x] (if (= k :real4) (str (unchecked-float x)) (str x)))
 
 ;; ---- the reference (clj), cached by the inputs and the reference's source
-(load-file (str (fs/file repo "upstream" "names.clj")))
+(when (:scan opts) (scan-real4))
 (def ref-in (str/join "\n" (for [{:keys [f k args]} jobs] (str/join " " (concat [f (name k)] (map #(bits k %) args))))))
 (def src-key (str (hash [ref-in (slurp (fs/file repo "test" "ftypes" "refmath.clj")) (slurp (fs/file repo "test" "ftypes" "accuracy.clj"))])))
 (def ref-file (fs/file work (str "ref-" src-key ".txt")))
@@ -166,15 +249,21 @@
       (fs/move (fs/file work "ref-tmp.txt") ref-file {:replace-existing true}))))
 (defn parse-bits-line [k line] (mapv #(from-bits k (parse-long %)) (str/split (str/trim line) #"\s+")))
 (def recheck (str/split (slurp (fs/file work (str "ref-" src-key ".check"))) #" "))
-(def reference (mapv (fn [{:keys [k]} l] (parse-bits-line k l)) jobs (str/split-lines (slurp ref-file))))
+(def ref-lines (str/split-lines (slurp ref-file)))
+(def reference (mapv (fn [{:keys [k]} l] (parse-bits-line k (first (str/split l #"\|")))) jobs ref-lines))
+;; the real(4) value rounded to real(8) first, where it is one value
+(def ref8 (mapv (fn [l] (when-let [b (second (str/split l #"\|"))] (from-bits :real8 (parse-long (str/trim b))))) ref-lines))
 (assert (= (count reference) (count jobs)))
 
 ;; ---- Fortran drivers: the intrinsic (plain) or clotran's pure function (pure)
 (defn ffn [f] f)
 (defn driver [mode]
   (let [call (fn [f kk xs] ; kk 4 or 8; xs the argument variables
-               (if (= mode :plain)
+               (cond
+                 (and (= mode :plain) (binop f)) (str "(" (first xs) " " (binop f) " " (second xs) ")")
+                 (= mode :plain)
                  (str (intrinsic f) "(" (str/join ", " xs) ")")
+                 :else
                  (str f "_r" kk "(" (str/join ", " (map #(if (= kk 4) (str "real(" % ", real64)") %) xs)) ")")))
         rk (fn [kk] (if (= kk 4) "real32" "real64"))
         block (fn [kk]
@@ -220,7 +309,7 @@
                               "(defn " f "_im-r" kk " ^double [^double a ^double b] (f/dble (f/aimag " z ")))\n")
                          (str "(defn " f "_re-r" kk " ^double [^double a ^double b] (f/dble " z "))\n")))
                      (= 2 (arity f))
-                     (str "(defn " f "-r" kk " ^double [^double y ^double x] (f/dble (f/" f " (" mk " y) (" mk " x))))\n")
+                     (str "(defn " f "-r" kk " ^double [^double y ^double x] (f/dble (f/" (intrinsic f) " (" mk " y) (" mk " x))))\n")
                      :else
                      (str "(defn " f "-r" kk " ^double [^double x] (f/dble (f/" f " (" mk " x))))\n"))))))
 
@@ -313,9 +402,9 @@
   (let [sub? (fn [i] (let [k (:k (jobs i))] (some #(let [x (Math/abs (double %))] (and (pos? x) (< x (:minn (kp k))))) (concat (reference i) (:args (jobs i))))))
         idx (vec (remove sub? (range 0 (count jobs) 20)))
         lit (fn [k x] (str (if (= k :real4) (str (unchecked-float x)) (str x)) (if (= k :real4) "_real32" "_real64")))
-        expr (fn [{:keys [f k args]}] (if (complex-fn? f)
+        expr (fn [{:keys [f k args]}] (cond (binop f) (str "(" (lit k (first args)) " " (binop f) " " (lit k (second args)) ")") :else (if (complex-fn? f)
                                         (str (intrinsic f) "((" (str/join ", " (map #(lit k %) args)) "))")
-                                        (str f "(" (str/join ", " (map #(lit k %) args)) ")")))
+                                        (str f "(" (str/join ", " (map #(lit k %) args)) ")"))))
         ptype (fn [{:keys [f k]}] (str (if (two-parts? f) "complex(" "real(") (if (= k :real4) "real32" "real64") ")"))
         tb (fn [k e] (if (= k :real4) (str "transfer(" e ", 0_int32)") (str "transfer(" e ", 0_int64)")))
         src (str "program mp
@@ -358,14 +447,27 @@
 (doseq [d (take 5 (:diffs mpfr-check))] (println "  MPFR DIFF" (pr-str d)))
 (print table) (flush)
 (when (:table opts) (spit (:table opts) table))
+;; double rounding: the real(4) points where the value rounded to real(8) and then to real(4) is not the
+;; value rounded once (for + - * / and sqrt there are none: 53 >= 2 x 24 + 2)
+(let [is (filter #(ref8 %) (range (count jobs)))
+      dr (filter #(not= (bits :real4 (ref8 %)) (bits :real4 (first (reference %)))) is)]
+  (println (str "  real(4) through a correctly rounded real(8): " (count dr) " of " (count is) " points round differently"
+                (when (seq dr) (str ": " (str/join ", " (map #(pr-str [(:f (jobs %)) (:args (jobs %))]) (take 5 dr))))))))
 ;; where a leg's bits differ from fortran.ops's, by kind: the interpreter and the compiled code are one
 ;; implementation, and where they disagree it is said
 (def ops-res (some (fn [[l r]] (when (= l "fortran.ops") r)) legs))
 (doseq [[leg res] legs :when (and res ops-res (not= leg "fortran.ops"))]
-  (println (str "  " leg " differs from fortran.ops on "
-                (str/join ", " (for [k kinds :let [is (filter #(= k (:k (jobs %))) (range (count jobs)))]]
-                                 (str (count (filter #(not= (mapv (fn [x] (bits k x)) (res %)) (if (= :refused (ops-res %)) [] (mapv (fn [x] (bits k x)) (ops-res %)))) is))
-                                      " of " (count is) " " (name k) " points"))))))
+  (let [bits-differ? (fn [i] (let [k (:k (jobs i))] (not= (mapv #(bits k %) (res i)) (if (= :refused (ops-res i)) [] (mapv #(bits k %) (ops-res i))))))
+        ;; a value differs, not only a zero's sign (which the ulp measure does not see)
+        differ? (fn [i] (and (bits-differ? i) (or (= :refused (ops-res i)) (some pos? (map #(err (:k (jobs i)) %1 %2) (ops-res i) (res i))))))
+        signs (count (filter #(and (bits-differ? %) (not (differ? %))) (range (count jobs))))
+        label (fn [{:keys [f k]}] (str (intrinsic f) " " (if (complex-fn? f) ({:real4 "complex4" :real8 "complex8"} k) (name k))))
+        by-fn (frequencies (for [i (range (count jobs)) :when (differ? i)] (label (jobs i))))]
+    (println (str "  " leg " differs from fortran.ops on "
+                  (str/join ", " (for [k kinds :let [is (filter #(= k (:k (jobs %))) (range (count jobs)))]]
+                                   (str (count (filter differ? is)) " of " (count is) " " (name k) "-part points")))
+                  (when (seq by-fn) (str " (" (str/join ", " (for [[f c] (sort by-fn)] (str f " " c))) ")"))
+                  "; " signs " more only in the sign of a zero"))))
 ;; how many points are more than 4 ulps off, where some are
 (doseq [[[leg f k] s] (sort stats) :when (pos? (:over4 s))]
   (println (str "  " leg " " (intrinsic f) " " (if (complex-fn? f) ({:real4 "complex4" :real8 "complex8"} k) (name k)) ": " (:over4 s) " of " (:n s) " points more than 4 ulps off")))
@@ -387,8 +489,18 @@
 (defn bound [leg f k]
   (if (complex-fn? f)
     (when (= leg "fortran.ops") (get complex-bounds [f k] 1))
-    (get {["tan" :real8] 2} [f k] 1)))
+    ;; + - * / and SQRT are IEEE's, correctly rounded: 0
+    (if (some #{f} arith-fns) 0 (get {["tan" :real8] 2} [f k] 1))))
 (def over (for [[[leg f k] s] stats :let [b (bound leg f k)] :when (and b (> (:max s) b))] (str leg " " f " " (name k) ": " (fmt-e (:max s)) " ulps, bound " b)))
 (doseq [o over] (println (str "  OVER BOUND " o)))
+;; the compiled code is fortran.ops: on every real (not complex) point the two must agree in value (the
+;; complex ones call the processor's libm: DEVIATIONS 98)
+(def pure-mismatch
+  (for [[leg res] legs :when (and res ops-res (str/starts-with? leg "pure"))
+        i (range (count jobs)) :let [j (jobs i)]
+        :when (and (not (complex-fn? (:f j)))
+                   (or (= :refused (ops-res i)) (some pos? (map #(err (:k j) %1 %2) (ops-res i) (res i)))))]
+    (str leg " " (:f j) " " (name (:k j)) " " (pr-str (:args j)))))
+(doseq [m (take 5 pure-mismatch)] (println (str "  COMPILED IS NOT fortran.ops: " m)))
 (def failed-legs (remove second legs))
-(System/exit (if (or (seq failed-legs) (:failed mpfr-check) (seq (:diffs mpfr-check)) (and (:quick opts) (seq over))) 1 0))
+(System/exit (if (or (seq failed-legs) (:failed mpfr-check) (seq (:diffs mpfr-check)) (and (:quick opts) (or (seq over) (seq pure-mismatch)))) 1 0))
