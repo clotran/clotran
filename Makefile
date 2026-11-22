@@ -714,6 +714,7 @@ check-lms:
 	  CLOTRAN_PATH=test/lms/proj ./clotran-bin src/clj/clojure/core.clj test/clj/lms_noreader_test.clj </dev/null >> $(B)/lms_test.out 2>&1 || s=1; \
 	  CLOTRAN_PATH=test/lms:test/lms/proj ./clotran-bin src/clj/clojure/core.clj test/clj/lms_trace_test.clj </dev/null > $(B)/lms_trace.out 2>&1; \
 	  grep -qF "at mix.solver/boom (test/lms/proj/mix/solver.lms:13:3)" $(B)/lms_trace.out && echo "ok   - an uncaught error's frame names the .lms line and column" || { echo "FAIL - the trace:"; cat $(B)/lms_trace.out; s=1; }; \
+	  CLOTRAN_PATH=test/lms:test/lms/proj ./clotran-bin src/clj/clojure/core.clj test/lms/proj/mix/solver.lms </dev/null > $(B)/lms_cli.out 2>&1 && ! grep -q -i 'error\|cannot\|could not' $(B)/lms_cli.out && echo "ok   - clotran file.lms loads it through the hook, as load-file does" || { echo "FAIL - clotran file.lms:"; cat $(B)/lms_cli.out; s=1; }; \
 	  grep -v '^note: \|^ok   -' $(B)/lms_test.out; exit $$s
 check-language:
 	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"

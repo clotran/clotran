@@ -336,8 +336,23 @@ contains
   subroutine load_file(path, env)
     character(len=*), intent(in) :: path
     type(gc_value), intent(in) :: env
-    character(len=:), allocatable :: text
-    integer :: u, st, fsize
+    character(len=:), allocatable :: text, q
+    integer :: u, st, fsize, i, np
+
+    ! A Lemmis file is read by Lemmis's reader, not LispReader: load-file goes through the hook
+    ! (clotran.lms, DEVIATIONS 96), so `clotran file.lms` runs as `(load-file "file.lms")`
+    np = len_trim(path)
+    if (np > 4) then
+       if (path(np-3:np) == ".lms") then
+          q = ""
+          do i = 1, np
+             if (path(i:i) == '"' .or. path(i:i) == achar(92)) q = q // achar(92)
+             q = q // path(i:i)
+          end do
+          call load_text("(clojure.core/load-file """ // q // """)", path, env)
+          return
+       end if
+    end if
 
     ! Read in ONE allocation, via stream access, rather than
     ! appending line by line. Appending is O(n^2) -- each // builds a
