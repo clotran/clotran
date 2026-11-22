@@ -448,6 +448,7 @@ module Eval
   logical, save :: mf_loaded = .false.   ! clotran.multifn, once (mf_call)
   logical, save :: uuid_loaded = .false.   ! clotran.uuid, once (uuid_call)
   logical, save :: rdr_loaded = .false.   ! clotran.reader, once (reader_call)
+  logical, save :: lms_loaded = .false.   ! clotran.lms, once (load_text of a .lms file)
   ! STM: transactions are SERIALIZED under this one lock (DEVIATIONS 10)
   type(th_lock), save :: tx_lk
   logical, save :: tx_lk_made = .false.
@@ -15904,11 +15905,11 @@ contains
                ! for: sources, never a compiled class file (DEVIATIONS 67)
                if (index(rel, "_") > 0) then
                   call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // ".cljf, " // rel // &
-                       ".clj or " // rel // ".cljc on the load path. Please check that namespaces with dashes use " // &
+                       ".clj, " // rel // ".cljc or " // rel // ".lms on the load path. Please check that namespaces with dashes use " // &
                        "underscores in the Clojure file name.", [vs_get(vst, base + 1)])
                else
                   call fail_as("clotran.host.file_not_found_exception", "Could not locate " // rel // ".cljf, " // rel // &
-                       ".clj or " // rel // ".cljc on the load path.", [vs_get(vst, base + 1)])
+                       ".clj, " // rel // ".cljc or " // rel // ".lms on the load path.", [vs_get(vst, base + 1)])
                end if
                call vs_leave(vst, base)
                return
@@ -19575,13 +19576,14 @@ contains
     character(len=*), intent(in) :: text, path
     type(gc_value), intent(out) :: out
     type(gc_value) :: forms, genv, f
-    integer :: base, j, fid, saved_top
-    logical :: eof
+    integer :: base, j, fid, saved_top, k
+    integer, allocatable :: starts(:)
+    logical :: eof, lms
     character(len=:), allocatable :: dlt_1
     tctx => ctx_self()
     vst => gc_my_stack()
     out = gc_nil()
-    base = vs_enter(vst, 4)
+    base = vs_enter(vst, 5)
     call vs_set(vst, base + 1, gcn_current([gc_value ::]))
     if (gc_root_live(global_env_root)) then
        genv = gc_root_get(global_env_root)
@@ -19595,8 +19597,48 @@ contains
     call gce_push_load_frame()
     fid = gcr_begin_file(text, path)
     saved_top = tctx%top_pos
+    lms = .false.
+    if (len(path) > 4) lms = path(len(path) - 3:) == ".lms"
+    if (lms) then
+       ! A Lemmis file: its forms are Lemmis's reader's (clotran.lms/read-forms,
+       ! which loads lemmis.reader on first use and checks the ns), each one
+       ! then analysed and evaluated as below. Their {:line :column} metadata
+       ! becomes the packed position a list LispReader read would carry, in
+       ! this file's line table, so a Var, a frame and an error name the .lms
+       ! line (DEVIATIONS 97).
+       f = gcv_empty([vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 5, f)
+       call vs_set(vst, base + 3, gc_str(text, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 5)]))
+       f = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 5, f)
+       call vs_set(vst, base + 3, gc_str(path, [vs_get(vst, base + 1), vs_get(vst, base + 2), vs_get(vst, base + 5)]))
+       f = gcv_conj(vs_get(vst, base + 5), vs_get(vst, base + 3), [vs_get(vst, base + 1), vs_get(vst, base + 2)])
+       call vs_set(vst, base + 5, f)
+       forms = rt_call_in("clotran/lms", "clotran.lms", lms_loaded, "read-forms", vs_get(vst, base + 5))
+       call vs_set(vst, base + 5, forms)
+       if (.not. tctx%has_error) then
+          allocate(starts(count([(text(k:k) == achar(10), k = 1, len(text))]) + 1))
+          starts(1) = 1
+          j = 1
+          do k = 1, len(text)
+             if (text(k:k) == achar(10)) then
+                j = j + 1
+                starts(j) = k + 1
+             end if
+          end do
+          do k = 0, gcv_count(vs_get(vst, base + 5)) - 1
+             call vs_set(vst, base + 3, gcv_nth(vs_get(vst, base + 5), k))
+             call lms_place(vs_get(vst, base + 3), fid, starts)
+             f = gce_analyze(vs_get(vst, base + 3), vs_get(vst, base + 2))
+             if (tctx%has_error) exit
+             out = gce_eval(f, vs_get(vst, base + 2), [vs_get(vst, base + 2), vs_get(vst, base + 3), vs_get(vst, base + 5)])
+             if (tctx%has_error) exit
+          end do
+       end if
+    end if
     j = 1
     do
+       if (lms) exit
        forms = gcr_read_next(text, j, [vs_get(vst, base + 1), vs_get(vst, base + 2)], eof, fid)
        if (gcr_has_error()) then
           call gcr_error(s=dlt_1)
@@ -19615,6 +19657,44 @@ contains
     tctx%top_pos = saved_top
     call vs_leave(vst, base)
   end subroutine load_text
+
+  ! A form a Lemmis reader made, its lists given the packed positions
+  ! (file id fid, offset from the line starts) their {:line :column}
+  ! metadata says -- what the analyser copies onto a node, as from a list
+  ! LispReader read. Lists and vectors are walked; a map's or a set's
+  ! elements are not (ponytail: a call inside a map literal names no .lms
+  ! line; walk them too if that is missed).
+  recursive subroutine lms_place(v0, fid, starts)
+    type(gc_value), intent(in) :: v0
+    integer, intent(in) :: fid, starts(:)
+    type(gc_value) :: v, m, l, c
+    integer :: k, off
+    v = strip_meta(v0)
+    if (gc_kind(v0) == OBJ_META .and. gc_kind(v) == OBJ_CONS .and. fid > 0) then
+       m = gc_slot(v0, 2)
+       if (gca_is(m)) then
+          l = gca_get(m, gc_key("line", [v0]))
+          c = gca_get(m, gc_key("column", [v0]))
+          if (l%tag == GCT_INT .and. c%tag == GCT_INT .and. gc_i1(v) > 0) then
+             if (l%ival >= 1 .and. l%ival <= size(starts) .and. c%ival >= 1) then
+                off = starts(int(l%ival)) + int(c%ival) - 1
+                if (off < POS_SHIFT) call gc_set_i2(v, fid * POS_SHIFT + off)
+             end if
+          end if
+       end if
+    end if
+    if (gc_kind(v) == OBJ_CONS) then
+       do while (gc_kind(v) == OBJ_CONS)
+          if (gc_i1(v) == 0) exit
+          call lms_place(gc_slot(v, 1), fid, starts)
+          v = gc_slot(v, 2)
+       end do
+    else if (gcv_is(v)) then
+       do k = 0, gcv_count(v) - 1
+          call lms_place(gcv_nth(v, k), fid, starts)
+       end do
+    end if
+  end subroutine lms_place
 
   ! The first argument taken out of a builtin's argument vector, in
   ! place, so a walk over it holds no head: the vector is private to the
@@ -22794,7 +22874,8 @@ contains
   ! conditionals, .clj is clj's. A library that ships a .cljc
   ! beside a .clj wrote the .cljc for other hosts, so it wins here;
   ! RT.load prefers the .clj, which is right for the host the .clj was
-  ! written for. DEVIATIONS 33.
+  ! written for. DEVIATIONS 33. .lms, a Lemmis file, is the fourth and
+  ! last: a lib written both ways loads its Clojure (DEVIATIONS 96).
   ! raw: rel as a file name, no extension tried -- io/resource's lookup
   ! (clotran.files/resource), path "" when no root has it
   subroutine classpath_find(rel, path, raw)
@@ -22803,15 +22884,15 @@ contains
     logical, intent(in), optional :: raw
     character(len=:), allocatable :: cand
     character(len=1024) :: roots(5)
-    character(len=4), parameter :: exts(3) = [character(len=4) :: "cljf", "cljc", "clj"]
-    character(len=5) :: sfx(3)
+    character(len=4), parameter :: exts(4) = [character(len=4) :: "cljf", "cljc", "clj", "lms"]
+    character(len=5) :: sfx(4)
     logical :: there
     integer :: i, e, ne
 
     ! temporaries for the deferred-length calls below (share.clj)
     character(len=:), allocatable :: dlt_1
-    ne = 3
-    do e = 1, 3
+    ne = 4
+    do e = 1, 4
        sfx(e) = "." // exts(e)
     end do
     if (present(raw)) then

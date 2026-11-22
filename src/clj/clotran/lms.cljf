@@ -1,0 +1,51 @@
+(ns clotran.lms
+  "A Lemmis file (.lms) as a namespace source (DEVIATIONS 96, 97). load reads a
+  .lms path here, not with LispReader, and sends the forms down the path any
+  file's take: analysed, evaluated, their Vars interned in the file's
+  namespace. The index reads .lms files through the same function.
+
+  The reader is Lemmis's, lemmis.reader/read-forms, found on the load path
+  (CLOTRAN_PATH, a package) and loaded the first time a .lms file is read."
+  (:require [clojure.string :as str]))
+
+(def ^:private how-to-get
+  (str "add the Lemmis repo's src directory to CLOTRAN_PATH (CLOTRAN_PATH=/path/to/lemmis/src), "
+       "or list Lemmis in the project's deps.edn"))
+
+(defn- reader
+  "lemmis.reader/read-forms, its namespace loaded on first use."
+  [path]
+  (when-not (find-ns 'lemmis.reader)
+    (try (require 'lemmis.reader)
+         (catch clotran.host.throwable e
+           (if (str/includes? (str (.getMessage e)) "Could not locate lemmis/reader.cljf")
+             (throw (ex-info (str "Cannot load " path ": a .lms file is read by lemmis.reader, which is not on the load path; "
+                                  how-to-get)
+                             {:path path}))
+             (throw e)))))
+  (or (resolve 'lemmis.reader/read-forms)
+      (throw (ex-info (str "Cannot load " path ": lemmis.reader has no read-forms") {:path path}))))
+
+(defn- lib-file
+  "The file a lib's name says, as require finds it: a.b-c is a/b_c.lms."
+  [lib]
+  (str (-> (name lib) (str/replace "." "/") (str/replace "-" "_")) ".lms"))
+
+(defn read-forms
+  "The forms of the .lms file at path, text its contents: Lemmis's reader's,
+  the first of them (ns <lib> ...) with lib the one the file name says, as
+  clj refuses a file whose ns is not its lib's."
+  [text path]
+  (let [forms (vec ((reader path) text path))
+        f (first forms)
+        lib (when (and (seq? f) (= 'ns (first f)) (symbol? (second f))) (second f))]
+    (when-not lib
+      (throw (ex-info (str path ": a .lms file opens with its namespace, (ns <lib> ...); the first form is "
+                           (pr-str (if (seq? f) (take 2 f) f)))
+                      {:path path})))
+    (let [want (lib-file lib)]
+      (when-not (or (= path want) (str/ends-with? path (str "/" want)))
+        (throw (ex-info (str path ": its namespace is " lib ", whose file would be " want
+                             "; a .lms file's (ns ...) names the lib it is loaded as")
+                        {:path path :ns lib}))))
+    forms))

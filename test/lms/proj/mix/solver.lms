@@ -1,0 +1,13 @@
+! mix.solver: a Lemmis module as the stub reads it, using a .cljf one
+(ns mix.solver
+  (:require [mix.util :refer [twice adder]]))
+
+! closes over k
+(defn scale [k] (fn [x] (* k x)))
+
+(defn run [f x]
+  (twice f x))
+
+(def plus3 (adder 3))
+(defn boom [x]
+  (/ x 0))

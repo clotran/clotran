@@ -1,0 +1,5 @@
+(ns mix.util)
+
+(defn twice [f x] (f (f x)))
+
+(defn adder [n] (fn [x] (+ x n)))

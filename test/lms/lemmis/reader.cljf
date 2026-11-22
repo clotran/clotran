@@ -1,0 +1,27 @@
+(ns lemmis.reader
+  "A STUB of Lemmis's reader, for clotran's tests of the .lms hook only
+  (test/clj/lms_test.clj, scripts/fuzz-lms); the real one is Lemmis's own,
+  lemmis/src/lemmis/reader.cljf. It keeps the contract's shape:
+  (read-forms text path) is a vector of forms, the first (ns <lib> ...), every
+  list carrying {:line :column :file}.
+
+  Its .lms is Clojure's S-expressions with Fortran's comment line: a line whose
+  first non-blank character is ! is blank. The forms are read by clotran's
+  reader and every list is then built afresh with its position as metadata, so
+  a position clotran reports for a .lms line came through the hook, not from
+  the reader that loads .cljf files.")
+
+(defn- blank-comments [text]
+  (clojure.string/replace text #"(?m)^[ \t]*!.*$" (fn [m] (apply str (repeat (count m) \space)))))
+
+(defn- rebuild [f path]
+  (cond (seq? f) (let [m (meta f) l (apply list (map #(rebuild % path) f))]
+                   (if (:line m) (with-meta l {:line (:line m) :column (:column m) :file path}) l))
+        (vector? f) (mapv #(rebuild % path) f)
+        (map? f) (into {} (map (fn [[k v]] [(rebuild k path) (rebuild v path)])) f)
+        :else f))
+
+(defn read-forms
+  "The forms of the .lms text read from path."
+  [text path]
+  (mapv #(rebuild % path) (binding [*ns* (the-ns 'user)] (clotran-read-forms path true (blank-comments text)))))

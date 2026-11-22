@@ -577,9 +577,9 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #           only: a random case finds the same bug under either
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
-TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-lineedit check-language check-index check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
+TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-lineedit check-language check-index check-lms check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
 	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-ftypes check-compiler check-static check-costs check-seed check-fuzz-regressions
-TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index check-fuzz-recur check-fuzz-binds check-fuzz-forms
+TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index check-fuzz-lms check-fuzz-recur check-fuzz-binds check-fuzz-forms
 SCHED_SEEDS ?= 4
 TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-seqlock check-lazy check-sched check-replay check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
 ifeq ($(notdir $(FC)),gfortran)
@@ -707,6 +707,14 @@ check-lsp:
 check-index:
 	@echo "--- the index of definitions against the live Vars: core.clj, clotran's own namespaces, a Fortran package (PLAN 36) ---"
 	./clotran-bin src/clj/clojure/core.clj test/clj/index_check.clj </dev/null > $(B)/index_check.out 2>&1; s=$$?; grep -v '^note: ' $(B)/index_check.out; exit $$s
+check-lms:
+	@echo "--- a Lemmis file (.lms) as a namespace source, against test/lms's stub reader: require from .cljf and from .lms, resolution order, refusals, positions, reload, the index, no reader on the path (DEVIATIONS 96, 97) ---"
+	rm -rf $(B)/lms && mkdir -p $(B)/lms/rl && \
+	  CLOTRAN_PATH=test/lms:test/lms/proj:$(B)/lms ./clotran-bin src/clj/clojure/core.clj test/clj/lms_test.clj </dev/null > $(B)/lms_test.out 2>&1; s=$$?; \
+	  CLOTRAN_PATH=test/lms/proj ./clotran-bin src/clj/clojure/core.clj test/clj/lms_noreader_test.clj </dev/null >> $(B)/lms_test.out 2>&1 || s=1; \
+	  CLOTRAN_PATH=test/lms:test/lms/proj ./clotran-bin src/clj/clojure/core.clj test/clj/lms_trace_test.clj </dev/null > $(B)/lms_trace.out 2>&1; \
+	  grep -qF "at mix.solver/boom (test/lms/proj/mix/solver.lms:13:3)" $(B)/lms_trace.out && echo "ok   - an uncaught error's frame names the .lms line and column" || { echo "FAIL - the trace:"; cat $(B)/lms_trace.out; s=1; }; \
+	  grep -v '^note: \|^ok   -' $(B)/lms_test.out; exit $$s
 check-language:
 	@echo "--- language_test (with core.clj, loaded from source: the one run without the image) ---"
 	CLOTRAN_IMAGE=0 ./clotran-bin src/clj/clojure/core.clj test/clj/language_test.clj </dev/null > $(B)/language_test.out 2>&1; \
@@ -885,6 +893,9 @@ check-fuzz-profiles:
 check-fuzz-index:
 	@echo "--- the index of definitions (PLAN 36): generated files of def forms, read by clotran.index, against the loaded Vars and against clj ---"
 	scripts/fuzz-index -n 20 -s $(SEED) > $(B)/fuzz-index.out 2>&1; s=$$?; cat $(B)/fuzz-index.out; exit $$s
+check-fuzz-lms:
+	@echo "--- a namespace written both ways, .cljf and .lms (test/lms's stub reader), required across each other: the two agree, and agree with clj; .lms Vars at their lines (DEVIATIONS 96, 97) ---"
+	scripts/fuzz-lms -n 20 -s $(SEED) > $(B)/fuzz-lms.out 2>&1; s=$$?; cat $(B)/fuzz-lms.out; exit $$s
 check-fuzz-net:
 	@echo "--- sockets and the REPL over one (PLAN 29): random payloads echoed, generated forms through io-prepl against clj ---"
 	scripts/fuzz-net -n 20 -s $(SEED) > $(B)/fuzz-net.out 2>&1; s=$$?; cat $(B)/fuzz-net.out; exit $$s

@@ -2902,3 +2902,54 @@ Fortran answers its processor's (the `{:processor ...}` cases). Complex argument
 
 **Removal**: a stated bound per function from the libm's own documentation; correctly rounded versions
 (CORE-MATH, or the reference's series in Fortran) where 0 ulp is wanted.
+
+## 96. `.lms`, a Lemmis file, is a source extension, found after `.cljf`, `.cljc` and `.clj`
+
+clj knows no `.lms`. clotran's `classpath_find` (`src/f/Eval.f90`) tries it fourth, after the three of
+DEVIATIONS 33, in every root: the source roots, a loaded package's directory, each CLOTRAN_PATH entry. So
+`(require 'a.b)` finds `a/b.lms` when there is no `a/b.cljf`, `a/b.cljc` or `a/b.clj`, and a lib written
+both ways loads its Clojure, as a `.cljc` beside a `.clj` loads the `.cljc`. Root order is as before: within
+a package directory or a CLOTRAN_PATH entry every extension is tried before the next root, and in the source
+roots every root before the next extension. The "Could not locate" message for a missing lib names `.lms` too
+(the rest of it is DEVIATIONS 67's). Checked by `make check-lms` (`test/clj/lms_test.clj`: a.cljf beside a.lms,
+b.clj beside b.lms, c.lms alone) and `scripts/fuzz-lms`.
+
+**Removal**: none while Lemmis is a clotran language. If a `.lms` should win over its Clojure twin, it is
+the order of `exts` in `classpath_find`.
+
+## 97. A `.lms` file is read by `lemmis.reader`, loaded on first use, and its ns must be its lib's
+
+`load` (`load_text` in `src/f/Eval.f90`) reads a path ending `.lms` with Lemmis's reader instead of
+LispReader: `clotran.lms/read-forms` (`src/clj/clotran/lms.cljf`) requires `lemmis.reader` the first time,
+calls `(lemmis.reader/read-forms text path)`, and returns its vector of forms. Each form is then analysed and
+evaluated by the code a `.clj` file's forms go through, with the same `*ns*` saved and restored and the same
+bindings, so its Vars are interned in the file's namespace. The reader is Lemmis's (the Lemmis repo's
+`src/lemmis/reader.cljf`); clotran ships none, and its tests use a stub (`test/lms/lemmis/reader.cljf`).
+Where this differs from loading a `.clj`:
+
+- **The reader is found on the load path.** When `lemmis.reader` is not there, loading a `.lms` file fails
+  with "Cannot load <path>: a .lms file is read by lemmis.reader, which is not on the load path; add the
+  Lemmis repo's src directory to CLOTRAN_PATH ...". Any other error while loading the reader is passed on as it is.
+- **The file is read whole, then evaluated.** The reader returns every form before the first one runs, where
+  Compiler.load reads one form, evaluates it, then reads the next (DEVIATIONS 1, closed for clotran's reader).
+  A Lemmis file cannot change how its own later text is read.
+- **The first form must be `(ns <lib> ...)`, and <lib> must be the lib the file name says** (`a/b_c.lms`
+  opens with `(ns a.b-c ...)`), or nothing in the file is evaluated and the error names both. clj loads a
+  `.clj` whose ns is some other one, and `require` only refuses afterwards ("namespace 'a.b' not found after
+  loading '/a/b'") when no namespace a.b exists. A `(load-file ...)` of a `.lms` is held to the same rule.
+- **Positions come from metadata.** The reader's lists carry `{:line :column}`. Before a form is analysed,
+  each such list gets the packed source position a list LispReader reads would carry, in the `.lms` file's
+  line table. So `(meta #'v)`, a stack frame (`at a.b/f (a/b.lms:13:3)`) and the index name `.lms` lines.
+  Lists and vectors are walked; the elements of a map or a set literal are not, so a call written inside one
+  names no `.lms` line. An analysis error is reported at the requiring form, as it is for a `.clj` file.
+- **The command line does not go through it.** `clotran file.lms` (main.f90's own `load_file`) reads the file
+  with LispReader; `(load-file "file.lms")` and `require` go through the hook.
+
+`clotran.index` reads a `.lms` file through the same `clotran.lms/read-forms`, so the index, and the editor
+features built on it, see the forms load evaluates. Checked by `make check-lms` (both directions of
+require, closures and functions passed across, refusals, positions, reload, the index of a mixed project,
+no reader on the path) and `scripts/fuzz-lms` (`make check-fuzz-lms`: generated namespaces written both
+ways, against each other and against clj).
+
+**Removal**: main.f90's `load_file` routed through `load_text` for a `.lms` path; map and set elements
+walked; a reader that hands forms over one at a time, if Lemmis ever needs reading to depend on evaluation.
