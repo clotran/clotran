@@ -217,14 +217,29 @@
     (when (and (zero? x) (zero? y)) (undefined :domain))
     [k (rm/round-to k (rm/atan2* (rm/bd y) (rm/bd x)))]))
 
-(def ^:private complex-ok '#{+ - * / ** abs real dble cmplx conjg aimag kind})
+(defn- celem
+  "EXP, LOG, SQRT, SIN, COS of a complex: each part to 80 digits (refmath's cexp* ...), rounded once to
+  the part kind, so an implementation is checked within an ulp bound of each part. LOG of zero is
+  undefined (the standard: X shall not be zero); a part not finite, the processor's."
+  [op [k [a b]]]
+  (finite! a) (finite! b)
+  (when (and (= op 'log) (zero? a) (zero? b)) (undefined :domain))
+  (let [pk (:part (kinds k))
+        f ({'exp rm/cexp* 'log rm/clog* 'sqrt rm/csqrt* 'sin rm/csin* 'cos rm/ccos*} op)]
+    [k (mapv #(rm/round-to pk %) (f a b))]))
+
+;; TAN ASIN ACOS ATAN SINH COSH TANH of a complex are Fortran 2008's, not here yet (ill-typed); LOG10 and
+;; ATAN2 of a complex are not Fortran
+(def ^:private complex-ok '#{+ - * / ** abs real dble cmplx conjg aimag kind exp log sqrt csqrt sin cos})
 
 (defn- call [op args]
-  (let [vs (mapv #(if (keyword? %) % (ev %)) args)]
+  (let [vs (mapv #(if (keyword? %) % (ev %)) args)
+        op (if (and (= op 'sqrt) (vector? (first vs)) (complex-kind? (first (first vs)))) 'csqrt op)]
     (when (and (some #(and (vector? %) (complex-kind? (first %))) vs) (not (complex-ok op)))
       (ill-typed (str op " of a complex")))
     (case op
-      (exp log log10 sin cos tan asin acos atan sinh cosh tanh) (elem op vs)
+      (exp log sin cos) (if (complex-kind? (first (first vs))) (celem op (first vs)) (elem op vs))
+      (log10 tan asin acos atan sinh cosh tanh) (elem op vs)
       atan2 (elem2 vs)
       cmplx (let [k (kind-arg (drop 2 vs) :complex4) pk (:part (kinds k)) [x y] vs]
               (when-not (complex-kind? k) (ill-typed "cmplx's kind is a complex kind"))
@@ -240,6 +255,8 @@
                           :else [k (- x)]))
                   (arith op (vs 0) (vs 1)))
       ** (power (vs 0) (vs 1))
+      ;; checked before sqrt's real case below
+      csqrt (celem 'sqrt (first vs))
       int (to-int clotran.host.rounding_mode/DOWN (kind-arg (rest vs) default-integer) (first vs))
       nint (to-int clotran.host.rounding_mode/HALF_UP (kind-arg (rest vs) default-integer) (first vs))
       floor (to-int clotran.host.rounding_mode/FLOOR (kind-arg (rest vs) default-integer) (first vs))
@@ -253,13 +270,10 @@
              (if (complex-kind? k) (conv :real8 [(:part (kinds k)) (first x)]) (conv :real8 (first vs))))
       abs (let [[k x] (first vs)]
             (if (complex-kind? k)
-              (let [pk (:part (kinds k)) [a b] x
-                    s (.add (.multiply (exact-part a) (exact-part a)) (.multiply (exact-part b) (exact-part b)))
-                    r (clotran.host.decimal. (clotran.host.math/sqrt (double s)))]
-                ;; a processor's hypot is exact only where the answer is a whole number of the part kind
-                (if (and (= s (.multiply r r)) (= r (exact-part (second (rnd pk r)))))
-                  [pk (double r)]
-                  (undefined :inexact-complex-abs)))
+              ;; sqrt(a**2 + b**2) to 80 digits, rounded once to the part kind: checked within an ulp bound
+              (let [pk (:part (kinds k)) [a b] x]
+                (finite! a) (finite! b)
+                [pk (rm/round-to pk (rm/cabs* a b))])
             (if (int-kind? k) (fit k (clojure.core/abs (bigint x))) [k (clotran.host.math/abs (double x))])))
       sqrt (let [[k x] (first vs)]
              (when-not (real-kind? k) (ill-typed "sqrt needs a real"))

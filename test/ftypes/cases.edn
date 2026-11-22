@@ -195,7 +195,7 @@
  (real [:complex4 ["1.5" "2.5"]])
  (real [:complex8 ["1.5" "2.5"]] :real4)
  (dble [:complex4 ["0.1" "2.5"]])
- ;; defined (hypot exact), answered by fortran.ops; the pure tier declines ABS of a complex
+ ;; ABS of a complex: sqrt(a**2 + b**2) to 80 digits, rounded once; within an ulp (scripts/ftypes-accuracy)
  {:interpreted (abs [:complex8 ["3" "4"]])}
  {:interpreted (abs [:complex4 ["5" "12"]])}
  (kind [:complex4 ["1" "1"]])
@@ -207,7 +207,7 @@
  (- [:complex4 ["0.1" "0.2"]] [:real8 "0.1"])
  {:undefined (/ [:complex8 ["1" "2"]] [:complex8 ["3" "4"]])}
  {:processor (* [:complex8 ["0.1" "0.2"]] [:complex8 ["0.3" "0.4"]])}
- {:undefined (abs [:complex8 ["1" "1"]])}
+ {:ulp 1 :expr (abs [:complex8 ["1" "1"]])}
 
  ;; elementary functions: the standard gives them no accuracy, so each is checked within 1 ulp of the
  ;; correctly rounded value the oracle computes to 80 digits (test/ftypes/refmath.clj)
@@ -381,4 +381,71 @@
  {:processor (asin [:real8 "1.5"])}
  {:processor (acos [:real8 "-2.0"])}
  {:processor (atan2 [:real8 "0.0"] [:real8 "0.0"])}
+ ;; EXP LOG SQRT SIN COS of a complex: each part within its ulp bound of the 80-digit reference
+ ;; (complex8 3: scripts/ftypes-accuracy's worst over 4000 points for fortran.ops). LOG and SQRT on the
+ ;; negative real axis: the sign of a zero imaginary part picks the side of the cut
+ {:ulp 1 :expr (exp [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (exp [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (exp [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (exp [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (log [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (log [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (sin [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (sin [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (sin [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (sin [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (cos [:complex4 ["0.5" "1.25"]])}
+ {:ulp 1 :expr (cos [:complex4 ["-2.0" "0.75"]])}
+ {:ulp 1 :expr (cos [:complex4 ["3.0" "-4.0"]])}
+ {:ulp 1 :expr (cos [:complex4 ["1e-3" "2.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-1.0" "0.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-2.5" "0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-4.0" "0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-2.0" "0.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-1.0" "-0.0"]])}
+ {:ulp 1 :expr (log [:complex4 ["-2.5" "-0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-4.0" "-0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["-2.0" "-0.0"]])}
+ {:ulp 1 :expr (sqrt [:complex4 ["0.0" "0.0"]])}
+ {:ulp 1 :expr (exp [:complex4 ["1.0" "0.0"]])}
+ {:ulp 1 :expr (abs [:complex4 ["-1.5" "2.0"]])}
+ {:processor (log [:complex4 ["0.0" "0.0"]])}
+ {:ulp 3 :expr (exp [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (exp [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (exp [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (exp [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (log [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (log [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (sin [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (sin [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (sin [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (sin [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (cos [:complex8 ["0.5" "1.25"]])}
+ {:ulp 3 :expr (cos [:complex8 ["-2.0" "0.75"]])}
+ {:ulp 3 :expr (cos [:complex8 ["3.0" "-4.0"]])}
+ {:ulp 3 :expr (cos [:complex8 ["1e-3" "2.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-1.0" "0.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-2.5" "0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-4.0" "0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-2.0" "0.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-1.0" "-0.0"]])}
+ {:ulp 3 :expr (log [:complex8 ["-2.5" "-0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-4.0" "-0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["-2.0" "-0.0"]])}
+ {:ulp 3 :expr (sqrt [:complex8 ["0.0" "0.0"]])}
+ {:ulp 3 :expr (exp [:complex8 ["1.0" "0.0"]])}
+ {:ulp 3 :expr (abs [:complex8 ["-1.5" "2.0"]])}
+ {:processor (log [:complex8 ["0.0" "0.0"]])}
 ]

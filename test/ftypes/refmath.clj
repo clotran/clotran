@@ -138,6 +138,39 @@
       (atan* (div x (.sqrt (sub one (mul x x)) *mc*))))))
 (defn acos* [x] (sub (div (pi*) two) (asin* x)))
 
+;; Complex: a function of a + bi, a and b doubles (the parts of a complex(4) or complex(8)), answering
+;; [re im], each a decimal, or a double where a zero's sign is the point (a decimal has no -0). Fortran
+;; says only: LOG and SQRT are principal values, LOG's imaginary part in (-pi, pi], -pi only for a
+;; negative real part and a -0 imaginary part; SQRT's real part >= 0, and where it is 0 the imaginary
+;; part has the sign of b.
+(defn- neg-sign? [x] (neg? (clotran.host.math/copySign 1.0 (double x))))
+(defn- norm2 [a b] (.add (.multiply (bd a) (bd a)) (.multiply (bd b) (bd b))))   ; exact
+(defn cabs* [a b] (.sqrt (norm2 a b) *mc*))
+(defn cexp* [a b]
+  (let [e (exp* (bd a))]
+    (if (zero? b) [e b] (let [[s c] (sincos (bd b))] [(mul e c) (mul e s)]))))
+(defn clog*
+  "log z = log |z| + i arg z; log |z| = log1p(|z|^2 - 1) / 2 with |z|^2 - 1 exact, so z near the unit
+  circle keeps its digits. z = 0 is the caller's to refuse."
+  [a b]
+  [(div (log1p* (.subtract (norm2 a b) (clotran.host.decimal. 1))) two)
+   (cond (and (zero? b) (neg? a)) (if (neg-sign? b) (.negate (pi*)) (pi*))
+         (zero? b) b
+         :else (atan2* (bd b) (bd a)))])
+(defn csqrt*
+  "The principal square root, by halves that do not cancel: for a >= 0, re = sqrt((|z| + a)/2) and
+  im = b / (2 re); for a < 0, |im| = sqrt((|z| - a)/2) with b's sign and re = |b| / (2 |im|)."
+  [a b]
+  (if (and (zero? a) (zero? b))
+    [0.0 b]
+    (let [m (cabs* a b)]
+      (if (not (neg? a))
+        (let [re (.sqrt (div (add m (bd a)) two) *mc*)] [re (if (zero? b) b (div (bd b) (mul two re)))])
+        (let [t (.sqrt (div (sub m (bd a)) two) *mc*)]
+          [(if (zero? b) 0.0 (div (.abs (bd b)) (mul two t))) (if (neg-sign? b) (.negate t) t)])))))
+(defn csin* [a b] (let [[s c] (sincos (bd a))] [(mul s (cosh* (bd b))) (mul c (sinh* (bd b)))]))
+(defn ccos* [a b] (let [[s c] (sincos (bd a))] [(mul c (cosh* (bd b))) (.negate (mul s (sinh* (bd b))))]))
+
 (defn round-to
   "A decimal rounded ONCE to a real kind: a double holding the nearest real(4) or real(8), ties to
   even, past the greatest finite value plus half its last place infinity. The host's conversion is a

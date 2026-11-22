@@ -959,7 +959,8 @@ end module " mod "
                      (not (every? k? ts)))
             (decline (str "fortran." "ops/" nm " of something that is not a Fortran kind: make one with int4, real8 ..., or write long or double")))
         _ (when (and (some kcplx? ts)
-                     (not (#{"+" "-" "*" "real" "dble" "cmplx" "conjg" "aimag" "kind" "complex4" "complex8"} nm)))
+                     (not (#{"+" "-" "*" "real" "dble" "cmplx" "conjg" "aimag" "kind" "complex4" "complex8"
+                             "exp" "log" "sqrt" "sin" "cos" "abs"} nm)))
             (decline (str "fortran.ops/" nm " of a complex is not lowered")))
         same! (fn [] (when-not (apply = ts) (decline (str "fortran.ops/" nm " needs one kind, not " (str/join ", " (map kwords ts))))))
         to-int (fn [e64 k] (kfit e64 k))]
@@ -1050,7 +1051,8 @@ end module " mod "
       "dble" (if (kcplx? t0) (done (str "real(" e0 ", real64)") :double) (done (kto e0 t0 :double) :double))
 
       "abs"
-      (cond (= t0 :long) (let [a (fresh! st "x" :long)]
+      (cond (kcplx? t0) (done (str "abs(" e0 ")") (:part (fkinds t0)))
+            (= t0 :long) (let [a (fresh! st "x" :long)]
                            (done (str "merge(cl_neg(" a "), " a ", " a " < 0_int64)") :long [(str a " = " e0)]))
             (kint? t0) (done (kfit (str "abs(" (i64 e0 t0) ")") t0) t0)
             :else (done (str "abs(" e0 ")") t0))
@@ -1075,14 +1077,18 @@ end module " mod "
               (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0))))
 
       "sqrt"
+      (if (kcplx? t0)
+        (done (str "sqrt(" e0 ")") t0)
       (do (when-not (kreal? t0) (decline "sqrt of an integer"))
           (let [h (str "cl_fsqrt(" (kwiden e0 t0 :double) ")")]
-            (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0)))
+            (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0))))
 
       ;; the elementary functions: Fortran's own, in the argument's kind (the host's libm's: accurate to
       ;; the ulp bound scripts/ftypes-check measures; outside a domain the processor's, a NaN)
       ("exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh")
-      (do (when-not (kreal? t0) (decline (str nm " of something that is not a real")))
+      ;; of a complex, Fortran's own EXP LOG SIN COS (and SQRT, ABS above): measured part by part
+      (do (when-not (or (kreal? t0) (and (kcplx? t0) (#{"exp" "log" "sin" "cos"} nm)))
+            (decline (str nm " of something that is not a real")))
           (done (str nm "(" e0 ")") t0))
       "atan2" (do (same!) (when-not (kreal? t0) (decline "atan2 of something that is not a real"))
                   (done (str "atan2(" e0 ", " e1 ")") t0))

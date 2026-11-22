@@ -27,10 +27,14 @@
 
 ;; ---- the functions: name, arity, what the Fortran and fortran.ops call is
 (def real-fns ["exp" "log" "log10" "sin" "cos" "tan" "asin" "acos" "atan" "sinh" "cosh" "tanh" "atan2"])
-(def complex-fns [])
+;; of a complex, part kind k (complex(4) has real(4) parts); "cexp" is EXP of a complex, and so on
+(def complex-fns ["cexp" "clog" "csqrt" "csin" "ccos" "cabs"])
+(def complex-fn? (set complex-fns))
+(defn intrinsic [f] (get {"cexp" "exp" "clog" "log" "csqrt" "sqrt" "csin" "sin" "ccos" "cos" "cabs" "abs"} f f))
+(defn two-parts? "a complex result" [f] (and (complex-fn? f) (not= f "cabs")))
 (def fns (vec (concat real-fns complex-fns)))
 (def fn-index (zipmap fns (range)))
-(defn arity [f] (if (#{"atan2"} f) 2 1))
+(defn arity [f] (if (or (= f "atan2") (complex-fn? f)) 2 1))
 
 ;; ---- points
 ;; splitmix64, seeded: the same points for the same seed on any host
@@ -62,6 +66,7 @@
            ("log" "log10") (pos? x)
            ("asin" "acos") (<= (Math/abs x) 1.0)
            "atan2" (not (and (zero? x) (zero? y)))
+           "clog" (not (and (zero? x) (zero? y)))
            true))))
 
 (defn structured [f k]
@@ -81,7 +86,18 @@
       ("sinh" "cosh") (let [e (+ (Math/log max) (Math/log 2.0))] (concat (mapcat #(around k % 6) [e (- e) 0.0 1.0 -1.0]) (filter #(< (Math/abs %) 800) pow2)))
       "tanh" (concat (mapcat #(around k % 6) [0.0 (if (= k :real8) 19.06 9.01) (if (= k :real8) -19.06 -9.01) 0.5 -0.5]) (filter #(< (Math/abs %) 64) pow2))
       "atan2" (concat (for [y [0.0 -0.0 1.0 -1.0 mins (- mins)] x [-1.0 1.0 -2.0 mins (- mins) max (- max)]] [y x])
-                      (for [x (filter #(< 1e-30 (Math/abs %) 1e30) pow2) y [1.0 -1.0]] [y x])))))
+                      (for [x (filter #(< 1e-30 (Math/abs %) 1e30) pow2) y [1.0 -1.0]] [y x]))
+      ;; complex: [re im]
+      ("clog" "csqrt" "cabs")
+      (concat (for [a [-4.0 -1.0 -0.5 (- mins) (- max)] b [0.0 -0.0 mins (- mins) 1e-30 -1e-30]] [a b])   ; the branch cut
+              (for [d (concat (around k 1.0 6) (around k -1.0 6)) b [0.0 -0.0 1e-10 (Math/scalb 1.0 -30) mins]] [d b])  ; near |z| = 1
+              (for [j (range 64) :let [t (* j (/ Math/PI 32))]] [(Math/cos t) (Math/sin t)])
+              (for [a [0.0 mins minn 1.0 max (- max) (* 0.5 max)] b [mins minn max (- max) 3.0]] [a b])
+              [[3.0 4.0] [5.0 12.0] [-3.0 -4.0]])
+      "cexp" (concat (for [a (concat (around k ln-max 3) (around k ln-minn 3) [0.0 1.0 -1.0 (+ ln-max 1)]) b [0.0 -0.0 1.0 Math/PI half-pi 1e10 max]] [a b])
+                     (for [b (concat near-pi2 pow2)] [0.5 b]))
+      ("csin" "ccos") (concat (for [a (concat near-pi2 (map - near-pi2) [0.0 -0.0 1.0 1e10 max]) b [0.0 -0.0 1.0 -1.0 1e-10 20.0 (- ln-max 1)]] [a b])
+                              (for [b (filter #(< (Math/abs %) ln-max) pow2)] [1.0 b])))))
 
 (defn random-point [f k]
   (let [{:keys [emin emax max]} (kp k)
@@ -99,7 +115,16 @@
       "atan2" (pick #(vector (* (sgn) (mag -60 60)) (* (sgn) (mag -60 60)))
                     #(vector (u -4 4) (u -4 4))
                     #(vector (* (sgn) (mag emin -30)) (- (mag -4 4)))
-                    #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax)))))))
+                    #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax))))
+      ("clog" "csqrt" "cabs")
+      (pick #(vector (u -3 3) (u -3 3)) #(vector (* (sgn) (mag -60 60)) (* (sgn) (mag -60 60)))
+            #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag emin emax)))
+            #(let [t (u (- Math/PI) Math/PI)] [(Math/cos t) (Math/sin t)])
+            #(vector (- (mag -10 10)) (* (sgn) (mag emin -20))))
+      "cexp" (pick #(vector (u -3 3) (u -3 3)) #(vector (u (- (+ ln-max 30)) (+ ln-max 1)) (* (sgn) (mag -60 60)))
+                   #(vector (* (sgn) (mag -60 6)) (* (sgn) (mag emin emax))))
+      ("csin" "ccos") (pick #(vector (u -3 3) (u -3 3)) #(vector (* (sgn) (mag -60 60)) (u (- (+ ln-max 1)) (+ ln-max 1)))
+                            #(vector (* (sgn) (mag emin emax)) (* (sgn) (mag -60 4)))))))
 
 (defn points
   "n distinct arguments of f in kind k: up to half structured (evenly sampled), the rest random"
@@ -149,22 +174,34 @@
 (defn driver [mode]
   (let [call (fn [f kk xs] ; kk 4 or 8; xs the argument variables
                (if (= mode :plain)
-                 (str (ffn f) "(" (str/join ", " xs) ")")
-                 (str (str/replace f "-" "_") "_r" kk "(" (str/join ", " (map #(if (= kk 4) (str "real(" % ", real64)") %) xs)) ")")))
+                 (str (intrinsic f) "(" (str/join ", " xs) ")")
+                 (str f "_r" kk "(" (str/join ", " (map #(if (= kk 4) (str "real(" % ", real64)") %) xs)) ")")))
+        rk (fn [kk] (if (= kk 4) "real32" "real64"))
         block (fn [kk]
                 (let [x (str "x" kk) y (str "y" kk) r (str "r" kk)]
                   (str "      select case (fi)\n"
-                       (str/join (for [f fns :let [i (fn-index f) xs (if (= 2 (arity f)) [x y] [x])]]
-                                   (str "      case (" i ")\n        " r " = " (if (and (= mode :pure) (= kk 4)) (str "real(" (call f kk xs) ", real32)") (call f kk xs)) "\n")))
+                       (str/join (for [f fns :let [i (fn-index f) xs (if (= 2 (arity f)) [x y] [x])
+                                               narrow (fn [e] (if (and (= mode :pure) (= kk 4)) (str "real(" e ", real32)") e))]]
+                                   (cond
+                                     (not (complex-fn? f))
+                                     (str "      case (" i ")\n        " r " = " (narrow (call f kk xs)) "\n")
+                                     (= mode :plain)
+                                     (str "      case (" i ")\n        z" kk " = cmplx(" x ", " y ", kind=" (rk kk) ")\n"
+                                          (if (two-parts? f)
+                                            (str "        w" kk " = " (intrinsic f) "(z" kk ")\n        " r " = real(w" kk ")\n        s" kk " = aimag(w" kk ")\n")
+                                            (str "        " r " = abs(z" kk ")\n")))
+                                     :else
+                                     (str "      case (" i ")\n        " r " = " (narrow (call (str f "_re") kk xs)) "\n"
+                                          (when (two-parts? f) (str "        s" kk " = " (narrow (call (str f "_im") kk xs)) "\n"))))))
                        "      end select\n")))]
     (str "program acc\n  use iso_fortran_env\n" (when (= mode :pure) "  use accpure_pure\n") "  implicit none\n"
          "  integer(int64) :: fi, ki, b1, b2, o1, o2\n  integer :: ios\n"
-         "  real(real32) :: x4, y4, r4\n  real(real64) :: x8, y8, r8\n"
+         "  real(real32) :: x4, y4, r4, s4\n  real(real64) :: x8, y8, r8, s8\n  complex(real32) :: z4, w4\n  complex(real64) :: z8, w8\n"
          "  do\n    read(*,*,iostat=ios) fi, ki, b1, b2\n    if (ios /= 0) exit\n    o2 = 0\n"
          "    if (ki == 4) then\n      x4 = transfer(int(b1, int32), x4)\n      y4 = transfer(int(b2, int32), y4)\n"
-         (block 4) "      o1 = int(transfer(r4, 0_int32), int64)\n"
+         "      s4 = 0\n" (block 4) "      o1 = int(transfer(r4, 0_int32), int64)\n      o2 = int(transfer(s4, 0_int32), int64)\n"
          "    else\n      x8 = transfer(b1, x8)\n      y8 = transfer(b2, y8)\n"
-         (block 8) "      o1 = transfer(r8, 0_int64)\n"
+         "      s8 = 0\n" (block 8) "      o1 = transfer(r8, 0_int64)\n      o2 = transfer(s8, 0_int64)\n"
          "    end if\n    write(*,'(I0,1X,I0)') o1, o2\n  end do\nend program acc\n")))
 
 ;; the driver's input: atan2's arguments as y then x, as the jobs hold them
@@ -175,8 +212,16 @@
 (def pure-src
   (str "(ns accpure (:require [fortran.ops :as f]))\n"
        (str/join (for [f fns k kinds :let [kk (if (= k :real4) 4 8) mk (if (= k :real4) "f/real4" "f/real8")]]
-                   (if (= 2 (arity f))
+                   (cond
+                     (complex-fn? f)
+                     (let [z (str "(f/" (intrinsic f) " (f/complex" kk " (" mk " a) (" mk " b)))")]
+                       (if (two-parts? f)
+                         (str "(defn " f "_re-r" kk " ^double [^double a ^double b] (f/dble (f/real " z ")))\n"
+                              "(defn " f "_im-r" kk " ^double [^double a ^double b] (f/dble (f/aimag " z ")))\n")
+                         (str "(defn " f "_re-r" kk " ^double [^double a ^double b] (f/dble " z "))\n")))
+                     (= 2 (arity f))
                      (str "(defn " f "-r" kk " ^double [^double y ^double x] (f/dble (f/" f " (" mk " y) (" mk " x))))\n")
+                     :else
                      (str "(defn " f "-r" kk " ^double [^double x] (f/dble (f/" f " (" mk " x))))\n"))))))
 
 (defn run-fortran [mode fc]
@@ -201,7 +246,7 @@
       (when-not (= (count ls) (count jobs)) (throw (ex-info (str fc " " (name mode) " printed " (count ls) " lines for " (count jobs) ": " (:err r)) {})))
       (mapv (fn [{:keys [f k]} l]
               (let [[o1 o2] (str/split (str/trim l) #"\s+")]
-                [(from-bits k (parse-long o1))]))
+                (if (two-parts? f) [(from-bits k (parse-long o1)) (from-bits k (parse-long o2))] [(from-bits k (parse-long o1))])))
             jobs ls))))
 
 (defn pd [t] (case t "##Inf" ##Inf "##-Inf" ##-Inf "##NaN" ##NaN (or (parse-double t) (throw (ex-info (str "not a number: " t) {})))))
@@ -211,14 +256,15 @@
 (spit (fs/file work "ops-in.txt") (str ops-in "\n"))
 (def ops-src
   (str "(require '[fortran.ops :as f] '[clojure.string :as str])\n"
-       "(def fns {" (str/join " " (for [f fns] (str (pr-str f) " f/" f))) "})\n"
+       "(def fns {" (str/join " " (for [f fns] (str (pr-str f) " f/" (intrinsic f)))) "})\n"
+       "(def cplx #{" (str/join " " (map pr-str complex-fns)) "})\n"
        "(doseq [line (str/split-lines (slurp " (pr-str (str (fs/file work "ops-in.txt"))) "))]\n"
        "  (let [[fname k & ts] (str/split line #\" \")\n"
        "        mk (if (= k \"real4\") f/real4 f/real8)\n"
        "        xs (map mk ts)\n"
-       "        show (fn [v] (pr-str (double v)))]\n"
+       "        show (fn [v] (if (instance? fortran.ops.Complex v) (str (pr-str (double (f/real v))) \" \" (pr-str (double (f/aimag v)))) (pr-str (double v))))]\n"
        "    (println (str/join \" \" (map show xs)) \"|\"\n"
-       "      (try (let [r (apply (fns fname) xs)] (show r))\n"
+       "      (try (let [r (if (cplx fname) ((fns fname) ((if (= k \"real4\") f/complex4 f/complex8) (first xs) (second xs))) (apply (fns fname) xs))] (show r))\n"
        "           (catch clotran.host.throwable e \"refused\")))))\n"))
 (defn run-ops []
   (let [src (fs/file work "ops.cljf")]
@@ -255,28 +301,33 @@
   (into {} (for [[leg res] legs :when res
                  [[f k] idxs] (group-by (fn [i] [(:f (jobs i)) (:k (jobs i))]) (range (count jobs)))]
              (let [es (vec (sort (map #(job-err (jobs %) (reference %) (res %)) idxs)))]
-               [[leg f k] {:n (count es) :max (peek es) :p999 (pct es 0.999) :cr (count (filter zero? es))}]))))
+               [[leg f k] {:n (count es) :max (peek es) :p999 (pct es 0.999) :cr (count (filter zero? es)) :over4 (count (filter #(> % 4) es))}]))))
 (def leg-names (mapv first legs))
 
 ;; ---- a second reference: gfortran folds a constant expression with MPFR, correctly rounded, so 1
-;; point in 20 is folded at compile time and must equal refmath's. Not a subnormal result: gfortran
+;; point in 20 is folded at compile time and must equal refmath's. Not a subnormal argument (MPC folds
+;; atan2(1.4e-45, 1.2e-38), the imaginary part of a complex log, to 0) nor result: gfortran
 ;; rounds it to the kind's precision and then to the subnormal's, twice (exp(-88.72284698486328) in
 ;; real(4) folds 1 ulp from the nearest, 7.2e-46 away where refmath's is 6.8e-46)
 (def mpfr-check
-  (let [sub? (fn [i] (let [k (:k (jobs i)) x (Math/abs (double (first (reference i))))] (and (pos? x) (< x (:minn (kp k))))))
+  (let [sub? (fn [i] (let [k (:k (jobs i))] (some #(let [x (Math/abs (double %))] (and (pos? x) (< x (:minn (kp k))))) (concat (reference i) (:args (jobs i))))))
         idx (vec (remove sub? (range 0 (count jobs) 20)))
         lit (fn [k x] (str (if (= k :real4) (str (unchecked-float x)) (str x)) (if (= k :real4) "_real32" "_real64")))
-        expr (fn [{:keys [f k args]}] (str f "(" (str/join ", " (map #(lit k %) args)) ")"))
+        expr (fn [{:keys [f k args]}] (if (complex-fn? f)
+                                        (str (intrinsic f) "((" (str/join ", " (map #(lit k %) args)) "))")
+                                        (str f "(" (str/join ", " (map #(lit k %) args)) ")")))
+        ptype (fn [{:keys [f k]}] (str (if (two-parts? f) "complex(" "real(") (if (= k :real4) "real32" "real64") ")"))
+        tb (fn [k e] (if (= k :real4) (str "transfer(" e ", 0_int32)") (str "transfer(" e ", 0_int64)")))
         src (str "program mp
   use iso_fortran_env
   implicit none
 "
                  (str/join (for [i idx :let [j (jobs i)]]
-                             (str "  real(" (if (= (:k j) :real4) "real32" "real64") "), parameter :: p" i " = " (expr j) "
-")))
+                             (str "  " (ptype j) ", parameter :: p" i " = " (expr j) "\n")))
                  (str/join (for [i idx :let [j (jobs i)]]
-                             (str "  write(*,'(I0)') " (if (= (:k j) :real4) (str "transfer(p" i ", 0_int32)") (str "transfer(p" i ", 0_int64)")) "
-")))
+                             (if (two-parts? (:f j))
+                               (str "  write(*,'(I0,1X,I0)') " (tb (:k j) (str "real(p" i ")")) ", " (tb (:k j) (str "aimag(p" i ")")) "\n")
+                               (str "  write(*,'(I0)') " (tb (:k j) (str "p" i)) "\n"))))
                  "end program mp
 ")
         dir (fs/file work "mpfr") _ (fs/create-dirs dir)
@@ -286,16 +337,18 @@
       (if-not (zero? (:exit c))
         {:failed (subs (:err c) 0 (min 600 (count (:err c))))}
         (let [ls (str/split-lines (:out (shell {:out :string} exe)))
-              diffs (for [[i l] (map vector idx ls) :let [k (:k (jobs i)) got (from-bits k (parse-long (str/trim l)))]
-                          :when (not= (bits k got) (bits k (first (reference i))))]
-                      [(jobs i) (first (reference i)) got])]
+              diffs (for [[i l] (map vector idx ls) :let [k (:k (jobs i)) got (mapv #(from-bits k (parse-long %)) (str/split (str/trim l) #"\s+"))]
+                          ;; the ulp measure's equality: a zero's sign is not compared (MPC gives sin(x + 0i) the
+                          ;; sign cos x sinh 0 has; the reference's decimal zero has none)
+                          :when (not (every? zero? (map #(err k %1 %2) (reference i) got)))]
+                      [(jobs i) (reference i) got])]
           {:n (count idx) :diffs (vec diffs)})))))
 (defn fmt-e [x] (if (Double/isInfinite (double x)) "inf" (str x)))
 (def table
   (str "| function | kind | points | " (str/join " | " leg-names) " |\n"
        "|---|---|---|" (str/join (repeat (count leg-names) "---|")) "\n"
        (str/join (for [f fns k kinds :let [n (:n (stats [(first leg-names) f k]))]]
-                   (str "| " f " | " (name k) " | " n " | "
+                   (str "| " (intrinsic f) " | " (if (complex-fn? f) ({:real4 "complex4" :real8 "complex8"} k) (name k)) " | " n " | "
                         (str/join " | " (for [l leg-names :let [s (stats [l f k])]] (if s (str (fmt-e (:max s)) " / " (fmt-e (:p999 s))) "--")))
                         " |\n")))))
 (println (str "ftypes-accuracy: " (count jobs) " points (" (:n opts) " per function and kind, seed " (:seed opts) "); max / 99.9th percentile error in ulps"))
@@ -313,6 +366,9 @@
                 (str/join ", " (for [k kinds :let [is (filter #(= k (:k (jobs %))) (range (count jobs)))]]
                                  (str (count (filter #(not= (mapv (fn [x] (bits k x)) (res %)) (if (= :refused (ops-res %)) [] (mapv (fn [x] (bits k x)) (ops-res %)))) is))
                                       " of " (count is) " " (name k) " points"))))))
+;; how many points are more than 4 ulps off, where some are
+(doseq [[[leg f k] s] (sort stats) :when (pos? (:over4 s))]
+  (println (str "  " leg " " (intrinsic f) " " (if (complex-fn? f) ({:real4 "complex4" :real8 "complex8"} k) (name k)) ": " (:over4 s) " of " (:n s) " points more than 4 ulps off")))
 ;; the arguments of the worst errors of 2 ulps or more
 (doseq [[leg res] legs :when res
         [[f k] idxs] (sort (group-by (fn [i] [(:f (jobs i)) (:k (jobs i))]) (range (count jobs))))
@@ -322,11 +378,17 @@
   (println (str "  worst " leg " " f " " (name k) ": " m " ulps at "
                 (str/join ", " (for [[i e] (take 3 (filter #(= m (second %)) es))] (pr-str (:args (jobs i))))))))
 
-;; the gate's bounds: the sweep's maximum (4000 points per function and kind, docs/types.md), the same for
-;; every leg. A regression that matters (a real(8) computed through real(4), a lost argument reduction, a
-;; wrong branch) is thousands of ulps, not one more.
-(defn bound [f k] (get {["tan" :real8] 2} [f k] 1))
-(def over (for [[[leg f k] s] stats :when (> (:max s) (bound f k))] (str leg " " f " " (name k) ": " (fmt-e (:max s)) " ulps, bound " (bound f k))))
+;; the gate's bounds: the sweep's maximum (4000 points per function and kind, docs/types.md). A regression
+;; that matters (a real(8) computed through real(4), a lost argument reduction, a wrong branch) is
+;; thousands of ulps, not one more. The real functions: the same bound for every leg. The complex ones:
+;; fortran.ops's own formulas are bounded; the compilers' (and so the compiled code's, which calls
+;; Fortran's intrinsic) are the processor's libm, reported and not bounded (DEVIATIONS 98).
+(def complex-bounds {["cexp" :real8] 3 ["clog" :real8] 3 ["csin" :real8] 2 ["ccos" :real8] 2})
+(defn bound [leg f k]
+  (if (complex-fn? f)
+    (when (= leg "fortran.ops") (get complex-bounds [f k] 1))
+    (get {["tan" :real8] 2} [f k] 1)))
+(def over (for [[[leg f k] s] stats :let [b (bound leg f k)] :when (and b (> (:max s) b))] (str leg " " f " " (name k) ": " (fmt-e (:max s)) " ulps, bound " b)))
 (doseq [o over] (println (str "  OVER BOUND " o)))
 (def failed-legs (remove second legs))
 (System/exit (if (or (seq failed-legs) (:failed mpfr-check) (seq (:diffs mpfr-check)) (and (:quick opts) (seq over))) 1 0))

@@ -54,9 +54,9 @@ indexing of the Clojure array functions (`aget` is 0-based; DEVIATIONS 24).
 
 The operations: `+ - * / **`, `int nint floor ceiling real dble`, `abs sign min max mod modulo
 sqrt`, `huge tiny epsilon kind digits`, for complex `cmplx conjg aimag`, and the elementary functions `exp log log10 sin cos tan asin acos
-atan atan2 sinh cosh tanh` (the host libm's, measured against a correctly rounded reference: below, and DEVIATIONS 95). `CMPLX(x, y)` is a
+atan atan2 sinh cosh tanh` (the host libm's, measured against a correctly rounded reference: below, and DEVIATIONS 95), and of a complex `exp log sqrt sin cos abs` (DEVIATIONS 98). `CMPLX(x, y)` is a
 complex(4) whatever the arguments' kind, as Fortran's is; a complex product the processor would
-round, any complex division and `**`, and a real to an integer power whose partial powers are not all
+round, any complex division and `**`, LOG of zero, and a real to an integer power whose partial powers are not all
 exact (`x**2` always is defined) are refused (DEVIATIONS 93, 94). Real arithmetic is IEEE: overflow is
 infinity, `x/0.0` infinity, `0.0/0.0` NaN, in both real kinds; a NaN or an infinity has no integer
 value (DEVIATIONS 90).
@@ -116,6 +116,30 @@ pure tier compiled at -O2 -ffp-contract=off:
   regression that matters (a real(8) through a real(4), a lost argument reduction) is millions of
   ulps, not one more.
 
+### Complex
+
+EXP, LOG, SQRT, SIN, COS and ABS of a complex, measured the same way, each PART in ulps of the part kind
+(LOG and SQRT principal values; the sign of a zero imaginary part picks the side of the cut):
+
+| function | kind | points | gfortran | flang | fortran.ops | pure gfortran | pure flang |
+|---|---|---|---|---|---|---|---|
+| exp | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| exp | complex8 | 4000 | 2 / 2 | 2 / 2 | 3 / 2 | 2 / 2 | 2 / 2 |
+| log | complex4 | 4000 | 1694574510 / 1684919996 | 1694574510 / 1684919996 | 0 / 0 | 1694574510 / 1684919996 | 1694574510 / 1684919996 |
+| log | complex8 | 4000 | 8716560023488369748 / 8711941746245982286 | 8716560023488369748 / 8711941746245982286 | 3 / 2 | 8716560023488369748 / 8711941746245982286 | 8716560023488369748 / 8711941746245982286 |
+| sqrt | complex4 | 4000 | 436207616 / 430228120 | 436207616 / 430228120 | 0 / 0 | 436207616 / 430228120 | 436207616 / 430228120 |
+| sqrt | complex8 | 4000 | 6473974912013982395 / 6372751694632527319 | 6473974912013982395 / 6372751694632527319 | 1 / 1 | 6473974912013982395 / 6372751694632527319 | 6473974912013982395 / 6372751694632527319 |
+| sin | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| sin | complex8 | 4000 | 3 / 2 | 3 / 2 | 2 / 2 | 3 / 2 | 3 / 2 |
+| cos | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| cos | complex8 | 4000 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 | 2 / 2 |
+| abs | complex4 | 4000 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
+| abs | complex8 | 4000 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 | 1 / 1 |
+
+`fortran.ops` (clotran's formulas in real(8)) is correctly rounded on complex(4) and within 3 ulps on
+complex(8). The compilers' LOG and SQRT, which the compiled code calls, are not: near |z| = 1 LOG's real part
+keeps no relative digits, and SQRT drops a part far below the other (DEVIATIONS 98 has the points).
+
 ## Hints in Fortran's words
 
 A hint says what an argument is. Clojure's spellings work, and so do Fortran's:
@@ -170,6 +194,7 @@ runs every oracle case through gfortran's and flang's pure builds.
 ```
 
 Complex is native inside a function too: `(f/+ z w)` is a `complex(real64)` add, and a complex
-leaves the function as `(f/real z)` and `(f/aimag z)`. Not yet lowered: arrays of complex, `abs`,
+leaves the function as `(f/real z)` and `(f/aimag z)`. `exp log sqrt sin cos abs` of a complex are Fortran's intrinsics, the
+processor's libm (measured: DEVIATIONS 98). Not yet lowered: arrays of complex,
 `/` and `**` of a complex, the narrow scalar kinds and complex as parameters or results of a
 compiled library function, array results of the narrow kinds, rank above 1 (DEVIATIONS 91, 94).
