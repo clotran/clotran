@@ -2,6 +2,10 @@
 
 - `guide.md` -- using clotran: programs, projects, Fortran arrays and
   packages, embedding, compiling, the debugger, threads.
+- `types.md` -- clotran's types are Fortran's: the kinds, `fortran.ops`, hints in
+  Fortran's words, the pure tier, and the oracle (`test/ftypes`) that decides.
+- `release-1.0.md` -- what stands between the release candidate and 1.0.0: a
+  checklist with each item's state, its evidence and who it needs.
 - `status.md` -- what works, measured, what does not, and the version
   policy.
 - `building.md` -- building from source; the repository's layout.
@@ -10,7 +14,8 @@
   which are generated from the proof, and which are not and why.
 
 `scripts/readme-check` runs the examples in `../README.md` and
-`guide.md` (`make test`), so their output stays verified.
+`guide.md` (`make test`), so their output stays verified. `types.md`'s
+examples are run by `scripts/ftypes-check` (the cases) and by hand (the prose).
 
 ## The north star
 

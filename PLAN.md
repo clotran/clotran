@@ -5423,6 +5423,12 @@ remains before 1.0.0, in order:
   claim and a deadline torture mode could not meet.
 - 1.0.0-rc.2 tagged 2026-10-14 on main (feat/threads merged); then James
   tags v1.0.0.
+- **Audited again 2026-11-22 (rc.9, 149 commits on):** `docs/release-1.0.md` is
+  the checklist -- each item's state, evidence and owner. Open for 1.0.0:
+  `make crosscheck` on the tag's tree, `make fuzz-all` at full size on a
+  frozen tree (last clean 2026-10-13), the Linux and Windows gates and
+  artifacts at the tag, DEVIATIONS 85 (no kind) and 91, 94 (kind 1.x, no
+  decision), and the version strings the bump touches.
 
 **rc.3 pulled, 2026-10-16.** Following the README on a clean install of
 every artifact (a script per OS) found what the dist checks had not:

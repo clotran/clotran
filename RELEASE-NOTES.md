@@ -1,15 +1,26 @@
 # clotran 1.0.0 -- release notes
 
-This is release candidate 9 of 1.0.0: `1.0.0-rc.9`. Since rc.8: the
-REPL has its own line editor, replacing rlwrap on every system --
-Windows, which had none, included: editing keys, history kept across
-sessions with Ctrl-R search, a form spread over lines sent only when the
-reader finds it whole, and Tab completing from what the running REPL
-holds (`alias/` offers that namespace's public vars, nothing seen
-elsewhere); `CLOTRAN_NO_EDITOR=1` reads plainly, as a pipe or a file
-always is. `clotran new` names no library: a library's own README gives
-its `deps.edn` line, so a library moves without a clotran release.
-`install.ps1` leaves nothing set in the PowerShell session that ran it.
+This is release candidate 10 of 1.0.0: `1.0.0-rc.10`. Since rc.9:
+clotran's types are Fortran's (`docs/types.md`). A value's kind is its
+Fortran kind -- `integer(1)` to `integer(8)`, `real(4)`, `real(8)`,
+`complex(4)` and `complex(8)` -- and `fortran.ops` is Fortran's arithmetic
+and intrinsics over them (the result keeps the kind, integer `/`
+truncates, what the standard leaves to the processor throws), beside
+`clojure.core`, which keeps Clojure's meaning. Hints take Fortran's words
+(`^real8s`, `^int4s`, ...), checked against Clojure's spelling. The pure
+tier (`clotran compile --pure`) lowers those kinds and complex natively,
+and arrays of the narrow kinds as arguments. A second oracle decides what
+Fortran does: `test/ftypes/oracle.clj`, Fortran's intrinsic types written
+once as plain Clojure and run by `clj`, compared by `scripts/ftypes-check`
+with gfortran and flang (reals bit for bit), `fortran.ops` and the pure
+tier's Fortran under both compilers: 349 cases, 0 differ, and the
+elementary functions (`exp` to `tanh`) within 1 ulp of a correctly
+rounded reference, the worst error reported. DEVIATIONS 86-95 are the
+differences, in terms of types. Also: the VM's translation, the
+analyser's passes and the ahead-of-time compiler's type inference are
+generated from the ACL2 model (`docs/model-coverage.md` says which rows are
+proved, generated and tested); the multi-threaded runtime is checked by
+litmus tests (TSan, GenMC), a seeded scheduler and replay of its logs.
 
 clotran is Clojure hosted on Fortran: Rich Hickey's own `core.clj`, from
 the `clojure-1.12.6` release, running on a Fortran host. 1.0 is the
@@ -26,8 +37,9 @@ change.
   load beside it, and `clojure.spec.alpha` is consulted before every
   macro expansion, as Clojure's compiler does.
 - **Measured against Clojure itself.** `clj` 1.12.6 is the oracle for
-  every behaviour: 1,332 forms run through both, 1,310 agreeing and 22
-  differing as their DEVIATIONS entries say they must, none otherwise. Clojure's own test suite, derived
+  every behaviour: 1,402 forms run through both, 1,379 agreeing and 23
+  differing as their DEVIATIONS entries say they must, none otherwise.
+  Clojure's own test suite, derived
   to the language that clj and ClojureScript share: 39 namespaces, 312
   tests, 2,719 assertions, every one passing and every namespace run.
   The portable libraries (set, walk, string, math, pprint) on Clojure's
@@ -37,9 +49,10 @@ change.
   and is a DEVIATIONS entry.
 - **Every place it differs is written down.** `DEVIATIONS.md` names each
   difference, why, and what removing it would take, with its kind:
-  81 entries, 41 resolved and kept as the record, 30 by design, 6 forced
-  by the host, 4 staying through 1.0 by decision (48, 51, 54, 74), and
-  none open. Reader conditionals are read as clj reads them: only in a
+  95 entries, 44 resolved and kept as the record, 38 by design, 6 forced
+  by the host, 6 of kind 1.x (48, 51, 54 and 74 staying through 1.0 by
+  decision; 91 and 94, the pure tier's kinds and complex, awaiting it),
+  and 85 not yet classified (`docs/release-1.0.md`). Reader conditionals are read as clj reads them: only in a
   `.cljc` file, or by `read-string` given `{:read-cond :allow}` (entry 33).
 - **Fortran underneath, on purpose.** Arrays are Fortran arrays a
   library takes as they are; a package is a shared library opened at run
@@ -116,12 +129,12 @@ change.
 
 ## Install
 
-    tar xzf clotran-1.0.0-rc.5-<os>-<arch>[-musl].tar.gz
-    clotran-1.0.0-rc.5-<os>-<arch>[-musl]/bin/clotran
+    tar xzf clotran-<version>-<os>-<arch>[-musl].tar.gz
+    clotran-<version>-<os>-<arch>[-musl]/bin/clotran
 
 and on Windows, the zip unpacked anywhere:
 
-    clotran-1.0.0-rc.5-windows-x86_64\bin\clotran.cmd
+    clotran-<version>-windows-x86_64\bin\clotran.cmd
 
 `SHA256SUMS` beside them lists each archive's sha256.
 

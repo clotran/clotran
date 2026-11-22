@@ -100,6 +100,29 @@ contiguous, column-major, at an address the collector never moves:
 (f/array-shape m)                     ;=> [2 3]
 ```
 
+**Fortran's types.** A value's kind is its Fortran kind (`integer(1)`
+to `integer(8)`, `real(4)`, `real(8)`, and `complex`), and `fortran.ops` is
+Fortran's arithmetic over them: the result keeps the kind, `/` on integers
+truncates, and what the standard leaves to the processor throws.
+`clojure.core` keeps Clojure's meaning on the same values. Type hints
+take Fortran's words (`^real8s` for `^doubles`), and `clotran compile --pure`
+lowers them to Fortran of those kinds (`docs/types.md`):
+
+```clojure
+(require '[fortran.ops :as f])
+(f/+ (f/int1 100) (f/int4 100000))     ;=> 100100
+(class (f/+ (f/int1 100) (f/int4 100000))) ;=> clotran.host.int4
+(f// (f/int4 -7) (f/int4 2))           ;=> -3
+(f/mod (f/int4 -7) (f/int4 3))         ;=> -1
+(f/modulo (f/int4 -7) (f/int4 3))      ;=> 2
+(f/real (f/int4 7))                    ;=> 7.0
+(+ (int 5) (int 7))                    ;=> 12
+(defn dot ^real8 [^real8s a ^real8s b]
+  (loop [i 0 s 0.0]
+    (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))
+(dot (double-array [1 2 3]) (double-array [4 5 6])) ;=> 32.0
+```
+
 **Calling your own Fortran.** This needs a Fortran compiler (gfortran
 or flang) on the PATH. Any free-form module, written with no
 thought of clotran, becomes a package: a `package.edn` beside it names
@@ -194,6 +217,8 @@ has the long version, with what it costs.
 ## More
 
 - `docs/guide.md` -- using clotran, feature by feature
+- `docs/types.md` -- clotran's types are Fortran's: kinds, `fortran.ops`, hints, the pure tier
+- `docs/release-1.0.md` -- what stands between this release candidate and 1.0.0
 - `docs/status.md` -- what works (measured), what does not, the version policy
 - `docs/building.md` -- building from source on macOS, Linux and Windows; the layout
 - `docs/rationale.md` -- why Fortran

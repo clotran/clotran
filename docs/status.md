@@ -12,7 +12,7 @@ transducers, metadata, `case`, regex literals, `deftype`, `reify`,
 clotran does not implement those, core.clj does.
 
 **25 of the 30 library namespaces Clojure ships load** (measured
-2026-10-12): `core.protocols`, `core.reducers`, `core.specs.alpha`,
+2026-11-22): `core.protocols`, `core.reducers`, `core.specs.alpha`,
 `data`, `datafy`, `edn`, `inspector`, `main`, `math`, `pprint`,
 `reflect`, `repl`, `set`, `spec.alpha`, `spec.gen.alpha`,
 `spec.test.alpha`, `stacktrace`, `string`, `template`, `test`,
@@ -37,7 +37,7 @@ agree on it -- and leaves out the ones that name a clj class, a
 member call or a `clojure.core` function ClojureScript never had.
 That keeps 312 tests, in 39 files that all load and run: **2719
 passing assertions, none failing and none erroring** (measured
-2026-10-12).
+2026-11-22).
 
 That denominator is assertions that executed, not assertions that
 exist: a test that errors part-way contributes only what ran. The 66
@@ -47,11 +47,16 @@ and `rt`, which test clj's host's method values and its RT class, stop
 before they report. clj-shaped as half of them are, that is not the
 number to watch.
 
-Four oracles keep it honest: gfortran and flang must agree
+Five oracles keep it honest: gfortran and flang must agree
 (`make crosscheck`), `clj` -- real clj --
 answers what Clojure actually does rather than what anyone remembers,
-and pinned clones of Clojure and ClojureScript are cited rather than
-recalled (`scripts/oracle`).
+pinned clones of Clojure and ClojureScript are cited rather than
+recalled (`scripts/oracle`: 1402 forms through both, 1379 agreeing and 23
+differing as DEVIATIONS says, measured 2026-11-22), and what Fortran
+does is decided by `test/ftypes/oracle.clj`, Fortran's intrinsic types
+as plain Clojure run by `clj`, against both compilers and clotran
+(`scripts/ftypes-check`: 349 cases, 321 compared with the compilers, 0
+differ, 2026-11-22; `docs/types.md`).
 
 ## What does not
 
@@ -61,6 +66,7 @@ recalled (`scripts/oracle`).
 | startup | 0.17 s from the image, and on a terminal the REPL opens by naming the build -- clotran's `VERSION`, the Clojure and ClojureScript commits the language is pinned to (`test/clj/derived/PROVENANCE.md`, written by the deriver), the compiler, the machine and the image's hash; a pipe gets no banner: `build/core.image` is the heap as it stood once core.clj and spec had loaded (`make image`, built with the binary), read back in place of loading them; from source, about 0.9 s. An image belongs to one build of the binary and to the sources it holds, and is left alone with a note when either has changed; `CLOTRAN_IMAGE=0` loads from source |
 | memory | 140 MB after starting from the image (165 MB after loading core.clj from source; measured 2026-10-12), and a walk over a lazy seq stays there: `last`, `nth`, `count` and `dorun` over 10^6 elements of a range, an `iterate` or a mapped seq run at the baseline (PLAN.md step 16: the collector ages survivors before promoting them, and a builtin lets go of its arguments before it walks); the baseline is the heap core.clj and spec leave behind |
 | debugger | steps count calls, not lines, since a call is the event the executor has; one level, so a break inside the handler is a snapshot; no socket. What it does is in `docs/guide.md` |
+| types | clotran's types are Fortran's (`docs/types.md`): kinds `integer(1)`..`integer(8)`, `real(4)`, `real(8)`, `complex(4)`, `complex(8)`; `fortran.ops` is Fortran's arithmetic over them and `clojure.core` keeps Clojure's; hints in Fortran's words (`^real8s`); the pure tier (`clotran compile --pure`) lowers the scalar kinds, complex and 1-D arrays of the narrow kinds as arguments. Not there: `logical` and `character(len=n)` as kinds, rank above 1, arrays of complex, a scalar class for complex (DEVIATIONS 91, 94) |
 | `BigDecimal` | real: `1M`, scale kept, `with-precision` and all eight rounding modes. `(/ 1M 3)` ANSWERS at decimal128 rather than throwing, as MATLAB, Octave and Julia do (DEVIATIONS 43) |
 | threads | a future runs on a thread of its own beside its maker (PLAN.md 14f); an agent's `send` actions run in order on a pool of worker threads with a run queue each, work stealing and a batch cap, designed in ACL2 (`model/agents.lisp`, PLAN.md 24) and `send-off` actions on a thread of the agent's own, a send inside an action or a transaction held until it ends and a failed agent's queue kept for `restart-agent` (DEVIATIONS 29); `dosync` is a transaction with a log and a commit, transactions serialized under one lock (a valid schedule, no retries; DEVIATIONS 10); a wait nothing can satisfy is an error, not a hang (DEVIATIONS 38) |
 | the five host-bound sibling libs | bytecode generation; see `upstream/clojure/src/clj/clojure/PROVENANCE.md` |

@@ -24,6 +24,20 @@ between a 38 MB binary and a 9.5 MB one.
 every fuzzer at full size, for a release candidate. Each writes a log
 whose last line is `EXIT n`, and that line is the verdict.
 
+The targeted checks, each cheap and read-only against the build:
+`make check-static` (no static string lengths, no text relocations),
+`make check-pure` (pure Fortran through gfortran and flang against clj),
+`scripts/ftypes-check` (Fortran's types: `test/ftypes`, the oracle written
+as Clojure, against both compilers, `fortran.ops` and the pure tier),
+`scripts/oracle`, `make check-index`, `upstream/check-names` and
+`make check-model-ratchet`. `docs/release-1.0.md` lists them with what
+they last answered. A second working tree is a `git worktree` outside
+the repository (`git worktree add ../wt/lane -b lane main`): a copy inside
+it, as `.claude/worktrees` once held, is copied again by every
+`make crosscheck`. A fresh worktree has no build: run `make`, after
+copying `src/c/icu/source/lib` from a built tree if ICU's libraries are
+complained about.
+
 To have the build on your PATH:
 
 ```
@@ -97,13 +111,17 @@ runs the same forms through, and `bb` (babashka) runs the scripts.
 - `upstream/` -- Clojure's own source and test suite, vendored and
   unmodified, and `derive`, which writes them into `src/clj/clojure`
   and `test/clj/clojure` in clotran's class names.
-- `src/clj` -- that derived source, and clotran's own (`src/clj/clotran`).
+- `src/clj` -- that derived source, and clotran's own (`src/clj/clotran`,
+  and `src/clj/fortran/ops.cljf`, Fortran's arithmetic: `types.md`).
 - `test/f` -- unit tests for the Fortran host, one file per module.
 - `test/clj` -- Clojure's own test suite, derived the same way, and
   clotran's own checks (`oracle.clj`, `language_test.clj`, and
   `fuzz-regressions.edn`, every case a fuzzer found). The
   conformance measure is `test/clj/derived/`, run by
   `scripts/run-clojure-tests-parallel test/clj/derived`.
+- `test/ftypes` -- the second oracle: Fortran's intrinsic types as Clojure
+  (`oracle.clj`), its cases (`cases.edn`) and the 80-digit reference for the
+  elementary functions (`refmath.clj`); `scripts/ftypes-check` runs it.
 - `model/` -- the ACL2 books: the VM, the allocator and collectors, the
   agent pool, each proved before it was built (`model-coverage.md`).
 - `scripts/` -- babashka scripts: the oracle, the fuzzers, the gates
