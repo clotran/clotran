@@ -4153,3 +4153,22 @@ remains in the words, not the verdict: clotran checks a recur's
 argument count while analyzing it and the place after, so
 `(loop [] (recur (recur 1)))` is refused for its count, clj for its
 place.
+
+## How load reads a file, and where a .lms file joins it
+
+`(require 'a.b)` reaches `RT.load`'s stand-in, `B_RTLOAD` in `src/f/Eval.f90`, with "a/b". It skips
+or renames a few of Clojure's own files by name, and asks `classpath_find` for the file: each root and
+each extension in turn (cljf, cljc, clj, and now lms; DEVIATIONS 33 and 96), across a loaded package's
+directory, src/clj, test/clj, ., clotran's home and CLOTRAN_PATH. A miss is "Could not locate". A hit goes
+to `B_LOADFILE`, which reads the whole file into a string and hands it to `load_text`. `load_text` saves
+`*ns*` and the bindings, registers the file with the reader (`gcr_begin_file`: a file id and its line
+table, so a position is one packed integer, file id times 2^22 plus the character offset), and then loops:
+`gcr_read_next` reads one form, `gce_analyze` makes its node tree (the cons cell's packed position
+becomes the node's, and so a Var's `:line` and a frame's site), `gce_eval` runs it, and only then is the
+next form read. The first error ends the loop; `*ns*` and the bindings are put back however it ends.
+
+A `.lms` path takes the same `load_text` with one change: the forms come from
+`clotran.lms/read-forms` (Lemmis's reader, loaded on first use, and the ns check) as a vector, and each
+list's `{:line :column}` metadata is turned into the packed position LispReader would have given it, in
+the file id and line table `gcr_begin_file` made for the `.lms` text. From there the forms are analysed
+and evaluated by the same two calls (DEVIATIONS 97).

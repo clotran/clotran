@@ -410,6 +410,31 @@ a coarray image -- would answer the same names. Verified:
 (t/status worker)                              ;=> :done
 ```
 
+## Lemmis files
+
+Lemmis is a Fortran-shaped language that runs on
+clotran. A Lemmis file, `.lms`, is a clotran namespace like any other:
+`(require 'my.solver)` from Clojure loads `my/solver.lms`, and a Lemmis
+file's `use` of a Clojure namespace loads its `.cljf`, `.cljc` or `.clj`.
+Functions, closures and values pass between the two with no glue.
+
+- **Where it is found.** `.lms` is tried after `.cljf`, `.cljc` and `.clj`,
+  in every root (the source roots, a package's directory, CLOTRAN_PATH), so
+  a lib written both ways loads its Clojure (DEVIATIONS 96).
+- **What reads it.** Lemmis's own reader, `lemmis.reader`, which is part of
+  Lemmis, not of clotran. Put the Lemmis repo's `src` on CLOTRAN_PATH (or
+  depend on Lemmis in `deps.edn`); clotran loads the reader the first time a
+  `.lms` file is loaded and says what to add when it is missing. The forms
+  it returns are analysed and evaluated exactly as a Clojure file's are
+  (DEVIATIONS 97).
+- **The namespace.** A `.lms` file's module is its namespace, and it must be
+  the lib's name: `my/solver.lms` is `my.solver`, or it is refused.
+- **Lines.** Stack traces, `(meta #'v)` and `clotran index` (so the editor's
+  go-to-definition and hover) name `.lms` lines and columns.
+
+Not yet: `clotran my/solver.lms` on the command line reads the file as
+Clojure; load a `.lms` file with `require` or `load-file`.
+
 ## Compiling a namespace
 
 `clotran compile stats.cljf` turns every `defn` in the file into
