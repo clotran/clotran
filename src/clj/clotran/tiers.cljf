@@ -118,6 +118,14 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
      ns-resolve intern alter-var-root in-ns macroexpand macroexpand-1
      push-thread-bindings pop-thread-bindings with-redefs-fn find-var var-set})
 
+(def ^:private fortran-ops-a
+  "fortran.ops's operations purefort lowers (src/clj/fortran/ops.cljf is their meaning)."
+  '#{fortran.ops/int1 fortran.ops/int2 fortran.ops/int4 fortran.ops/int8 fortran.ops/real4 fortran.ops/real8
+     fortran.ops/+ fortran.ops/- fortran.ops/* fortran.ops// fortran.ops/**
+     fortran.ops/int fortran.ops/nint fortran.ops/floor fortran.ops/ceiling fortran.ops/real fortran.ops/dble
+     fortran.ops/abs fortran.ops/sign fortran.ops/min fortran.ops/max fortran.ops/mod fortran.ops/modulo
+     fortran.ops/sqrt fortran.ops/huge fortran.ops/tiny fortran.ops/epsilon fortran.ops/kind fortran.ops/digits})
+
 (def ^:private string-a
   "clojure.string functions with a pure-Fortran lowering: strings in,
   strings, numbers or booleans out."
@@ -258,7 +266,7 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
                                 (str "see `" vs "`'s own warnings; once it is tier A, so is this call"))])
                     (walk-all args (assoc ctx :consuming false))))
 
-          (string-a vs)
+          (or (string-a vs) (fortran-ops-a vs))
           (walk-all args (assoc ctx :consuming false))
 
           cn

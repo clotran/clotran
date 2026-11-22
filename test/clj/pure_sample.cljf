@@ -123,3 +123,12 @@
 (defn add-down
   ([n] (add-down n 0))
   ([n acc] (if (zero? n) acc (recur (dec n) (+ acc n)))))
+
+;; arrays of the other kinds: an element is its own kind, clojure.core's arithmetic widens it (pure-check)
+(defn sum-ints ^long [^ints a] (loop [i 0 s 0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+(defn sum-floats ^double [^floats a] (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+(defn sum-shorts ^long [^shorts a] (reduce + 0 a))
+(defn sum-bytes ^long [^bytes a] (loop [i 0 s 0] (if (< i (alength a)) (recur (inc i) (+ s (aget a i))) s)))
+(defn dot-floats ^double [^floats a ^floats b]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget b i)))) s)))
+(defn twice-ints ^long [^ints a] (loop [i 0] (if (< i (alength a)) (do (aset a i (* 2 (aget a i))) (recur (inc i))) (alength a))))

@@ -73,7 +73,8 @@ module NativeArray
        gcna_extents, gcna_lows, gcna_total, gcna_index, &
        gcna_get_real, gcna_get_int, gcna_get_logical, &
        gcna_set_real, gcna_set_int, gcna_set_logical, gcna_elem_string, &
-       gcna_live_count, gcna_real8_ptr, gcna_int4_ptr, gcna_int8_ptr, gcna_int1_ptr
+       gcna_live_count, gcna_real8_ptr, gcna_int4_ptr, gcna_int8_ptr, gcna_int1_ptr, &
+       gcna_real4_ptr, gcna_int2_ptr
 
   public :: gcna_image_write, gcna_image_read
 contains
@@ -143,6 +144,38 @@ contains
        ok = .true.
     end select
   end subroutine gcna_int4_ptr
+
+  ! The buffers of the other kinds, for pure Fortran given an array of that kind (a
+  ! real(4) array, an integer(2) one): what clotran_array_view hands over.
+  subroutine gcna_real4_ptr(handle, p, ok)
+    integer, intent(in) :: handle
+    real(4), pointer, contiguous, intent(out) :: p(:)
+    logical, intent(out) :: ok
+    ok = .false.
+    p => null()
+    if (.not. gcna_is(handle)) return
+    if (.not. allocated(reg(handle)%buf)) return
+    select type (b => reg(handle)%buf)
+    type is (real(4))
+       p => b
+       ok = .true.
+    end select
+  end subroutine gcna_real4_ptr
+
+  subroutine gcna_int2_ptr(handle, p, ok)
+    integer, intent(in) :: handle
+    integer(2), pointer, contiguous, intent(out) :: p(:)
+    logical, intent(out) :: ok
+    ok = .false.
+    p => null()
+    if (.not. gcna_is(handle)) return
+    if (.not. allocated(reg(handle)%buf)) return
+    select type (b => reg(handle)%buf)
+    type is (integer(2))
+       p => b
+       ok = .true.
+    end select
+  end subroutine gcna_int2_ptr
 
   ! C = A x B through the reference BLAS, the first Fortran routine
   ! clotran calls. The three buffers are `real(dp)` here and go to

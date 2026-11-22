@@ -23,6 +23,72 @@
 
 ;;; ---- the support module ----------------------------------------------
 
+(defn- kinds-support
+  "The checked procedures fortran.ops's kinds need, as support-text writes the
+  others: P \"\" (nothing that can fail is pure), E `, err` in a library, ED its
+  declaration, fail a failure's statements. A result the standard leaves to the
+  processor -- an integer out of its kind's range, a zero divisor, a power of
+  zero, a square root of a negative -- fails, as fortran.ops throws."
+  [P E ED fail lib?]
+  (let [chk (if lib? "          if (err%code /= 0) return\n" "")]
+    (str
+     (str/join
+      (for [[n iso lo hi] [[1 "int8" "-128" "127"] [2 "int16" "-32768" "32767"] [4 "int32" "-2147483648" "2147483647"]]]
+        (str "  " P "function cl_fit" n "(a" E ") result(r)\n"
+             "    integer(int64), intent(in) :: a\n" ED
+             "    integer(" iso ") :: r\n"
+             "    if (a < " lo "_int64 .or. a > " hi "_int64) then\n"
+             "       " (fail (str "'undefined by the standard: integer overflow (integer(" n "))'") 1) "\n"
+             "    end if\n"
+             "    r = int(a, " iso ")\n"
+             "  end function cl_fit" n "\n")))
+     "  " P "function cl_fsqrt(x" E ") result(r)\n"
+     "    real(real64), intent(in) :: x\n" ED
+     "    real(real64) :: r\n"
+     "    if (x < 0.0_real64) then\n"
+     "       " (fail "'undefined by the standard: SQRT of a negative real'" 1) "\n"
+     "    end if\n"
+     "    r = sqrt(x)\n"
+     "  end function cl_fsqrt\n"
+     (str/join
+      (for [f ["mod" "modulo"]]
+        (str "  " P "function cl_f" f "(a, p" E ") result(r)\n"
+             "    real(real64), intent(in) :: a, p\n" ED
+             "    real(real64) :: r\n"
+             "    if (p == 0.0_real64) then\n"
+             "       " (fail "'undefined by the standard: MOD or MODULO with a zero second argument'" 1) "\n"
+             "    end if\n"
+             "    r = " f "(a, p)\n"
+             "  end function cl_f" f "\n")))
+     ;; a ** b for integers, exactly: by squaring, checked; the squaring of the base is skipped
+     ;; after the last bit, so a power that fits is not refused for a square that does not
+     "  " P "function cl_ipow(a, b" E ") result(r)\n"
+     "    integer(int64), intent(in) :: a, b\n" ED
+     "    integer(int64) :: r, base, e\n"
+     "    r = 1_int64\n"
+     "    if (b < 0_int64) then\n"
+     "       if (a == -1_int64) then\n"
+     "          if (mod(b, 2_int64) /= 0_int64) r = -1_int64\n"
+     "       else if (a == 0_int64) then\n"
+     "          " (fail "'undefined by the standard: 0 raised to a negative integer power'" 1) "\n"
+     "       else if (a /= 1_int64) then\n"
+     "          r = 0_int64\n"
+     "       end if\n"
+     "       return\n"
+     "    end if\n"
+     "    base = a\n"
+     "    e = b\n"
+     "    do while (e > 0_int64)\n"
+     "       if (mod(e, 2_int64) == 1_int64) then\n"
+     "          r = cl_mul(r, base" E ")\n" chk
+     "       end if\n"
+     "       e = e / 2_int64\n"
+     "       if (e > 0_int64) then\n"
+     "          base = cl_mul(base, base" E ")\n" chk
+     "       end if\n"
+     "    end do\n"
+     "  end function cl_ipow\n")))
+
 (defn- support-text
   "The few checked operations every pure module shares, plain Fortran,
   as module `mod`. STANDALONE (lib? false): a failure is Clojure's
@@ -48,7 +114,7 @@
                               (str "call cl_fail(" msg ", " code ", err)\n       return")
                               (str "call cl_fail(" msg ")")))]
     (str "module " mod "\n"
-         "  use iso_fortran_env, only: int64, real64\n"
+         "  use iso_fortran_env, only: int8, int16, int32, int64, real32, real64\n"
          "  implicit none
   integer, parameter :: k16 = selected_int_kind(38)
 "
@@ -217,7 +283,7 @@
        r = int(x, int64)
     end if
   end function cl_long_of
-  " P "subroutine cl_bounds(i, n" E ")
+" (kinds-support P E ED fail lib?) "  " P "subroutine cl_bounds(i, n" E ")
     integer(int64), intent(in) :: i, n
 " ED "    character(len=24) :: bi, bn
     if (i < 0 .or. i >= n) then
@@ -323,7 +389,8 @@ end module " mod "
 ;; the support procedures that can fail, and so take `err` in a library
 (def ^:private fallible
   #{"cl_add" "cl_sub" "cl_mul" "cl_neg" "cl_quot" "cl_rem" "cl_mod" "cl_long_of"
-    "cl_bounds" "cl_dzeros" "cl_lzeros" "cl_subs"})
+    "cl_bounds" "cl_dzeros" "cl_lzeros" "cl_subs"
+    "cl_fit1" "cl_fit2" "cl_fit4" "cl_ipow" "cl_fsqrt" "cl_fmod" "cl_fmodulo"})
 
 (defn- ident-char? [c] (boolean (re-matches #"[A-Za-z0-9_]" (str c))))
 
@@ -409,13 +476,16 @@ end module " mod "
   (if (record-type? t)
     (str "type(" (type-name t) ")")
     ({:long "integer(int64)" :double "real(real64)" :bool "logical"
+      :int1 "integer(int8)" :int2 "integer(int16)" :int4 "integer(int32)" :real4 "real(real32)"
       :doubles "real(real64)" :longs "integer(int64)"
+      :ints "integer(int32)" :floats "real(real32)" :shorts "integer(int16)" :bytes "integer(int8)"
       :string "character(len=:), allocatable"} t)))
 
 (defn- suffix [t]
   (if (record-type? t)
     (str "r" (fort-ident* (name t)))
-    ({:long "l" :double "d" :doubles "vd" :longs "vl" :string "s"} t)))
+    ({:long "l" :double "d" :doubles "vd" :longs "vl" :string "s"
+      :int1 "i1" :int2 "i2" :int4 "i4" :real4 "f4" :ints "vi4" :floats "vf4" :shorts "vi2" :bytes "vi1"} t)))
 
 (defn records-of
   "The records a file defines: {Name {:type :record/Name :factory ns/->Name
@@ -432,6 +502,33 @@ end module " mod "
                                       fields)}])))
 
 (defn- num? [t] (#{:long :double} t))
+
+;; Fortran's kinds in the pure tier (James, 2026-11-21: clotran's types are Fortran's).
+;; :long is integer(8) and :double real(8), as always; :int1 :int2 :int4 :real4 are
+;; the other kinds fortran.ops (src/clj/fortran/ops.cljf) has. A value of one of
+;; them is made by a fortran.ops constructor or operation and lowered by
+;; fortran-call; clojure.core's operations on them are not lowered (Clojure's
+;; rule widens them; say what you mean with fortran.ops).
+(def ^:private fkinds
+  {:int1 {:int? true :bits 8 :n 1 :iso "int8"} :int2 {:int? true :bits 16 :n 2 :iso "int16"}
+   :int4 {:int? true :bits 32 :n 4 :iso "int32"} :long {:int? true :bits 64 :n 8 :iso "int64"}
+   :real4 {:bits 32 :n 4 :iso "real32"} :double {:bits 64 :n 8 :iso "real64"}})
+(defn- k? [t] (contains? fkinds t))
+(defn- kint? [t] (boolean (:int? (fkinds t))))
+(defn- kreal? [t] (and (k? t) (not (kint? t))))
+(defn- kiso [t] (:iso (fkinds t)))
+(defn- kwords [t] (str (if (kint? t) "integer" "real") "(" (:n (fkinds t)) ")"))
+
+;; arrays of those kinds, as clj's hints spell them: ^doubles ^longs ^ints ^floats ^shorts ^bytes
+;; (and Fortran's: ^real8s ^int8s ^int4s ^real4s ^int2s ^int1s). An element read is its own kind;
+;; clojure.core's operations widen it (Clojure's rule: an int is a long in arithmetic, a float a
+;; double), fortran.ops's keep it.
+(def ^:private karr-types {:doubles :double :longs :long :ints :int4 :floats :real4 :shorts :int2 :bytes :int1})
+(defn- karr? [t] (contains? karr-types t))
+(defn- karr-elem [t] (karr-types t))
+(defn- kwide
+  "The kind clojure.core's arithmetic sees a kind as: integers are longs, reals doubles."
+  [t] (case t (:int1 :int2 :int4) :long :real4 :double t))
 
 (defn- decline [why] (throw (ex-info why {::decline why})))
 
@@ -493,7 +590,7 @@ end module " mod "
   (reduce (fn [[ls es ts] nd]
             (let [[l e t] (emit nd env st)]
               (when (= t :none) (decline "recur is not in tail position"))
-              (if (and (#{:long :double :bool} t) (not (#{:const :local} (:op nd))))
+              (if (and (or (#{:long :double :bool} t) (k? t)) (not (#{:const :local} (:op nd))))
                 (let [v (fresh! st "a" t)]
                   [(conj (into ls l) (str v " = " e)) (conj es v) (conj ts t)])
                 [(into ls l) (conj es e) (conj ts t)])))
@@ -584,7 +681,7 @@ end module " mod "
   (loop [nd nd steps ()]
     (case (:op nd)
       :local (let [[v t] (get env (:i2 nd))]
-               (when (#{:doubles :longs} t) {:source [:array v t] :steps (vec steps)}))
+               (when (karr? t) {:source [:array v t] :steps (vec steps)}))
       :call (let [[h & as] (:children nd) op (op-name h)]
               (cond
                 (and ('#{map filter remove} op) (= 2 (count as)))
@@ -605,7 +702,7 @@ end module " mod "
         (case (first source)
           :array (let [[_ v t] source
                        k (fresh! st "k" :long)
-                       et (if (= t :doubles) :double :long)
+                       et (kwide (karr-elem t))
                        e (fresh! st "e" et)]
                    [[] [(str label ": do " k " = 1, size(" v ", kind=int64)")
                         (str "   " e " = " v "(" k ")")]
@@ -741,13 +838,219 @@ end module " mod "
 
       :else (emit-call** nd env st))))
 
-(defn- emit-call** [nd env st]
+;;; ---- fortran.ops: Fortran's kinds, lowered natively ---------------------
+;;
+;; src/clj/fortran/ops.cljf is the meaning (and test/ftypes/oracle.clj the
+;; specification, checked against gfortran and flang); these are its operations
+;; on the kinds of fkinds as Fortran, with the result kind a Fortran result has:
+;; the larger of two integer kinds, the real's kind of an integer with a real.
+;; A narrow integer is computed in integer(8) and checked into its kind by
+;; cl_fit1/2/4; integer(8) uses the checked cl_add .. helpers; reals are
+;; Fortran's own operators. A result the standard leaves to the processor
+;; fails, as fortran.ops throws. (DEVIATIONS 93.)
+
+(defn- kwiden
+  "Expression e of kind from, as kind to, where to is at least as wide (or a real)."
+  [e from to]
+  (cond (= from to) e
+        (and (kint? from) (kint? to)) (str "int(" e ", " (kiso to) ")")
+        (kreal? to) (str "real(" e ", " (kiso to) ")")
+        :else (decline (str "a " (kwords from) " cannot be used as a " (kwords to)))))
+
+(defn- kfit
+  "An integer(8) expression as integer kind k: checked into a narrow kind."
+  [e k]
+  (if (= k :long) e (str "cl_fit" (:n (fkinds k)) "(" e ")")))
+
+(defn- kto
+  "Expression e of kind from as kind to, an assignment's or a constructor's: a
+  narrowing integer is checked, a real never becomes an integer here."
+  [e from to]
+  (cond (= from to) e
+        (and (kint? from) (kint? to))
+        (if (> (:bits (fkinds to)) (:bits (fkinds from)))
+          (kwiden e from to)
+          (kfit (if (= from :long) e (str "int(" e ", int64)")) to))
+        (kreal? to) (kwiden e from to)
+        :else (decline (str "a " (kwords from) " to a " (kwords to) ": use int, nint, floor or ceiling"))))
+
+(defn- kpromote [a b]
+  (cond (and (kint? a) (kint? b)) (if (>= (:bits (fkinds a)) (:bits (fkinds b))) a b)
+        (and (kreal? a) (kreal? b)) (if (>= (:bits (fkinds a)) (:bits (fkinds b))) a b)
+        (kint? a) b
+        :else a))
+
+(defn- i64 [e t] (if (= t :long) e (str "int(" e ", int64)")))
+
+(defn- kop
+  "a op b, op one of :+ :- :* :/ , for two expressions of Fortran kinds."
+  [op a ta b tb]
+  (let [k (kpromote ta tb) x (kwiden a ta k) y (kwiden b tb k)]
+    (if (kint? k)
+      (if (= k :long)
+        [(str (case op :+ "cl_add(" :- "cl_sub(" :* "cl_mul(" :/ "cl_quot(") x ", " y ")") :long]
+        [(kfit (case op
+                 :/ (str "cl_quot(" (i64 x k) ", " (i64 y k) ")")
+                 (str "(" (i64 x k) " " (name op) " " (i64 y k) ")")) k)
+         k])
+      [(str "(" x " " (name op) " " y ")") k])))
+
+(def ^:private real-text #"-?[0-9]+(\.[0-9]*)?([eEdD][+-]?[0-9]+)?|-?\.[0-9]+([eEdD][+-]?[0-9]+)?")
+
+(defn- real-literal
+  "A real kind's literal from its decimal text, rounded once from the text, as Fortran rounds it."
+  [text k]
+  (when-not (re-matches real-text text) (decline (str "the real literal " (pr-str text))))
+  (let [t (str/replace text #"[dD]" "e")
+        t (if (re-find #"[.eE]" t) t (str t ".0"))
+        t (if (re-find #"^-?\." t) (str/replace t #"\." "0." ) t)
+        t (str t "_" (kiso k))]
+    (if (str/starts-with? t "-") (str "(" t ")") t)))
+
+(defn- const-int
+  "The integer a node says, a constant or a fortran.ops constructor of one, else nil."
+  [nd]
+  (cond (and (= :const (:op nd)) (integer? (:p1 nd))) (:p1 nd)
+        (and (= :call (:op nd)) (let [o (op-name (first (:children nd)))]
+                                   (and (symbol? o) (= "fortran.ops" (namespace o)) (re-matches #"int[1248]" (name o)))))
+        (const-int (second (:children nd)))
+        :else nil))
+
+(defn- kzero [t] (if (kint? t) (str "0_" (kiso t)) (str "0.0_" (kiso t))))
+
+(defn- fortran-call [op args env st]
+  (let [nm (name op)
+        n (count args)
+        kw? #(and (= :const (:op %)) (keyword? (:p1 %)))
+        vals (vec (remove kw? args))
+        [ls es ts] (emit-args vals env st)
+        kwk (some #(when (kw? %) (:p1 %)) args)
+        tgt (fn [dflt] (let [m {:int1 :int1 :int2 :int2 :int4 :int4 :int8 :long :real4 :real4 :real8 :double}]
+                         (cond (nil? kwk) dflt
+                               (m kwk) (m kwk)
+                               :else (decline (str "the kind " kwk " is not one of int1 int2 int4 int8 real4 real8")))))
+        done (fn [e t & [more]] [(into ls more) e t])
+        e0 (first es) t0 (first ts) e1 (second es) t1 (second ts)
+        _ (when (and (not (#{"int1" "int2" "int4" "int8" "real4" "real8"} nm))
+                     (not (every? k? ts)))
+            (decline (str "fortran." "ops/" nm " of something that is not a Fortran kind: make one with int4, real8 ..., or write long or double")))
+        same! (fn [] (when-not (apply = ts) (decline (str "fortran.ops/" nm " needs one kind, not " (str/join ", " (map kwords ts))))))
+        to-int (fn [e64 k] (kfit e64 k))]
+    (case nm
+      ("int1" "int2" "int4" "int8")
+      (let [k ({"int1" :int1 "int2" :int2 "int4" :int4 "int8" :long} nm)]
+        (cond (kint? t0) (done (kto e0 t0 k) k)
+              :else (decline (str nm " of a real: use int, nint, floor or ceiling"))))
+
+      ("real4" "real8")
+      (let [k (if (= nm "real4") :real4 :double) a (first vals)]
+        (cond (and (= :const (:op a)) (string? (:p1 a))) (done (real-literal (:p1 a) k) k)
+              (k? t0) (done (kto e0 t0 k) k)
+              :else (decline (str nm " of something that is not a number or a decimal text"))))
+
+      ("+" "*" "/")
+      (do (when-not (= 2 n) (decline (str "fortran.ops/" nm " of other than two values")))
+          (let [[e t] (kop (keyword nm) e0 t0 e1 t1)] (done e t)))
+
+      "-"
+      (cond (= n 1) (cond (= t0 :long) (done (str "cl_neg(" e0 ")") :long)
+                          (kint? t0) (done (kfit (str "(-" (i64 e0 t0) ")") t0) t0)
+                          :else (done (str "(-" e0 ")") t0))
+            (= n 2) (let [[e t] (kop :- e0 t0 e1 t1)] (done e t))
+            :else (decline "fortran.ops/- of other than one or two values"))
+
+      "**"
+      (let [p (const-int (second vals))]
+        (cond (and (kint? t0) (kint? t1))
+              (let [k (kpromote t0 t1)] (done (kfit (str "cl_ipow(" (i64 e0 t0) ", " (i64 e1 t1) ")") k) k))
+              (and (kreal? t0) (kint? t1) (= p 2)) (done (str "(" e0 " * " e0 ")") t0)
+              :else (decline "a real power other than x**2 is processor dependent")))
+
+      "int"
+      (let [k (tgt :int4)]
+        (when-not (kint? k) (decline "int to a real kind"))
+        (if (kint? t0)
+          (done (kto e0 t0 k) k)
+          (done (to-int (str "cl_long_of(" (kwiden e0 t0 :double) ")") k) k)))
+
+      ("nint" "floor" "ceiling")
+      (let [k (tgt :int4)]
+        (when-not (kint? k) (decline (str nm " to a real kind")))
+        (if (kint? t0)
+          (done (kto e0 t0 k) k)
+          (let [x (fresh! st "x" :double)]
+            (if (= nm "nint")
+              (done (to-int (str "cl_long_of(anint(" x "))") k) k [(str x " = " (kwiden e0 t0 :double))])
+              (done (to-int (if (= nm "floor")
+                              (str "cl_long_of(aint(" x ") - merge(1.0_real64, 0.0_real64, " x " < aint(" x ")))")
+                              (str "cl_long_of(aint(" x ") + merge(1.0_real64, 0.0_real64, " x " > aint(" x ")))")) k) k
+                    [(str x " = " (kwiden e0 t0 :double))])))))
+
+      "real"
+      (let [k (tgt :real4)]
+        (when-not (kreal? k) (decline "real to an integer kind"))
+        (done (kto e0 t0 k) k))
+
+      "dble" (done (kto e0 t0 :double) :double)
+
+      "abs"
+      (cond (= t0 :long) (let [a (fresh! st "x" :long)]
+                           (done (str "merge(cl_neg(" a "), " a ", " a " < 0_int64)") :long [(str a " = " e0)]))
+            (kint? t0) (done (kfit (str "abs(" (i64 e0 t0) ")") t0) t0)
+            :else (done (str "abs(" e0 ")") t0))
+
+      "sign"
+      (do (same!)
+          (if (kint? t0)
+            (let [a (fresh! st "x" :long)]
+              (done (kfit (str "merge(-" a ", " a ", " (i64 e1 t1) " < 0_int64)") t0) t0
+                    [(str a " = " (if (= t0 :long) (str "merge(cl_neg(" e0 "), " e0 ", " e0 " < 0_int64)") (str "abs(" (i64 e0 t0) ")")))]))
+            (done (str "sign(" e0 ", " e1 ")") t0)))
+
+      ("min" "max")
+      (do (same!) (done (str nm "(" (str/join ", " es) ")") t0))
+
+      ("mod" "modulo")
+      (do (same!)
+          (if (kint? t0)
+            (let [h (str (if (= nm "mod") "cl_rem(" "cl_mod(") (i64 e0 t0) ", " (i64 e1 t1) ")")]
+              (done (if (= t0 :long) h (str "int(" h ", " (kiso t0) ")")) t0))
+            (let [h (str "cl_f" nm "(" (kwiden e0 t0 :double) ", " (kwiden e1 t1 :double) ")")]
+              (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0))))
+
+      "sqrt"
+      (do (when-not (kreal? t0) (decline "sqrt of an integer"))
+          (let [h (str "cl_fsqrt(" (kwiden e0 t0 :double) ")")]
+            (done (if (= t0 :double) h (str "real(" h ", " (kiso t0) ")")) t0)))
+
+      "huge" (done (str "huge(" (kzero t0) ")") t0)
+      "tiny" (do (when-not (kreal? t0) (decline "tiny of an integer")) (done (str "tiny(" (kzero t0) ")") t0))
+      "epsilon" (do (when-not (kreal? t0) (decline "epsilon of an integer")) (done (str "epsilon(" (kzero t0) ")") t0))
+      "kind" (done (str (:n (fkinds t0)) "_int32") :int4)
+      "digits" (done (str (if (kint? t0) (dec (:bits (fkinds t0))) (case t0 :real4 24 :double 53)) "_int32") :int4)
+
+      (decline (str "fortran.ops/" nm " is not lowered")))))
+
+(defn- widen-args
+  "clojure.core's operations see the Fortran kinds as Clojure does: an integer kind is a
+  long and a real(4) a double (an int in clj arithmetic is a long, a float a double). Only
+  the value an aset stores keeps its kind, which the array's element then checks."
+  [op es ts]
+  (let [pairs (map-indexed (fn [j [e t]]
+                             (if (and (#{:int1 :int2 :int4 :real4} t) (not (and (= op 'aset) (= j 2))))
+                               [(kwiden e t (kwide t)) (kwide t)]
+                               [e t]))
+                           (map vector es ts))]
+    [(mapv first pairs) (mapv second pairs)]))
+
+(defn- emit-call*** [nd env st]
   (let [[head & args] (:children nd)
         op (op-name head)
         ;; an array hint's checkcast is (clotran-array-cast x :doubles): the
         ;; keyword names the type and is no expression to emit
         args (if (= op 'clotran-array-cast) [(first args)] args)
-        [ls es ts] (emit-args args env st)
+        [ls es0 ts0] (emit-args args env st)
+        [es ts] (widen-args op es0 ts0)
         n (count args)
         done (fn [e t] [ls e t])]
     (cond
@@ -832,13 +1135,17 @@ end module " mod "
         (done ".false." :bool))
 
       (#{'double 'num} op)
-      (if (num? (first ts)) (done (as-double (first es) (first ts)) :double)
-          (decline (str op " of something that is not a number")))
+      (cond (num? (first ts)) (done (as-double (first es) (first ts)) :double)
+            ;; a Fortran kind leaves the kinds here, widened (fortran.ops makes them)
+            (k? (first ts)) (done (kwiden (first es) (first ts) :double) :double)
+            :else (decline (str op " of something that is not a number")))
 
       (#{'long 'int 'unchecked-long} op)
       (case (first ts)
         :long (done (first es) :long)
         :double (done (str "cl_long_of(" (first es) ")") :long)
+        (:int1 :int2 :int4) (done (str "int(" (first es) ", int64)") :long)
+        :real4 (done (str "cl_long_of(real(" (first es) ", real64))") :long)
         (decline (str op " of something that is not a number")))
 
       (#{'abs 'math/abs} op)
@@ -860,33 +1167,38 @@ end module " mod "
             (if (= op 'double-array) :doubles :longs))
 
       ;; a copy: assigned to its own variable, Fortran array assignment copies
-      (and (= op 'aclone) (#{:doubles :longs} (first ts)))
+      (and (= op 'aclone) (karr? (first ts)))
       (done (first es) (first ts))
 
       (and ('#{unchecked-inc unchecked-dec} op) (= :long (first ts)))
       (done (str "(" (first es) (if (= op 'unchecked-inc) " + " " - ") "1_int64)") :long)
 
       (= op 'alength)
-      (if (#{:doubles :longs} (first ts))
+      (if (karr? (first ts))
         (done (str "size(" (first es) ", kind=int64)") :long)
         (decline "alength of something that is not an array"))
 
       (= op 'aget)
       (let [[ta ti] ts [a i] es]
-        (when-not (and (#{:doubles :longs} ta) (= ti :long)) (decline "aget of other than an array and a long index"))
+        (when-not (and (karr? ta) (= ti :long)) (decline "aget of other than an array and a long index"))
         (let [iv (fresh! st "i" :long)]
           [(conj (into ls [(str iv " = " i)]) (str "call cl_bounds(" iv ", size(" a ", kind=int64))"))
-           (str a "(" iv " + 1)") (if (= ta :doubles) :double :long)]))
+           (str a "(" iv " + 1)") (karr-elem ta)]))
 
       (= op 'aset)
       (let [[ta ti tv] ts [a i v] es]
-        (when-not (and (#{:doubles :longs} ta) (= ti :long)) (decline "aset of other than an array and a long index"))
-        (let [et (if (= ta :doubles) :double :long)
-              _ (when-not (or (= tv et) (and (= et :double) (= tv :long))) (decline "aset of a value of the wrong type"))
+        (when-not (and (karr? ta) (= ti :long)) (decline "aset of other than an array and a long index"))
+        (let [et (karr-elem ta)
+              ;; a value of the element's kind, or of another of its class (an integer kind into an integer
+              ;; array, checked into it; a real into a real one), or a long into doubles as before
+              _ (when-not (or (= tv et) (and (= et :double) (= tv :long)) (and (kint? et) (kint? tv)) (and (kreal? et) (kreal? tv)))
+                  (decline "aset of a value of the wrong type"))
               iv (fresh! st "i" :long) vv (fresh! st "v" et)]
           (swap! st update :written conj a)
           [(into ls [(str iv " = " i) (str "call cl_bounds(" iv ", size(" a ", kind=int64))")
-                     (str vv " = " (if (= et :double) (as-double v tv) v))
+                     (str vv " = " (cond (and (= et :double) (= tv :long)) (as-double v tv)
+                                         (= tv et) v
+                                         :else (kto v tv et)))
                      (str a "(" iv " + 1) = " vv)])
            vv et]))
 
@@ -914,7 +1226,7 @@ end module " mod "
       (and (= op 'count) (= 1 n) (= :string (first ts)))
       (done (str "cl_nchars(" (first es) ")") :long)
 
-      (and (= op 'count) (= 1 n) (#{:doubles :longs} (first ts)))
+      (and (= op 'count) (= 1 n) (karr? (first ts)))
       (done (str "size(" (first es) ", kind=int64)") :long)
 
       (= op 'subs)
@@ -947,6 +1259,16 @@ end module " mod "
           (done (str (fort-ident (name op)) "(" (str/join ", " es) ")") rt)))
 
       :else (decline (str "calls `" (or op (:op head)) "`, which is not lowered yet")))))
+
+
+(defn- emit-call**
+  "fortran.ops's operations are lowered by fortran-call; every other call by emit-call***."
+  [nd env st]
+  (let [[head & args] (:children nd)
+        op (op-name head)]
+    (if (and (symbol? op) (= "fortran.ops" (namespace op)))
+      (fortran-call op args env st)
+      (emit-call*** nd env st))))
 
 (defn- not-in-fns
   "Every node under nd, not descending into fn literals -- their slots
@@ -1024,7 +1346,7 @@ end module " mod "
                         (str "do " k " = 0, " le " - 1"))
                       "   block"]
                      (for [[v t] (distinct inner) :when (fort-type t)]
-                       (str "      " (if (#{:doubles :longs} t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
+                       (str "      " (if (karr? t) (str (fort-type t) ", allocatable :: " v "(:)") (str (fort-type t) " :: " v))))
                      (map #(str "      " %) el)
                      (when-not conc? [(str "      call cl_bounds(" k ", " n ")")])
                      [(str "      " rv "(" k " + 1) = " (if (and (= rt :doubles) (= et :long)) (str "real(" ee ", real64)") ee))
@@ -1064,7 +1386,7 @@ end module " mod "
                                      (let [init (nth kids i)
                                            [l e t] (emit init env st)]
                                        (when (= t :none) (decline "recur in a let binding"))
-                                       (if (and (#{:doubles :longs} t) (= :local (:op init)))
+                                       (if (and (karr? t) (= :local (:op init)))
                                          ;; an array is a reference: this local IS that array
                                          [(into ls l) (assoc env (+ base i) (get env (:i2 init)))]
                                          (let [v (fresh! st "x" t)]
@@ -1076,7 +1398,7 @@ end module " mod "
                  [ls es ts] (emit-args (:children nd) env st)]
              (when-not label (decline "a recur with no loop to go to"))
              (doseq [[[v tv] e t] (map vector vars es ts)]
-               (if (#{:doubles :longs} tv)
+               (if (karr? tv)
                  ;; an array parameter can only be passed back as it is
                  (when (not= e v) (decline "recur passes a different array"))
                  ;; clj boxes a local a recur passes another type -- (loop
@@ -1084,7 +1406,7 @@ end module " mod "
                  ;; Fortran has no box, so the function stays compiled
                  (when-not (= t tv)
                    (decline "recur changes a loop local's type"))))
-             (let [pairs (remove (fn [[[_ tv]]] (#{:doubles :longs} tv)) (map vector vars es ts))
+             (let [pairs (remove (fn [[[_ tv]]] (karr? tv)) (map vector vars es ts))
                    tmps (mapv (fn [[[_ tv] e t]] (let [v (fresh! st "r" tv)] [v (str v " = " (if (= tv :double) (as-double e t) e))])) pairs)]
                (-> ls (into (map second tmps))
                    (into (map (fn [[[v _]] [tmp _]] (str v " = " tmp)) pairs tmps))
@@ -1095,7 +1417,7 @@ end module " mod "
                 label (str "lp" (:n (swap! st update :n inc)))
                 [ls env' vars] (reduce (fn [[ls env vars] i]
                                          (let [[l e t] (emit (nth kids i) env st)
-                                               arr? (#{:doubles :longs} t)
+                                               arr? (karr? t)
                                                ;; an array local is the same array under another name
                                                ;; (what `(fn ^double [^doubles a] ..)` expands to:
                                                ;; (let [a a] ..)): no copy, only a plain name may alias
@@ -1207,7 +1529,9 @@ end module " mod "
     (vec (map-indexed
           (fn [i p]
             (if-let [h ('{doubles [:doubles] longs [:longs] double [:double] long [:long] clotran.host.string [:string]
-                    real8s [:doubles] int8s [:longs] real8 [:double] int8 [:long]} (:tag (meta p)))]
+                    ints [:ints] floats [:floats] shorts [:shorts] bytes [:bytes]
+                    real8s [:doubles] int8s [:longs] real8 [:double] int8 [:long]
+                    int4s [:ints] real4s [:floats] int2s [:shorts] int1s [:bytes]} (:tag (meta p)))]
               h
               (cond (callee-types (+ start i)) (vec (callee-types (+ start i)))
                     (record-cands (+ start i)) (vec (record-cands (+ start i)))
@@ -1231,12 +1555,12 @@ end module " mod "
                     :printing-versions printing-versions :records records})
           pnames (mapv #(str "p" %) (range nargs))
           ;; scalar parameters are copied into locals, so a recur can rebind them
-          locals (mapv (fn [t] (when-not (#{:doubles :longs} t) (fresh! st "a" t))) ts)
-          env (into {} (map-indexed (fn [i t] [(+ start i) [(if (#{:doubles :longs} t) (pnames i) (locals i)) t]]) ts))
+          locals (mapv (fn [t] (when-not (karr? t) (fresh! st "a" t))) ts)
+          env (into {} (map-indexed (fn [i t] [(+ start i) [(if (karr? t) (pnames i) (locals i)) t]]) ts))
           label (str "top" (:n (swap! st update :n inc)))
           ret (atom nil)
           body-lines (emit-tail body (assoc env :loop {:label label
-                                                       :vars (vec (map-indexed (fn [i t] [(if (#{:doubles :longs} t) (pnames i) (locals i)) t]) ts))})
+                                                       :vars (vec (map-indexed (fn [i t] [(if (karr? t) (pnames i) (locals i)) t]) ts))})
                                 st
                                 (fn [e t]
                                   (when (and @ret (not= @ret t))
@@ -1247,6 +1571,8 @@ end module " mod "
                                     [(str "r = " e) (str "exit " label)])))
           rt @ret
           _ (when-not rt (decline "no path answers a value"))
+          _ (when (and (karr? rt) (not (#{:doubles :longs} rt)))
+              (decline "an array result of that kind is not lowered yet"))
           ;; in a library, the error flag after every call that can fail:
           ;; the support procedures and this file's own functions
           body-lines (if *library*
@@ -1256,7 +1582,7 @@ end module " mod "
           nm (str (fort-ident (name fname)) "__" (str/join "_" (map suffix ts)))
           {:keys [decls written]} @st
           decl-lines (for [[v t] (distinct decls) :when (fort-type t)]
-                       (if (#{:doubles :longs} t)
+                       (if (karr? t)
                          (str "    " (fort-type t) ", allocatable :: " v "(:)")
                          (str "    " (fort-type t) " :: " v)))
           sub? (= rt :nil)
@@ -1278,20 +1604,20 @@ end module " mod "
                   (apply str (for [[i t] (map-indexed vector ts)]
                                (str "    " (if (= t :string) "character(len=*), intent(in)" (fort-type t))
                                     (cond
-                                      (#{:doubles :longs} t)
+                                      (karr? t)
                                       (str ", intent(" (if (written (pnames i)) "inout" "in") ") :: " (pnames i) "(:)\n")
                                       (= t :string) (str " :: " (pnames i) "\n")
                                       :else (str ", intent(in) :: " (pnames i) "\n")))))
-                  (when-not sub? (if (#{:doubles :longs} rt)
+                  (when-not sub? (if (karr? rt)
                                    (str "    " (fort-type rt) ", allocatable :: r(:)\n")
                                    (str "    " (fort-type rt) " :: r\n")))
                   (str/join "\n" decl-lines) (when (seq decl-lines) "\n")
-                  (apply str (for [[i t] (map-indexed vector ts) :when (not (#{:doubles :longs} t))]
+                  (apply str (for [[i t] (map-indexed vector ts) :when (not (karr? t))]
                                (str "    " (locals i) " = " (pnames i) "\n")))
                   ;; a library's array result is allocated (empty) before
                   ;; anything can fail: a failed call returns on err, and the
                   ;; caller's copy of an unallocated result is a crash
-                  (when (and *library* (not sub?) (#{:doubles :longs} rt)) "    allocate(r(0))\n")
+                  (when (and *library* (not sub?) (karr? rt)) "    allocate(r(0))\n")
                   "    " label ": do\n"
                   (apply str (map #(str "       " % "\n") body-lines))
                   "    end do " label "\n"
@@ -1402,7 +1728,7 @@ end module " mod "
                              "! one generic name each, one specific procedure per argument type.\n\n"))
                       (support-text *library* (if *library* (str mod-name "_rt") "clotran_pure")) "\n"
                       "module " mod-name "\n"
-                      "  use iso_fortran_env, only: int64, real64\n"
+                      "  use iso_fortran_env, only: int8, int16, int32, int64, real32, real64\n"
                       "  use " (if *library* (str mod-name "_rt") "clotran_pure") "\n"
                       "  implicit none\n"
                       "  private\n"

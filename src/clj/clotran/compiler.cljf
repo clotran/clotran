@@ -2049,7 +2049,18 @@ end module clotran_rt_decl
 ;; thread's context (clotran_fail) and set the flag; the dispatcher
 ;; returns with no answer, as a tier-B procedure does after an error.
 
-(def ^:private pure-arg-types #{:long :double :doubles :longs})
+;; the arrays a pure version may take, by clotran_array_view's kind code: the kind code, the
+;; name its pointer and its arguments have, the Fortran type of an element, and the zero-length
+;; target a pointer is given for an empty array (c_f_pointer cannot make one of length 0)
+(def ^:private pure-arrays
+  {:doubles {:code 1 :v "vd" :no "nod" :ft "real(c_double)"}
+   :longs {:code 2 :v "vl" :no "nol" :ft "integer(c_int64_t)"}
+   :ints {:code 3 :v "vi4" :no "noi4" :ft "integer(c_int32_t)"}
+   :floats {:code 4 :v "vf4" :no "nof4" :ft "real(c_float)"}
+   :shorts {:code 5 :v "vi2" :no "noi2" :ft "integer(c_int16_t)"}
+   :bytes {:code 6 :v "vi1" :no "noi1" :ft "integer(c_int8_t)"}})
+
+(def ^:private pure-arg-types #{:long :double :doubles :longs :ints :floats :shorts :bytes})
 (def ^:private pure-ret-types #{:long :double :bool :nil :doubles :longs})
 
 (defn- pure-version-ok? [v]
@@ -2066,13 +2077,14 @@ end module clotran_rt_decl
   (let [arg (fn [i] (str "argbase + " (inc i)))
         scalar-tests (for [[i t] (map-indexed vector ts) :when (#{:long :double} t)]
                        (str "sv(" (arg i) ")%tag == " (if (= t :long) 2 3)))
-        views (for [[i t] (map-indexed vector ts) :when (#{:doubles :longs} t)]
+        views (for [[i t] (map-indexed vector ts) :when (pure-arrays t)
+                    :let [{:keys [code v no]} (pure-arrays t)]]
                 (str "          if (ok) then\n"
-                     "             if (clotran_array_view(cs, " (arg i) ", " (if (= t :doubles) 1 2) "_c_int, ap, an) == 1) then\n"
+                     "             if (clotran_array_view(cs, " (arg i) ", " code "_c_int, ap, an) == 1) then\n"
                      "                if (an > 0) then\n"
-                     "                   call c_f_pointer(ap, " (if (= t :doubles) "vd" "vl") i ", [an])\n"
+                     "                   call c_f_pointer(ap, " v i ", [an])\n"
                      "                else\n"
-                     "                   " (if (= t :doubles) "vd" "vl") i " => " (if (= t :doubles) "nod" "nol") "\n"
+                     "                   " v i " => " no "\n"
                      "                end if\n"
                      "             else\n"
                      "                ok = .false.\n"
@@ -2082,7 +2094,7 @@ end module clotran_rt_decl
                 (if (= t :long)
                   (str "             l" i " = sv(" (arg i) ")%ival\n")
                   (str "             d" i " = transfer(sv(" (arg i) ")%ival, 0.0_c_double)\n")))
-        args (str/join ", " (concat (map-indexed (fn [i t] (str ({:long "l" :double "d" :doubles "vd" :longs "vl"} t) i)) ts) ["err"]))
+        args (str/join ", " (concat (map-indexed (fn [i t] (str (or (:v (pure-arrays t)) ({:long "l" :double "d"} t)) i)) ts) ["err"]))
         call (case ret
                :nil (str "call " name "(" args ")")
                :long (str "rl = " name "(" args ")")
@@ -2142,11 +2154,9 @@ end module clotran_rt_decl
            "    integer(c_int) :: nme, nrel\n"
            "    real(c_double), allocatable, target :: ra(:)\n"
            "    integer(c_int64_t), allocatable, target :: la(:)\n"
-           "    real(c_double), target :: nod(0)\n"
-           "    integer(c_int64_t), target :: nol(0)\n"
+           (apply str (for [[_ {:keys [no ft]}] (sort-by key pure-arrays)] (str "    " ft ", target :: " no "(0)\n")))
            (apply str (for [i (range width)]
-                        (str "    real(c_double), pointer :: vd" i "(:)\n"
-                             "    integer(c_int64_t), pointer :: vl" i "(:)\n"
+                        (str (apply str (for [[_ {:keys [v ft]}] (sort-by key pure-arrays)] (str "    " ft ", pointer :: " v i "(:)\n")))
                              "    integer(c_int64_t) :: l" i "\n"
                              "    real(c_double) :: d" i "\n")))
            "    cs = clotran_stack()\n"

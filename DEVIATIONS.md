@@ -115,8 +115,9 @@ Categories:
 | 88 | What the standard leaves to the processor throws | design | `src/clj/fortran/ops.cljf` |
 | 89 | A real(4) literal is rounded from its text through a real(8) | 1.x | `src/clj/fortran/ops.cljf` |
 | 90 | A real(4) conversion out of range throws where IEEE answers infinity | design | -- |
-| 91 | The pure tier lowers only some of Fortran's kinds | 1.x | `src/clj/clotran/purefort.cljf` |
+| 91 | The pure tier lowers some of Fortran's kinds | 1.x | `src/clj/clotran/purefort.cljf` |
 | 92 | Type hints in Fortran's words | design | `src/f/analyze.inc` (hint_canon) |
+| 93 | fortran.ops in the pure tier: Fortran's kinds, with their own messages | design | `src/clj/clotran/purefort.cljf` (fortran-call) |
 
 ---
 
@@ -2785,17 +2786,20 @@ values go through `float` too, so an overflowing real(4) `+` or `*` throws. A re
 
 **Removal**: none intended; Fortran leaves the overflow to the processor (88).
 
-## 91. The pure tier lowers only some of Fortran's kinds
+## 91. The pure tier lowers some of Fortran's kinds
 
-`clotran compile --pure` lowers long, double, boolean, 1-D long and double arrays,
-strings and records. It has no int1, int2, int4, real4, complex or logical
-kind, no rank above 1, and types an unhinted parameter by guessing (the hint, else
-what a same-file callee takes, else how the body uses it, else long or double) and
-emitting up to 8 versions. Fortran declares every type. `docs/types.md` has the
-table and what is planned.
+`clotran compile --pure` lowers integer(1), (2), (4) and (8), real(4) and real(8) scalars
+(through `fortran.ops`, DEVIATIONS 93), boolean, strings and records, and 1-D arrays of
+integer(8), real(8), integer(4), real(4), integer(2) and integer(1) as ARGUMENTS (`^longs`,
+`^doubles`, `^ints`, `^floats`, `^shorts`, `^bytes`, or Fortran's spellings, DEVIATIONS 92).
+Not yet: complex; a function parameter or result of the narrow scalar kinds at the
+boundary of a compiled library (they cross as a long or a double: `^int4` is refused on a
+fn, 92); an array RESULT of the four narrow kinds; rank above 1; logical kinds;
+`character(len=n)`. An unhinted parameter's type is still guessed (the hint, else what a
+same-file callee takes, else how the body uses it, else long or double), with up to 8
+versions. Fortran declares every type.
 
-**Removal**: the pure tier's lattice takes the kinds `fortran.ops` already has
-(PLAN: types), hints spelled in Fortran's words, and then complex.
+**Removal**: the missing kinds above, then guessing goes: a pure function states its types.
 
 ## 92. Type hints in Fortran's words
 
@@ -2821,3 +2825,25 @@ as clj does (`[I`, `[D`); its Fortran wording is a change to the oracle's expect
 
 **Removal**: accept the other scalar kinds on a fn (a conversion by `int`, `float`,
 `short`, `byte`) once the pure tier has them, and reword the class-cast text.
+
+## 93. fortran.ops in the pure tier: Fortran's kinds, with their own messages
+
+Inside a pure function, a call of a `fortran.ops` operation is lowered by
+`purefort.cljf`'s `fortran-call` with the kinds as Fortran has them: the result keeps the
+kind (the larger of two integer kinds, the real's kind of an integer with a real), a narrow
+integer is computed in integer(8) and checked into its kind by `cl_fit1`/`cl_fit2`/`cl_fit4`,
+and real(4) arithmetic is Fortran's own (computed in real(4)). `clojure.core`'s operations on
+these values widen them, as Clojure's do: an integer kind is a long, a real(4) a double; an
+array element read is its own kind. `scripts/ftypes-check` compiles all 121 cases of
+`test/ftypes/cases.edn` as pure functions and requires gfortran's and flang's builds to
+answer the oracle's value, or, for a case the standard leaves undefined, to fail (or not
+to lower, when `fortran.ops` throws it instead).
+
+Where this differs from `fortran.ops` interpreted: the TEXT of a failure. The pure helpers
+say "undefined by the standard: integer overflow (integer(4))" for a narrow kind but "long
+overflow" for integer(8) and "Divide by zero" for `quot`, the helpers clojure.core's
+arithmetic shares. A real(4) overflow is infinity in pure Fortran, as IEEE has it, where
+`fortran.ops` throws (DEVIATIONS 90). `NaN` converted to an integer is 0 (the cast of a long), where
+the oracle calls it undefined. A real power other than `x**2` is not lowered.
+
+**Removal**: one text for each failure, from one table; the real(4) overflow decided once.

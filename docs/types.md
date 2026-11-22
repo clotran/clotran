@@ -92,6 +92,18 @@ that was undefined and stops being so, or the reverse, fails.
 
 ## The compiler
 
-`clotran compile --pure` lowers long, double, boolean, 1-D arrays of long and double,
-strings and records, and guesses an unhinted parameter's type (DEVIATIONS 91). The lattice is
-to take the kinds above (the hints are spelled as Fortran spells them already), then complex.
+`clotran compile --pure` lowers integer(1), (2), (4), (8), real(4) and real(8) scalars when a
+function uses `fortran.ops` (the kinds are Fortran's, the result keeps the kind), arrays of
+those kinds as arguments, boolean, strings and records. Inside such a function the kinds are
+native: `(f/+ (f/int4 a) (f/int4 b))` is an `integer(int32)` add checked into its kind.
+`clojure.core`'s operations widen them as Clojure's do (DEVIATIONS 93). `scripts/ftypes-check`
+runs every oracle case through gfortran's and flang's pure builds.
+
+```
+(require '[fortran.ops :as f])
+(defn mean-sq ^real8 [^real4s a]
+  (loop [i 0 s 0.0] (if (< i (alength a)) (recur (inc i) (+ s (* (aget a i) (aget a i)))) (/ s (alength a)))))
+```
+
+Not yet lowered: complex, the narrow scalar kinds as parameters or results of a compiled
+library function, array results of the narrow kinds, rank above 1 (DEVIATIONS 91).

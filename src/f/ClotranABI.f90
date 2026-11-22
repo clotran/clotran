@@ -1149,7 +1149,9 @@ contains
 
   ! A VIEW of a one-dimensional array: the address of its first element
   ! and its length, for compiled code to index directly. kind is 1 for
-  ! a double array and 2 for a long array. Answers 1, or 0 when the
+  ! a double array, 2 for a long array, 3 an int array (integer(4)), 4 a float
+  ! array (real(4)), 5 a short array (integer(2)), 6 a byte array (integer(1)).
+  ! Answers 1, or 0 when the
   ! value is not an array of that kind, not rank 1, or a slice -- and
   ! then the caller takes its generic path, which is the interpreter's.
   !
@@ -1166,6 +1168,10 @@ contains
     type(gc_value) :: v
     real(c_double), pointer, contiguous :: rp(:)
     integer(8), pointer, contiguous :: ip(:)
+    integer(4), pointer, contiguous :: i4p(:)
+    real(4), pointer, contiguous :: r4p(:)
+    integer(2), pointer, contiguous :: i2p(:)
+    integer(1), pointer, contiguous :: i1p(:)
     logical :: good
     integer :: h
     call c_f_pointer(cs, vst)
@@ -1190,6 +1196,26 @@ contains
        if (.not. good) return
        n = int(size(ip), c_int64_t)
        if (n > 0) ptr = c_loc(ip(1))
+    case (3)
+       call gcna_int4_ptr(h, i4p, good)
+       if (.not. good) return
+       n = int(size(i4p), c_int64_t)
+       if (n > 0) ptr = c_loc(i4p(1))
+    case (4)
+       call gcna_real4_ptr(h, r4p, good)
+       if (.not. good) return
+       n = int(size(r4p), c_int64_t)
+       if (n > 0) ptr = c_loc(r4p(1))
+    case (5)
+       call gcna_int2_ptr(h, i2p, good)
+       if (.not. good) return
+       n = int(size(i2p), c_int64_t)
+       if (n > 0) ptr = c_loc(i2p(1))
+    case (6)
+       call gcna_int1_ptr(h, i1p, good)
+       if (.not. good) return
+       n = int(size(i1p), c_int64_t)
+       if (n > 0) ptr = c_loc(i1p(1))
     case default
        return
     end select
