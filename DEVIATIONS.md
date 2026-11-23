@@ -110,6 +110,8 @@ Categories:
 | 81 | `.hashCode` of a core value is not a member | design | -- |
 | 82 | A symbol's text alone decides its namespace: `(symbol "a" "b/7")` is a/b and 7 | design | `src/f/GC.f90` |
 | 83 | `format`'s `%f`, `%e` and `%g` round the stored double, not its text | design | `src/f/Eval.f90` (format_one) |
+| 84 | RESOLVED -- apply refuses a non-seq before a non-fn | -- | `src/f/Eval.f90` |
+| 85 | A `.` casts its target only to an IFn hint | 1.x | `src/f/Eval.f90` (is_instance, dot_hint_class) |
 | 86 | clojure.core arithmetic widens the narrow kinds; Fortran's operations keep them | design | `src/clj/fortran/ops.cljf` |
 | 87 | `/` on integers: a ratio in clojure.core, truncation in fortran.ops | design | `src/clj/fortran/ops.cljf` |
 | 88 | What the standard leaves to the processor throws | design | `src/clj/fortran/ops.cljf` |
@@ -2714,6 +2716,8 @@ DEVIATIONS 85.
 
 ## 85. A `.` casts its target only to an IFn hint
 
+**Stays through 1.0 (decided 2026-11-23, PLAN step 35):** accepting a program clj refuses, as 48 does; removal is below.
+
 clj casts a `.`'s target to its hinted class, before the arguments run,
 whenever it finds the member there (InstanceMethodExpr's checkCast).
 clotran casts only an IFn hint (84): its instance? (Eval.f90 is_instance)
@@ -2798,6 +2802,8 @@ real(4)s, as clj's Float constants are (fixed in f32a82f3).
 
 ## 91. The pure tier lowers some of Fortran's kinds
 
+**Stays through 1.0 (decided 2026-11-23, PLAN step 35):** what is not lowered is refused with its reason, never miscompiled; removal is below.
+
 `clotran compile --pure` lowers integer(1), (2), (4) and (8), real(4) and real(8) and complex(4) and
 complex(8) scalars (through `fortran.ops`, DEVIATIONS 93, 94), boolean, strings and records, and 1-D arrays of
 integer(8), real(8), integer(4), real(4), integer(2) and integer(1) as ARGUMENTS (`^longs`,
@@ -2865,6 +2871,8 @@ the rest (`{:processor ...}` cases in `test/ftypes/cases.edn`), as for an inexac
 **Removal**: one text for each failure, from one table; the real(4) overflow decided once.
 
 ## 94. Complex values are records, and a complex result the processor decides is refused
+
+**Stays through 1.0 (decided 2026-11-23, PLAN step 35):** values and results agree with the oracle (DEVIATIONS 98); removal is below.
 
 **A complex is a record.** `complex(4)` and `complex(8)` have no scalar class in the runtime yet
 (its values are a tag and one 64-bit payload; a complex(8) is two of them), so
