@@ -49,10 +49,9 @@ change.
   and is a DEVIATIONS entry.
 - **Every place it differs is written down.** `DEVIATIONS.md` names each
   difference, why, and what removing it would take, with its kind:
-  95 entries, 44 resolved and kept as the record, 38 by design, 6 forced
-  by the host, 6 of kind 1.x (48, 51, 54 and 74 staying through 1.0 by
-  decision; 91 and 94, the pure tier's kinds and complex, awaiting it),
-  and 85 not yet classified (`docs/release-1.0.md`). Reader conditionals are read as clj reads them: only in a
+  every entry has a kind: resolved ones kept as the record, by design, forced
+  by the host, and 7 of kind 1.x (48, 51, 54, 74, 85, 91 and 94), each
+  staying through 1.0 by decision (`docs/release-1.0.md`). Reader conditionals are read as clj reads them: only in a
   `.cljc` file, or by `read-string` given `{:read-cond :allow}` (entry 33).
 - **Fortran underneath, on purpose.** Arrays are Fortran arrays a
   library takes as they are; a package is a shared library opened at run
@@ -111,8 +110,10 @@ change.
   builder image, pinned by digest.
 - **Windows** (x86_64, Windows 10 and on): built natively under MSYS2's
   UCRT64 gfortran and tested on a Windows 10 machine -- `make test`
-  passing whole, every fuzzer at full size, the oracle's forms agreeing
-  with clj there, a line ending CR LF as clj's does -- and the release
+  passing whole (rc.10: 2026-11-23), the oracle's forms agreeing
+  with clj there (the elementary functions to a few ulps, as the host
+  libm gives them: mingw's gfortran complex `LOG` is far worse, and
+  `fortran.ops` is not -- `docs/types.md`), a line ending CR LF as clj's does -- and the release
   zip checked in a fresh Windows Sandbox (`packaging/windows/check.ps1`).
   The release is a zip: `bin\clotran.cmd`, which runs
   `clotran-bin.exe --launch` -- the command is clotran's own Clojure, so
