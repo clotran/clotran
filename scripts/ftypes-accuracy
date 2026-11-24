@@ -16,6 +16,12 @@
 (require '[clojure.string :as str] '[babashka.fs :as fs] '[babashka.process :refer [shell]])
 
 (def repo (-> *file* fs/file .getCanonicalFile .getParentFile .getParentFile))
+;; Windows: the launcher is clotran-bin.exe --launch (clotran is a #!/bin/sh file there), and the box has
+;; gfortran and no flang
+(def windows? (fs/windows?))
+(def clotran-cmd (if windows? [(str (fs/file repo "clotran-bin.exe")) "--launch"] [(str (fs/file repo "clotran"))]))
+(defn clotran-shell [opts & args] (apply shell opts (concat clotran-cmd args)))
+(def no-flang? windows?)
 (def opts (loop [m {:n 4000 :seed 1} [a & r] *command-line-args*]
             (case a
               nil m
@@ -321,8 +327,7 @@
         srcs (if (= mode :pure)
                (let [cl (fs/file dir "accpure.cljf") f90 (fs/file dir "accpure.f90")]
                  (spit cl pure-src)
-                 (let [c (shell {:out :string :err :string :continue true :dir (str dir) :extra-env env}
-                                (str (fs/file repo "clotran")) "compile" "--pure" (str cl) (str f90))]
+                 (let [c (clotran-shell {:out :string :err :string :continue true :dir (str dir) :extra-env env} "compile" "--pure" (str cl) (str f90))]
                    (when-not (zero? (:exit c)) (throw (ex-info (str "compile --pure: " (:out c) (:err c)) {}))))
                  [(str f90) (str drv)])
                [(str drv)])
@@ -358,8 +363,7 @@
 (defn run-ops []
   (let [src (fs/file work "ops.cljf")]
     (spit src ops-src)
-    (let [r (shell {:out :string :err :string :continue true :dir (str work) :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}}
-                   (str (fs/file repo "clotran")) (str src))
+    (let [r (clotran-shell {:out :string :err :string :continue true :dir (str work) :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}} (str src))
           ls (str/split-lines (:out r))]
       (when-not (and (zero? (:exit r)) (= (count ls) (count jobs)))
         (throw (ex-info (str "fortran.ops printed " (count ls) " lines for " (count jobs) ": " (:err r) (subs (:out r) 0 (min 400 (count (:out r))))) {})))
@@ -379,11 +383,11 @@
 (defn job-err [{:keys [k]} want got] (if (= got :refused) ##Inf (apply max (map #(err k %1 %2) want got))))
 
 (def legs
-  (let [ps (pmap (fn [[nm thunk]] [nm (try (thunk) (catch Exception e (println "  " nm "FAILED:" (ex-message e)) nil))])
+  (let [ps (pmap (fn [[nm thunk]] [nm (try (when-not (and no-flang? (re-find #"flang" nm)) (thunk)) (catch Exception e (println "  " nm "FAILED:" (ex-message e)) nil))])
                  [["gfortran" #(run-fortran :plain "gfortran")] ["flang" #(run-fortran :plain "flang")]
                   ["fortran.ops" run-ops]
                   ["pure gfortran" #(run-fortran :pure "gfortran")] ["pure flang" #(run-fortran :pure "flang")]])]
-    (vec ps)))
+    (vec (remove #(and no-flang? (re-find #"flang" (first %))) ps))))
 
 (defn pct [sorted q] (if (empty? sorted) 0 (nth sorted (min (dec (count sorted)) (int (Math/ceil (* q (dec (count sorted)))))))))
 (def stats

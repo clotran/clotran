@@ -21,6 +21,13 @@
 (def cases (edn/read-string (slurp cases-file)))
 (def work (fs/file repo "build" "ftypes-check"))
 (fs/create-dirs work)
+;; Windows: the launcher is clotran-bin.exe --launch (clotran is a #!/bin/sh file there), paths join with ;,
+;; and the box has gfortran and no flang
+(def windows? (fs/windows?))
+(def clotran-cmd (if windows? [(str (fs/file repo "clotran-bin.exe")) "--launch"] [(str (fs/file repo "clotran"))]))
+(defn clotran-shell [opts & args] (apply shell opts (concat clotran-cmd args)))
+(def psep (if windows? ";" ":"))
+(def compilers (if windows? ["gfortran"] ["gfortran" "flang"]))
 
 ;; 1. the oracle, on real clj. It is written in clotran's class names, as every file of
 ;; the tree is (upstream/check-names); upstream/names.clj turns them into clj's, as
@@ -168,7 +175,7 @@
         (= (Double/doubleToRawLongBits (double want)) (Double/doubleToRawLongBits (double got))))))
 
 (def results
-  (for [[fc flags] [["gfortran" ["-std=f2018" "-ffp-contract=off" "-O0"]] ["flang" []]]]
+  (for [[fc flags] (filter (comp (set compilers) first) [["gfortran" ["-std=f2018" "-ffp-contract=off" "-O0"]] ["flang" []]])]
     (let [exe (str (fs/file work (str "ftypes-" fc)))
           c (apply shell {:out :string :err :string :continue true} fc (concat flags ["-o" exe (str (fs/file work "ftypes.f90"))]))]
       (if-not (zero? (:exit c))
@@ -204,9 +211,8 @@
                               (str "(prn (try (show " (pr-str (clotran-form e)) ") (catch clotran.host.throwable e [:threw (ex-message e)])))\n"))))
         f (fs/file work "ftypes_clotran.cljf")]
     (spit f prog)
-    (let [r (shell {:out :string :err :string :continue true :dir (str work)
-                    :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}}
-                   (str (fs/file repo "clotran")) (str f))]
+    (let [r (clotran-shell {:out :string :err :string :continue true :dir (str work)
+                    :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}} (str f))]
       (if (zero? (:exit r))
         {:answers (->> (str/split-lines (:out r)) (remove str/blank?) (mapv read-string))}
         {:failed (str (:out r) (:err r))}))))
@@ -244,18 +250,16 @@
                                    (pr-str (list 'try (cons (symbol "ftypes-hints" (str f)) args) '(catch clotran.host.throwable e (ex-message e)))) "])\n"))))
         pf (fs/file work "ftypes_hints_run.cljf")
         _ (spit pf prog)
-        run (shell {:out :string :err :string :continue true :dir (str work)
-                    :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj") ":" dir)}}
-                   (str (fs/file repo "clotran")) (str pf))
+        run (clotran-shell {:out :string :err :string :continue true :dir (str work)
+                    :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj") psep dir)}} (str pf))
         interp (if (zero? (:exit run))
                  (for [line (str/split-lines (:out run)) :when (str/starts-with? line "[")
                        :let [[_ a b] (read-string line)] :when (not= a b)]
                    (str "interpreted answers differ: " a " vs " b))
                  [(str "did not run: " (:out run) (:err run))])
         pure-file (fs/file work "ftypes_hints_pure.f90")
-        pr (shell {:out :string :err :string :continue true :dir (str work)
-                   :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}}
-                  (str (fs/file repo "clotran")) "compile" "--pure" (str (fs/file dir "ftypes_hints.cljf")) (str pure-file))
+        pr (clotran-shell {:out :string :err :string :continue true :dir (str work)
+                   :extra-env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}} "compile" "--pure" (str (fs/file dir "ftypes_hints.cljf")) (str pure-file))
         text (when (zero? (:exit pr)) (slurp pure-file))
         procs (fn [fname] (let [id (str/replace (name fname) "-" "_")]
                             (->> (re-seq (re-pattern (str "(?s)(?:pure )?function " id "__\\w+\\(.*?end function " id "__\\w+")) text)
@@ -298,8 +302,7 @@
         src (fs/file work "ftypes_pure.cljf")
         env {"CLOTRAN_PATH" (str (fs/file repo "src" "clj"))}
         _ (spit src (str head fns))
-        c (shell {:out :string :err :string :continue true :dir (str work) :extra-env env}
-                 (str (fs/file repo "clotran")) "compile" "--pure" (str src) (str (fs/file work "ftypes_pure.f90")))
+        c (clotran-shell {:out :string :err :string :continue true :dir (str work) :extra-env env} "compile" "--pure" (str src) (str (fs/file work "ftypes_pure.f90")))
         got (set (for [l (str/split-lines (:out c)) :let [m (re-find #"^\s+pure\s+ftypes-pure/([cd])(\d+)" l)] :when m]
                    [(first (rest m)) (parse-long (nth m 2))]))
         lowered (set (for [i (range (count cases))
@@ -314,14 +317,13 @@
         _ (spit full (str head fns main))
         build (fn [fc]
                 (let [exe (str (fs/file work (str "ftypes_pure_" fc)))
-                      b (shell {:out :string :err :string :continue true :dir (str work)
-                                :extra-env (assoc env "FC" fc)}
-                               (str (fs/file repo "clotran")) "build" "--pure" (str full) "-o" exe)]
+                      b (clotran-shell {:out :string :err :string :continue true :dir (str work)
+                                :extra-env (assoc env "FC" fc)} "build" "--pure" (str full) "-o" exe)]
                   (if (zero? (:exit b))
                     {:fc fc :exe exe}
                     {:fc fc :failed (str (:out b) (:err b))})))]
     {:lowered lowered
-     :runs (vec (for [b [(build "gfortran") (build "flang")]]
+     :runs (vec (for [b (map build compilers)]
                   (if (:failed b) b
                     (assoc b :out (into {} (for [i (sort lowered)
                                                  :let [run (fn [p] (let [r (shell {:out :string :err :string :continue true} (:exe b) (str i) (str p))]
@@ -359,7 +361,7 @@
 
 ;; 7. accuracy measured, the quick version of scripts/ftypes-accuracy: 16 points per function and kind
 ;; through every leg, against the reference, within the bound the full sweep measured (docs/types.md)
-(def accuracy (shell {:out :string :err :string :continue true :dir (str repo)} (str (fs/file repo "scripts" "ftypes-accuracy")) "--quick"))
+(def accuracy (apply shell {:out :string :err :string :continue true :dir (str repo)} (concat (when windows? ["bb"]) [(str (fs/file repo "scripts" "ftypes-accuracy")) "--quick"])))
 
 (let [n (count cases)
       ulp-cases (count (filter #(pos? (ulp-bound %)) (range (count cases))))

@@ -1110,10 +1110,15 @@
 ;; the non-finite constants
 [(pr-str clotran.host.real8/POSITIVE_INFINITY) (pr-str clotran.host.real8/NEGATIVE_INFINITY) (pr-str ##NaN)]
 ;; Float's own constants are Floats (they answered Doubles), and its range members exist
-;; log1p and expm1 are libm's: near zero the naive forms are many ulps off
-[(clotran.host.math/log1p 0.0229) (clotran.host.math/log1p -0.3) (clotran.host.math/log1p 1.0e-8) (clotran.host.math/log1p 12345.678)
- (clotran.host.math/expm1 0.0229) (clotran.host.math/expm1 -0.3) (clotran.host.math/expm1 1.0e-8) (clotran.host.math/expm1 20.0)
- (clotran.host.math/log1p 0.0) (clotran.host.math/expm1 0.0) (clotran.host.math/log1p -1.0)]
+;; log1p and expm1 are libm's: near zero the naive forms are many ulps off (up to 22). Each is
+;; asked to be within 4 ulps of clj's value, not equal: a platform's libm (mingw's) rounds the last
+;; place differently from the reference's (DEVIATIONS 95, the elementary functions are the host libm's)
+(let [near (fn [x e] (or (= x e) (<= (abs (- x e)) (* 4 (clojure.math/ulp e)))))]
+  [(near (clotran.host.math/log1p 0.0229) 0.02264173048082465) (near (clotran.host.math/log1p -0.3) -0.35667494393873234)
+   (near (clotran.host.math/log1p 1.0e-8) 9.999999950000001E-9) (near (clotran.host.math/log1p 12345.678) 9.42114231801815)
+   (near (clotran.host.math/expm1 0.0229) 0.02316421800942491) (near (clotran.host.math/expm1 -0.3) -0.2591817793182821)
+   (near (clotran.host.math/expm1 1.0e-8) 1.0000000050000001E-8) (near (clotran.host.math/expm1 20.0) 4.851651944097903E8)
+   (clotran.host.math/log1p 0.0) (clotran.host.math/expm1 0.0) (clotran.host.math/log1p -1.0)])
 ;; aset into an int[] of a long past an int: clj throws "integer overflow"; and the long array
 [(try (aset (int-array 1) 0 2147483648) (catch clotran.host.throwable e (ex-message e)))
  (try (aset (int-array 1) 0 -2147483649) (catch clotran.host.throwable e (ex-message e)))
