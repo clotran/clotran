@@ -1,0 +1,47 @@
+#!/usr/bin/env bb
+;; lmsface-check: a clotran function calling a Lemmis module as pure Fortran (clotran.lmsface), with a
+;; STAND-IN for Lemmis (test/clj/lmsface/lemmis/{reader,fortran}.cljf) so the gate does not need Lemmis.
+;; The caller (test/clj/lmsface/lf_caller.cljf) runs two ways -- interpreted, the module read through the
+;; require hook, and clotran build --pure, built by gfortran and by flang -- and prints must agree: words
+;; as text, doubles by their bits. The classifier must say the caller is tier A,. Without Lemmis on the load
+;; path nothing here runs: the stub names are only found through test/clj/lmsface.
+;;
+;;   scripts/lmsface-check
+(require '[clojure.string :as str] '[babashka.fs :as fs] '[babashka.process :refer [shell]])
+
+(def repo (str (fs/parent (fs/parent (fs/absolutize *file*)))))
+(def tdir (str repo "/test/clj/lmsface"))
+(def clotran (str repo "/clotran"))
+(def work (str repo "/build/lmsface-check"))
+(fs/create-dirs work)
+(defn sh [env & args] (apply shell {:out :string :err :string :continue true :dir tdir :extra-env env} args))
+(def fail (atom []))
+(defn check [ok msg] (when-not ok (swap! fail conj msg)) (println (if ok "ok  " "FAIL") msg))
+
+(def path {"CLOTRAN_PATH" (str "src:" tdir)})   ; src: clotran's own, dir: the stand-in Lemmis and the caller
+
+;; tier A with the stand-in
+(let [r (sh path clotran "compile" "--report" "lf_caller.cljf")]
+  (check (str/includes? (:out r) "tier A  lf_caller/both") "with Lemmis on the path, both is tier A"))
+
+;; the two paths
+(def interp (:out (sh path clotran "-m" "lf_caller")))
+(defn toks-equal? [a b]
+  (let [ls #(str/split-lines (str/trim %))]
+    (and (= (count (ls a)) (count (ls b)))
+         (every? (fn [[x y]] (let [tx (str/split x #"\s+") ty (str/split y #"\s+")]
+                               (and (= (count tx) (count ty))
+                                    (every? (fn [[p q]] (or (= p q) (try (= (Double/doubleToRawLongBits (Double/parseDouble p))
+                                                                              (Double/doubleToRawLongBits (Double/parseDouble q)))
+                                                                         (catch Exception _ false)))) (map vector tx ty)))))
+                 (map vector (ls a) (ls b))))))
+(check (str/includes? interp "both 12.5") (str "interpreted: " (str/replace (str/trim interp) "\n" " | ")))
+(doseq [fc ["gfortran" "flang"]]
+  (let [exe (str work "/lf-" fc)
+        b (sh (assoc path "FC" fc) clotran "build" "--pure" "-m" "lf_caller" "-o" exe)]
+    (if (pos? (:exit b))
+      (check false (str fc " build --pure: " (str/join " | " (take 3 (str/split-lines (str (:err b) (:out b)))))))
+      (let [x (sh {} exe)]
+        (check (and (zero? (:exit x)) (toks-equal? interp (:out x))) (str fc ": the pure program prints what the interpreted one does"))))))
+(println (if (empty? @fail) "lmsface-check: all agree" (str "lmsface-check: " (count @fail) " failed")))
+(System/exit (if (empty? @fail) 0 1))

@@ -553,6 +553,19 @@ every case through `clj`, gfortran and flang and compares. Numbers
 become text the Fortran way (DEVIATIONS 50). PLAN.md step 13 has the
 design.
 
+### Calling a Lemmis module from pure Fortran
+
+A namespace that is a Lemmis module (a `.lms` file on the load path, with Lemmis's `src` on
+`CLOTRAN_PATH`) can be called from a tier-A function: its functions whose dummies are `intent(in)`
+numbers, logicals or assumed-shape arrays of numbers, and whose result is a number or a logical, are
+Fortran module procedures, so `clotran compile --pure` writes the call as a call of the module (the output
+holds the Lemmis module's Fortran before the namespace's own module) and `clotran build --pure` links no
+clotran at all. The specific procedure is picked by the argument types as for the namespace's own
+functions; a call with types the Lemmis function does not have stays tier B (B004). The other direction, a
+Lemmis module calling a clotran namespace through its `--pure` module, is Lemmis's `use`
+(lemmis.typer `import-uses`). `scripts/lmsface-check` tests this against a stand-in for Lemmis; the real
+one is tested by Lemmis's `test/to_clotran.bb`.
+
 ## A whole program as pure Fortran
 
 When a program's `-main` and everything it calls are tier A, `clotran

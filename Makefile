@@ -578,7 +578,7 @@ TEST_DEPS = $(test-bins) clotran-bin $(B)/core.image $(B)/libtestpkg.$(SOEXT) $(
 #   NIGHTLY the slow and specialised fuzzers, make test-nightly; and
 #           make fuzz-all, every fuzzer at full size, for a release
 TEST_FIXED = check-unit check-embed check-embed-repl check-path check-install check-new check-program check-lineedit check-language check-index check-lms check-nrepl check-lsp check-profiles check-cljfmt check-tree check-banner check-seed-per-process check-no-libquadmath check-build-pure check-overflow-binding check-torture check-threads \
-	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-ftypes check-compiler check-static check-costs check-seed check-fuzz-regressions
+	check-autocompile check-break check-readme check-libraries check-oracle check-oracle-gc check-pure check-lmsface check-ftypes check-compiler check-static check-costs check-seed check-fuzz-regressions
 TEST_FUZZ = check-fuzz check-fuzz-num check-fuzz-str check-fuzz-coll check-fuzz-macro check-fuzz-fn check-fuzz-deftype check-fuzz-hints check-fuzz-bytes check-fuzz-read check-fuzz-print check-fuzz-index check-fuzz-lms check-fuzz-recur check-fuzz-binds check-fuzz-forms
 SCHED_SEEDS ?= 4
 TEST_NIGHTLY = check-fuzz-profiles check-fuzz-jit check-fuzz-shrink check-frames check-fuzz-spec check-fuzz-threads check-seqlock check-lazy check-sched check-replay check-fuzz-pure check-fuzz-gc check-fuzz-net check-fuzz-deps check-fuzz-bind check-fuzz-run check-fuzz-build-pure
@@ -809,6 +809,9 @@ endif
 check-pure:
 	@echo "--- pure Fortran (tier A through gfortran and flang, against clj) ---"
 	scripts/pure-check
+check-lmsface:
+	@echo "--- a clotran function calling a Lemmis module as pure Fortran (clotran.lmsface), against a stand-in Lemmis: interpreted, gfortran and flang agree ---"
+	scripts/lmsface-check
 check-ftypes:
 	@echo "--- Fortran's types: the oracle (plain Clojure on clj) against gfortran and flang, then fortran.ops against the oracle ---"
 	scripts/ftypes-check

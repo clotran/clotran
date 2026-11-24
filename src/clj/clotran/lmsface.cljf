@@ -1,0 +1,56 @@
+(ns clotran.lmsface
+  "Lemmis modules as callees of pure Fortran. A namespace a file requires may be a Lemmis module (a
+  .lms file on the load path, DEVIATIONS 96, 97); when Lemmis's typer says its functions are tier A
+  and of types Fortran and clotran agree on, a call of one from a tier-A function is a call of a
+  Fortran module procedure, and clotran.tiers and clotran.purefort treat it as one. Without Lemmis on
+  the load path there are none, and nothing here runs.
+
+  The interface comes from lemmis.fortran/interface (the other direction of this is
+  lemmis.typer's use of clotran.purefort): {:module :text :procs {name [{:ts :ret :fpure :prints}]}}."
+  (:require [clojure.string :as str]))
+
+(defn- libs-of
+  "The libs a file's ns form requires or uses, as symbols."
+  [ns-form]
+  (set (for [clause (drop 2 ns-form)
+             :when (and (seq? clause) (#{:require :use} (first clause)))
+             spec (rest clause)
+             :let [lib (cond (symbol? spec) spec
+                             (and (vector? spec) (symbol? (first spec))) (first spec))]
+             :when lib]
+         lib)))
+
+(defn- roots
+  "Where require looks: the file's own root (its path without the lib's), then CLOTRAN_PATH."
+  [src ns-name]
+  (let [tail (str "/" (-> (name ns-name) (str/replace "." "/") (str/replace "-" "_")))
+        base (str/replace (str src) #"\.[a-z]+$" "")
+        own (when (str/ends-with? base tail) (subs base 0 (- (count base) (count tail))))
+        cp (clotran.host.system/getenv "CLOTRAN_PATH")]
+    (vec (concat (when own [own]) (when cp (remove str/blank? (str/split cp #":")))))))
+
+(defn- lms-file [roots lib]
+  (let [rel (str (-> (name lib) (str/replace "." "/") (str/replace "-" "_")) ".lms")]
+    (first (filter clotran-file-exists? (map #(str % "/" rel) roots)))))
+
+(defn externals
+  "{ns/name {:module m :versions {ts {:ret :fpure :prints}} :text t}} for the functions of the Lemmis
+  modules that the file src (its ns form read from text) requires, which pure Fortran can call; {} when
+  Lemmis is not on the load path or none is required."
+  [src text]
+  (let [form (read-string text)
+        ns-name (second form)
+        iface (try (do (require 'lemmis.fortran) (resolve 'lemmis.fortran/interface))
+                   (catch clotran.host.throwable _ nil))]
+    (if-not iface
+      {}
+      (into {}
+            (for [lib (sort (libs-of form))
+                  :let [path (lms-file (roots src ns-name) lib)]
+                  :when path
+                  :let [i (iface path)]
+                  :when i
+                  [n vs] (:procs i)]
+              [(symbol (str lib) n)
+               {:module (:module i) :text (:text i)
+                :versions (into {} (for [v vs] [(:ts v) (select-keys v [:ret :fpure :prints])]))}])))))

@@ -13,7 +13,8 @@
   design's, and this is their first cut: where it cannot tell, it says B
   rather than promise pure Fortran it cannot deliver."
   (:require [clojure.string :as str]
-            [clotran.loader :as loader]))
+            [clotran.loader :as loader]
+            [clotran.lmsface :as lmsface]))
 
 ;;; ---- the codes -------------------------------------------------------
 ;;;
@@ -39,7 +40,7 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
    "B003" {:title "a clojure.core function with no pure-Fortran lowering" :tier :B
            :explain "The function works on Clojure data -- maps, vectors, seqs, strings built up piece by piece -- and has no Fortran equivalent that does without the collector. The help line names the nearest pure alternative where there is one: a primitive array for a vector, a record of numbers for a map, clojure.string/includes? for a fixed-text regex."}
    "B004" {:title "calls a function from another namespace" :tier :B
-           :explain "The function lives in a namespace this report did not classify, so it cannot be promised pure. Run --report on that namespace; a tier-A function there is called directly."}
+           :explain "The function lives in a namespace this report did not classify, so it cannot be promised pure. Run --report on that namespace; a tier-A function there is called directly. A function of a Lemmis module the file requires (a .lms file, with Lemmis on the load path) is called directly too, as a Fortran function of the module, when its dummies are intent(in) numbers, logicals or assumed-shape arrays of numbers and its result is a number or a logical; a Lemmis subroutine, or a function with an intent(out) dummy, is not."}
    "B005" {:title "calls a host function" :tier :B
            :explain "The call reaches a host member (clj's names, clotran's implementation) with no Fortran lowering. Arithmetic, Math/ functions and array operations have one; object methods do not."}
    "B006" {:title "calls a function held in a local" :tier :B
@@ -412,9 +413,15 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
   "{ns/name {:tier :A|:B|:C :findings [...]}} for every top-level defn of
   the file `src`, loading it first if its namespace is not loaded. A
   function's tier includes the tiers of the functions of the same file
-  it calls, so this goes round until nothing changes."
-  [src]
+  it calls, so this goes round until nothing changes. A call of a
+  function of a Lemmis module the file requires (clotran.lmsface) is tier
+  A where Lemmis says it is pure Fortran; opts :externals gives them
+  already read."
+  ([src] (classify src {}))
+  ([src opts]
   (let [text (clotran-slurp src)
+        ext (if (contains? opts :externals) (:externals opts) (lmsface/externals src text))
+        ext-tiers (zipmap (keys ext) (repeat :A))
         [head ns-name] (read-string text)
         _ (when-not (= 'ns head) (throw (ex-info (str src " does not begin with (ns ...)") {})))
         _ (when-not (find-ns ns-name) (load-file src))
@@ -431,12 +438,12 @@ Consumers that fuse: reduce, transduce, run!, every?, some, not-any?, count, int
                                     (keyword (name fl))))]
     (loop [tiers (into {} (for [[s] defns] [s :A])) rounds 0]
       (let [result (into {} (for [[s] defns
-                                  :let [fs (fn-findings (tops s) tiers s)]]
+                                  :let [fs (fn-findings (tops s) (into ext-tiers tiers) s)]]
                               [s {:tier (tier-of fs) :findings fs}]))
             tiers' (into {} (for [[s r] result] [s (:tier r)]))]
         (if (or (= tiers tiers') (> rounds 20))
           result
-          (recur tiers' (inc rounds))))))))
+          (recur tiers' (inc rounds)))))))))
 
 ;;; ---- the report ------------------------------------------------------
 

@@ -1,0 +1,10 @@
+(ns lemmis.reader
+  "A STAND-IN for Lemmis's reader, for scripts/lmsface-check: it reads a .lms file of this test, whose text
+  is a name and a number (scale3 3.0), as the forms of (ns <name>) and a function multiplying by the number.
+  Only the seam clotran.lms uses: read-forms.")
+
+(defn read-forms [text path]
+  (let [[_ nm k] (re-find #"module (\S+) scale (\S+)" text)]
+    [(list 'ns (symbol nm))
+     (list 'defn 'scale ['x] (list '* (parse-double k) 'x))
+     (list 'defn 'twice ['x] (list '* 2.0 'x))]))

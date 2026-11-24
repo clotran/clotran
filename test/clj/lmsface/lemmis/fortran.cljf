@@ -1,0 +1,14 @@
+(ns lemmis.fortran
+  "A STAND-IN for lemmis.fortran/interface, for scripts/lmsface-check: the Fortran of the module the stub
+  reader reads, and the interface Lemmis's typer would give it (scale and twice: real(8) to real(8), pure).")
+
+(defn interface [path]
+  (let [[_ nm k] (re-find #"module (\S+) scale (\S+)" (slurp path))
+        mod (clojure.string/replace nm "." "_")]
+    {:module mod
+     :text (str "module " mod "\n  implicit none\ncontains\n"
+                "  pure real(8) function scale(x)\n    real(8), intent(in) :: x\n    scale = " k "d0 * x\n  end function scale\n"
+                "  pure real(8) function twice(x)\n    real(8), intent(in) :: x\n    twice = 2.0d0 * x\n  end function twice\n"
+                "end module " mod "\n")
+     :procs {"scale" [{:ts [:double] :ret :double :name "scale" :fpure true :prints false}]
+             "twice" [{:ts [:double] :ret :double :name "twice" :fpure true :prints false}]}}))

@@ -141,7 +141,7 @@
 (defn run-clotran [file]
   (:out (shell {:out :string :err :string :dir (str repo) :continue true :in ""}
                "./clotran-bin" "src/clj/clojure/core.clj" "src/clj/clotran/loader.cljf"
-               "src/clj/clotran/tiers.cljf" "src/clj/clotran/purefort.cljf" (str file))))
+               "src/clj/clotran/lmsface.cljf" "src/clj/clotran/tiers.cljf" "src/clj/clotran/purefort.cljf" (str file))))
 
 ;; ---- interpreted, and the Fortran generated -------------------------
 

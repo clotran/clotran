@@ -1,0 +1,10 @@
+(ns lf_caller
+  "Calls a Lemmis module (lf.geo, read by the stand-in reader): tier A, so the pure Fortran calls the module."
+  (:require [lf.geo :as g]))
+
+(defn both ^double [^double x] (+ (g/scale x) (g/twice x)))
+
+(defn -main []
+  (let [a 2.5]
+    (println "both" (both a))
+    (println "scale" (g/scale (+ a 1.0)))))
