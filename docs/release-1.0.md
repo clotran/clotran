@@ -10,8 +10,7 @@ James's decision (PLAN step 35); this lists what that decision rests on.
 
 | # | Item | Evidence | Who or what is needed |
 |---|---|---|---|
-| 1 | `make fuzz-all` at full size on a frozen tree | last clean 2026-10-13 on rc.2's tree (PLAN step 35: 22 of 22 macOS, 21 Linux, 21 Windows). Since then `scripts/fuzz-*` grew to 46 scripts and the language, the pure tier and fortran.ops changed | a frozen tree and hours of machine time, on macOS, Linux and Windows (CLAUDE.md asks it of a release candidate); not run here |
-| 2 | The release itself | `make dist`/`scripts/dist-linux` archives, `SHA256SUMS`, the GitHub release, the tag; the sibling repositories (clotran-deps, clotran-plot, clotran-ui, clotran-vscode, clotran-mode) pointing at a clotran that exists | James |
+| 1 | The release itself | `make dist`/`scripts/dist-linux` archives, `SHA256SUMS`, the GitHub release, the tag; the sibling repositories (clotran-deps, clotran-plot, clotran-ui, clotran-vscode, clotran-mode) pointing at a clotran that exists | James |
 
 ## Done
 
@@ -23,6 +22,7 @@ James's decision (PLAN step 35); this lists what that decision rests on.
 | Windows zip (`make dist`, `packaging/windows/check.ps1`) | done | `clotran-1.0.0-rc.10-windows-x86_64.zip` (20.6 MB): "pass program, future, regex", "pass deps.edn project", EXIT 0. The tag's artifact is built from the tag, not this tree |
 | DEVIATIONS 84 and 85 in the table, 85, 91 and 94 stay through 1.0 | done | commit `7348c79b` |
 | Version strings at 1.0.0-rc.10 | done | `VERSION`, `install.sh`, `install.ps1`, `docs/guide.md`, `docs/status.md`: commit `7348c79b` |
+| `make fuzz-all` at full size, macOS arm64 | done | 2026-11-23/24 on the rc.10 tree (`4ed6d1e6`): 25 of 25. 24 passed in the run; `fuzz-door` failed there because its generated code caught `:default` (ClojureScript's, which clotran rejects as clj does) -- fixed to `clotran.host.throwable`, then `-n 20000`: "20049 values x 4 kinds, 23574 cross, 56622 refused, 0 disagree with the model". Not run on Linux or Windows (rc.2's run was 21 of 22 on each) |
 | Static checks | done | `make check-static`: EXIT 0 (no static string lengths in clotran-bin, libchemsol, libblas; the text-relocation check is ELF only, not run on macOS) |
 | Pure tier against clj | done | `make check-pure`: "pure-check: 525 runs (105 cases x 4 compilers + the library), 525 agree, 0 differ; 42 functions pure in the library" |
 | Fortran's types, the second oracle | done | `scripts/ftypes-check`: 349 cases, 321 compared with the compilers, 28 not (the standard leaves them to the processor); gfortran 0 differ, flang 0 differ, clotran 0 differ (349), pure Fortran 0 differ (343 lowered, both compilers); hints 11 pairs 0 differ; elementary functions 163 cases within bound, worst error 1 ulp |

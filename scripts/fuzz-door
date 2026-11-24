@@ -117,7 +117,7 @@
                  "(defn same? [a b] (if (and (number? a) (number? b) (not= a a)) (not= b b) (and (= a b) (= (str a) (str b)))))\n"
                  "(defn door [i k slot v]\n"
                  "  (let [args (assoc [0 0 0.0 false] slot v)\n"
-                 "        r (try (apply samplelib.raw/echo-kinds args) (catch :default e :refused))]\n"
+                 "        r (try (apply samplelib.raw/echo-kinds args) (catch clotran.host.throwable e :refused))]\n"
                  "    (if (= r :refused) (println \"DOOR\" i k \"REFUSED\")\n"
                  "        (let [e (get r ([:oi4 :oi8 :or8 :ol] slot))]\n"
                  "          (println \"DOOR\" i k (if (same? e v) \"SAME\" (str \"CHANGED \" (pr-str v) \" -> \" (pr-str e))))))))\n"
