@@ -1,6 +1,7 @@
 # Release 1.0.0: the checklist
 
 Written 2026-11-22 against `main` at f32a82f3 (149 commits after `v1.0.0-rc.9`, which VERSION still
+Updated 2026-11-23: rc.10 tree gated on macOS, Linux x86_64 and Windows x86_64 (below).
 names). Every result below was run that day in a clean worktree built with `make` (gfortran, macOS
 arm64); nothing here is recalled. States: **done**, **open**, **decided-to-stay**. Tagging 1.0.0 is
 James's decision (PLAN step 35); this lists what that decision rests on.
@@ -9,18 +10,19 @@ James's decision (PLAN step 35); this lists what that decision rests on.
 
 | # | Item | Evidence | Who or what is needed |
 |---|---|---|---|
-| 1 | `make crosscheck` green on the tree to be tagged | not run here (it takes about 1.5 h and the main session owns it). The last verdict on record, in git log: "crosscheck EXIT 0 on the tree before" cd70177a; 9 commits since (e8b4ff91..f32a82f3), whose gating is not recorded | the main session, at the merge that becomes rc.10 and again at the tag |
-| 2 | `make fuzz-all` at full size on a frozen tree | last clean 2026-10-13 on rc.2's tree (PLAN step 35: 22 of 22 macOS, 21 Linux, 21 Windows). Since then `scripts/fuzz-*` grew to 46 scripts and the language, the pure tier and fortran.ops changed | a frozen tree and hours of machine time, on macOS, Linux and Windows (CLAUDE.md asks it of a release candidate); not run here |
-| 3 | Linux and Windows gates and artifacts for the tag | rc.9's were run (RELEASE-NOTES, Platforms). Since rc.9 `src/f`, the pure tier and fortran.ops changed; none of `scripts/gate-linux`, `scripts/gate-wsl`, `scripts/dist-check`, `packaging/windows/check.ps1` was run here | James's x86_64 Windows machine for `gate-wsl` and the zip check; Docker for `gate-linux`, `dist-linux`; run at the tag |
-| 4 | DEVIATIONS 85 has no kind | `## 85` exists, the table at the top of DEVIATIONS.md has no row for 85 (and none for 84, which reads RESOLVED); RELEASE-NOTES says "none open" only if every entry has a kind | James: classify 85 (it reads like 48: a cast clotran skips, accepting a program clj refuses -- "1.x, staying through 1.0", or "design"); add rows 84 and 85 to the table. DEVIATIONS.md is not this lane's file |
-| 5 | DEVIATIONS 91 and 94 are kind 1.x with no recorded decision | 48, 51, 54 and 74 each say "Stays through 1.0 (decided 2026-10-10, PLAN step 35)"; 91 (the pure tier lowers some kinds) and 94 (complex is a record) say what removal takes but not that they stay | James: decide that they stay through 1.0 (then the entry says so), or that something is done first |
-| 6 | The version strings the bump touches | `VERSION` and also `install.sh` line 13 (`1.0.0-rc.9`), `install.ps1` line 12, `docs/guide.md` line 25 (`clotran --version`, already stale at rc.8), `docs/status.md` "Versions" section, RELEASE-NOTES.md's first paragraph (drafted for rc.10) | the main session when it bumps; `make check-install` compares `clotran --version` to VERSION |
-| 7 | The release itself | `make dist`/`scripts/dist-linux` archives, `SHA256SUMS`, the GitHub release, the tag; the sibling repositories (clotran-deps, clotran-plot, clotran-ui, clotran-vscode, clotran-mode) pointing at a clotran that exists | James |
+| 1 | `make fuzz-all` at full size on a frozen tree | last clean 2026-10-13 on rc.2's tree (PLAN step 35: 22 of 22 macOS, 21 Linux, 21 Windows). Since then `scripts/fuzz-*` grew to 46 scripts and the language, the pure tier and fortran.ops changed | a frozen tree and hours of machine time, on macOS, Linux and Windows (CLAUDE.md asks it of a release candidate); not run here |
+| 2 | The release itself | `make dist`/`scripts/dist-linux` archives, `SHA256SUMS`, the GitHub release, the tag; the sibling repositories (clotran-deps, clotran-plot, clotran-ui, clotran-vscode, clotran-mode) pointing at a clotran that exists | James |
 
 ## Done
 
 | Item | State | Evidence (run 2026-11-22) |
 |---|---|---|
+| Crosscheck on the tree to be tagged | done | gate 12 on `e6524dc1`: flang and gfortran EXIT 0 (2026-11-23); the same on the rc.10 tree with the oracle and script fixes, gate 15 (below) |
+| Linux x86_64 gate (`scripts/gate-wsl`, real x86_64 under Docker on the Windows box's WSL2) | done | `gate-linux: EXIT 0`, its `crosscheck` flang exit 0 and gfortran exit 0, 2026-11-23, tree `7348c79b` |
+| Windows x86_64 native (MSYS2 UCRT64, gfortran 16.2) `make test` | done | EXIT 0 on the rc.10 tree, 2026-11-23. It found and fixed four things: `scripts/ftypes-check` and `scripts/ftypes-accuracy` started `./clotran` (a `#!/bin/sh` file) and needed flang, so on Windows they use `clotran-bin.exe --launch`, `;` path joins and gfortran only; the oracle form for `log1p`/`expm1` asked for equality with Java's values, mingw's libm differs in the last place, so it asks 4 ulps (a naive form is up to 22 off); and a comment naming the JVM failed `upstream/check-names` |
+| Windows zip (`make dist`, `packaging/windows/check.ps1`) | done | `clotran-1.0.0-rc.10-windows-x86_64.zip` (20.6 MB): "pass program, future, regex", "pass deps.edn project", EXIT 0. The tag's artifact is built from the tag, not this tree |
+| DEVIATIONS 84 and 85 in the table, 85, 91 and 94 stay through 1.0 | done | commit `7348c79b` |
+| Version strings at 1.0.0-rc.10 | done | `VERSION`, `install.sh`, `install.ps1`, `docs/guide.md`, `docs/status.md`: commit `7348c79b` |
 | Static checks | done | `make check-static`: EXIT 0 (no static string lengths in clotran-bin, libchemsol, libblas; the text-relocation check is ELF only, not run on macOS) |
 | Pure tier against clj | done | `make check-pure`: "pure-check: 525 runs (105 cases x 4 compilers + the library), 525 agree, 0 differ; 42 functions pure in the library" |
 | Fortran's types, the second oracle | done | `scripts/ftypes-check`: 349 cases, 321 compared with the compilers, 28 not (the standard leaves them to the processor); gfortran 0 differ, flang 0 differ, clotran 0 differ (349), pure Fortran 0 differ (343 lowered, both compilers); hints 11 pairs 0 differ; elementary functions 163 cases within bound, worst error 1 ulp |
